@@ -142,6 +142,7 @@ function Assert-PrFastWorkflow([object]$Workflow) {
     "pnpm i18n:verify",
     "pnpm docs:verify-security",
     "pnpm docs:verify-support-intake",
+    "pnpm release:test-marketplace-publication-scripts",
     "pnpm release:verify-readiness:smoke",
     "pnpm release:test-native-remote-fuzz-target-preflight-scripts",
     "pnpm release:generate-native-remote-fuzz-target-preflight:win32-x64",
@@ -313,6 +314,18 @@ function Invoke-SupportIntakeChecks() {
   & $supportIntakeVerifier -RepoRoot $repoRoot
 }
 
+function Assert-RequirementOwnerException([object]$EvidenceCsv, [string]$Id, [string]$ExpectedRef) {
+  Assert-RequirementEvidenceStatus $EvidenceCsv $Id "exception"
+  $row = Get-RequirementEvidenceRow $EvidenceCsv $Id
+  if ($row.exception_ref -ne $ExpectedRef) {
+    throw "$($EvidenceCsv.RelativePath): '$Id' exception_ref must be '$ExpectedRef', got '$($row.exception_ref)'."
+  }
+  $exceptionPath = Join-Path $repoRoot $ExpectedRef
+  if (-not (Test-Path -LiteralPath $exceptionPath -PathType Leaf)) {
+    throw "$($EvidenceCsv.RelativePath): '$Id' exception_ref does not exist: '$ExpectedRef'."
+  }
+}
+
 function Invoke-RequirementEvidenceRuleChecks() {
   # The requirements catalog lives in the private planning archive since the
   # public cutover. The public gate verifies the release evidence CSV's own
@@ -434,6 +447,20 @@ function Invoke-RequirementEvidenceRuleChecks() {
   )) {
     Assert-RequirementEvidenceStatus $requirementsEvidence $id "blocked"
   }
+  foreach ($id in @("SEC-015", "MIG-010", "MIG-012")) {
+    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception.md"
+  }
+  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception.md"
+  Assert-Terms $marketplaceOwnerException @(
+    "# Marketplace Pre-release Owner Exception",
+    "public issue [#14]",
+    'release tag: `v0.2.0-beta.1`',
+    'extension version: `0.2.0`',
+    "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
+    '`SEC-015`, `MIG-010`, and `MIG-012`',
+    "It cannot transfer to a rebuilt asset or a later version",
+    "does not claim public release readiness"
+  ) "Marketplace pre-release owner exception scope"
 
   [pscustomobject]@{
     RequirementsEvidence = $requirementsEvidence
@@ -6952,6 +6979,8 @@ Assert-Terms $m7Plan @(
   "## M7k2a Gates",
   "## M7k2b Implemented Slice",
   "## M7k2b Gates",
+  "## M7k2c Implemented Slice",
+  "## M7k2c Gates",
   "## M7l1 Implemented Slice",
   "## M7l1 Gates",
   "## M7l2a Implemented Slice",
@@ -7023,6 +7052,11 @@ Assert-Terms $m7Plan @(
   "pnpm release:test-publication-gaps-scripts",
   "pnpm release:generate-publication-gaps:win32-x64",
   "pnpm release:verify-publication-gaps:win32-x64",
+  "pnpm release:test-marketplace-publication-scripts",
+  "subversionr.release.marketplace-publication.win32-x64.v1",
+  "docs/release/marketplace-pre-release-owner-exception.md",
+  "docs/release/marketplace-identity-bootstrap-evidence.json",
+  "docs/release/marketplace-existing-listing-evidence.json",
   "subversionr.release.vulnerability-review-preflight.win32-x64.v1",
   "pnpm release:test-vulnerability-review-scripts",
   "pnpm release:generate-vulnerability-review:win32-x64",

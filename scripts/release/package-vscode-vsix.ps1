@@ -302,6 +302,7 @@ $evidencePathResolved = Assert-GeneratedPath -Path $EvidencePath -Name "Evidence
 
 $extensionEntrypointPath = Assert-File (Join-Path $distRootResolved "extension.js") "dist/extension.js"
 $extensionEntrypointSha256 = (Get-FileHash -LiteralPath $extensionEntrypointPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$readmeSha256 = (Get-FileHash -LiteralPath $readmeResolved -Algorithm SHA256).Hash.ToLowerInvariant()
 Assert-NoCompiledTestArtifacts $distRootResolved
 
 & $verifyLayoutScript -Target $Target -PackageRoot $packageRootResolved
@@ -372,6 +373,10 @@ $vsixEntrypointSha256 = Get-ZipEntrySha256 -ZipPath $vsixResolved -EntryName "ex
 if ($vsixEntrypointSha256 -ne $extensionEntrypointSha256) {
   throw "VSIX compiled extension entrypoint hash must match ExtensionDistDirectory/dist/extension.js."
 }
+$vsixReadmeSha256 = Get-ZipEntrySha256 -ZipPath $vsixResolved -EntryName "extension/readme.md"
+if ($vsixReadmeSha256 -ne $readmeSha256) {
+  throw "VSIX Marketplace README hash must match the explicit ReadmePath input."
+}
 $iconRelativePath = Assert-RelativePackagePath -Path ([string]$vsixPackageJson.icon) -Name "VSIX package icon"
 $inputIconPath = Assert-File (Join-Path $workingPackageRoot $iconRelativePath.Replace("/", [System.IO.Path]::DirectorySeparatorChar)) "Marketplace icon"
 $inputIconSha256 = (Get-FileHash -LiteralPath $inputIconPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -396,6 +401,8 @@ $report = [pscustomobject]@{
     packageRoot = Get-RepoRelativePath $packageRootResolved
     distRoot = Get-RepoRelativePath $distRootResolved
     extensionEntrypointSha256 = $extensionEntrypointSha256
+    readmePath = Get-RepoRelativePath $readmeResolved
+    readmeSha256 = $readmeSha256
     vscodeIgnoreSha256 = $vscodeIgnoreSha256
     changelogSha256 = (Get-FileHash -LiteralPath $changelogResolved -Algorithm SHA256).Hash.ToLowerInvariant()
     supportSha256 = (Get-FileHash -LiteralPath $supportResolved -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -410,12 +417,14 @@ $report = [pscustomobject]@{
     size = $vsixItem.Length
     sha256 = (Get-FileHash -LiteralPath $vsixResolved -Algorithm SHA256).Hash.ToLowerInvariant()
     extensionEntrypointSha256 = $vsixEntrypointSha256
+    readmeSha256 = $vsixReadmeSha256
     marketplaceIconSha256 = $vsixIconSha256
   }
   assertions = @(
     "vsce package ran with explicit target and no dependency detection",
     "compiled extension entrypoint is present",
     "compiled extension entrypoint hash matches the input dist artifact",
+    "Marketplace listing README is present and hash-bound to the explicit ReadmePath input",
     "Marketplace icon is present and hash-bound in the VSIX",
     "packaged backend sidecar, bridge, and manifest are present",
     "TypeScript source, tests, node_modules, and SVN CLI fixture tools are absent",

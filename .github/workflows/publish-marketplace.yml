@@ -1,0 +1,313 @@
+name: Publish Marketplace Prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub prerelease tag allowed by the source-controlled attestation contract
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: marketplace-prerelease-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: marketplace
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      GH_TOKEN: ${{ github.token }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Validate public main dispatch and attestation contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          if ($env:GITHUB_REPOSITORY -ne "Hitsuki-Ban/SubversionR") {
+            throw "Marketplace publication must run in the public Hitsuki-Ban/SubversionR repository."
+          }
+          if ($env:GITHUB_REF -ne "refs/heads/main") {
+            throw "Marketplace publication must be dispatched from public main."
+          }
+          if ($env:GITHUB_EVENT_NAME -ne "workflow_dispatch") {
+            throw "Marketplace publication requires workflow_dispatch."
+          }
+
+          $contractPath = "docs/release/github-attestation-contract.win32-x64.json"
+          $contract = Get-Content -Raw -LiteralPath $contractPath | ConvertFrom-Json
+          if ([string]$contract.schema -ne "subversionr.release.github-attestation-contract.win32-x64.v1") {
+            throw "Attestation contract schema must match the Marketplace publication contract."
+          }
+          if ([string]$contract.target -ne "win32-x64") {
+            throw "Attestation contract target must be win32-x64."
+          }
+          if ($env:RELEASE_TAG -ne [string]$contract.release.tag) {
+            throw "release_tag must exactly match the source-controlled attestation contract."
+          }
+          $subjectName = [string]$contract.subject.name
+          if ($subjectName -notmatch '^[A-Za-z0-9._-]+\.vsix$') {
+            throw "Attestation subject name must be a safe VSIX leaf name."
+          }
+
+          $subjectRoot = "target/marketplace-publication/win32-x64"
+          $subjectPath = "$subjectRoot/$subjectName"
+          New-Item -ItemType Directory -Force -Path $subjectRoot | Out-Null
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTESTATION_CONTRACT_PATH=$contractPath"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "SUBJECT_NAME=$subjectName"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "SUBJECT_PATH=$subjectPath"
+
+      - name: Download exact existing release VSIX
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $env:SUBJECT_NAME --dir (Split-Path -Parent $env:SUBJECT_PATH)
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download the contracted release VSIX."
+          }
+          if (-not (Test-Path -LiteralPath $env:SUBJECT_PATH -PathType Leaf)) {
+            throw "The contracted release VSIX was not downloaded."
+          }
+
+      - name: Verify exact released VSIX bytes
+        shell: pwsh
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass
+          -File scripts/release/verify-release-attestation-subject.ps1
+          -Target win32-x64
+          -ContractPath $env:ATTESTATION_CONTRACT_PATH
+          -SubjectPath $env:SUBJECT_PATH
+          -ReleaseTag $env:RELEASE_TAG
+
+      - name: Validate exact live attestation evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          function Assert-Equal($Expected, $Actual, [string]$Message) {
+            if ($Expected -ne $Actual) {
+              throw "$Message Expected '$Expected', got '$Actual'."
+            }
+          }
+
+          function Get-Sha256([string]$Path) {
+            (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+
+          function Assert-RepoFile([string]$Path, [string]$Name) {
+            if ([System.IO.Path]::IsPathRooted($Path)) {
+              throw "$Name must be repository-relative."
+            }
+            $root = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+            $absolute = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE $Path))
+            if (-not $absolute.StartsWith($root, [System.StringComparison]::Ordinal)) {
+              throw "$Name must stay inside the repository."
+            }
+            if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
+              throw "$Name must be a file."
+            }
+            $absolute
+          }
+
+          $contractPath = Assert-RepoFile $env:ATTESTATION_CONTRACT_PATH "Attestation contract"
+          $evidenceRelativePath = "docs/release/github-attestation-evidence.win32-x64.json"
+          $evidencePath = Assert-RepoFile $evidenceRelativePath "Live attestation evidence"
+          $contract = Get-Content -Raw -LiteralPath $contractPath | ConvertFrom-Json
+          $evidence = Get-Content -Raw -LiteralPath $evidencePath | ConvertFrom-Json
+
+          Assert-Equal "subversionr.release.live-github-attestation.win32-x64.v1" ([string]$evidence.schema) "Live attestation evidence schema must match."
+          if ($evidence.publicReadinessClaim -isnot [bool] -or $evidence.signingClaim -isnot [bool] -or $evidence.verification.verified -isnot [bool]) {
+            throw "Live attestation evidence claim and verification fields must be JSON booleans."
+          }
+          Assert-Equal $false $evidence.publicReadinessClaim "Live attestation evidence must not claim public readiness."
+          Assert-Equal $false $evidence.signingClaim "Live attestation evidence must not claim signing."
+          Assert-Equal "live-attestation-verified" ([string]$evidence.status) "Live attestation evidence status must be verified."
+          Assert-Equal ([string]$contract.schema) ([string]$evidence.contract.schema) "Live evidence contract schema must match."
+          Assert-Equal $env:ATTESTATION_CONTRACT_PATH ([string]$evidence.contract.path) "Live evidence contract path must match."
+          Assert-Equal (Get-Sha256 $contractPath) ([string]$evidence.contract.sha256) "Live evidence contract SHA256 must match current bytes."
+          Assert-Equal $env:RELEASE_TAG ([string]$evidence.release.tag) "Live evidence release tag must match."
+          Assert-Equal ([string]$contract.subject.name) ([string]$evidence.subject.name) "Live evidence subject name must match."
+          Assert-Equal ([int64]$contract.subject.size) ([int64]$evidence.subject.size) "Live evidence subject size must match."
+          Assert-Equal ([string]$contract.subject.sha256) ([string]$evidence.subject.sha256) "Live evidence subject SHA256 must match."
+          Assert-Equal ([string]$contract.workflow.path) ([string]$evidence.workflow.path) "Live evidence workflow path must match."
+          Assert-Equal "workflow_dispatch" ([string]$evidence.workflow.event) "Live evidence workflow event must match."
+          Assert-Equal $true $evidence.verification.verified "Live attestation evidence must record successful verification."
+          Assert-Equal ([string]$contract.verificationPolicy.repository) ([string]$evidence.verification.repository) "Live evidence repository must match."
+          Assert-Equal ([string]$contract.verificationPolicy.signerWorkflow) ([string]$evidence.verification.signerWorkflow) "Live evidence signer workflow must match."
+          Assert-Equal ([string]$contract.verificationPolicy.predicateType) ([string]$evidence.verification.predicateType) "Live evidence predicate type must match."
+          Assert-Equal "refs/heads/main" ([string]$evidence.workflow.sourceRef) "Live attestation must originate from public main."
+          Assert-Equal "refs/heads/main" ([string]$evidence.verification.certificate.workflowRef) "Live verification certificate must originate from public main."
+          Assert-Equal "public" ([string]$evidence.verification.certificate.sourceVisibility) "Live verification certificate must record public source visibility."
+
+          $sourceSha = [string]$evidence.workflow.headSha
+          if ($sourceSha -notmatch '^[a-f0-9]{40}$') {
+            throw "Live attestation source SHA must be a full lowercase commit SHA."
+          }
+          Assert-Equal $sourceSha ([string]$evidence.verification.certificate.workflowSha) "Live verification workflow SHA must match."
+
+          $bundleRelativePath = [string]$evidence.attestation.bundlePath
+          $bundlePath = Assert-RepoFile $bundleRelativePath "Live attestation bundle"
+          Assert-Equal (Get-Sha256 $bundlePath) ([string]$evidence.attestation.bundleSha256) "Live attestation bundle SHA256 must match current bytes."
+          $recordedResultPath = Assert-RepoFile ([string]$evidence.verification.resultPath) "Recorded live verification result"
+          Assert-Equal (Get-Sha256 $recordedResultPath) ([string]$evidence.verification.resultSha256) "Recorded live verification result SHA256 must match current bytes."
+
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "LIVE_ATTESTATION_EVIDENCE_PATH=$evidenceRelativePath"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTESTATION_BUNDLE_PATH=$bundleRelativePath"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTESTATION_REPOSITORY=$($contract.verificationPolicy.repository)"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTESTATION_SIGNER_WORKFLOW=$($contract.verificationPolicy.signerWorkflow)"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTESTATION_PREDICATE_TYPE=$($contract.verificationPolicy.predicateType)"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTESTATION_SOURCE_REF=refs/heads/main"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTESTATION_SOURCE_SHA=$sourceSha"
+
+      - name: Verify live attestation for downloaded VSIX
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $resultPath = "target/marketplace-publication/win32-x64/gh-attestation-verification.json"
+          $verification = gh attestation verify $env:SUBJECT_PATH -R $env:ATTESTATION_REPOSITORY --bundle $env:ATTESTATION_BUNDLE_PATH --signer-workflow $env:ATTESTATION_SIGNER_WORKFLOW --signer-digest $env:ATTESTATION_SOURCE_SHA --source-ref $env:ATTESTATION_SOURCE_REF --source-digest $env:ATTESTATION_SOURCE_SHA --predicate-type $env:ATTESTATION_PREDICATE_TYPE --deny-self-hosted-runners --format json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Live attestation verification failed for the downloaded VSIX."
+          }
+          $verification | Set-Content -LiteralPath $resultPath -Encoding utf8
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTESTATION_VERIFICATION_RESULT_PATH=$resultPath"
+
+      - name: Require packaged Marketplace prerelease property
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($env:SUBJECT_PATH)
+          try {
+            $manifestEntries = @($archive.Entries | Where-Object { $_.FullName -ceq "extension.vsixmanifest" })
+            if ($manifestEntries.Count -ne 1) {
+              throw "VSIX must contain exactly one extension.vsixmanifest."
+            }
+            $reader = [System.IO.StreamReader]::new($manifestEntries[0].Open())
+            try {
+              [xml]$manifest = $reader.ReadToEnd()
+            }
+            finally {
+              $reader.Dispose()
+            }
+          }
+          finally {
+            $archive.Dispose()
+          }
+
+          $properties = @($manifest.SelectNodes("//*[local-name()='PackageManifest']/*[local-name()='Metadata']/*[local-name()='Properties']/*[local-name()='Property' and @Id='Microsoft.VisualStudio.Code.PreRelease']"))
+          if ($properties.Count -ne 1 -or [string]$properties[0].Value -cne "true") {
+            throw "The exact released VSIX is not packaged as a Marketplace prerelease; refusing Azure login and publication."
+          }
+
+          $identities = @($manifest.SelectNodes("//*[local-name()='PackageManifest']/*[local-name()='Metadata']/*[local-name()='Identity']"))
+          if ($identities.Count -ne 1) {
+            throw "VSIX must contain exactly one Marketplace identity."
+          }
+          $identity = $identities[0]
+          if ([string]$identity.Id -cne "subversionr" -or [string]$identity.Publisher -cne "hitsuki-ban" -or [string]$identity.TargetPlatform -cne "win32-x64") {
+            throw "VSIX Marketplace identity must be hitsuki-ban.subversionr for win32-x64."
+          }
+          $extensionVersion = [string]$identity.Version
+          if ($extensionVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "VSIX Marketplace version must be an exact three-part numeric version."
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "EXTENSION_VERSION=$extensionVersion"
+
+      - name: Validate required Entra variables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_ID)) {
+            throw "Marketplace environment variable AZURE_CLIENT_ID is required."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_TENANT_ID)) {
+            throw "Marketplace environment variable AZURE_TENANT_ID is required."
+          }
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          version: 11.5.2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+
+      - name: Install locked publishing toolchain
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify locked vsce supports Entra credentials
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = Get-Content -Raw -LiteralPath package.json | ConvertFrom-Json
+          $configuredVersion = [string]$package.devDependencies."@vscode/vsce"
+          try {
+            $parsedVersion = [version]$configuredVersion
+          }
+          catch {
+            throw "@vscode/vsce must be pinned to an exact numeric version."
+          }
+          if ($parsedVersion -lt [version]"2.26.1") {
+            throw "@vscode/vsce must be at least 2.26.1 for --azure-credential."
+          }
+          $installedVersion = (pnpm exec vsce --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne $configuredVersion) {
+            throw "Installed vsce version must match the locked root dependency."
+          }
+
+      - name: Azure login with federated Marketplace identity
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Publish exact VSIX as Marketplace prerelease
+        shell: pwsh
+        run: pnpm exec vsce publish --packagePath $env:SUBJECT_PATH --pre-release --azure-credential
+
+      - name: Record Marketplace publication evidence
+        shell: pwsh
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass
+          -File scripts/release/record-marketplace-publication.ps1
+          -Target win32-x64
+          -ContractPath $env:ATTESTATION_CONTRACT_PATH
+          -LiveAttestationEvidencePath $env:LIVE_ATTESTATION_EVIDENCE_PATH
+          -AttestationVerificationResultPath $env:ATTESTATION_VERIFICATION_RESULT_PATH
+          -VsixPath $env:SUBJECT_PATH
+          -ReleaseTag $env:RELEASE_TAG
+          -ExtensionId hitsuki-ban.subversionr
+          -ExtensionVersion $env:EXTENSION_VERSION
+          -Repository $env:GITHUB_REPOSITORY
+          -WorkflowPath .github/workflows/publish-marketplace.yml
+          -RunId $env:GITHUB_RUN_ID
+          -RunAttempt $env:GITHUB_RUN_ATTEMPT
+          -RunUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          -HeadSha $env:GITHUB_SHA
+          -SourceRef $env:GITHUB_REF
+          -EventName $env:GITHUB_EVENT_NAME
+          -OutputPath target/release-evidence/subversionr-marketplace-publication-win32-x64.json
+
+      - name: Upload Marketplace publication evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: subversionr-marketplace-publication-win32-x64
+          if-no-files-found: error
+          path: |
+            target/marketplace-publication/win32-x64/gh-attestation-verification.json
+            target/release-evidence/subversionr-marketplace-publication-win32-x64.json

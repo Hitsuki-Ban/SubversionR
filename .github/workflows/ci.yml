@@ -154,6 +154,9 @@ jobs:
       - name: Release publication gaps script tests
         shell: pwsh
         run: pnpm release:test-publication-gaps-scripts
+      - name: Marketplace publication script tests
+        shell: pwsh
+        run: pnpm release:test-marketplace-publication-scripts
       - name: Release vulnerability review script tests
         shell: pwsh
         run: pnpm release:test-vulnerability-review-scripts

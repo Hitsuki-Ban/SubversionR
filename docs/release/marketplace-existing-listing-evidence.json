@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.release.marketplace-existing-listing.v1",
+  "publicReadinessClaim": false,
+  "observedAt": "2026-07-10T17:00:09Z",
+  "source": {
+    "provider": "visual-studio-marketplace-public-gallery-api",
+    "endpoint": "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery",
+    "extensionPage": "https://marketplace.visualstudio.com/items?itemName=hitsuki-ban.subversionr"
+  },
+  "listing": {
+    "extensionId": "hitsuki-ban.subversionr",
+    "displayName": "SVN-R",
+    "version": "0.1.0",
+    "targetPlatform": "win32-x64",
+    "versionCount": 1,
+    "lastUpdated": "2026-06-30T05:30:33.993Z",
+    "status": "pre-existing-manual-publication"
+  },
+  "currentCandidate": {
+    "version": "0.2.0",
+    "publishedByEntraPipeline": false,
+    "publicationEvidenceRecorded": false
+  },
+  "nonClaims": [
+    "This observation does not prove Marketplace public install or acquisition.",
+    "This observation does not prove publisher membership or Entra pipeline publication.",
+    "This observation does not claim that version 0.2.0 is published.",
+    "This observation does not claim public release readiness."
+  ]
+}
