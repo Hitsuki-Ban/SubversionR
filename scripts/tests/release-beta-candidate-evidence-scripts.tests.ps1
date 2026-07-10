@@ -558,15 +558,15 @@ function New-BetaCandidateFixture([string]$Root) {
         bundleRecorded = $true
         attestationUrlRecorded = $true
         verified = $true
-        runUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29087683655"
-        attestationUrl = "https://github.com/Hitsuki-Ban/SubversionR/attestations/34733676"
+        runUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425"
+        attestationUrl = "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487"
         bundlePath = Convert-ToRepoRelativePath $attestationBundlePath
         bundleSha256 = Get-Sha256 $attestationBundlePath
         verificationResultPath = Convert-ToRepoRelativePath $attestationVerificationPath
         verificationResultSha256 = Get-Sha256 $attestationVerificationPath
         sourceRef = "refs/heads/codex/issue-5-live-attestation"
-        sourceDigest = "4a84e7a601f86227756af1e377dc4fa4bcc5caaf"
-        signerDigest = "4a84e7a601f86227756af1e377dc4fa4bcc5caaf"
+        sourceDigest = "99a440316dd281fd9c72f2f432bbc78734c0f127"
+        signerDigest = "99a440316dd281fd9c72f2f432bbc78734c0f127"
         evidencePath = Convert-ToRepoRelativePath $liveAttestationPath
         evidenceSha256 = Get-Sha256 $liveAttestationPath
       }
@@ -581,8 +581,8 @@ function New-BetaCandidateFixture([string]$Root) {
     publicCutover = [pscustomobject]@{
       release = [pscustomobject]@{
         artifactAttestationPublished = $true
-        attestationRunUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29087683655"
-        attestationUrl = "https://github.com/Hitsuki-Ban/SubversionR/attestations/34733676"
+        attestationRunUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425"
+        attestationUrl = "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487"
         attestationEvidencePath = Convert-ToRepoRelativePath $liveAttestationPath
         attestationEvidenceSha256 = Get-Sha256 $liveAttestationPath
       }

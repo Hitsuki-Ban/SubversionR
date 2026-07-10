@@ -5,10 +5,10 @@
   "signingClaim": false,
   "target": "win32-x64",
   "status": "live-attestation-verified",
-  "generatedAt": "2026-07-10T10:54:09.2741463Z",
+  "generatedAt": "2026-07-10T11:28:05.0792681Z",
   "contract": {
     "path": "docs/release/github-attestation-contract.win32-x64.json",
-    "sha256": "217490e4ae991e9808dcb4955ddd526591f42ee57e9aa5807e6d1434fdb4db4c",
+    "sha256": "da734e611fa918710d3ac21a2b925fdf4bce0adb8c963403d2959f938605f7ce",
     "schema": "subversionr.release.github-attestation-contract.win32-x64.v1"
   },
   "release": {
@@ -24,40 +24,45 @@
   "workflow": {
     "path": ".github/workflows/attest-release-vsix.yml",
     "event": "workflow_dispatch",
-    "runId": "29087683655",
+    "runId": "29089455425",
     "runAttempt": 1,
-    "runUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29087683655",
-    "headSha": "4a84e7a601f86227756af1e377dc4fa4bcc5caaf",
+    "runUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
+    "headSha": "99a440316dd281fd9c72f2f432bbc78734c0f127",
     "sourceRef": "refs/heads/codex/issue-5-live-attestation"
   },
   "attestation": {
     "provider": "github-artifact-attestations",
-    "action": "actions/attest-build-provenance@v4",
-    "actionDigest": "0f67c3f4856b2e3261c31976d6725780e5e4c373",
-    "predicateType": "https://slsa.dev/provenance/v1",
-    "id": "34733676",
-    "url": "https://github.com/Hitsuki-Ban/SubversionR/attestations/34733676",
-    "outputSource": "actions/attest-build-provenance outputs",
+    "action": "actions/attest@v4",
+    "actionDigest": "a1948c3f048ba23858d222213b7c278aabede763",
+    "predicateType": "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+    "predicateSchemaPath": "docs/release/post-release-asset-verification-predicate.v1.schema.json",
+    "predicateSchema": "subversionr.release.post-release-asset-verification-predicate.v1",
+    "predicateClaim": "post-release-asset-digest-verification",
+    "originalBuildProvenanceClaim": false,
+    "artifactSignatureClaim": false,
+    "id": "34738487",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
+    "outputSource": "actions/attest outputs",
     "bundlePath": "docs/release/github-attestation-bundle.win32-x64.json",
-    "bundleSha256": "e58d44b305296c9a0c7736064787ffec007febe8c84de9da630218a52aebeb4e"
+    "bundleSha256": "b6d4112c9d94bd160fbc66c503d3074b2d7071b59782564b320eb8610536d389"
   },
   "verification": {
     "verified": true,
     "repository": "Hitsuki-Ban/SubversionR",
     "signerWorkflow": "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",
-    "predicateType": "https://slsa.dev/provenance/v1",
+    "predicateType": "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
     "denySelfHostedRunners": true,
     "format": "json",
     "bundleMatched": true,
-    "command": "gh attestation verify target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix -R Hitsuki-Ban/SubversionR --bundle docs/release/github-attestation-bundle.win32-x64.json --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest 4a84e7a601f86227756af1e377dc4fa4bcc5caaf --source-ref refs/heads/codex/issue-5-live-attestation --source-digest 4a84e7a601f86227756af1e377dc4fa4bcc5caaf --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners --format json",
+    "command": "gh attestation verify target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix -R Hitsuki-Ban/SubversionR --bundle docs/release/github-attestation-bundle.win32-x64.json --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest 99a440316dd281fd9c72f2f432bbc78734c0f127 --source-ref refs/heads/codex/issue-5-live-attestation --source-digest 99a440316dd281fd9c72f2f432bbc78734c0f127 --predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1 --deny-self-hosted-runners --format json",
     "resultPath": "docs/release/github-attestation-verification.win32-x64.json",
-    "resultSha256": "ed56af2832064ffc4274f1eee172b9fb4e233ee4d3e494da5556a3b513ddb1b9",
+    "resultSha256": "1843e92706c67e1f902cebb86d8d92cbb75288e0b539c5e041bfb4b8103faaa2",
     "certificate": {
       "signerIdentity": "https://github.com/Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml@refs/heads/codex/issue-5-live-attestation",
-      "workflowSha": "4a84e7a601f86227756af1e377dc4fa4bcc5caaf",
+      "workflowSha": "99a440316dd281fd9c72f2f432bbc78734c0f127",
       "workflowRef": "refs/heads/codex/issue-5-live-attestation",
       "runnerEnvironment": "github-hosted",
-      "runInvocationUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29087683655/attempts/1",
+      "runInvocationUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425/attempts/1",
       "sourceVisibility": "public"
     }
   },

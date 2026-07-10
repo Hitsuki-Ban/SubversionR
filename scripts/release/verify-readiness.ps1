@@ -223,8 +223,8 @@ function Assert-PublicCutoverRunbook([object]$Document) {
     "subversionr-pr-fast",
     "v0.2.0-beta.1",
     "docs/release/github-attestation-evidence.win32-x64.json",
-    "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29087683655",
-    "https://github.com/Hitsuki-Ban/SubversionR/attestations/34733676",
+    "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
+    "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
     "publicReadinessClaim=false"
   ) "public cutover runbook"
 }
@@ -6354,7 +6354,7 @@ Assert-Terms $attestationPredicateSchema @(
   '"subjectSha256Matched"'
 ) "post-release asset verification predicate schema coverage"
 Assert-Terms $attestationPredicateGenerator @(
-  "generate-post-release-asset-verification-predicate.ps1",
+  "verify-release-attestation-subject.ps1",
   "post-release-asset-digest-verification",
   "originalBuildProvenanceClaim = `$false",
   "artifactSignatureClaim = `$false",
@@ -6380,19 +6380,19 @@ Assert-Terms $attestationVerification @(
   '"originalBuildProvenanceClaim":false',
   '"artifactSignatureClaim":false',
   "refs/heads/codex/issue-5-live-attestation",
-  "4a84e7a601f86227756af1e377dc4fa4bcc5caaf"
+  "99a440316dd281fd9c72f2f432bbc78734c0f127"
 ) "source-controlled exact GitHub attestation verification coverage"
 Assert-Terms $liveAttestationEvidence @(
   "subversionr.release.live-github-attestation.win32-x64.v1",
   '"publicReadinessClaim": false',
   '"signingClaim": false',
   '"status": "live-attestation-verified"',
-  "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29087683655",
-  "https://github.com/Hitsuki-Ban/SubversionR/attestations/34733676",
-  "e58d44b305296c9a0c7736064787ffec007febe8c84de9da630218a52aebeb4e",
-  "ed56af2832064ffc4274f1eee172b9fb4e233ee4d3e494da5556a3b513ddb1b9",
+  "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
+  "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
+  "b6d4112c9d94bd160fbc66c503d3074b2d7071b59782564b320eb8610536d389",
+  "1843e92706c67e1f902cebb86d8d92cbb75288e0b539c5e041bfb4b8103faaa2",
   "refs/heads/codex/issue-5-live-attestation",
-  "4a84e7a601f86227756af1e377dc4fa4bcc5caaf",
+  "99a440316dd281fd9c72f2f432bbc78734c0f127",
   "--bundle docs/release/github-attestation-bundle.win32-x64.json",
   '"predicateClaim": "post-release-asset-digest-verification"',
   '"originalBuildProvenanceClaim": false',
