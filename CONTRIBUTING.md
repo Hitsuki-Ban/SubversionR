@@ -39,7 +39,7 @@ pnpm native:smoke-bridge:staged
 
 ## Requirement Status
 
-`Reference/requirements.csv` is the authoritative requirement catalog. Its `status` column records specification approval only.
+The authoritative requirement catalog records specification approval and lives in the private planning archive since the public cutover. Maintainers cross-check the public evidence mapping against it with `scripts/release/verify-requirement-catalog-alignment.ps1`.
 
 `docs/release/requirements-release-evidence.csv` maps every P0/P1 requirement to release evidence state:
 
@@ -62,4 +62,4 @@ Do not treat `Approved` specification status as implemented or verified product 
 
 `.github/workflows/pr-fast.yml` is the automatic pull request gate for lightweight TypeScript, Rust, localization, and script checks.
 
-`.github/workflows/ci.yml` remains the manually triggered release workflow. It contains heavy native build, packaging, VSIX install, vulnerability, and release-evidence gates and must not be used as an automatic PR gate until it is split further.
+`.github/workflows/ci.yml` is the heavy release workflow, triggered manually or by the weekly schedule. It contains native build, packaging, VSIX install, vulnerability, and release-evidence gates and must not be used as an automatic PR gate until it is split further.
