@@ -235,10 +235,14 @@ function Invoke-SupportIntakeChecks() {
 }
 
 function Invoke-RequirementEvidenceRuleChecks() {
-  $requirementsCatalog = Read-RequiredCsv -RepoRoot $repoRoot -RelativePath "Reference/requirements.csv"
+  # The requirements catalog lives in the private planning archive since the
+  # public cutover. The public gate verifies the release evidence CSV's own
+  # integrity; catalog alignment runs as the explicit maintainer-side gate
+  # scripts/release/verify-requirement-catalog-alignment.ps1 against the
+  # archived catalog.
   $requirementsEvidence = Read-RequiredCsv -RepoRoot $repoRoot -RelativePath "docs/release/requirements-release-evidence.csv" -Path $RequirementsEvidencePath
 
-  Assert-RequirementReleaseEvidenceCoverage $requirementsCatalog $requirementsEvidence
+  Assert-RequirementReleaseEvidenceIntegrity $requirementsEvidence
   Assert-RequirementEvidenceRefsResolve -EvidenceCsv $requirementsEvidence -RepoRoot $repoRoot
 
   foreach ($id in @(
@@ -353,7 +357,6 @@ function Invoke-RequirementEvidenceRuleChecks() {
   }
 
   [pscustomobject]@{
-    RequirementsCatalog = $requirementsCatalog
     RequirementsEvidence = $requirementsEvidence
   }
 }
@@ -538,7 +541,6 @@ $cloudflarePrFastBridgeScript = Read-RequiredDocument "scripts/ci/cloudflare-pr-
 $cloudflarePrFastWorkerScript = Read-RequiredDocument "scripts/ci/cloudflare-pr-fast-worker.mjs"
 $cloudflarePrFastWranglerConfig = Read-RequiredDocument "scripts/ci/cloudflare-pr-fast.wrangler.jsonc"
 $readinessRules = Invoke-RequirementEvidenceRuleChecks
-$requirementsCatalog = $readinessRules.RequirementsCatalog
 $requirementsEvidence = $readinessRules.RequirementsEvidence
 Assert-RequirementEvidenceRefs $requirementsEvidence "COM-001" @(
   "docs/plans/m4-core-scm-operations.md",
