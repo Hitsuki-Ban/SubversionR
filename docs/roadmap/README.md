@@ -1,28 +1,28 @@
 # SubversionR Roadmap
 
-SubversionR development starts in a private repository and keeps history suitable for later public release.
+SubversionR is developed in the public repository with milestone history, release claims, and evidence gates kept reviewable alongside the implementation.
 
 ## Current Engineering Focus
 
-After the Windows Beta local workflow closure, installed VSIX evidence expansion, Beta candidate consistency gate, and PR #157 security evidence reconciliation, the main implementation focus remains Windows `win32-x64` Beta packaging readiness. New work should prioritize semantic hardening of the Beta candidate verifier, installed VSIX negative/failure-flow breadth for the implemented local workflows, and claim/evidence alignment before adding more publication-only preflight slices or post-Beta SVN features.
+After the Windows Beta local workflow closure, installed VSIX evidence expansion, Beta candidate consistency gate, and security evidence reconciliation, the main implementation focus remains Windows `win32-x64` Beta packaging readiness. New work should prioritize semantic hardening of the Beta candidate verifier, installed VSIX negative/failure-flow breadth for the implemented local workflows, and claim/evidence alignment before adding more publication-only preflight slices or post-Beta SVN features.
 
 ## Windows Beta Closure
 
-The Windows `win32-x64` Beta local workflow scope now covers checkout/open, status, add/remove/move/revert/resolve/update/commit/delete-unversioned, update-to-revision/depth/externals policy, properties and `svn:ignore`, changelists, lock/unlock, branch/tag create, and switch through the TypeScript adapter, Rust sidecar, and private `libsvn` bridge. Merge, merge preview, mergeinfo, Marketplace/public installation, signing/provenance publication, previous-stable rollback, cross-platform packages, broad remote/auth matrices, and coverage-guided native remote-protocol fuzzing remain outside the Beta claim.
+The Windows `win32-x64` Beta local workflow scope now covers checkout/open, status, add/remove/move/revert/resolve/update/commit/delete-unversioned, update-to-revision/depth/externals policy, properties and `svn:ignore`, changelists, lock/unlock, branch/tag create, and switch through the TypeScript adapter, Rust sidecar, and native `libsvn` bridge. Merge, merge preview, mergeinfo, Marketplace/public installation, signing/provenance publication, previous-stable rollback, cross-platform packages, broad remote/auth matrices, and coverage-guided native remote-protocol fuzzing remain outside the Beta claim.
 
 ## Windows Beta Packaging Readiness
 
-The Beta package can be considered for internal candidate distribution only after the implemented local workflows have installed VS Code/VSIX evidence, the state engine has a minimum Windows-local performance gate, and the candidate VSIX plus release evidence are verified as a single same-run bundle. The packaging-readiness track is intentionally narrower than public release readiness:
+The Beta package can be considered for candidate distribution only after the implemented local workflows have installed VS Code/VSIX evidence, the state engine has a minimum Windows-local performance gate, and the candidate VSIX plus release evidence are verified as a single same-run bundle. The packaging-readiness track is intentionally narrower than public release readiness:
 
 - Installed E2E first: local-file Checkout Repository URL prompt cancellation, pre-existing obstructing target file failure/no-state-pollution flow, invalid URL failure/no-state-pollution flow, pre-existing local directory target success path, pre-existing local directory obstruction tree-conflict projection path, happy path, Update to Revision happy path plus revision prompt cancellation/no-state-pollution flow, Add to Ignore/`svn:ignore`, changelist set/clear/commit/revert, Lock/Unlock/`svn:needs-lock`, Branch/Tag create, and Switch happy paths are covered; next installed slices should cover remaining checkout remote/auth/browser and broader failure flows, update remote/backend-failure/load edges, branch/switch target-browsing and edge/load behavior, and remaining failure/cancellation behavior.
 - State-engine floor: Beta-F records `pnpm release:test-state-engine-beta-performance:win32-x64` evidence that single-file saves must not trigger full scans, event bursts must stay bounded, nested working copies and externals must remain isolated, dirty-generation supersede must not publish stale results, sidecar restart must recover or mark stale, and a 10k local working copy must have a recorded baseline. Native watcher production, adaptive cost feedback, 100k/1M scale, idle CPU measurement, and default background remote polling remain outside this floor.
 - Candidate bundle consistency: Beta-G records `pnpm release:verify-beta-candidate:win32-x64` evidence that the current VSIX bytes, VSIX package evidence, installed VSIX evidence, native artifact map, provenance, publication gaps, state-engine floor, artifact bundle manifest, and explicit CI upload allowlist all belong to the same candidate bundle before CI uploads `subversionr-win32-x64-beta-candidate` with `actions/upload-artifact@v7`. The manual preparation entrypoint is `pnpm release:prepare-beta-candidate:win32-x64`, which regenerates the default candidate evidence paths in dependency order, runs `pnpm release:generate-beta-artifact-bundle-manifest:win32-x64`, and then runs the final consistency verifier.
-- CI discipline: Cloudflare PR Fast is a portable subset only; local Windows validation and manual heavy gates remain explicit until Windows runner coverage is restored.
+- CI discipline: `.github/workflows/pr-fast.yml` is the automatic Windows pull-request gate; heavy native, packaging, installed-product, advisory, and publication gates remain scheduled/manual.
 - Claim discipline: Beta may claim local file-backed Windows `win32-x64` workflows only. Public release, Marketplace, signing/provenance, previous-stable rollback, broad remote/auth, cross-platform, coverage-guided fuzzing, merge, merge preview, and mergeinfo remain outside the Beta package claim.
 
 ## Milestones
 
-- M0: private repository, environment baseline, CI, and documentation contract.
+- M0: repository, environment, CI, and documentation baseline.
 - M1: Apache Subversion 1.14.5 source gate, narrow C ABI, Rust sidecar, TypeScript extension, and protocol smoke.
 - M2: repository discovery/open/close and minimal status snapshot.
 - M3: dirty-path status engine with generation, epoch, targeted status, full reconcile, backend restart/heartbeat degradation handling, global degraded-backend context/status-bar surfacing, client-side status refresh cancellation/stale handling, and daemon/native status plus operation cancellation execution.

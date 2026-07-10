@@ -130,7 +130,7 @@ Migration and rollback release blockers:
 - The M7f fixture hashes a fixture-local `.svn/wc.db` sentinel before and after package install, upgrade, and rollback to keep working-copy non-mutation observable in CI. This is not a substitute for previous-stable installed-product migration E2E.
 - Upgrade and rollback tests from the previous stable release once a stable release exists (`MIG-010`).
 - User-visible migration report for imported or changed settings and command behavior (`MIG-011`).
-- Legacy compatibility only where `Reference/legacy_migration.csv` explicitly requires it.
+- Legacy compatibility only for the explicitly reviewed aliases documented in `docs/plans/m5-content-diff-history.md` and covered by command/manifest tests.
 - No silent semantic change from legacy commands or settings.
 
 ## Security And Support Gates

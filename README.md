@@ -2,7 +2,7 @@
 
 SubversionR is a native Apache Subversion (SVN) client for Visual Studio Code. It talks to `libsvn` directly through a bundled Rust sidecar and C bridge — no `svn` command line, no TortoiseSVN dependency, and no Git-flavored reinterpretation of SVN concepts.
 
-The current public target is a Windows `win32-x64` Beta package distributed as a VSIX from GitHub Releases after the public cutover. It is not yet a Marketplace or cross-platform release.
+The current public target is a Windows `win32-x64` Beta package distributed as a VSIX from GitHub Releases. It is not yet a Marketplace or cross-platform release.
 
 ## Install From Releases
 
@@ -45,7 +45,7 @@ For security vulnerabilities, follow [SECURITY.md](SECURITY.md) instead of openi
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Release governance, claim boundaries, and readiness gates live under [docs/release/](docs/release/), and the development roadmap lives under [docs/roadmap/](docs/roadmap/).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Start with the [engineering onboarding guide](docs/onboarding/ENGINEERING_HANDOFF.md) and the [Architecture Decision Records](docs/adr/README.md). Release governance, claim boundaries, and readiness gates live under [docs/release/](docs/release/), and the development roadmap lives under [docs/roadmap/](docs/roadmap/).
 
 ## License And Attribution
 

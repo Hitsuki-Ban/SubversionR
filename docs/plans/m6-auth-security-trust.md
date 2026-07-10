@@ -10,7 +10,7 @@ The first M6 slice establishes the VS Code Workspace Trust baseline for currentl
 
 - The extension manifest declares limited untrusted-workspace support through `capabilities.untrustedWorkspaces`.
 - The trust description states the concrete Restricted Mode surface: local read-only SVN status, BASE content, and already loaded history metadata can remain available while write operations, update/commit remote operations, external tool integrations, and custom SVN config/tunnel settings require workspace trust.
-- The first-stage backend path settings from M3c were a private development limitation and were removed in M6f; current startup uses mandatory packaged backend resources instead.
+- The first-stage backend path settings from M3c were a development-only limitation and were removed in M6f; current startup uses mandatory packaged backend resources instead.
 - The Source Control, editor context, and history view menus hide currently implemented write, update, remote content, history loading, blame, line history, and revision-compare commands in untrusted workspaces via VS Code's `isWorkspaceTrusted` context key.
 - The Source Control commit input affordance is trust-aware outside manifest menus: untrusted workspaces remove the `subversionr.commitAll` accept-input command and show a localized Restricted Mode placeholder, then restore the commit command after workspace trust is granted.
 - Runtime command handlers enforce the same trust boundary before side effects, so direct command invocation through keybindings, command palette routing, or extension API calls cannot bypass the menu condition.
@@ -142,7 +142,7 @@ This slice intentionally does not launch TortoiseSVN, detect Tortoise installati
 
 ## M6f Implemented Slice
 
-The sixth M6 slice replaces the first-stage private-development backend path requirement with mandatory packaged backend resources, closing the Restricted Mode startup gap identified in M6a:
+The sixth M6 slice replaces the first-stage development-only backend path requirement with mandatory packaged backend resources, closing the Restricted Mode startup gap identified in M6a:
 
 - The VS Code extension resolves backend resources from its own installed extension directory via `ExtensionContext.asAbsolutePath`.
 - The only supported packaged target in this slice is `win32-x64`, matching the current Windows-first development and CI baseline.

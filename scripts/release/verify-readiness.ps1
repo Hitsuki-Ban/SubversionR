@@ -128,13 +128,7 @@ function Assert-TableStatusIn([object]$Document, [string]$Key, [string[]]$Allowe
   }
 }
 
-function Assert-PrFastWorkflow(
-  [object]$Workflow,
-  [object]$CloudflareBridgeDoc,
-  [object]$CloudflareBridgeScript,
-  [object]$CloudflareWorkerScript,
-  [object]$CloudflareWranglerConfig
-) {
+function Assert-PrFastWorkflow([object]$Workflow) {
   Assert-Terms $Workflow @(
     "pull_request:",
     "push:",
@@ -162,40 +156,121 @@ function Assert-PrFastWorkflow(
   if ($Workflow.Content -match "native:build-deps|native:build-subversion|native:build-bridge|native:smoke-bridge|release:package-vsix|release:test-vsix|release:test-installed|release:install-rollback|release:generate-live-osv-review|release:verify-live-osv-review|release:generate-native-remote-fuzz-fixed-seed-smoke|release:verify-native-remote-fuzz-fixed-seed-smoke|release:test-native-remote-fuzz-fixed-seed-smoke-scripts|cargo\s+\+nightly\s+fuzz") {
     throw ".github/workflows/pr-fast.yml: PR Fast gate must not run heavy native build, VSIX packaging, installed VS Code, live vulnerability review, or fixed-seed fuzz build/run flows."
   }
-  Assert-Terms $CloudflareBridgeDoc @(
-    "Cloudflare Workers Builds bridge",
-    'Build command: `node scripts/ci/cloudflare-pr-fast-bridge.mjs`',
-    "Preview deploy command:",
-    '`pnpm release:test-state-engine-beta-performance:win32-x64`',
-    "scheduled for retirement at the public repository migration",
-    "PR Fast / windows",
-    "disconnect Workers Builds from the repository",
-    "keep this document for historical evidence",
-    "Do not store the GitHub token, Cloudflare API token, webhook secret, deploy hook URL, or build token in this repository."
-  ) "temporary Cloudflare PR Fast bridge documentation"
-  Assert-Terms $CloudflareBridgeScript @(
-    'const powershellVersion = "7.6.3"',
-    'commandExists("pwsh")',
-    'powershell-${powershellVersion}-linux-x64.tar.gz',
-    'process.env.PATH = `${powershellInstallDirectory}:${process.env.PATH}`',
-    "pnpm install --frozen-lockfile",
-    "pnpm -r check",
-    "pnpm -r test",
-    "pnpm release:test-state-engine-beta-performance:win32-x64",
-    'cargo +${rustToolchain} fmt --all -- --check',
-    'cargo +${rustToolchain} test --workspace --lib',
-    'cargo +${rustToolchain} test -p subversionr-protocol --test protocol_contract'
-  ) "temporary Cloudflare PR Fast bridge command coverage"
-  Assert-Terms $CloudflareWorkerScript @(
-    "SubversionR PR Fast Cloudflare bridge",
-    "text/plain; charset=utf-8"
-  ) "temporary Cloudflare PR Fast worker response contract"
-  Assert-Terms $CloudflareWranglerConfig @(
-    '"name": "subversionr-pr-fast"',
-    '"main": "cloudflare-pr-fast-worker.mjs"',
-    '"workers_dev": true',
-    '"preview_urls": false'
-  ) "temporary Cloudflare PR Fast Wrangler routing contract"
+}
+
+function Assert-RetiredCloudflareBridgeDoc([object]$Document) {
+  Assert-Terms $Document @(
+    "# Retired Cloudflare PR Fast Bridge",
+    'Retirement date: `2026-07-10`',
+    "zero build triggers",
+    "repository connection was removed",
+    'no longer has a build configuration associated with `subversionr-pr-fast`',
+    ".github/workflows/pr-fast.yml",
+    "Git history preserves the exact implementation",
+    "No Cloudflare live identifiers"
+  ) "retired Cloudflare PR Fast bridge record"
+  $forbiddenPatterns = [ordered]@{
+    "private repository identifier" = 'Hitsuki-Ban[\\/]+SubversionR-private'
+    "retired bridge source path" = 'cloudflare-pr-fast-(?:bridge|worker)\.mjs|cloudflare-pr-fast\.wrangler\.jsonc'
+    "Wrangler deployment command" = '\bwrangler(?:@[^\s`]+)?\b.{0,80}\b(?:deploy|versions\s+upload)\b'
+    "GitHub integration reconnection instruction" = '(?:\b(?:reconnect|reinstall)\b.{0,80}\b(?:github\s+(?:integration|app)|git\s+integration)\b)|(?:\b(?:github\s+(?:integration|app)|git\s+integration)\b.{0,80}\b(?:reconnect|reinstall)\b)'
+    "webhook signature relay instruction" = '\b(?:x[- ]?hub[- ]?signature[- ]?256|webhook.{0,40}signature|signature.{0,40}webhook)\b'
+  }
+  foreach ($category in $forbiddenPatterns.Keys) {
+    if ([regex]::IsMatch($Document.Content, [string]$forbiddenPatterns[$category], [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+      throw "$($Document.RelativePath): retired bridge record must not contain $category."
+    }
+  }
+}
+
+function Read-AndAssertArchitectureDecisionRecords() {
+  $contracts = [ordered]@{
+    "docs/adr/ADR-001-typescript-rust-libsvn-architecture.md" = @(
+      "# ADR-001: TypeScript UI, Rust Sidecar, and libsvn",
+      "The VS Code UI and adapter are implemented in TypeScript.",
+      "Native and long-running work runs in a Rust sidecar",
+      "libsvn is authoritative for SVN semantics."
+    )
+    "docs/adr/ADR-002-stdio-rpc-transport.md" = @(
+      "# ADR-002: Stdio RPC Transport",
+      "framed RPC over the child process's standard input and output",
+      "The sidecar does not open a listening port."
+    )
+    "docs/adr/ADR-003-bundled-libsvn-runtime.md" = @(
+      "# ADR-003: Bundled libsvn Runtime",
+      "The bundled libsvn and its packaged native dependencies are the default production runtime.",
+      "Core workflows do not depend on a system"
+    )
+    "docs/adr/ADR-004-working-copy-database-integrity.md" = @(
+      "# ADR-004: Working Copy Database Integrity",
+      "SubversionR never writes",
+      "any read-only optimization must not replace libsvn confirmation where correctness matters."
+    )
+    "docs/adr/ADR-005-dirty-path-status-refresh.md" = @(
+      "# ADR-005: Dirty-Path Status Refresh",
+      "Ordinary local status refresh targets the dirty paths",
+      "Low-frequency full reconciliation is a separate repair mechanism"
+    )
+    "docs/adr/ADR-006-local-and-remote-status-scheduling.md" = @(
+      "# ADR-006: Local and Remote Status Scheduling",
+      "Local and remote status are scheduled independently.",
+      "Remote status is manual-first, with no default background remote polling."
+    )
+    "docs/adr/ADR-007-sidecar-process-lifetime.md" = @(
+      "# ADR-007: Sidecar Process Lifetime",
+      "Each Extension Host starts one Rust sidecar",
+      "shares it across all repositories managed by that host."
+    )
+    "docs/adr/ADR-008-stable-vscode-apis.md" = @(
+      "# ADR-008: Stable VS Code APIs",
+      "Core functionality uses stable VS Code APIs and does not depend on proposed APIs."
+    )
+    "docs/adr/ADR-009-optional-tortoisesvn-adapter.md" = @(
+      "# ADR-009: Optional TortoiseSVN Adapter",
+      "TortoiseSVN is an optional adapter integration, not a core dependency.",
+      "Missing TortoiseSVN does not break or weaken native core workflows."
+    )
+    "docs/adr/ADR-010-credential-storage.md" = @(
+      "# ADR-010: Credential Storage",
+      "Persistent credentials are stored only in VS Code SecretStorage.",
+      "credential persistence fails closed",
+      "does not fall back to settings, extension caches, sidecar storage, diagnostics, or the standard SVN auth cache"
+    )
+    "docs/adr/ADR-011-cache-source-of-truth.md" = @(
+      "# ADR-011: Cache Source of Truth",
+      "All SubversionR caches are discardable.",
+      "The working copy, interpreted through libsvn, is the external source of truth."
+    )
+    "docs/adr/ADR-012-svn-terminology.md" = @(
+      "# ADR-012: SVN Terminology",
+      "SubversionR uses SVN terminology and semantics.",
+      "It does not invent staging, push/pull, Git commit graphs, or other fake Git equivalents."
+    )
+  }
+
+  $index = Read-RequiredDocument "docs/adr/README.md"
+  Assert-Terms $index @(
+    "# Architecture Decision Records",
+    "## Governance",
+    "ADR numbers are stable and are never reused or renumbered.",
+    "requires a new ADR and product, architecture, security, and QA review",
+    "each superseded record must link to its replacement"
+  ) "public architecture decision governance coverage"
+
+  $records = [ordered]@{}
+  foreach ($path in $contracts.Keys) {
+    $record = Read-RequiredDocument $path
+    $title = ([string]$contracts[$path][0]).Substring(2)
+    Assert-Terms $index @("[$title]($(Split-Path -Leaf $path))") "public architecture decision index entry"
+    Assert-Terms $record (@(
+        "Status: Accepted",
+        "## Context",
+        "## Decision",
+        "## Consequences"
+      ) + @($contracts[$path])) "public architecture decision contract"
+    $records[$path] = $record
+  }
+  $records
 }
 
 function Assert-GithubActionsRestorationDoc([object]$Document) {
@@ -206,8 +281,8 @@ function Assert-GithubActionsRestorationDoc([object]$Document) {
     "workflow_dispatch",
     "weekly schedule",
     "PR Fast / windows",
-    "Public Cutover Checklist",
-    "Private workflow disable date: not cut over.",
+    "## Cutover State",
+    "Private-repository workflow disablement remains a separate owner operation",
     "scheduled/manual",
     "not part of automatic PR validation"
   ) "GitHub Actions restoration documentation"
@@ -371,12 +446,9 @@ if ($Mode -eq "rule") {
 }
 
 if ($Mode -eq "smoke") {
-  Assert-PrFastWorkflow `
-    (Read-RequiredDocument ".github/workflows/pr-fast.yml") `
-    (Read-RequiredDocument "docs/ci/cloudflare-pr-fast-bridge.md") `
-    (Read-RequiredDocument "scripts/ci/cloudflare-pr-fast-bridge.mjs") `
-    (Read-RequiredDocument "scripts/ci/cloudflare-pr-fast-worker.mjs") `
-    (Read-RequiredDocument "scripts/ci/cloudflare-pr-fast.wrangler.jsonc")
+  Assert-PrFastWorkflow (Read-RequiredDocument ".github/workflows/pr-fast.yml")
+  Assert-RetiredCloudflareBridgeDoc (Read-RequiredDocument "docs/ci/cloudflare-pr-fast-bridge.md")
+  $null = Read-AndAssertArchitectureDecisionRecords
   Assert-GithubActionsRestorationDoc `
     (Read-RequiredDocument "docs/ci/github-actions-restoration.md")
   Assert-PublicCutoverRunbook `
@@ -409,6 +481,9 @@ $liveAttestationRecorder = Read-RequiredDocument "scripts/release/record-live-gi
 $liveAttestationScriptTests = Read-RequiredDocument "scripts/tests/release-live-attestation-scripts.tests.ps1"
 $projectReadme = Read-RequiredDocument "README.md"
 $engineeringHandoff = Read-RequiredDocument "docs/onboarding/ENGINEERING_HANDOFF.md"
+$architectureDecisions = Read-AndAssertArchitectureDecisionRecords
+$stableVsCodeApiAdr = $architectureDecisions["docs/adr/ADR-008-stable-vscode-apis.md"]
+$credentialStorageAdr = $architectureDecisions["docs/adr/ADR-010-credential-storage.md"]
 $m2Plan = Read-RequiredDocument "docs/plans/m2-repository-status-snapshot.md"
 $m3Plan = Read-RequiredDocument "docs/plans/m3-dirty-path-status-engine.md"
 $m4Plan = Read-RequiredDocument "docs/plans/m4-core-scm-operations.md"
@@ -547,9 +622,6 @@ $ciWorkflow = Read-RequiredDocument ".github/workflows/ci.yml"
 $fastPrWorkflow = Read-RequiredDocument ".github/workflows/pr-fast.yml"
 $cloudflarePrFastBridgeDoc = Read-RequiredDocument "docs/ci/cloudflare-pr-fast-bridge.md"
 $githubActionsRestorationDoc = Read-RequiredDocument "docs/ci/github-actions-restoration.md"
-$cloudflarePrFastBridgeScript = Read-RequiredDocument "scripts/ci/cloudflare-pr-fast-bridge.mjs"
-$cloudflarePrFastWorkerScript = Read-RequiredDocument "scripts/ci/cloudflare-pr-fast-worker.mjs"
-$cloudflarePrFastWranglerConfig = Read-RequiredDocument "scripts/ci/cloudflare-pr-fast.wrangler.jsonc"
 $readinessRules = Invoke-RequirementEvidenceRuleChecks
 $requirementsEvidence = $readinessRules.RequirementsEvidence
 Assert-RequirementEvidenceRefs $requirementsEvidence "COM-001" @(
@@ -1392,16 +1464,45 @@ Assert-Terms $installRollbackFixtureScriptTests @(
   "working-copy sentinel .svn/wc.db hash was unchanged"
 ) "SEC-013/MIG-008 install rollback fixture non-mutation test coverage"
 Assert-RequirementEvidenceRefs $requirementsEvidence "PRD-014" @(
-  "docs/onboarding/ENGINEERING_HANDOFF.md",
+  "docs/adr/ADR-008-stable-vscode-apis.md",
   "packages/vscode-extension/package.json",
   "packages/vscode-extension/tsconfig.json",
   "packages/vscode-extension/tests/extensionManifest.test.ts",
   "package.json"
 )
-Assert-Terms $engineeringHandoff @(
-  "The extension uses only stable VS Code APIs for core functionality",
-  "proposed APIs are not required"
+Assert-Terms $stableVsCodeApiAdr @(
+  "# ADR-008: Stable VS Code APIs",
+  "Core functionality uses stable VS Code APIs and does not depend on proposed APIs."
 ) "PRD-014 public stable VS Code API architecture coverage"
+Assert-Terms $credentialStorageAdr @(
+  "# ADR-010: Credential Storage",
+  "Persistent credentials are stored only in VS Code SecretStorage.",
+  "credential persistence fails closed",
+  "does not fall back to settings, extension caches, sidecar storage, diagnostics, or the standard SVN auth cache"
+) "fail-closed credential storage architecture coverage"
+Assert-Terms $engineeringHandoff @(
+  "# SubversionR Engineering Guide",
+  "## Public Fact Sources",
+  "docs/adr/README.md",
+  "docs/roadmap/README.md",
+  "docs/release/public-claim-matrix.md",
+  "The extension uses only stable VS Code APIs for core functionality",
+  "pnpm install --frozen-lockfile",
+  "cargo test --workspace"
+) "public engineering guide coverage"
+$privateArchivePrefix = "Refer" + "ence/"
+foreach ($forbiddenTerm in @(
+    $privateArchivePrefix,
+    "Review Estimate",
+    "Completion percentages",
+    "PR #157",
+    "Cloudflare PR Fast",
+    "Windows runner coverage is unavailable"
+  )) {
+  if ($engineeringHandoff.Content.Contains($forbiddenTerm, [System.StringComparison]::Ordinal)) {
+    throw "docs/onboarding/ENGINEERING_HANDOFF.md: public engineering guide must not contain stale or private-only term '$forbiddenTerm'."
+  }
+}
 Assert-Terms $extensionTsconfig @(
   '"types": ["node", "vscode", "vitest"]'
 ) "PRD-014 stable VS Code API type definition coverage"
@@ -6585,20 +6686,6 @@ Assert-Terms $projectReadme @(
   "SECURITY.md",
   "sanitized diagnostics evidence"
 ) "public README support and claim-boundary surface"
-Assert-Terms $engineeringHandoff @(
-  "pnpm release:prepare-beta-candidate:win32-x64",
-  "pnpm release:generate-beta-artifact-bundle-manifest:win32-x64",
-  "same-run candidate VSIX/evidence consistency",
-  "artifact bundle manifest",
-  "explicit CI upload allowlist",
-  "subversionr-win32-x64-beta-candidate",
-  "actions/upload-artifact@v7",
-  "subversionr.release.beta-artifact-bundle-manifest.win32-x64.v1",
-  "subversionr.release.beta-candidate-consistency.win32-x64.v1",
-  "Marketplace/public install",
-  "verified live GitHub attestation"
-) "Beta-G candidate evidence handoff status"
-
 Assert-Terms $ciWorkflow @(
   "workflow_dispatch:",
   "schedule:",
@@ -6609,12 +6696,8 @@ if ($ciWorkflow.Content -match "(?m)^\s*(push|pull_request):\s*$") {
   throw ".github/workflows/ci.yml: heavy release workflow must not run on pull_request or push; keep it scheduled/manual while PR Fast owns automatic PR checks."
 }
 
-Assert-PrFastWorkflow `
-  $fastPrWorkflow `
-  $cloudflarePrFastBridgeDoc `
-  $cloudflarePrFastBridgeScript `
-  $cloudflarePrFastWorkerScript `
-  $cloudflarePrFastWranglerConfig
+Assert-PrFastWorkflow $fastPrWorkflow
+Assert-RetiredCloudflareBridgeDoc $cloudflarePrFastBridgeDoc
 
 Assert-GithubActionsRestorationDoc $githubActionsRestorationDoc
 Assert-PublicCutoverRunbook $publicCutoverRunbook

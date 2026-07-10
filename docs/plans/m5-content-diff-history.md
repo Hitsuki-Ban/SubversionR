@@ -307,7 +307,7 @@ This slice intentionally does not implement editor context menu entry points, op
 The thirteenth M5 slice adds clipboard utilities for already loaded history revision rows:
 
 - `subversionr.history.copyMessage` and `subversionr.history.copyRevision` are contributed for repository and file revision TreeView rows and hidden from the Command Palette.
-- The extension registers the explicit legacy aliases required by `Reference/legacy_migration.csv`: `svn.itemlog.copymsg`, `svn.repolog.copymsg`, `svn.itemlog.copyrevision`, and `svn.repolog.copyrevision`. These aliases are activation-only/programmatic compatibility commands and are not contributed as user-visible command titles.
+- The extension registers the explicitly reviewed legacy aliases `svn.itemlog.copymsg`, `svn.repolog.copymsg`, `svn.itemlog.copyrevision`, and `svn.repolog.copyrevision`. These aliases are activation-only/programmatic compatibility commands and are not contributed as user-visible command titles.
 - The history TreeDataProvider validates the selected revision node through the current live TreeView node set before returning copy data, so cloned or stale nodes are rejected with stable command error codes.
 - Copy Revision Number writes the bare SVN revision number, for example `8`, to the clipboard. Copy Commit Message writes the original `svn:log` value and writes an empty string when `svn:log` is absent; it does not copy localized placeholder text.
 - The commands use the VS Code clipboard API and localized success notifications.
@@ -327,7 +327,7 @@ This slice intentionally does not implement copy URL, changed-path URL reconstru
 The fourteenth M5 slice exposes user-triggered HEAD content and Working Copy versus HEAD comparison for local changed file SCM resources:
 
 - `subversionr.openHead` and `subversionr.diffWithHead` are contributed for local `subversionr.changedFile.baseDiffable` SCM resources and hidden from the Command Palette.
-- The extension registers the explicit legacy aliases required by `Reference/legacy_migration.csv`: `svn.openHEADFile` and `svn.openChangeHead`. These aliases are activation-only/programmatic compatibility commands and are not contributed as user-visible command titles.
+- The extension registers the explicitly reviewed legacy aliases `svn.openHEADFile` and `svn.openChangeHead`. These aliases are activation-only/programmatic compatibility commands and are not contributed as user-visible command titles.
 - HEAD content uses a separate mutable `svn-r-head` virtual document scheme instead of widening immutable `svn-r-revision` explicit-revision semantics.
 - Each HEAD command invocation creates a strict HEAD URI containing repository id, epoch, projection generation, repository-relative path, `revision = head`, and a fresh request id. The document provider forwards only repository id, epoch, path, and `revision = head` to `content/get`.
 - The repository command controller validates selected SCM resources through the current Source Control projection, rejects spoofed, unavailable, stale, unsupported, or non-file targets, and uses the projection-canonical repository-relative path.
@@ -409,7 +409,7 @@ This slice intentionally does not implement editor context menu entries for writ
 The eighteenth M5 slice adds a projection-backed Compare PREV command for editor-visible local SVN files:
 
 - `subversionr.diffWithPrevious` is contributed as a hidden canonical command and exposed through the SubversionR editor context submenu only when the active projected local history-file editor has a valid previous-revision candidate.
-- The extension registers the explicit legacy alias required by `Reference/legacy_migration.csv`: `svn.openChangePrev`. The alias is activation-only/programmatic compatibility and is not contributed as a user-visible command title.
+- The extension registers the explicitly reviewed legacy alias `svn.openChangePrev`. The alias is activation-only/programmatic compatibility and is not contributed as a user-visible command title.
 - File Header CodeLens now shows `Compare PREV` between the revision summary lens and BASE/HEAD compare lenses when projected status metadata carries a valid changed revision.
 - Command execution revalidates the active editor or SCM resource argument through the current Source Control projection, matching repository id, epoch, resource kind, projection-canonical path, supported local history-file context, and the carried projection generation when CodeLens or SCM resource state supplies it.
 - Compare PREV performs no background prefetch. On invocation it requests a bounded file history page through `history/log` with `startRevision = r<changedRevision>`, `endRevision = r0`, `limit = 2`, `discoverChangedPaths = false`, `strictNodeHistory = false`, and `includeMergedRevisions = false`.
@@ -430,7 +430,7 @@ This slice intentionally does not implement full peg-aware PREV across rename/co
 The nineteenth M5 slice adds loaded-row Compare Revisions for file history:
 
 - `subversionr.history.compareRevisions` is contributed for multi-selected file revision rows in the native `SVN History` TreeView and hidden from the Command Palette.
-- The extension registers the explicit legacy aliases required by `Reference/legacy_migration.csv`: `svn.itemlog.openDiff` and `svn.repolog.openDiff`. These aliases are activation-only/programmatic compatibility commands and are not contributed as user-visible command titles.
+- The extension registers the explicitly reviewed legacy aliases `svn.itemlog.openDiff` and `svn.repolog.openDiff`. These aliases are activation-only/programmatic compatibility commands and are not contributed as user-visible command titles.
 - The `SVN History` TreeView enables multi-selection. Single-row history actions are hidden while multiple rows are selected so they do not silently act on only the focused revision.
 - Command execution validates exactly two current provider-owned file revision nodes from the same loaded file-history target, requires the focused row to be part of the selection, rejects duplicates, orders revisions older-to-newer, and opens a VS Code diff between strict immutable `svn-r-revision` URIs.
 - The slice performs no history refetch, background prefetch, native ABI change, Rust RPC change, SVN CLI call, Tortoise integration, or URL/repository revision comparison. It compares only already loaded revisions for the same file history target.
@@ -449,7 +449,7 @@ This slice intentionally does not implement repository revision comparison, chan
 The twentieth M5 slice adds a foreground filter for already loaded `SVN History` rows:
 
 - `subversionr.history.searchLoaded` is contributed to the native `SVN History` TreeView title menu and hidden from the Command Palette.
-- The extension registers the explicit legacy alias required by `Reference/legacy_migration.csv`: `svn.searchLogByText`. The alias is activation-only/programmatic compatibility and is not contributed as a user-visible command title.
+- The extension registers the explicitly reviewed legacy alias `svn.searchLogByText`. The alias is activation-only/programmatic compatibility and is not contributed as a user-visible command title.
 - The command opens a localized input box, validates the query length, and applies the filter only to the provider's already loaded `history/log` entries.
 - The filter matches raw loaded revision metadata: revision number, author, date, log message, changed-path action/path/copy-from metadata, node kind, and text/property modified flags. It does not search localized placeholder text or reconstruct repository URLs.
 - Empty trimmed input clears the filter. Cancelled input is a no-op. Opening a different history target clears the filter and TreeView message.
