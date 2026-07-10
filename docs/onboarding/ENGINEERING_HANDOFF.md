@@ -12,6 +12,7 @@ SubversionR should become a complete, native, high-performance SVN client inside
 - The Rust sidecar owns status, scheduling, caching, diagnostics, and long-lived state.
 - The narrow C ABI owns APR/libsvn lifetime, callbacks, and error conversion.
 - libsvn is the single authoritative SVN semantics layer.
+- The extension uses only stable VS Code APIs for core functionality; proposed APIs are not required.
 - Production functionality must not depend on `svn.exe` or write `.svn/wc.db` directly.
 - TortoiseSVN is an optional GUI integration, not a core dependency.
 

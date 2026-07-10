@@ -5,6 +5,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).ProviderPath
 $stageScript = Join-Path $repoRoot "scripts\release\stage-vscode-package-layout.ps1"
 $verifyLayoutScript = Join-Path $repoRoot "scripts\release\verify-vscode-package-layout.ps1"
 $verifyReadinessScript = Join-Path $repoRoot "scripts\release\verify-readiness.ps1"
+$verifyRequirementCatalogAlignmentScript = Join-Path $repoRoot "scripts\release\verify-requirement-catalog-alignment.ps1"
 $requirementsEvidencePath = Join-Path $repoRoot "docs\release\requirements-release-evidence.csv"
 $deleteUnversionedTrashPolicyPath = Join-Path $repoRoot "docs\release\delete-unversioned-trash-policy.md"
 $packageJsonPath = Join-Path $repoRoot "package.json"
@@ -102,8 +103,114 @@ function New-RequirementsEvidenceFixture() {
 }
 
 function New-RequirementsCatalogFixture() {
-  $requirements = Read-RequiredCsv -RepoRoot $repoRoot -RelativePath "Reference/requirements.csv"
-  New-ReadinessCsvModel -RelativePath $requirements.RelativePath -Rows (Copy-ReadinessCsvRows $requirements.Rows)
+  New-ReadinessCsvModel -RelativePath "synthetic/requirements.csv" -Rows @(
+    [pscustomobject][ordered]@{
+      id = "SYNTHETIC-001"
+      priority = "P0"
+      status = "Approved"
+    }
+  )
+}
+
+function New-RequirementsCoverageEvidenceFixture() {
+  New-ReadinessCsvModel -RelativePath "synthetic/requirements-release-evidence.csv" -Rows @(
+    [pscustomobject][ordered]@{
+      id = "SYNTHETIC-001"
+      priority = "P0"
+      requirement_status = "Approved"
+      release_evidence_status = "blocked"
+      evidence_refs = "none"
+      exception_ref = "none"
+      blocker_reason = "synthetic-release-blocker"
+    }
+  )
+}
+
+function Assert-RequirementCoverageUsesSyntheticFixtures() {
+  $requirements = New-RequirementsCatalogFixture
+  $evidence = New-RequirementsCoverageEvidenceFixture
+  Assert-RequirementReleaseEvidenceCoverage -RequirementsCsv $requirements -EvidenceCsv $evidence
+
+  $evidence.Rows[0].priority = "P1"
+  Assert-ThrowsContaining {
+    Assert-RequirementReleaseEvidenceCoverage -RequirementsCsv $requirements -EvidenceCsv $evidence
+  } "priority must be 'P0'" "Synthetic requirement coverage should reject catalog/evidence priority drift."
+}
+
+function Assert-RequirementCatalogAlignmentUsesSyntheticArchive([string]$TempRoot) {
+  $fixtureRoot = Join-Path $TempRoot "catalog-alignment"
+  $archiveRoot = Join-Path $fixtureRoot "archive"
+  $referenceRoot = Join-Path $archiveRoot "Reference"
+  $catalogPath = Join-Path $referenceRoot "requirements.csv"
+  $evidencePath = Join-Path $fixtureRoot "requirements-release-evidence.csv"
+  New-Item -ItemType Directory -Force -Path $referenceRoot | Out-Null
+
+  $sourceEvidence = New-RequirementsEvidenceFixture
+  $catalogRows = @(
+    foreach ($row in $sourceEvidence.Rows) {
+      [pscustomobject][ordered]@{
+        id = [string]$row.id
+        priority = [string]$row.priority
+        status = [string]$row.requirement_status
+      }
+    }
+  )
+  $catalogRows | Export-Csv -LiteralPath $catalogPath -NoTypeInformation
+  $sourceEvidence.Rows | Export-Csv -LiteralPath $evidencePath -NoTypeInformation
+
+  $archiveRefs = @(
+    $sourceEvidence.Rows |
+      ForEach-Object { Get-RequirementEvidenceRefTokens $_ } |
+      Where-Object { $_ -match '^Reference[/\\]' } |
+      Sort-Object -Unique
+  )
+  foreach ($archiveRef in $archiveRefs) {
+    if ($archiveRef -eq "Reference/requirements.csv") {
+      continue
+    }
+    $archivePath = Join-Path $archiveRoot $archiveRef
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $archivePath) | Out-Null
+    Set-Content -LiteralPath $archivePath -Value "synthetic private archive evidence" -NoNewline
+  }
+
+  Assert-NativeCommandSucceedsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyRequirementCatalogAlignmentScript `
+      -RequirementsCatalogPath $catalogPath `
+      -RequirementsEvidencePath $evidencePath
+  } "Requirement catalog alignment passed:" "Catalog alignment should accept complete synthetic archive fixtures."
+
+  $missingBindingRows = Copy-ReadinessCsvRows $sourceEvidence.Rows
+  $missingBindingRow = @($missingBindingRows | Where-Object { $_.id -eq "SYN-001" })[0]
+  $missingBindingRow.evidence_refs = @(
+    Get-RequirementEvidenceRefTokens $missingBindingRow |
+      Where-Object { $_ -ne "Reference/requirements.csv" }
+  ) -join "; "
+  $missingBindingRows | Export-Csv -LiteralPath $evidencePath -NoTypeInformation
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyRequirementCatalogAlignmentScript `
+      -RequirementsCatalogPath $catalogPath `
+      -RequirementsEvidencePath $evidencePath
+  } "'SYN-001' evidence_refs must include 'Reference/requirements.csv'" "Catalog alignment should reject a missing explicit private archive binding."
+
+  $sourceEvidence.Rows | Export-Csv -LiteralPath $evidencePath -NoTypeInformation
+  $missingArchivePath = Join-Path $archiveRoot "Reference/12_TortoiseSVN_Integration.md"
+  Remove-Item -LiteralPath $missingArchivePath -Force
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyRequirementCatalogAlignmentScript `
+      -RequirementsCatalogPath $catalogPath `
+      -RequirementsEvidencePath $evidencePath
+  } "archive evidence ref does not exist" "Catalog alignment should reject a missing private archive file."
+  Set-Content -LiteralPath $missingArchivePath -Value "synthetic private archive evidence" -NoNewline
+
+  $driftedCatalogRows = Copy-ReadinessCsvRows $catalogRows
+  $driftedCatalogRow = @($driftedCatalogRows | Where-Object { $_.id -eq "PRD-002" })[0]
+  $driftedCatalogRow.priority = "P1"
+  $driftedCatalogRows | Export-Csv -LiteralPath $catalogPath -NoTypeInformation
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyRequirementCatalogAlignmentScript `
+      -RequirementsCatalogPath $catalogPath `
+      -RequirementsEvidencePath $evidencePath
+  } "'PRD-002' priority must be 'P1', got 'P0'" "Catalog alignment should reject catalog/evidence priority drift."
 }
 
 function Replace-RequirementsEvidenceRef([object]$EvidenceCsv, [string]$ExistingRef, [string]$ReplacementRef) {
@@ -134,7 +241,6 @@ function Assert-ReleaseReadinessRejectsRequirementEvidenceStatus(
   [string]$ExpectedText,
   [string]$Message
 ) {
-  $requirements = New-RequirementsCatalogFixture
   $evidence = New-RequirementsEvidenceFixture
   $row = Get-RequirementEvidenceRow $evidence $RequirementId
   $expectedStatus = $row.release_evidence_status
@@ -142,7 +248,6 @@ function Assert-ReleaseReadinessRejectsRequirementEvidenceStatus(
   $row.blocker_reason = $ReplacementBlockerReason
 
   Assert-ThrowsContaining {
-    Assert-RequirementReleaseEvidenceCoverage -RequirementsCsv $requirements -EvidenceCsv $evidence
     Assert-RequirementEvidenceStatus -EvidenceCsv $evidence -Id $RequirementId -ExpectedStatus $expectedStatus
   } $ExpectedText $Message
 }
@@ -403,11 +508,25 @@ New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
   Assert-ReleaseScriptTestsDoNotMutateSourceControlledFixtures
+  Assert-RequirementCoverageUsesSyntheticFixtures
+  Assert-RequirementCatalogAlignmentUsesSyntheticArchive $tempRoot
   Assert-True (Test-Path -LiteralPath $stageScript -PathType Leaf) "stage-vscode-package-layout.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $verifyLayoutScript -PathType Leaf) "verify-vscode-package-layout.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $verifyReadinessScript -PathType Leaf) "verify-readiness.ps1 should exist."
+  Assert-True (Test-Path -LiteralPath $verifyRequirementCatalogAlignmentScript -PathType Leaf) "verify-requirement-catalog-alignment.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $requirementsEvidencePath -PathType Leaf) "Requirements release evidence CSV should exist."
   Assert-True (Test-Path -LiteralPath $githubActionsRestorationPath -PathType Leaf) "GitHub Actions restoration note should exist."
+  $verifyReadinessText = Get-Content -Raw -LiteralPath $verifyReadinessScript
+  $privateArchiveDocumentRead = 'Read-RequiredDocument "Refer' + 'ence/'
+  Assert-True (-not $verifyReadinessText.Contains($privateArchiveDocumentRead)) "Full release readiness must not read documents from the private Reference archive."
+  $privateArchiveEvidenceMember = '  "Refer' + 'ence/'
+  Assert-True (-not $verifyReadinessText.Contains($privateArchiveEvidenceMember)) "Full release readiness must not require private Reference archive members."
+  Assert-TextFileContainsTokens $verifyRequirementCatalogAlignmentScript @(
+    "Assert-RequirementReleaseEvidenceCoverage",
+    "`$requiredArchiveEvidenceRefs",
+    "Assert-RequirementEvidenceRefs",
+    "archive evidence ref does not exist"
+  ) "The maintainer alignment gate should own catalog coverage and explicit private archive bindings."
   Assert-TextFileContainsTokens $packageJsonPath @(
     '"release:verify-readiness:smoke"',
     "-Mode smoke"
@@ -626,7 +745,7 @@ try {
     "operation_run_remove_accepts_multiple_paths_and_returns_targeted_reconcile_hints",
     "fails fast on invalid add request field",
     "sends operation/run remove with multiple explicit paths",
-    "adds multiple selected unversioned SCM resources through single-path operation/run requests",
+    "adds selected unversioned files and directories with SVN-appropriate depths",
     "reconciles a successful selected add before reporting a later selected add failure",
     "confirms and removes multiple selected changed SCM resources through one operation/run request",
     "confirms and reverts multiple selected changed SCM resources through one operation/run request",
@@ -915,7 +1034,8 @@ try {
     "PRD-004",
     "TOR-001",
     "TOR-002",
-    "Reference/12_TortoiseSVN_Integration.md",
+    "docs/plans/m7-release-publication.md",
+    "TortoiseSVN public integration plan coverage",
     "packages/vscode-extension/src/security/externalToolConfiguration.ts",
     "packages/vscode-extension/tests/externalToolConfiguration.test.ts",
     "packages/vscode-extension/src/tortoise/tortoiseDetector.ts",
@@ -954,9 +1074,9 @@ try {
   ) "Release readiness should verify M7d cache schema, privacy, and migration report evidence."
   Assert-TextFileContainsTokens $verifyReadinessScript @(
     "PRD-014",
-    "Reference/01_Project_Charter_and_Scope.md",
-    "Reference/05_System_Architecture.md",
-    "Reference/18_Governance_Decisions_and_Glossary.md",
+    "docs/onboarding/ENGINEERING_HANDOFF.md",
+    "The extension uses only stable VS Code APIs for core functionality",
+    "proposed APIs are not required",
     "packages/vscode-extension/tsconfig.json",
     "does not request proposed VS Code APIs",
     "enabledApiProposals",

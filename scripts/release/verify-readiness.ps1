@@ -388,9 +388,6 @@ Invoke-SupportIntakeChecks
 
 $rootPackageJson = Read-RequiredDocument "package.json"
 $securityPolicy = Read-RequiredDocument "SECURITY.md"
-$projectCharter = Read-RequiredDocument "Reference/01_Project_Charter_and_Scope.md"
-$systemArchitecture = Read-RequiredDocument "Reference/05_System_Architecture.md"
-$governanceDecisions = Read-RequiredDocument "Reference/18_Governance_Decisions_and_Glossary.md"
 $releaseGates = Read-RequiredDocument "docs/release/m7-release-readiness-gates.md"
 $evidenceMatrix = Read-RequiredDocument "docs/release/security-evidence-matrix.md"
 $publicClaimMatrix = Read-RequiredDocument "docs/release/public-claim-matrix.md"
@@ -404,7 +401,6 @@ $m5Plan = Read-RequiredDocument "docs/plans/m5-content-diff-history.md"
 $m7Plan = Read-RequiredDocument "docs/plans/m7-release-publication.md"
 $roadmap = Read-RequiredDocument "docs/roadmap/README.md"
 $m6ToM7Decision = Read-RequiredDocument "docs/security/m6-to-m7-security-decision.md"
-$tortoiseReference = Read-RequiredDocument "Reference/12_TortoiseSVN_Integration.md"
 $supportChecklist = Read-RequiredDocument "docs/security/support-redaction-checklist.md"
 $installedSourceControlSurfaceScript = Read-RequiredDocument "scripts/release/test-vscode-installed-source-control-surface.ps1"
 $installedSourceControlSurfaceScriptTests = Read-RequiredDocument "scripts/tests/release-installed-source-control-surface-scripts.tests.ps1"
@@ -444,7 +440,6 @@ $nativeBridgeRustSource = Read-RequiredDocument "crates/subversionr-daemon/src/n
 $bridgeSource = Read-RequiredDocument "crates/subversionr-daemon/src/bridge.rs"
 $daemonStateSource = Read-RequiredDocument "crates/subversionr-daemon/src/state.rs"
 $protocolSource = Read-RequiredDocument "crates/subversionr-protocol/src/lib.rs"
-$reference11History = Read-RequiredDocument "Reference/11_SVN_Lens_History_and_Diff.md"
 $nativeBridgeHeader = Read-RequiredDocument "native/svn-bridge/include/subversionr_bridge.h"
 $statusSnapshotRpcClientSource = Read-RequiredDocument "packages/vscode-extension/src/status/statusSnapshotRpcClient.ts"
 $statusRefreshRpcClientSource = Read-RequiredDocument "packages/vscode-extension/src/status/statusRefreshRpcClient.ts"
@@ -629,14 +624,14 @@ Assert-Terms $m4Plan @(
 Assert-Terms $extensionPackageJson @(
   "onCommand:subversionr.commitResource",
   "command.commitResource.title",
-  "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.changedFile",
-  "subversionr.changedFile"
+  "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+  "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/"
 ) "COM-002 extension manifest command coverage"
 Assert-Terms $extensionManifestTests @(
   "onCommand:subversionr.commitResource",
   "command.commitResource.title",
   "subversionr.commitResource",
-  "subversionr.changedFile.baseDiffable"
+  'when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",'
 ) "COM-002 extension manifest test coverage"
 Assert-Terms $protocolContractTests @(
   "operation_run_commit",
@@ -682,7 +677,6 @@ Assert-Terms $installedSourceControlUiE2eScriptTests @(
   "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_WORKING_COPY"
 ) "COM-002 installed Commit Selected E2E script-test evidence"
 Assert-RequirementEvidenceRefs $requirementsEvidence "SYN-001" @(
-  "Reference/requirements.csv",
   "docs/plans/m4-core-scm-operations.md",
   "packages/vscode-extension/src/extension.ts",
   "crates/subversionr-protocol/src/lib.rs",
@@ -711,7 +705,6 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "SYN-001" @(
   "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1"
 )
 Assert-RequirementEvidenceRefs $requirementsEvidence "SYN-003" @(
-  "Reference/requirements.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/bridge.rs",
@@ -731,7 +724,6 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "SYN-003" @(
   "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1"
 )
 Assert-RequirementEvidenceRefs $requirementsEvidence "SYN-004" @(
-  "Reference/requirements.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/bridge.rs",
@@ -751,7 +743,6 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "SYN-004" @(
   "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1"
 )
 Assert-RequirementEvidenceRefs $requirementsEvidence "SYN-005" @(
-  "Reference/requirements.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/bridge.rs",
@@ -900,8 +891,8 @@ Assert-Terms $operationRunRpcClientTests @(
   "rejects update responses without a resolved revision"
 ) "SYN-001 TypeScript operation/run update client tests"
 Assert-Terms $repositoryCommandControllerSource @(
-  "public async updateRepository()",
-  "public async updateToRevision()",
+  "public async updateRepository(repositoryId?: unknown): Promise<void>",
+  "public async updateToRevision(repositoryId?: unknown): Promise<void>",
   "this.requireTrustedWorkspace()",
   "HEAD_WORKING_COPY_UPDATE_OPTIONS",
   "validateRepositoryUpdateOptions(updateOptions)",
@@ -924,7 +915,7 @@ Assert-Terms $repositoryCommandControllerTests @(
 Assert-Terms $extensionEntrypoint @(
   'registerCommand("subversionr.updateRepository"',
   'registerCommand("subversionr.updateToRevision"',
-  "repositoryCommandController.updateRepository()"
+  "repositoryCommandController.updateRepository("
 ) "SYN-001 extension command registration"
 Assert-Terms $extensionPackageJson @(
   "onCommand:subversionr.updateRepository",
@@ -1050,7 +1041,7 @@ Assert-Terms $extensionManifestTests @(
 ) "STA-016 extension manifest test resource command coverage"
 Assert-Terms $repositoryCommandControllerTests @(
   "commits multiple selected changed file resources from one repository with the repository input message",
-  "adds multiple selected unversioned SCM resources through single-path operation/run requests",
+  "adds selected unversioned files and directories with SVN-appropriate depths",
   "confirms and removes multiple selected changed SCM resources through one operation/run request",
   "confirms and removes multiple selected changed SCM resources while keeping local content",
   "confirms and reverts multiple selected changed SCM resources through one operation/run request",
@@ -1089,7 +1080,6 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "PRD-003" @(
   "packages/vscode-extension/l10n/bundle.l10n.json"
 )
 Assert-RequirementEvidenceRefs $requirementsEvidence "PRD-004" @(
-  "Reference/12_TortoiseSVN_Integration.md",
   "docs/release/m7-release-readiness-gates.md",
   "docs/release/public-claim-matrix.md",
   "packages/vscode-extension/src/security/externalToolConfiguration.ts",
@@ -1103,7 +1093,6 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "PRD-004" @(
   "packages/vscode-extension/tests/extensionManifest.test.ts"
 )
 Assert-RequirementEvidenceRefs $requirementsEvidence "TOR-001" @(
-  "Reference/12_TortoiseSVN_Integration.md",
   "packages/vscode-extension/src/security/externalToolConfiguration.ts",
   "packages/vscode-extension/tests/externalToolConfiguration.test.ts",
   "packages/vscode-extension/src/tortoise/tortoiseDetector.ts",
@@ -1113,7 +1102,6 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "TOR-001" @(
   "packages/vscode-extension/tests/extensionManifest.test.ts"
 )
 Assert-RequirementEvidenceRefs $requirementsEvidence "TOR-002" @(
-  "Reference/12_TortoiseSVN_Integration.md",
   "docs/release/m7-release-readiness-gates.md",
   "docs/release/public-claim-matrix.md",
   "docs/release/security-evidence-matrix.md",
@@ -1130,14 +1118,12 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "TOR-002" @(
   "packages/vscode-extension/tests/extensionManifest.test.ts",
   "packages/vscode-extension/l10n/bundle.l10n.json"
 )
-Assert-Terms $tortoiseReference @(
-  "TortoiseSVN 是可选 GUI 适配器",
-  "核心 SCM、历史和 diff 不依赖 Tortoise",
-  "未发现时隐藏命令",
-  "adapter 接收结构化 intent，不接受已拼接命令行",
-  "Tortoise configdir 仅由用户设置",
-  "Log、diff、showcompare、browser、graph、blame 可直接启动"
-) "TortoiseSVN integration reference coverage"
+Assert-Terms $m7Plan @(
+  "The fifth M7 slice implements the first optional TortoiseSVN GUI handoff without changing core SVN semantics",
+  'Core SubversionR workflows continue to use the packaged Rust sidecar and source-built `libsvn`.',
+  'Missing TortoiseSVN reports capability unavailable, hides contributed Tortoise menus through `subversionr.tortoiseAvailable`',
+  'The launch adapter maps structured read-only intents to allowlisted `TortoiseProc.exe` arguments'
+) "TortoiseSVN public integration plan coverage"
 Assert-Terms $externalToolConfigurationSource @(
   "subversionr.tortoise.executablePath",
   "subversionr.tortoise.configDirectory",
@@ -1168,8 +1154,8 @@ Assert-Terms $tortoiseDetectorTests @(
   "reports unavailable without failing native workflows when TortoiseSVN is absent"
 ) "TortoiseSVN detector test coverage"
 Assert-Terms $tortoiseLauncherSource @(
-  'export type TortoiseReadOnlyIntent = "log" | "diff" | "revisiongraph" | "blame";',
-  "const COMMANDS: Record<TortoiseReadOnlyIntent, string>",
+  'export type TortoiseIntent = "log" | "diff" | "revisiongraph" | "repobrowser" | "blame";',
+  "const COMMANDS: Record<TortoiseIntent, string>",
   '"/ignoreprops"',
   "shell: false",
   'stdio: "ignore"',
@@ -1206,7 +1192,9 @@ Assert-Terms $extensionEntrypoint @(
   "createNodeTortoiseDetectionHost(vscode.workspace.isTrusted)",
   "subversionr.tortoiseAvailable",
   "refreshTortoiseAvailability();",
-  'vscode.commands.registerCommand("subversionr.tortoise.openRepositoryLog"',
+  "const tortoiseOpenRepositoryLogCommand = vscode.commands.registerCommand(",
+  '"subversionr.tortoise.openRepositoryLog",',
+  '"subversionr.tortoise.openRepositoryBrowser",',
   '"subversionr.tortoise.blameResource"'
 ) "TortoiseSVN extension integration coverage"
 Assert-Terms $extensionPackageJson @(
@@ -1214,6 +1202,7 @@ Assert-Terms $extensionPackageJson @(
   '"subversionr.tortoise.openResourceLog"',
   '"subversionr.tortoise.diffResource"',
   '"subversionr.tortoise.openRevisionGraph"',
+  '"subversionr.tortoise.openRepositoryBrowser"',
   '"subversionr.tortoise.blameResource"',
   "subversionr.tortoiseAvailable",
   '"subversionr.tortoise.executablePath"',
@@ -1388,24 +1377,16 @@ Assert-Terms $installRollbackFixtureScriptTests @(
   "working-copy sentinel .svn/wc.db hash was unchanged"
 ) "SEC-013/MIG-008 install rollback fixture non-mutation test coverage"
 Assert-RequirementEvidenceRefs $requirementsEvidence "PRD-014" @(
-  "Reference/01_Project_Charter_and_Scope.md",
-  "Reference/05_System_Architecture.md",
-  "Reference/18_Governance_Decisions_and_Glossary.md",
+  "docs/onboarding/ENGINEERING_HANDOFF.md",
   "packages/vscode-extension/package.json",
   "packages/vscode-extension/tsconfig.json",
   "packages/vscode-extension/tests/extensionManifest.test.ts",
   "package.json"
 )
-Assert-Terms $projectCharter @(
-  "不依赖 VS Code proposed API 才能完成核心体验"
-) "PRD-014 stable VS Code API reference coverage"
-Assert-Terms $systemArchitecture @(
-  "核心能力不依赖 proposed API。"
-) "PRD-014 stable VS Code API architecture coverage"
-Assert-Terms $governanceDecisions @(
-  "ADR-008",
-  "核心不依赖 proposed VS Code API"
-) "PRD-014 governance decision coverage"
+Assert-Terms $engineeringHandoff @(
+  "The extension uses only stable VS Code APIs for core functionality",
+  "proposed APIs are not required"
+) "PRD-014 public stable VS Code API architecture coverage"
 Assert-Terms $extensionTsconfig @(
   '"types": ["node", "vscode", "vitest"]'
 ) "PRD-014 stable VS Code API type definition coverage"
@@ -1469,7 +1450,6 @@ Assert-Terms $installedSourceControlSurfaceScriptTests @(
   "REP-001"
 ) "REP-001 installed Source Control subdirectory-open gate tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "REP-005" @(
-  "Reference/requirements.csv",
   "docs/plans/m2-repository-status-snapshot.md",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
@@ -1644,7 +1624,6 @@ Assert-Terms $rpcDispatchTests @(
   "vendor/nested/src/lib.c"
 ) "REP-003 daemon status boundary propagation"
 Assert-RequirementEvidenceRefs $requirementsEvidence "REP-006" @(
-  "Reference/requirements.csv",
   "packages/vscode-extension/src/repository/repositorySessionService.ts",
   "packages/vscode-extension/src/repository/repositoryLifecycleService.ts",
   "packages/vscode-extension/tests/repositorySessionService.test.ts",
@@ -1702,7 +1681,6 @@ Assert-Terms $nativeBridgeTests @(
   "subdirectory open must resolve provider root to the parent working copy root"
 ) "REP-006 native UUID root URL and working-copy root fixture coverage"
 Assert-RequirementEvidenceRefs $requirementsEvidence "REP-007" @(
-  "Reference/requirements.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "native/svn-bridge/include/subversionr_bridge.h",
   "native/svn-bridge/src/subversionr_bridge.c",
@@ -1777,7 +1755,6 @@ Assert-Terms $vscodeSourceControlPresenterTests @(
   "l10n:SVN sparse depth: files"
 ) "REP-007 Source Control sparse depth tooltip tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "REP-008" @(
-  "Reference/requirements.csv",
   "native/svn-bridge/include/subversionr_bridge.h",
   "native/svn-bridge/src/subversionr_bridge.c",
   "crates/subversionr-daemon/src/native.rs",
@@ -2381,8 +2358,6 @@ Assert-Terms $installedSourceControlUiE2eScriptTests @(
   "REP-002"
 ) "REP-002 installed multi-repository provider workflow tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "UX-007" @(
-  "Reference/02_Product_Requirements_and_UX.md",
-  "Reference/requirements.csv",
   "packages/vscode-extension/src/extension.ts",
   "packages/vscode-extension/tests/extensionManifest.test.ts",
   "packages/vscode-extension/tests/repositoryCommandController.test.ts",
@@ -2424,8 +2399,6 @@ Assert-Terms $installedSourceControlUiE2eScriptTests @(
   "UX-007"
 ) "UX-007 installed repository picker script-test evidence"
 Assert-RequirementEvidenceRefs $requirementsEvidence "UX-002" @(
-  "Reference/02_Product_Requirements_and_UX.md",
-  "Reference/requirements.csv",
   "packages/vscode-extension/package.json",
   "packages/vscode-extension/package.nls.json",
   "packages/vscode-extension/package.nls.ja.json",
@@ -2645,8 +2618,6 @@ Assert-Terms $installedSourceControlUiE2eScriptTests @(
   "UX-002"
 ) "UX-002 no-repository empty-state plus installed local-file checkout happy-path, existing-directory success, existing-directory obstruction tree-conflict projection, URL prompt cancellation, obstructing-file failure, and invalid-URL failure script-test evidence"
 Assert-RequirementEvidenceRefs $requirementsEvidence "UX-001" @(
-  "Reference/02_Product_Requirements_and_UX.md",
-  "Reference/requirements.csv",
   "packages/vscode-extension/package.json",
   "packages/vscode-extension/tests/extensionManifest.test.ts",
   "packages/vscode-extension/tests/repositoryLifecycleService.test.ts",
@@ -3240,7 +3211,7 @@ Assert-Terms $extensionEntrypoint @(
 Assert-Terms $extensionPackageJson @(
   "onCommand:subversionr.diffWithBase",
   "onCommand:subversionr.openBase",
-  "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable",
+  "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
   "resourceScheme == file && subversionr.activeEditorBaseDiffable"
 ) "DIF-001 command contribution and SCM/editor placement"
 Assert-Terms $extensionPackageNls @(
@@ -3272,12 +3243,10 @@ Assert-Terms $extensionManifestTests @(
   "onCommand:subversionr.openBase",
   "command.diffWithBase.title",
   "command.openBase.title",
-  "subversionr.changedFile.baseDiffable"
+  'when: "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",'
 ) "DIF-001 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "DIF-002" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/command_catalog.csv",
-  "Reference/legacy_migration.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/state.rs",
@@ -3415,7 +3384,7 @@ Assert-Terms $extensionEntrypoint @(
 Assert-Terms $extensionPackageJson @(
   "onCommand:subversionr.diffWithHead",
   "onCommand:subversionr.openHead",
-  "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable",
+  "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
   "resourceScheme == file && subversionr.activeEditorBaseDiffable"
 ) "DIF-002 command contribution and SCM/editor placement"
 Assert-Terms $extensionPackageNls @(
@@ -3614,7 +3583,6 @@ Assert-Terms $extensionManifestTests @(
 ) "HIS-009 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-008" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/command_catalog.csv",
   "packages/vscode-extension/src/history/historyLogRpcClient.ts",
   "packages/vscode-extension/tests/historyLogRpcClient.test.ts",
   "packages/vscode-extension/src/history/historyTreeDataProvider.ts",
@@ -3736,7 +3704,6 @@ Assert-Terms $extensionManifestTests @(
 ) "HIS-008 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-001" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/11_SVN_Lens_History_and_Diff.md",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/state.rs",
@@ -3855,7 +3822,7 @@ Assert-Terms $historyTreeDataProviderSource @(
   'endRevision: "r0"',
   "discoverChangedPaths: true",
   "strictNodeHistory: false",
-  "includeMergedRevisions: this.options.settings.includeMergedRevisions",
+  "includeMergedRevisions: this.settings.includeMergedRevisions",
   'localize("Repository: {0}", target.label)',
   '"subversionr.history.repositoryRevision"'
 ) "HIS-001 native History TreeView implementation"
@@ -3955,8 +3922,6 @@ Assert-Terms $extensionManifestTests @(
 ) "HIS-001 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-002" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/11_SVN_Lens_History_and_Diff.md",
-  "Reference/command_catalog.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/state.rs",
@@ -3993,11 +3958,10 @@ Assert-Terms $m5Plan @(
   "The view renders a target root, revision rows, changed-path children, copy-from metadata, localized empty/placeholder rows, refresh, and a foreground-only Load More command.",
   'Load More continues below the oldest loaded revision by requesting `r<N-1>` down to `r0`'
 ) "HIS-002 M5 File History copy-following scope"
-Assert-Terms $reference11History @(
-  "### File History",
-  "使用 peg revision 正确跟随 rename/copy",
-  "用户可切换 stop-on-copy"
-) "HIS-002 reference file-history requirement"
+Assert-Terms $m5Plan @(
+  'The request exposes libsvn-aligned options as explicit booleans: `discoverChangedPaths`, `strictNodeHistory`, and `includeMergedRevisions`.',
+  '`strictNodeHistory = false` is used deliberately so default file history follows SVN copy history rather than presenting a Git-style file identity.'
+) "HIS-002 public file-history requirement coverage"
 Assert-Terms $protocolSource @(
   "pub struct HistoryLogChangedPath",
   "pub copy_from_path: Option<String>",
@@ -4146,7 +4110,6 @@ Assert-Terms $extensionManifestTests @(
 ) "HIS-002 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-003" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/11_SVN_Lens_History_and_Diff.md",
   "packages/vscode-extension/src/history/lineHistoryCommandController.ts",
   "packages/vscode-extension/tests/lineHistoryCommandController.test.ts",
   "packages/vscode-extension/src/history/historyBlameRpcClient.ts",
@@ -4189,7 +4152,9 @@ Assert-Terms $lineHistoryCommandControllerSource @(
   'startRevision: "r0"',
   'endRevision: "base"',
   'ignoreWhitespace: "none"',
-  "includeMergedRevisions: false",
+  "includeMergedRevisions(): boolean;",
+  "const includeMergedRevisions = this.options.includeMergedRevisions();",
+  "includeMergedRevisions,",
   "MAX_LINE_HISTORY_LINE_LIMIT = 5_000",
   "MAX_LINE_HISTORY_REVISION_COUNT = 500",
   "startRevision: revisionId",
@@ -4205,6 +4170,7 @@ Assert-Terms $lineHistoryCommandControllerSource @(
 ) "HIS-003 Line History command implementation"
 Assert-Terms $lineHistoryCommandControllerTests @(
   "opens preloaded line history for a safe active editor selection",
+  "includes merged revisions in line blame and revision log requests when history settings enable them",
   "uses the current line for an empty selection and normalizes reversed selections",
   "blocks line history in untrusted workspaces before blame or log side effects",
   "does not query history for unsafe line-history target: %s",
@@ -4318,7 +4284,6 @@ Assert-Terms $extensionManifestTests @(
 ) "HIS-003 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-004" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/11_SVN_Lens_History_and_Diff.md",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/state.rs",
@@ -4442,10 +4407,11 @@ Assert-Terms $repositoryCommandControllerSource @(
   'endRevision: "base"',
   "lineLimit: 5000",
   'ignoreWhitespace: "none"',
-  "includeMergedRevisions: false"
+  "includeMergedRevisions: this.options.includeMergedRevisions()"
 ) "HIS-004 repository command target implementation"
 Assert-Terms $repositoryCommandControllerTests @(
   "opens file blame for a selected versioned SVN file using the projection canonical path",
+  "includes merged revisions in explicit blame documents when history settings enable them",
   "rejects unversioned and directory SCM resources for file blame"
 ) "HIS-004 repository command target tests"
 Assert-Terms $extensionEntrypoint @(
@@ -4492,14 +4458,13 @@ Assert-Terms $extensionManifestTests @(
   "onCommand:subversionr.showBlame",
   "command.showBlame.title",
   "subversionr.showBlame",
-  "scmResourceState == subversionr.conflicted",
-  "scmResourceState == subversionr.changedFile",
+  'scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/',
+  'scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/',
   "SVN Blame: {0}",
   "Merged from r{0}"
 ) "HIS-004 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-005" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/11_SVN_Lens_History_and_Diff.md",
   "packages/vscode-extension/src/history/historyBlameRpcClient.ts",
   "packages/vscode-extension/tests/historyBlameRpcClient.test.ts",
   "packages/vscode-extension/src/history/historyLogRpcClient.ts",
@@ -4589,7 +4554,7 @@ Assert-Terms $currentLineBlameStatusBarSource @(
   'endRevision: "base"',
   "lineLimit: 1",
   'ignoreWhitespace: "none"',
-  "includeMergedRevisions: false",
+  "includeMergedRevisions: this.options.includeMergedRevisions()",
   "settings.currentLine",
   "settings.maxFileLines",
   "showBlameLine",
@@ -4600,6 +4565,7 @@ Assert-Terms $currentLineBlameStatusBarSource @(
 ) "HIS-005 current-line status bar implementation"
 Assert-Terms $currentLineBlameStatusBarTests @(
   "shows a localized single-line blame status for a projected text-stable SVN file",
+  "includes merged revisions in current-line blame status requests when history settings enable them",
   "does not request blame in untrusted workspaces",
   "does not request blame for %s resources until working-copy line mapping exists",
   "hides without projection lookup when current-line blame is disabled or the editor is outside open repositories",
@@ -4617,6 +4583,8 @@ Assert-Terms $currentLineBlameHoverProviderSource @(
   'startRevision: "r0"',
   'endRevision: "base"',
   "lineLimit: 1",
+  "const includeMergedRevisions = this.options.includeMergedRevisions();",
+  "includeMergedRevisions,",
   "getLog({",
   "startRevision: revision",
   "endRevision: revision",
@@ -4633,6 +4601,7 @@ Assert-Terms $currentLineBlameHoverProviderSource @(
 ) "HIS-005 current-line hover implementation"
 Assert-Terms $currentLineBlameHoverProviderTests @(
   "returns localized one-line SVN blame hover with the first log-message line",
+  "includes merged revisions in current-line blame hover requests when history settings enable them",
   "does not request blame or log in untrusted workspaces",
   "returns a localized empty-log summary for %s log messages",
   "does not request blame when hover Lens is disabled or the file is outside open repositories",
@@ -4743,7 +4712,6 @@ Assert-Terms $extensionManifestTests @(
 ) "HIS-005 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-007" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/11_SVN_Lens_History_and_Diff.md",
   "packages/vscode-extension/src/history/historyBlameRpcClient.ts",
   "packages/vscode-extension/tests/historyBlameRpcClient.test.ts",
   "packages/vscode-extension/src/lens/lensSettings.ts",
@@ -4811,7 +4779,7 @@ Assert-Terms $symbolHistoryCodeLensProviderSource @(
   'startRevision: "r0"',
   'endRevision: "base"',
   'ignoreWhitespace: "none"',
-  "includeMergedRevisions: false",
+  "includeMergedRevisions: this.options.includeMergedRevisions()",
   "blame.hasMore",
   "aggregateBlameWindow",
   "line.localChange",
@@ -4825,6 +4793,7 @@ Assert-Terms $symbolHistoryCodeLensProviderSource @(
 Assert-Terms $symbolHistoryCodeLensProviderTests @(
   "provides unresolved symbol lenses for projected text-stable SVN files without requesting blame",
   "resolves a visible symbol lens with BASE blame revision, author, and revision counts",
+  "includes merged revisions in symbol history blame requests when history settings enable them",
   "does not provide or resolve symbol history lenses in untrusted workspaces",
   "supports SymbolInformation ranges from the current document",
   "does not provide lenses for missing symbols, invalid ranges, or oversized symbol ranges",
@@ -4885,7 +4854,6 @@ Assert-Terms $extensionManifestTests @(
 ) "HIS-007 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-006" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/11_SVN_Lens_History_and_Diff.md",
   "packages/vscode-extension/src/lens/lensSettings.ts",
   "packages/vscode-extension/tests/lensSettings.test.ts",
   "packages/vscode-extension/src/lens/fileHeaderCodeLensProvider.ts",
@@ -5104,8 +5072,6 @@ Assert-Terms $extensionManifestTests @(
 ) "HIS-006 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "DIF-003" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/command_catalog.csv",
-  "Reference/legacy_migration.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/state.rs",
@@ -5328,8 +5294,6 @@ Assert-Terms $extensionManifestTests @(
 ) "DIF-003 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "DIF-004" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/command_catalog.csv",
-  "Reference/legacy_migration.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/state.rs",
@@ -5497,8 +5461,6 @@ Assert-Terms $extensionManifestTests @(
 ) "DIF-004 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-010" @(
   "docs/plans/m5-content-diff-history.md",
-  "Reference/command_catalog.csv",
-  "Reference/legacy_migration.csv",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/src/state.rs",
@@ -5663,8 +5625,6 @@ Assert-Terms $extensionManifestTests @(
   "Binary SVN revision content is not displayed in the text editor: {0}@{1}"
 ) "HIS-010 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "STA-010" @(
-  "Reference/02_Product_Requirements_and_UX.md",
-  "Reference/03_Functional_Specification.md",
   "crates/subversionr-protocol/src/lib.rs",
   "crates/subversionr-protocol/tests/protocol_contract.rs",
   "crates/subversionr-daemon/tests/native_bridge.rs",
@@ -5972,7 +5932,7 @@ Assert-Terms $operationRunRpcClientTests @(
   "paths: [`"src/old.c`", `"src/other.c`"]"
 ) "OPS selected Add safety and Remove TypeScript RPC multi-path coverage"
 Assert-Terms $repositoryCommandControllerTests @(
-  "adds multiple selected unversioned SCM resources through single-path operation/run requests",
+  "adds selected unversioned files and directories with SVN-appropriate depths",
   "confirms and removes multiple selected changed SCM resources through one operation/run request",
   "confirms and removes multiple selected changed SCM resources while keeping local content",
   "confirms and reverts multiple selected changed SCM resources through one operation/run request",
@@ -6858,11 +6818,11 @@ Assert-Terms $m7Plan @(
   "M7l2l APR-iconv terminal named security finding decision gate",
   "native:apr-iconv@1.2.2",
   "APR-ICONV-1.2.2-NO-PUBLISHED-ADVISORY",
-  "apr-iconv-download",
-  "apr-iconv-changes-1-2",
-  "apr-iconv-github-advisories",
-  "nvd-apr-iconv-keyword-search",
-  "osv-apr-iconv-query",
+  "Apache APR download metadata",
+  "APR-iconv 1.2 CHANGES",
+  "apache/apr-iconv GitHub advisories",
+  "NVD keyword-search evidence",
+  "OSV query evidence",
   "pnpm release:test-apr-iconv-terminal-decision-scripts",
   "pnpm release:verify-vulnerability-decision-input:win32-x64",
   "pnpm release:generate-vulnerability-decision-evidence:win32-x64",
@@ -7024,7 +6984,7 @@ Assert-Contains $roadmap "M7l2h zlib terminal CVE-2026-22184 decision gate" "roa
 Assert-Contains $roadmap "M7l2i APR terminal CVE decision gate" "roadmap M7l2i status"
 Assert-Contains $roadmap "M7l2j APR-util terminal CVE decision gate" "roadmap M7l2j status"
 Assert-Contains $roadmap "M7l2k Serf terminal CVE-2014-3504 decision gate" "roadmap M7l2k status"
-Assert-Contains $roadmap "M7l2l APR-iconv terminal named security finding decision gate" "roadmap M7l2l status"
+Assert-Contains $roadmap "M7l2l APR-iconv named security finding decision gate" "roadmap M7l2l status"
 Assert-Contains $roadmap "M7l3 native artifact map preflight gate" "roadmap M7l3 status"
 Assert-Contains $roadmap "M7l4 malicious input corpus preflight" "roadmap M7l4 status"
 Assert-Contains $roadmap "M7l5 native malicious DAV/XML fixture" "roadmap M7l5 status"
