@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.release.public-cutover-evidence.v1",
+  "status": "recorded-post-cutover",
+  "repository": {
+    "url": "https://github.com/Hitsuki-Ban/SubversionR",
+    "defaultBranch": "main",
+    "baselineCommit": "e3f81b22d16bd0bd3ede67751a2c5276fec31604",
+    "cutoverHeadCommit": "5acc0c5cfc2cfbf0b299951a5a97a0c2b1863777",
+    "resolvesToPublic": true,
+    "branchProtectionRequiredCheck": "PR Fast / windows",
+    "branchProtectionConfigured": false,
+    "privateVulnerabilityReportingEnabled": true,
+    "metadataVerified": false
+  },
+  "ci": {
+    "status": "green",
+    "workflow": "PR Fast",
+    "requiredCheck": "PR Fast / windows",
+    "runUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29075386344",
+    "headSha": "5acc0c5cfc2cfbf0b299951a5a97a0c2b1863777",
+    "event": "push",
+    "conclusion": "success",
+    "startedAt": "2026-07-10T07:00:34Z",
+    "completedAt": "2026-07-10T07:02:49Z",
+    "publicPrFastFirstRunGreen": true,
+    "publicHeavyWorkflowScheduleOnly": true,
+    "privateWorkflowsDisabled": false,
+    "privateWorkflowDisableDateRecorded": false
+  },
+  "cloudflareBridgeRetirement": {
+    "status": "retired",
+    "workerName": "subversionr-pr-fast",
+    "publicCiReplacement": "PR Fast / windows",
+    "disconnected": true,
+    "triggersDisabled": true,
+    "retirementDate": "2026-07-10"
+  },
+  "release": {
+    "status": "published",
+    "tag": "v0.2.0-beta.1",
+    "tagCommit": "5acc0c5cfc2cfbf0b299951a5a97a0c2b1863777",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1",
+    "prerelease": true,
+    "publishedAt": "2026-07-10T07:24:13Z",
+    "artifactAttestationPublished": false,
+    "assets": [
+      {
+        "name": "subversionr-source-sbom.cdx.json",
+        "size": 272845,
+        "sha256": "2fe0ae5803c6a8b1eb4d22817e1149e463f60ead8b8af1e7cd6100e061355da0",
+        "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/download/v0.2.0-beta.1/subversionr-source-sbom.cdx.json"
+      },
+      {
+        "name": "subversionr-win32-x64-0.2.0.vsix",
+        "size": 8250996,
+        "sha256": "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
+        "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/download/v0.2.0-beta.1/subversionr-win32-x64-0.2.0.vsix"
+      },
+      {
+        "name": "subversionr-win32-x64-beta-candidate.zip",
+        "size": 15243662,
+        "sha256": "7b1c82e90261d893e2fb41809dc11b39ffd088de428abd32c9d55800be266db8",
+        "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/download/v0.2.0-beta.1/subversionr-win32-x64-beta-candidate.zip"
+      },
+      {
+        "name": "THIRD-PARTY-NOTICES.md",
+        "size": 75300,
+        "sha256": "d7e2c1d5fb0816243a13977d674cdeaf597545881b60d04ed634500634500ed4",
+        "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/download/v0.2.0-beta.1/THIRD-PARTY-NOTICES.md"
+      }
+    ]
+  },
+  "betaCandidateEvidence": {
+    "status": "blocked-published-bundle-inconsistent",
+    "publishedBundleAssetName": "subversionr-win32-x64-beta-candidate.zip",
+    "publishedBundleSha256": "7b1c82e90261d893e2fb41809dc11b39ffd088de428abd32c9d55800be266db8",
+    "expectedVsixName": "subversionr-win32-x64-0.2.0.vsix",
+    "expectedVsixSha256": "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
+    "containedVsixName": "svn-r-win32-x64-0.1.0.vsix",
+    "containedVsixSha256": "ff7094c02b27914351fde4d9ae9b09dd8a3cf4af00f983ddf085adb808a3167b",
+    "declaredPayloadCount": 1462,
+    "missingPayloadCount": 29,
+    "mismatchedPayloadCount": 421,
+    "consistencyVerified": false,
+    "regenerationCompleted": false
+  }
+}

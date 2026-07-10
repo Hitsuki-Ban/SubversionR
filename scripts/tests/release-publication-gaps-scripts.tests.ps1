@@ -59,6 +59,8 @@ function New-PublicationGapsFixture([string]$Root) {
   $vsixPath = Join-Path $artifactsRoot "subversionr-win32-x64-0.2.0.vsix"
   [System.IO.File]::WriteAllBytes($vsixPath, [byte[]](0x53, 0x75, 0x62, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x52))
   $vsixSha256 = Get-Sha256 $vsixPath
+  $baselineCommit = "1111111111111111111111111111111111111111"
+  $cutoverHeadCommit = "0123456789abcdef0123456789abcdef01234567"
 
   $vsixEvidencePath = Join-Path $evidenceRoot "subversionr-vsix-package-win32-x64.json"
   Write-JsonFile $vsixEvidencePath ([pscustomobject]@{
@@ -119,18 +121,115 @@ function New-PublicationGapsFixture([string]$Root) {
       }
     })
 
+  $cutoverEvidencePath = Join-Path $Root "public-cutover-evidence.json"
+  $releaseAssetBaseUrl = "https://github.com/Hitsuki-Ban/SubversionR/releases/download/v0.2.0-beta.1"
+  Write-JsonFile $cutoverEvidencePath ([pscustomobject]@{
+      schemaVersion = 1
+      schema = "subversionr.release.public-cutover-evidence.v1"
+      status = "recorded-post-cutover"
+      repository = [pscustomobject]@{
+        url = "https://github.com/Hitsuki-Ban/SubversionR"
+        defaultBranch = "main"
+        baselineCommit = $baselineCommit
+        cutoverHeadCommit = $cutoverHeadCommit
+        resolvesToPublic = $true
+        branchProtectionRequiredCheck = "PR Fast / windows"
+        branchProtectionConfigured = $false
+        privateVulnerabilityReportingEnabled = $true
+        metadataVerified = $false
+      }
+      ci = [pscustomobject]@{
+        status = "green"
+        workflow = "PR Fast"
+        requiredCheck = "PR Fast / windows"
+        runUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/123456789"
+        headSha = $cutoverHeadCommit
+        event = "push"
+        conclusion = "success"
+        startedAt = "2026-07-10T07:00:34Z"
+        completedAt = "2026-07-10T07:02:49Z"
+        publicPrFastFirstRunGreen = $true
+        publicHeavyWorkflowScheduleOnly = $true
+        privateWorkflowsDisabled = $false
+        privateWorkflowDisableDateRecorded = $false
+      }
+      cloudflareBridgeRetirement = [pscustomobject]@{
+        status = "retired"
+        workerName = "subversionr-pr-fast"
+        publicCiReplacement = "PR Fast / windows"
+        disconnected = $true
+        triggersDisabled = $true
+        retirementDate = "2026-07-10"
+      }
+      release = [pscustomobject]@{
+        status = "published"
+        tag = "v0.2.0-beta.1"
+        tagCommit = $cutoverHeadCommit
+        url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1"
+        prerelease = $true
+        publishedAt = "2026-07-10T07:24:13Z"
+        artifactAttestationPublished = $false
+        assets = @(
+          [pscustomobject]@{
+            name = "subversionr-source-sbom.cdx.json"
+            size = 101
+            sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            url = "$releaseAssetBaseUrl/subversionr-source-sbom.cdx.json"
+          },
+          [pscustomobject]@{
+            name = "subversionr-win32-x64-0.2.0.vsix"
+            size = (Get-Item -LiteralPath $vsixPath).Length
+            sha256 = $vsixSha256
+            url = "$releaseAssetBaseUrl/subversionr-win32-x64-0.2.0.vsix"
+          },
+          [pscustomobject]@{
+            name = "subversionr-win32-x64-beta-candidate.zip"
+            size = 303
+            sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            url = "$releaseAssetBaseUrl/subversionr-win32-x64-beta-candidate.zip"
+          },
+          [pscustomobject]@{
+            name = "THIRD-PARTY-NOTICES.md"
+            size = 404
+            sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            url = "$releaseAssetBaseUrl/THIRD-PARTY-NOTICES.md"
+          }
+        )
+      }
+      betaCandidateEvidence = [pscustomobject]@{
+        status = "blocked-published-bundle-inconsistent"
+        publishedBundleAssetName = "subversionr-win32-x64-beta-candidate.zip"
+        publishedBundleSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        expectedVsixName = "subversionr-win32-x64-0.2.0.vsix"
+        expectedVsixSha256 = $vsixSha256
+        containedVsixName = "svn-r-win32-x64-0.1.0.vsix"
+        containedVsixSha256 = "ff7094c02b27914351fde4d9ae9b09dd8a3cf4af00f983ddf085adb808a3167b"
+        declaredPayloadCount = 1462
+        missingPayloadCount = 29
+        mismatchedPayloadCount = 421
+        consistencyVerified = $false
+        regenerationCompleted = $false
+      }
+    })
+
   [pscustomobject]@{
     root = $Root
     vsixPath = $vsixPath
     vsixEvidencePath = $vsixEvidencePath
     provenancePath = $provenancePath
+    cutoverEvidencePath = $cutoverEvidencePath
+    baselineCommit = $baselineCommit
+    cutoverHeadCommit = $cutoverHeadCommit
     outputPath = Join-Path $evidenceRoot "subversionr-publication-gaps-win32-x64.json"
   }
 }
 
-function Invoke-GeneratePublicationGaps([object]$Fixture, [string]$OutputPath, [string]$ExtensionPackage = "packages/vscode-extension/package.json", [string]$ProvenancePath = $null) {
+function Invoke-GeneratePublicationGaps([object]$Fixture, [string]$OutputPath, [string]$ExtensionPackage = "packages/vscode-extension/package.json", [string]$ProvenancePath = $null, [string]$CutoverEvidencePath = $null) {
   if ([string]::IsNullOrWhiteSpace($ProvenancePath)) {
     $ProvenancePath = $Fixture.provenancePath
+  }
+  if ([string]::IsNullOrWhiteSpace($CutoverEvidencePath)) {
+    $CutoverEvidencePath = $Fixture.cutoverEvidencePath
   }
 
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $generatePublicationGapsScript `
@@ -141,6 +240,8 @@ function Invoke-GeneratePublicationGaps([object]$Fixture, [string]$OutputPath, [
     -LicensePath "LICENSE" `
     -ChangelogPath "CHANGELOG.md" `
     -SupportPath "SUPPORT.md" `
+    -PublicCutoverRunbookPath "docs/release/public-cutover-runbook.md" `
+    -PublicCutoverEvidencePath $CutoverEvidencePath `
     -ProvenanceEvidencePath $ProvenancePath `
     -VsixEvidencePath $Fixture.vsixEvidencePath `
     -OutputPath $OutputPath
@@ -178,19 +279,36 @@ try {
   Assert-Equal "False" ([string]$report.publishAuth.secretValueRecorded) "Publish auth must not record secret values."
   Assert-Equal "not-run" $report.marketplacePublicInstall.status "Marketplace public install should remain not-run."
   Assert-Equal "False" ([string]$report.marketplacePublicInstall.installEvidenceRecorded) "Marketplace public install evidence must not be recorded."
-  Assert-Equal "blocked-pending-cutover" $report.publicCutover.status "Public cutover should remain blocked until public baseline migration."
-  Assert-Equal "not-created" $report.publicCutover.baseline.status "Public cutover baseline should not be created by this local gap report."
+  Assert-Equal "recorded-post-cutover" $report.publicCutover.status "Public cutover should record the completed publication state."
+  Assert-Equal "published" $report.publicCutover.baseline.status "Public cutover baseline should be recorded as published."
+  Assert-Equal $fixture.baselineCommit $report.publicCutover.baseline.commit "Public cutover should preserve the fresh baseline commit."
+  Assert-Equal $fixture.cutoverHeadCommit $report.publicCutover.publicRepository.cutoverHeadCommit "Public cutover should preserve the later cutover head commit."
+  Assert-Equal "True" ([string]$report.publicCutover.baseline.publicPushRecorded) "Public cutover should record the public push."
+  Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/123456789" $report.publicCutover.ciHomeMigration.runUrl "Public cutover should record the green public CI run."
+  Assert-Equal "True" ([string]$report.publicCutover.publicRepository.privateVulnerabilityReportingEnabled) "Public cutover should record Private Vulnerability Reporting enablement."
   Assert-Equal "PR Fast / windows" $report.publicCutover.publicRepository.branchProtectionRequiredCheck "Public cutover should record the public PR Fast branch-protection check."
-  Assert-Equal "not-retired" $report.publicCutover.cloudflareBridgeRetirement.status "Cloudflare bridge retirement should remain not-retired before cutover."
+  Assert-Equal "False" ([string]$report.publicCutover.publicRepository.branchProtectionConfigured) "Public branch protection should remain an explicit owner follow-up."
+  Assert-Equal "False" ([string]$report.publicCutover.publicRepository.metadataVerified) "Incomplete public repository metadata should remain explicit."
+  Assert-Equal "retired" $report.publicCutover.cloudflareBridgeRetirement.status "Cloudflare bridge retirement should be recorded."
+  Assert-Equal "True" ([string]$report.publicCutover.cloudflareBridgeRetirement.disconnected) "Cloudflare bridge should be disconnected."
+  Assert-Equal "published" $report.publicCutover.release.status "Public release should be recorded as published."
   Assert-Equal "v0.2.0-beta.1" $report.publicCutover.release.tag "Public cutover should record the first public Beta tag."
+  Assert-Equal "False" ([string]$report.publicCutover.release.artifactAttestationPublished) "Live artifact attestation should remain blocked for public issue #5."
+  Assert-Equal 4 @($report.publicCutover.release.assets).Count "Public cutover should record all four release assets."
+  Assert-Equal "blocked-published-bundle-inconsistent" $report.publicCutover.betaCandidateEvidence.status "Published Beta candidate evidence should remain blocked on bundle inconsistency."
+  Assert-Equal "False" ([string]$report.publicCutover.betaCandidateEvidence.consistencyVerified) "Published Beta candidate evidence must not claim consistency."
   Assert-Equal (Get-Sha256 $fixture.vsixPath) $report.artifacts.vsix.sha256 "Publication gaps should bind the exact VSIX hash."
   foreach ($blocker in @(
       "Marketplace publisher authorization is not verified by this local gap report.",
       "Marketplace publish authentication is not configured by this local gap report.",
       "Marketplace publication is not run by this local gap report.",
       "Marketplace public install evidence is not generated by this local gap report.",
-      "Public repository baseline push and CI home migration are not performed by this local gap report.",
-      "Private workflow disablement and Cloudflare bridge retirement remain manual cutover steps."
+      "VSIX signing remains absent in the upstream provenance preflight.",
+      "Public branch protection is not configured.",
+      "Public repository homepage and social metadata are not fully verified.",
+      "Private repository workflows are not disabled.",
+      "Live GitHub artifact attestation is not published or verified."
+      "The published Beta candidate bundle is inconsistent with its manifest and cannot close the post-cutover Beta-G chain."
     )) {
     Assert-True (@($report.blockers | Where-Object { $_ -eq $blocker }).Count -eq 1) "Publication gaps should include blocker '$blocker'."
   }
@@ -222,6 +340,22 @@ try {
   Assert-NativeCommandFailsContaining {
     Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-provenance-report.json") -ProvenancePath $badProvenancePath
   } "publication readiness" "Publication gaps generation should reject upstream provenance that claims Marketplace publication readiness."
+
+  $badProvenancePath = Join-Path $tempRoot "bad-signed-provenance.json"
+  $badProvenance = Get-Content -Raw -LiteralPath $fixture.provenancePath | ConvertFrom-Json
+  $badProvenance.signing.status = "signed"
+  Write-JsonFile $badProvenancePath $badProvenance
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-signed-report.json") -ProvenancePath $badProvenancePath
+  } "signing status must remain unsigned" "Publication gaps generation should reject upstream signing overclaims."
+
+  $badProvenancePath = Join-Path $tempRoot "bad-rollback-provenance.json"
+  $badProvenance = Get-Content -Raw -LiteralPath $fixture.provenancePath | ConvertFrom-Json
+  $badProvenance.previousStableRollback.status = "proven"
+  Write-JsonFile $badProvenancePath $badProvenance
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-rollback-report.json") -ProvenancePath $badProvenancePath
+  } "previous-stable rollback status must remain not-proven" "Publication gaps generation should reject upstream rollback overclaims."
 
   $tamperedPath = Join-Path $tempRoot "tampered-public-readiness.json"
   $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
@@ -265,17 +399,77 @@ try {
       -EvidencePath $tamperedPath
   } "not-run" "Publication gaps verification should reject public install overclaims."
 
-  $tamperedPath = Join-Path $tempRoot "tampered-public-cutover.json"
+  $tamperedPath = Join-Path $tempRoot "tampered-live-attestation.json"
   $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
-  $tampered.publicCutover.status = "complete"
-  $tampered.publicCutover.cloudflareBridgeRetirement.status = "retired"
-  $tampered.publicCutover.cloudflareBridgeRetirement.disconnected = $true
+  $tampered.publicCutover.release.artifactAttestationPublished = $true
   Write-JsonFile $tamperedPath $tampered
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
       -Target win32-x64 `
       -EvidencePath $tamperedPath
-  } "blocked-pending-cutover" "Publication gaps verification should reject public cutover overclaims."
+  } "must remain false" "Publication gaps verification should reject live attestation overclaims."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-released-vsix-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  @($badCutover.release.assets | Where-Object { $_.name -eq "subversionr-win32-x64-0.2.0.vsix" })[0].sha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-released-vsix-report.json") -CutoverEvidencePath $badCutoverPath
+  } "Released VSIX SHA256 must match" "Publication gaps generation should reject a released VSIX hash that differs from current bytes."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-ci-url-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.ci.runUrl = "https://example.invalid/actions/runs/123456789"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-ci-url-report.json") -CutoverEvidencePath $badCutoverPath
+  } "runUrl must identify a public repository Actions run" "Publication gaps generation should reject a CI run outside the public repository."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-string-boolean-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtectionConfigured = "False"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-string-boolean-report.json") -CutoverEvidencePath $badCutoverPath
+  } "must be a JSON boolean" "Publication gaps generation should reject string values for boolean cutover fields."
+
+  $tamperedPath = Join-Path $tempRoot "tampered-source-divergence.json"
+  $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
+  $tampered.publicCutover.ciHomeMigration.runUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/987654321"
+  Write-JsonFile $tamperedPath $tampered
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
+      -Target win32-x64 `
+      -EvidencePath $tamperedPath
+  } "must match public cutover evidence" "Publication gaps verification should reject report facts that diverge from the hash-bound cutover source."
+
+  $productionMismatchPath = Join-Path $repoRoot "target\release-evidence\publication-gaps-test-$([Guid]::NewGuid().ToString('N')).json"
+  try {
+    Copy-Item -LiteralPath $fixture.outputPath -Destination $productionMismatchPath
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
+        -Target win32-x64 `
+        -EvidencePath $productionMismatchPath
+    } "must bind the source-controlled public cutover contract" "Production publication gaps verification should reject test-fixture cutover evidence."
+  }
+  finally {
+    Remove-Item -LiteralPath $productionMismatchPath -Force -ErrorAction SilentlyContinue
+  }
+
+  $cutoverEvidenceBytes = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath
+  try {
+    $driftedCutover = $cutoverEvidenceBytes | ConvertFrom-Json
+    $driftedCutover.release.publishedAt = "2026-07-10T07:25:00Z"
+    Write-JsonFile $fixture.cutoverEvidencePath $driftedCutover
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
+        -Target win32-x64 `
+        -EvidencePath $fixture.outputPath
+    } "SHA256 must match current bytes" "Publication gaps verification should reject public cutover evidence drift."
+  }
+  finally {
+    Set-Content -LiteralPath $fixture.cutoverEvidencePath -Value $cutoverEvidenceBytes -NoNewline -Encoding utf8
+  }
 
   $tamperedPath = Join-Path $tempRoot "tampered-cloudflare-live-id.json"
   $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
@@ -300,6 +494,8 @@ try {
   $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   Assert-True ($packageJson.scripts."release:test-publication-gaps-scripts".Contains("release-publication-gaps-scripts.tests.ps1")) "Root package should expose publication gaps script tests."
   Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("generate-publication-gaps.ps1")) "Root package should expose publication gaps generation."
+  Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("-PublicCutoverRunbookPath docs/release/public-cutover-runbook.md")) "Root package should pass the public cutover runbook explicitly."
+  Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("-PublicCutoverEvidencePath docs/release/public-cutover-evidence.json")) "Root package should pass the public cutover evidence explicitly."
   Assert-True ($packageJson.scripts."release:verify-publication-gaps:win32-x64".Contains("verify-publication-gaps.ps1")) "Root package should expose publication gaps verification."
 
   $ciWorkflow = Get-Content -Raw -LiteralPath $ciWorkflowPath
@@ -317,6 +513,7 @@ try {
       "M7k2b publication gaps and publish-auth contract preflight",
       "subversionr.release.publication-gaps.win32-x64.v1",
       "docs/release/public-cutover-runbook.md",
+      "docs/release/public-cutover-evidence.json",
       "pnpm release:test-publication-gaps-scripts",
       "pnpm release:generate-publication-gaps:win32-x64",
       "pnpm release:verify-publication-gaps:win32-x64"

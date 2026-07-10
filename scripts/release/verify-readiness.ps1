@@ -378,6 +378,7 @@ if ($Mode -eq "smoke") {
     (Read-RequiredDocument "docs/ci/github-actions-restoration.md")
   Assert-PublicCutoverRunbook `
     (Read-RequiredDocument "docs/release/public-cutover-runbook.md")
+  [void](Read-RequiredDocument "docs/release/public-cutover-evidence.json")
   Invoke-SupportIntakeChecks
   Invoke-RequirementEvidenceRuleChecks | Out-Null
   Write-Host "Release readiness smoke checks passed."
@@ -392,6 +393,7 @@ $releaseGates = Read-RequiredDocument "docs/release/m7-release-readiness-gates.m
 $evidenceMatrix = Read-RequiredDocument "docs/release/security-evidence-matrix.md"
 $publicClaimMatrix = Read-RequiredDocument "docs/release/public-claim-matrix.md"
 $publicCutoverRunbook = Read-RequiredDocument "docs/release/public-cutover-runbook.md"
+$publicCutoverEvidence = Read-RequiredDocument "docs/release/public-cutover-evidence.json"
 $projectReadme = Read-RequiredDocument "README.md"
 $engineeringHandoff = Read-RequiredDocument "docs/onboarding/ENGINEERING_HANDOFF.md"
 $m2Plan = Read-RequiredDocument "docs/plans/m2-repository-status-snapshot.md"
@@ -6467,6 +6469,16 @@ Assert-PrFastWorkflow `
 
 Assert-GithubActionsRestorationDoc $githubActionsRestorationDoc
 Assert-PublicCutoverRunbook $publicCutoverRunbook
+Assert-Terms $publicCutoverEvidence @(
+  "subversionr.release.public-cutover-evidence.v1",
+  "recorded-post-cutover",
+  "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/",
+  "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1",
+  "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
+  "blocked-published-bundle-inconsistent",
+  '"missingPayloadCount": 29',
+  '"mismatchedPayloadCount": 421'
+) "public cutover evidence contract"
 
 Assert-Terms $securityPolicy @(
   "# Security Policy",
@@ -6637,7 +6649,7 @@ Assert-Terms $publicClaimMatrix @(
   "Public support intake and redaction preflight",
   "Marketplace listing metadata and icon preflight",
   "Publication gaps and publish-auth contract preflight",
-  "public cutover baseline/CI/Cloudflare/release blockers",
+  "live-recorded",
   "Vulnerability review input-contract preflight",
   "Live OSV vulnerability review evidence",
   "Native advisory review evidence",
@@ -6939,7 +6951,7 @@ Assert-TableStatusIn $publicClaimMatrix "GitHub artifact attestation input contr
 Assert-TableStatusIn $publicClaimMatrix "Signed Marketplace/public install and previous-stable rollback" @("deferred")
 Assert-TableStatusIn $publicClaimMatrix "Public support intake and redaction preflight" @("fixture-only")
 Assert-TableStatusIn $publicClaimMatrix "Marketplace listing metadata and icon preflight" @("fixture-only")
-Assert-TableStatusIn $publicClaimMatrix "Publication gaps and publish-auth contract preflight" @("fixture-only")
+Assert-TableStatusIn $publicClaimMatrix "Publication gaps and publish-auth contract preflight" @("live-recorded")
 Assert-TableStatusIn $publicClaimMatrix "Vulnerability review input-contract preflight" @("fixture-only")
 Assert-TableStatusIn $publicClaimMatrix "Live OSV vulnerability review evidence" @("fixture-only")
 Assert-TableStatusIn $publicClaimMatrix "Native advisory review evidence" @("fixture-only")
