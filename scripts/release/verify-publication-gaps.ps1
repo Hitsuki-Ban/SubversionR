@@ -38,6 +38,9 @@ function Assert-GeneratedPath([string]$Path, [string]$Name, [string[]]$AllowedRo
 
 function Assert-File([string]$Path, [string]$Name) {
   $absolute = Get-RepoAbsolutePath $Path
+  if (-not (Test-IsPathWithin -Path $absolute -Root $repoRoot)) {
+    throw "$Name must resolve inside the repository: $Path"
+  }
   if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
     throw "$Name must be a file: $Path"
   }
@@ -219,7 +222,7 @@ Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR.git" ([string]$report.p
 Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR#readme" ([string]$report.publicRepositoryMetadata.homepageUrl) "Public homepage URL must match the extension manifest."
 Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/issues" ([string]$report.publicRepositoryMetadata.bugsUrl) "Public issue tracker URL must match the extension manifest."
 
-Assert-Equal "not-verified" ([string]$report.marketplacePublisherAuthorization.status) "Marketplace publisher authorization must remain not-verified."
+Assert-Equal "pending-owner-membership" ([string]$report.marketplacePublisherAuthorization.status) "Marketplace publisher authorization must remain pending owner membership."
 Assert-Equal "hitsuki-ban" ([string]$report.marketplacePublisherAuthorization.publisher) "Marketplace publisher authorization must bind publisher hitsuki-ban."
 Assert-Equal "hitsuki-ban.subversionr" ([string]$report.marketplacePublisherAuthorization.expectedExtensionId) "Marketplace publisher authorization must bind extension id."
 Assert-RequiredBooleanFalse $report.marketplacePublisherAuthorization "ownerOrContributorVerified" "Marketplace publisher authorization"
@@ -229,17 +232,36 @@ Assert-NoProperty $report.marketplacePublisherAuthorization "token" "Marketplace
 Assert-NoProperty $report.marketplacePublisherAuthorization "pat" "Marketplace publisher authorization"
 Assert-NoProperty $report.marketplacePublisherAuthorization "authorizationHeader" "Marketplace publisher authorization"
 
-Assert-Equal "not-configured" ([string]$report.publishAuth.status) "Publish auth must remain not-configured."
+Assert-Equal "entra-federated-workflow-configured" ([string]$report.publishAuth.status) "Publish auth must record the source-controlled Entra workflow."
 Assert-Equal "microsoft-entra-id-workload-identity" ([string]$report.publishAuth.primaryMode) "Publish auth primary mode should track the official Entra ID workload identity path."
 Assert-Equal "@vscode/vsce" ([string]$report.publishAuth.requiredTool) "Publish auth must name @vscode/vsce."
 Assert-Equal "2.26.1" ([string]$report.publishAuth.minimumVsceForAzureCredential) "Publish auth must record the documented minimum vsce version for --azure-credential."
-Assert-Equal "VSCE_PAT" ([string]$report.publishAuth.legacyPatSecretName) "Publish auth must record only the legacy secret name contract."
-Assert-Equal "2026-12-01" ([string]$report.publishAuth.legacyPatRetirementDate) "Publish auth must record the global PAT retirement date."
+Assert-Equal ".github/workflows/publish-marketplace.yml" ([string]$report.publishAuth.workflowPath) "Publish auth must bind the source-controlled Marketplace workflow."
+Assert-Equal "marketplace" ([string]$report.publishAuth.githubEnvironment) "Publish auth must bind the protected marketplace environment."
+Assert-Equal 2 @($report.publishAuth.requiredRepositoryVariables).Count "Publish auth must require exactly two repository variables."
+Assert-ArrayContainsExactlyOnce -Values @($report.publishAuth.requiredRepositoryVariables) -Expected "AZURE_CLIENT_ID" -Context "Publish auth repository variables"
+Assert-ArrayContainsExactlyOnce -Values @($report.publishAuth.requiredRepositoryVariables) -Expected "AZURE_TENANT_ID" -Context "Publish auth repository variables"
+Assert-Equal 2 @($report.publishAuth.requiredPermissions).Count "Publish auth must require exactly two workflow permissions."
+Assert-ArrayContainsExactlyOnce -Values @($report.publishAuth.requiredPermissions) -Expected "contents: read" -Context "Publish auth permissions"
+Assert-ArrayContainsExactlyOnce -Values @($report.publishAuth.requiredPermissions) -Expected "id-token: write" -Context "Publish auth permissions"
+Assert-Equal "vsce publish --packagePath <attested-vsix> --pre-release --azure-credential" ([string]$report.publishAuth.azureCredentialCommandShape) "Publish auth must bind the exact Entra publish command shape."
+Assert-RequiredBooleanTrue $report.publishAuth "allowNoSubscriptions" "Publish auth"
 Assert-RequiredBooleanFalse $report.publishAuth "environmentRead" "Publish auth"
-Assert-RequiredBooleanFalse $report.publishAuth "azureCredentialConfigured" "Publish auth"
-Assert-RequiredBooleanFalse $report.publishAuth "legacyPatConfigured" "Publish auth"
+Assert-RequiredBooleanTrue $report.publishAuth "azureCredentialConfigured" "Publish auth"
 Assert-RequiredBooleanFalse $report.publishAuth "secretValueRecorded" "Publish auth"
-Assert-RequiredBooleanFalse $report.publishAuth "claimAllowed" "Publish auth"
+Assert-RequiredBooleanTrue $report.publishAuth "claimAllowed" "Publish auth"
+Assert-Equal "marketplace-identity-bootstrap-evidence" ([string]$report.publishAuth.verifiedBy) "Publish auth must bind the successful identity bootstrap evidence."
+Assert-Equal "entra-federated-login-verified" ([string]$report.publishAuth.bootstrap.status) "Publish auth bootstrap must record successful federation."
+Assert-Equal ".github/workflows/bootstrap-marketplace-identity.yml" ([string]$report.publishAuth.bootstrap.workflowPath) "Publish auth bootstrap workflow path must match."
+Assert-True ([string]$report.publishAuth.bootstrap.runId -match '^[1-9][0-9]*$') "Publish auth bootstrap runId must be numeric."
+Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/$($report.publishAuth.bootstrap.runId)" ([string]$report.publishAuth.bootstrap.runUrl) "Publish auth bootstrap run URL must match."
+Assert-True ([string]$report.publishAuth.bootstrap.headSha -match '^[a-f0-9]{40}$') "Publish auth bootstrap headSha must be a full lowercase commit SHA."
+Assert-Equal "refs/heads/main" ([string]$report.publishAuth.bootstrap.sourceRef) "Publish auth bootstrap sourceRef must be public main."
+Assert-Equal "repo:Hitsuki-Ban/SubversionR:environment:marketplace" ([string]$report.publishAuth.bootstrap.oidcSubject) "Publish auth bootstrap OIDC subject must match."
+Assert-Equal 0 @($report.publishAuth.blockers).Count "Publish auth must have no source-configuration blocker."
+Assert-NoProperty $report.publishAuth "legacyPatSecretName" "Publish auth"
+Assert-NoProperty $report.publishAuth "legacyPatRetirementDate" "Publish auth"
+Assert-NoProperty $report.publishAuth "legacyPatConfigured" "Publish auth"
 Assert-NoProperty $report.publishAuth "tokenValue" "Publish auth"
 Assert-NoProperty $report.publishAuth "secretValue" "Publish auth"
 Assert-NoProperty $report.publishAuth "authorizationHeader" "Publish auth"
@@ -254,13 +276,18 @@ Assert-RequiredBooleanFalse $report.marketplacePublicInstall "claimAllowed" "Mar
 Assert-NoProperty $report.marketplacePublicInstall "marketplaceUrl" "Marketplace public install"
 Assert-NoProperty $report.marketplacePublicInstall "installLog" "Marketplace public install"
 
-Assert-Equal "not-published" ([string]$report.marketplace.status) "Marketplace status must remain not-published."
+Assert-Equal "current-candidate-not-published" ([string]$report.marketplace.status) "Marketplace status must remain not-published for the current candidate."
+Assert-Equal "extension-version" ([string]$report.marketplace.scope) "Marketplace status must be scoped to the extension version."
+Assert-Equal ([string]$report.extension.version) ([string]$report.marketplace.candidateVersion) "Marketplace candidate version must match the extension version."
+Assert-Equal "pre-existing-manual-publication" ([string]$report.marketplace.existingListing.status) "Marketplace existing listing must remain distinguished from the Entra pipeline."
+Assert-Equal "0.1.0" ([string]$report.marketplace.existingListing.version) "Marketplace existing listing must bind the observed version."
+Assert-Equal "win32-x64" ([string]$report.marketplace.existingListing.targetPlatform) "Marketplace existing listing must bind win32-x64."
 Assert-RequiredBooleanFalse $report.marketplace "publicationEvidenceRecorded" "Marketplace"
 Assert-RequiredBooleanFalse $report.marketplace "claimAllowed" "Marketplace"
 
 $expectedBlockers = @(
-    "Marketplace publisher authorization is not verified by this local gap report.",
-    "Marketplace publish authentication is not configured by this local gap report.",
+    "Marketplace publisher authorization is pending owner completion of publisher membership.",
+    "The attested 0.2.0 release VSIX is not eligible for Marketplace pre-release publication because its manifest lacks the pre-release property.",
     "Marketplace publication is not run by this local gap report.",
     "Marketplace public install evidence is not generated by this local gap report.",
     "VSIX signing remains absent in the upstream provenance preflight.",
@@ -276,7 +303,8 @@ $expectedNonClaims = @(
     "This gate is a local publication gaps report, not a publication readiness certificate.",
     "This gate records public repository metadata and cutover state from hash-bound evidence without recording a private remote, credentialed URL, or Marketplace publication URL.",
     "This gate does not verify Marketplace publisher ownership, contributor access, or authorization.",
-    "This gate does not configure or validate Microsoft Entra ID workload identity, managed identity, PAT, VSCE_PAT, or any other credential.",
+    "This gate records the source-controlled Microsoft Entra ID workflow and hash-bound successful bootstrap run without recording owner-managed variable values or proving publisher membership.",
+    "This gate records that the exact attested 0.2.0 VSIX cannot be published as a Marketplace pre-release without changing its bytes.",
     "This gate does not publish to Visual Studio Marketplace.",
     "This gate does not install from Visual Studio Marketplace or prove public acquisition.",
     "This gate records owner-managed branch protection and private workflow disablement from hash-bound evidence; it does not perform repository-owner API mutations.",
@@ -307,6 +335,11 @@ Assert-HashRecord $report.evidence.publicCutoverRunbook "Public cutover runbook"
 Assert-HashRecord $report.evidence.publicCutoverEvidence "Public cutover evidence"
 Assert-HashRecord $report.evidence.provenancePreflight "Provenance preflight"
 Assert-HashRecord $report.evidence.vsixPackage "VSIX package evidence"
+Assert-HashRecord $report.evidence.marketplacePublishWorkflow "Marketplace publish workflow"
+Assert-HashRecord $report.evidence.marketplaceIdentityBootstrap "Marketplace identity bootstrap evidence"
+Assert-Equal "subversionr.release.marketplace-identity-bootstrap.v1" (Assert-RequiredString $report.evidence.marketplaceIdentityBootstrap "schema" "Marketplace identity bootstrap evidence") "Marketplace identity bootstrap schema must be bound."
+Assert-HashRecord $report.evidence.marketplaceExistingListing "Marketplace existing-listing evidence"
+Assert-Equal "subversionr.release.marketplace-existing-listing.v1" (Assert-RequiredString $report.evidence.marketplaceExistingListing "schema" "Marketplace existing-listing evidence") "Marketplace existing-listing schema must be bound."
 Assert-Equal "subversionr.release.marketplace-provenance-preflight.win32-x64.v1" (Assert-RequiredString $report.evidence.provenancePreflight "schema" "Provenance preflight evidence") "Provenance preflight schema must be bound."
 Assert-Equal "subversionr.release.vsix-package.win32-x64.v1" (Assert-RequiredString $report.evidence.vsixPackage "schema" "VSIX package evidence") "VSIX package evidence schema must be bound."
 $provenance = Get-Content -Raw -LiteralPath (Assert-File ([string]$report.evidence.provenancePreflight.path) "Provenance preflight") | ConvertFrom-Json

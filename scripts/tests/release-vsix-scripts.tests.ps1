@@ -7,6 +7,7 @@ $installVsixScript = Join-Path $repoRoot "scripts\release\test-vscode-cli-instal
 $verifyLayoutScript = Join-Path $repoRoot "scripts\release\verify-vscode-package-layout.ps1"
 $packageJsonPath = Join-Path $repoRoot "package.json"
 $extensionPackageJsonPath = Join-Path $repoRoot "packages\vscode-extension\package.json"
+$extensionReadmePath = Join-Path $repoRoot "packages\vscode-extension\README.md"
 $extensionBuildTsconfigPath = Join-Path $repoRoot "packages\vscode-extension\tsconfig.build.json"
 $ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
 
@@ -48,6 +49,24 @@ function Assert-ZipDoesNotContainPattern([string]$ZipPath, [string]$Pattern, [st
   try {
     $matches = @($archive.Entries | Where-Object { $_.FullName -like $Pattern } | Select-Object -ExpandProperty FullName)
     Assert-True ($matches.Count -eq 0) "$Message Found: $($matches -join ', ')"
+  }
+  finally {
+    $archive.Dispose()
+  }
+}
+
+function Get-ZipEntryText([string]$ZipPath, [string]$EntryName) {
+  $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+  try {
+    $entries = @($archive.Entries | Where-Object { $_.FullName -eq $EntryName })
+    Assert-True ($entries.Count -eq 1) "VSIX should contain exactly one $EntryName entry."
+    $reader = [System.IO.StreamReader]::new($entries[0].Open())
+    try {
+      $reader.ReadToEnd()
+    }
+    finally {
+      $reader.Dispose()
+    }
   }
   finally {
     $archive.Dispose()
@@ -289,7 +308,18 @@ New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
   Assert-True (Test-Path -LiteralPath $packageVsixScript -PathType Leaf) "package-vscode-vsix.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $installVsixScript -PathType Leaf) "test-vscode-cli-install-vsix.ps1 should exist."
+  Assert-True (Test-Path -LiteralPath $extensionReadmePath -PathType Leaf) "VS Code extension Marketplace README should exist."
   Assert-True (Test-Path -LiteralPath $extensionBuildTsconfigPath -PathType Leaf) "VS Code extension build tsconfig should exist."
+
+  $extensionReadme = Get-Content -Raw -LiteralPath $extensionReadmePath
+  $extensionReadmeSha256 = (Get-FileHash -LiteralPath $extensionReadmePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  Assert-True ($extensionReadme.Contains('Windows x64 (`win32-x64`)')) "Marketplace README should state the Windows win32-x64 Beta boundary."
+  Assert-True ($extensionReadme.Contains('local `file://` repositories')) "Marketplace README should state the local-file Beta boundary."
+  Assert-True ($extensionReadme.Contains("Install Pre-Release Version")) "Marketplace README should explain pre-release installation."
+  Assert-True ($extensionReadme.Contains("https://github.com/Hitsuki-Ban/SubversionR/issues")) "Marketplace README should link to GitHub support."
+  Assert-True ($extensionReadme.Contains("https://github.com/Hitsuki-Ban/SubversionR/security/policy")) "Marketplace README should link to the GitHub security policy."
+  Assert-True ($extensionReadme -notmatch '(?i)\.svg(?:\b|[?#])') "Marketplace README must not reference SVG content."
+  Assert-True ($extensionReadme -notmatch '!\[') "Marketplace README must not contain images."
 
   $extensionPackage = Get-Content -Raw -LiteralPath $extensionPackageJsonPath | ConvertFrom-Json
   Assert-Equal "tsc -p tsconfig.build.json" $extensionPackage.scripts.build "VS Code extension should expose a release build script."
@@ -299,6 +329,7 @@ try {
   Assert-True ($rootPackage.scripts."release:test-vsix-scripts".Contains("release-vsix-scripts.tests.ps1")) "Root package should expose M7g VSIX script tests."
   Assert-True ($rootPackage.scripts."release:build-vscode-extension".Contains("--filter ./packages/vscode-extension build")) "Root package should expose the extension release build."
   Assert-True ($rootPackage.scripts."release:package-vsix:win32-x64".Contains("package-vscode-vsix.ps1")) "Root package should expose the win32-x64 VSIX package gate."
+  Assert-True ($rootPackage.scripts."release:package-vsix:win32-x64".Contains("-ReadmePath README.md")) "Production VSIX packaging should keep the attested 0.2.0 README input unchanged."
   Assert-True ($rootPackage.scripts."release:test-vsix-cli-install:win32-x64".Contains("test-vscode-cli-install-vsix.ps1")) "Root package should expose the win32-x64 VSIX CLI install gate."
   Assert-True ($rootPackage.scripts."release:test-vsix-cli-install:win32-x64".Contains("%SUBVERSIONR_CODE_CLI%")) "VSIX CLI install gate should require an explicit Code CLI path."
 
@@ -319,7 +350,7 @@ try {
     -Target win32-x64 `
     -PackageRoot $packageRoot `
     -ExtensionDistDirectory $distRoot `
-    -ReadmePath README.md `
+    -ReadmePath $extensionReadmePath `
     -LicensePath LICENSE `
     -ChangelogPath CHANGELOG.md `
     -SupportPath SUPPORT.md `
@@ -340,6 +371,10 @@ try {
   Assert-True ($report.vsix.sha256 -match '^[a-f0-9]{64}$') "VSIX package evidence should record a SHA256 hash."
   Assert-True ($report.inputs.extensionEntrypointSha256 -match '^[a-f0-9]{64}$') "VSIX package evidence should record the input entrypoint hash."
   Assert-Equal $report.inputs.extensionEntrypointSha256 $report.vsix.extensionEntrypointSha256 "VSIX package evidence should prove entrypoint hash continuity."
+  Assert-Equal "packages/vscode-extension/README.md" $report.inputs.readmePath "VSIX package evidence should record the explicit Marketplace README input path."
+  Assert-Equal $extensionReadmeSha256 $report.inputs.readmeSha256 "VSIX package evidence should record the Marketplace README input hash."
+  Assert-Equal $extensionReadmeSha256 $report.vsix.readmeSha256 "VSIX package evidence should record the packaged Marketplace README hash."
+  Assert-Equal $report.inputs.readmeSha256 $report.vsix.readmeSha256 "VSIX package evidence should prove Marketplace README hash continuity."
   Assert-True ($report.inputs.vscodeIgnoreSha256 -match '^[a-f0-9]{64}$') "VSIX package evidence should record the generated .vscodeignore hash."
   Assert-True ($report.inputs.changelogSha256 -match '^[a-f0-9]{64}$') "VSIX package evidence should record the CHANGELOG hash."
   Assert-True ($report.inputs.supportSha256 -match '^[a-f0-9]{64}$') "VSIX package evidence should record the SUPPORT hash."
@@ -359,6 +394,9 @@ try {
   Assert-ZipContains $vsixPath "extension/CHANGELOG.md" "VSIX should contain the changelog."
   Assert-ZipContains $vsixPath "extension/SUPPORT.md" "VSIX should contain the support document."
   Assert-ZipContains $vsixPath "extension/resources/marketplace/icon.png" "VSIX should contain the Marketplace icon."
+  $packagedReadme = Get-ZipEntryText -ZipPath $vsixPath -EntryName "extension/readme.md"
+  Assert-Equal $extensionReadme $packagedReadme "VSIX should contain the explicit Marketplace listing README content."
+  Assert-True ($packagedReadme -notmatch '(?i)\.svg(?:\b|[?#])') "Packaged Marketplace README must not reference SVG content."
   Assert-ZipDoesNotContainPattern $vsixPath "extension/src/*" "VSIX must not package TypeScript source."
   Assert-ZipDoesNotContainPattern $vsixPath "extension/tests/*" "VSIX must not package tests."
   Assert-ZipDoesNotContainPattern $vsixPath "extension/node_modules/*" "VSIX must not package node_modules for the current dependency-free extension."
@@ -400,7 +438,7 @@ try {
       -Target win32-x64 `
       -PackageRoot $packageRoot `
       -ExtensionDistDirectory $missingDistRoot `
-      -ReadmePath README.md `
+      -ReadmePath $extensionReadmePath `
       -LicensePath LICENSE `
       -ChangelogPath CHANGELOG.md `
       -SupportPath SUPPORT.md `
@@ -418,7 +456,7 @@ try {
       -Target win32-x64 `
       -PackageRoot $packageRoot `
       -ExtensionDistDirectory $distWithTests `
-      -ReadmePath README.md `
+      -ReadmePath $extensionReadmePath `
       -LicensePath LICENSE `
       -ChangelogPath CHANGELOG.md `
       -SupportPath SUPPORT.md `

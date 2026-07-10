@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.release.marketplace-identity-bootstrap.v1",
+  "publicReadinessClaim": false,
+  "status": "entra-federated-login-verified",
+  "repository": "Hitsuki-Ban/SubversionR",
+  "workflow": {
+    "path": ".github/workflows/bootstrap-marketplace-identity.yml",
+    "event": "workflow_dispatch",
+    "sourceRef": "refs/heads/main",
+    "headSha": "bb4a9bd1aea1a7a0e6bf29d2bcc23914e60437ce",
+    "runId": "29107576798",
+    "runAttempt": 1,
+    "runUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29107576798",
+    "completedAt": "2026-07-10T16:29:55Z",
+    "conclusion": "success"
+  },
+  "federation": {
+    "environment": "marketplace",
+    "oidcSubject": "repo:Hitsuki-Ban/SubversionR:environment:marketplace",
+    "repositoryVariableNames": [
+      "AZURE_CLIENT_ID",
+      "AZURE_TENANT_ID"
+    ],
+    "allowNoSubscriptions": true,
+    "azureCliLoginVerified": true,
+    "marketplaceIdentityResolved": true,
+    "credentialValuesRecorded": false
+  },
+  "publisherAuthorization": {
+    "publisher": "hitsuki-ban",
+    "status": "pending-owner-membership",
+    "ownerOrContributorVerified": false
+  },
+  "marketplacePublication": {
+    "status": "not-run-by-entra-pipeline",
+    "publicationEvidenceRecorded": false
+  },
+  "nonClaims": [
+    "This evidence does not record Azure tenant, application, Marketplace identity, or credential values.",
+    "This evidence does not prove publisher owner or contributor membership.",
+    "This evidence does not claim Marketplace publication or public install.",
+    "This evidence does not claim artifact signing, previous-stable rollback, final review, or public release readiness."
+  ]
+}

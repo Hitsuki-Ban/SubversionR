@@ -35,6 +35,15 @@ param(
   [string]$VsixEvidencePath,
 
   [Parameter(Mandatory = $true)]
+  [string]$MarketplacePublishWorkflowPath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$MarketplaceIdentityBootstrapEvidencePath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$MarketplaceExistingListingEvidencePath,
+
+  [Parameter(Mandatory = $true)]
   [string]$OutputPath
 )
 
@@ -72,6 +81,9 @@ function Assert-GeneratedPath([string]$Path, [string]$Name, [string[]]$AllowedRo
 
 function Assert-File([string]$Path, [string]$Name) {
   $absolute = Get-RepoAbsolutePath $Path
+  if (-not (Test-IsPathWithin -Path $absolute -Root $repoRoot)) {
+    throw "$Name must resolve inside the repository: $Path"
+  }
   if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
     throw "$Name must be a file: $Path"
   }
@@ -211,6 +223,9 @@ $publicCutoverRunbookResolved = Assert-File $PublicCutoverRunbookPath "PublicCut
 $publicCutoverEvidenceResolved = Assert-File $PublicCutoverEvidencePath "PublicCutoverEvidencePath"
 $provenanceResolved = Assert-File $ProvenanceEvidencePath "ProvenanceEvidencePath"
 $vsixEvidenceResolved = Assert-File $VsixEvidencePath "VsixEvidencePath"
+$marketplacePublishWorkflowResolved = Assert-File $MarketplacePublishWorkflowPath "MarketplacePublishWorkflowPath"
+$marketplaceIdentityBootstrapEvidenceResolved = Assert-File $MarketplaceIdentityBootstrapEvidencePath "MarketplaceIdentityBootstrapEvidencePath"
+$marketplaceExistingListingEvidenceResolved = Assert-File $MarketplaceExistingListingEvidencePath "MarketplaceExistingListingEvidencePath"
 $outputResolved = Assert-GeneratedPath -Path $OutputPath -Name "OutputPath" -AllowedRoots @(
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence")),
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\tests\release-publication-gaps-scripts"))
@@ -223,14 +238,66 @@ $vsixEvidence = Get-Content -Raw -LiteralPath $vsixEvidenceResolved | ConvertFro
 $publicCutoverEvidenceRaw = Get-Content -Raw -LiteralPath $publicCutoverEvidenceResolved
 Assert-NoForbiddenCutoverEvidenceText $publicCutoverEvidenceRaw
 $publicCutoverEvidence = $publicCutoverEvidenceRaw | ConvertFrom-Json
+$marketplaceIdentityBootstrapEvidence = Get-Content -Raw -LiteralPath $marketplaceIdentityBootstrapEvidenceResolved | ConvertFrom-Json
+$marketplaceExistingListingEvidence = Get-Content -Raw -LiteralPath $marketplaceExistingListingEvidenceResolved | ConvertFrom-Json
 
 $extensionName = [string](Get-RequiredProperty $extensionPackage "name" "Extension package")
 $extensionPublisher = [string](Get-RequiredProperty $extensionPackage "publisher" "Extension package")
 $extensionId = "$extensionPublisher.$extensionName"
+$extensionVersion = [string](Get-RequiredProperty $extensionPackage "version" "Extension package")
 Assert-Equal "hitsuki-ban.subversionr" $extensionId "Extension package identity must be hitsuki-ban.subversionr."
 Assert-Equal "SubversionR" ([string](Get-RequiredProperty $extensionPackage "displayName" "Extension package")) "Extension display name should remain SubversionR."
 Assert-True (-not ((Test-HasProperty $extensionPackage "private") -and [bool]$extensionPackage.private)) "Extension package must not be private for the public Marketplace identity."
 Assert-True ((Test-HasProperty $rootPackage "private") -and [bool]$rootPackage.private) "Root package must remain private for this local publication gaps gate."
+$vsceDependency = [string](Get-RequiredProperty (Get-RequiredProperty $rootPackage "devDependencies" "Root package") "@vscode/vsce" "Root package devDependencies")
+try {
+  $vsceVersion = [version]$vsceDependency
+}
+catch {
+  throw "Root package @vscode/vsce dependency must be an exact numeric version, got '$vsceDependency'."
+}
+if ($vsceVersion -lt [version]"2.26.1") {
+  throw "Root package @vscode/vsce dependency must be at least 2.26.1 for --azure-credential."
+}
+
+Assert-Equal 1 ([int]$marketplaceIdentityBootstrapEvidence.schemaVersion) "Marketplace identity bootstrap evidence schemaVersion must be 1."
+Assert-Equal "subversionr.release.marketplace-identity-bootstrap.v1" ([string]$marketplaceIdentityBootstrapEvidence.schema) "Marketplace identity bootstrap evidence schema must match."
+Assert-Equal "False" ([string]$marketplaceIdentityBootstrapEvidence.publicReadinessClaim) "Marketplace identity bootstrap evidence must not claim public readiness."
+Assert-Equal "entra-federated-login-verified" ([string]$marketplaceIdentityBootstrapEvidence.status) "Marketplace identity bootstrap evidence must record successful federation."
+Assert-Equal "Hitsuki-Ban/SubversionR" ([string]$marketplaceIdentityBootstrapEvidence.repository) "Marketplace identity bootstrap evidence must bind the public repository."
+Assert-Equal ".github/workflows/bootstrap-marketplace-identity.yml" ([string]$marketplaceIdentityBootstrapEvidence.workflow.path) "Marketplace identity bootstrap workflow path must match."
+Assert-Equal "workflow_dispatch" ([string]$marketplaceIdentityBootstrapEvidence.workflow.event) "Marketplace identity bootstrap event must match."
+Assert-Equal "refs/heads/main" ([string]$marketplaceIdentityBootstrapEvidence.workflow.sourceRef) "Marketplace identity bootstrap source ref must be public main."
+Assert-True ([string]$marketplaceIdentityBootstrapEvidence.workflow.headSha -match '^[a-f0-9]{40}$') "Marketplace identity bootstrap headSha must be a full lowercase commit SHA."
+Assert-True ([string]$marketplaceIdentityBootstrapEvidence.workflow.runId -match '^[1-9][0-9]*$') "Marketplace identity bootstrap runId must be numeric."
+Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/$($marketplaceIdentityBootstrapEvidence.workflow.runId)" ([string]$marketplaceIdentityBootstrapEvidence.workflow.runUrl) "Marketplace identity bootstrap run URL must match the run id."
+Assert-Equal "success" ([string]$marketplaceIdentityBootstrapEvidence.workflow.conclusion) "Marketplace identity bootstrap run must be successful."
+Assert-Equal "marketplace" ([string]$marketplaceIdentityBootstrapEvidence.federation.environment) "Marketplace identity bootstrap environment must match."
+Assert-Equal "repo:Hitsuki-Ban/SubversionR:environment:marketplace" ([string]$marketplaceIdentityBootstrapEvidence.federation.oidcSubject) "Marketplace identity bootstrap OIDC subject must match."
+Assert-Equal 2 @($marketplaceIdentityBootstrapEvidence.federation.repositoryVariableNames).Count "Marketplace identity bootstrap must record exactly two variable names."
+Assert-True (@($marketplaceIdentityBootstrapEvidence.federation.repositoryVariableNames) -contains "AZURE_CLIENT_ID") "Marketplace identity bootstrap must record AZURE_CLIENT_ID."
+Assert-True (@($marketplaceIdentityBootstrapEvidence.federation.repositoryVariableNames) -contains "AZURE_TENANT_ID") "Marketplace identity bootstrap must record AZURE_TENANT_ID."
+Assert-BooleanTrue $marketplaceIdentityBootstrapEvidence.federation "allowNoSubscriptions" "Marketplace identity bootstrap federation"
+Assert-BooleanTrue $marketplaceIdentityBootstrapEvidence.federation "azureCliLoginVerified" "Marketplace identity bootstrap federation"
+Assert-BooleanTrue $marketplaceIdentityBootstrapEvidence.federation "marketplaceIdentityResolved" "Marketplace identity bootstrap federation"
+Assert-BooleanFalse $marketplaceIdentityBootstrapEvidence.federation "credentialValuesRecorded" "Marketplace identity bootstrap federation"
+Assert-Equal "pending-owner-membership" ([string]$marketplaceIdentityBootstrapEvidence.publisherAuthorization.status) "Marketplace publisher authorization must remain pending owner membership."
+Assert-BooleanFalse $marketplaceIdentityBootstrapEvidence.publisherAuthorization "ownerOrContributorVerified" "Marketplace identity bootstrap publisher authorization"
+Assert-Equal "not-run-by-entra-pipeline" ([string]$marketplaceIdentityBootstrapEvidence.marketplacePublication.status) "Marketplace identity bootstrap evidence must not claim pipeline publication."
+Assert-BooleanFalse $marketplaceIdentityBootstrapEvidence.marketplacePublication "publicationEvidenceRecorded" "Marketplace identity bootstrap publication"
+
+Assert-Equal 1 ([int]$marketplaceExistingListingEvidence.schemaVersion) "Marketplace existing-listing evidence schemaVersion must be 1."
+Assert-Equal "subversionr.release.marketplace-existing-listing.v1" ([string]$marketplaceExistingListingEvidence.schema) "Marketplace existing-listing evidence schema must match."
+Assert-Equal "False" ([string]$marketplaceExistingListingEvidence.publicReadinessClaim) "Marketplace existing-listing evidence must not claim public readiness."
+Assert-Equal "visual-studio-marketplace-public-gallery-api" ([string]$marketplaceExistingListingEvidence.source.provider) "Marketplace existing-listing evidence provider must match."
+Assert-Equal "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery" ([string]$marketplaceExistingListingEvidence.source.endpoint) "Marketplace existing-listing evidence endpoint must match."
+Assert-Equal "hitsuki-ban.subversionr" ([string]$marketplaceExistingListingEvidence.listing.extensionId) "Marketplace existing listing must bind the extension id."
+Assert-Equal "0.1.0" ([string]$marketplaceExistingListingEvidence.listing.version) "Marketplace existing listing must bind the observed version."
+Assert-Equal "win32-x64" ([string]$marketplaceExistingListingEvidence.listing.targetPlatform) "Marketplace existing listing must bind win32-x64."
+Assert-Equal "pre-existing-manual-publication" ([string]$marketplaceExistingListingEvidence.listing.status) "Marketplace existing listing must remain distinguished from the Entra pipeline."
+Assert-Equal $extensionVersion ([string]$marketplaceExistingListingEvidence.currentCandidate.version) "Marketplace existing-listing evidence candidate version must match."
+Assert-BooleanFalse $marketplaceExistingListingEvidence.currentCandidate "publishedByEntraPipeline" "Marketplace existing-listing current candidate"
+Assert-BooleanFalse $marketplaceExistingListingEvidence.currentCandidate "publicationEvidenceRecorded" "Marketplace existing-listing current candidate"
 
 $repository = Get-RequiredProperty $extensionPackage "repository" "Extension package"
 Assert-Equal "git" ([string](Get-RequiredProperty $repository "type" "Extension package repository")) "Extension package repository type must be git."
@@ -242,7 +309,6 @@ Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR.git" $repositoryUrl "Ex
 Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR#readme" $homepageUrl "Extension package homepage URL must point to the public repository README."
 Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/issues" $bugsUrl "Extension package bugs URL must point to the public issue tracker."
 
-$extensionVersion = [string](Get-RequiredProperty $extensionPackage "version" "Extension package")
 $extensionLicense = [string](Get-RequiredProperty $extensionPackage "license" "Extension package")
 $engines = Get-RequiredProperty $extensionPackage "engines" "Extension package"
 $enginesVscode = [string](Get-RequiredProperty $engines "vscode" "Extension package engines")
@@ -461,8 +527,8 @@ Assert-BooleanTrue $betaCandidateEvidence "consistencyVerified" "Beta candidate 
 Assert-BooleanTrue $betaCandidateEvidence "regenerationCompleted" "Beta candidate evidence"
 
 $blockers = @(
-  "Marketplace publisher authorization is not verified by this local gap report.",
-  "Marketplace publish authentication is not configured by this local gap report.",
+  "Marketplace publisher authorization is pending owner completion of publisher membership.",
+  "The attested 0.2.0 release VSIX is not eligible for Marketplace pre-release publication because its manifest lacks the pre-release property.",
   "Marketplace publication is not run by this local gap report.",
   "Marketplace public install evidence is not generated by this local gap report.",
   "VSIX signing remains absent in the upstream provenance preflight.",
@@ -474,7 +540,8 @@ $nonClaims = @(
   "This gate is a local publication gaps report, not a publication readiness certificate.",
   "This gate records public repository metadata and cutover state from hash-bound evidence without recording a private remote, credentialed URL, or Marketplace publication URL.",
   "This gate does not verify Marketplace publisher ownership, contributor access, or authorization.",
-  "This gate does not configure or validate Microsoft Entra ID workload identity, managed identity, PAT, VSCE_PAT, or any other credential.",
+  "This gate records the source-controlled Microsoft Entra ID workflow and hash-bound successful bootstrap run without recording owner-managed variable values or proving publisher membership.",
+  "This gate records that the exact attested 0.2.0 VSIX cannot be published as a Marketplace pre-release without changing its bytes.",
   "This gate does not publish to Visual Studio Marketplace.",
   "This gate does not install from Visual Studio Marketplace or prove public acquisition.",
   "This gate records owner-managed branch protection and private workflow disablement from hash-bound evidence; it does not perform repository-owner API mutations.",
@@ -531,6 +598,17 @@ $report = [pscustomobject]@{
       sha256 = Get-Sha256 $vsixEvidenceResolved
       schema = [string]$vsixEvidence.schema
     }
+    marketplacePublishWorkflow = New-HashRecord $marketplacePublishWorkflowResolved
+    marketplaceIdentityBootstrap = [pscustomobject]@{
+      path = Get-RepoRelativePath $marketplaceIdentityBootstrapEvidenceResolved
+      sha256 = Get-Sha256 $marketplaceIdentityBootstrapEvidenceResolved
+      schema = [string]$marketplaceIdentityBootstrapEvidence.schema
+    }
+    marketplaceExistingListing = [pscustomobject]@{
+      path = Get-RepoRelativePath $marketplaceExistingListingEvidenceResolved
+      sha256 = Get-Sha256 $marketplaceExistingListingEvidenceResolved
+      schema = [string]$marketplaceExistingListingEvidence.schema
+    }
   }
   publicRepositoryMetadata = [pscustomobject]@{
     status = "configured"
@@ -553,32 +631,43 @@ $report = [pscustomobject]@{
     blockers = @()
   }
   marketplacePublisherAuthorization = [pscustomobject]@{
-    status = "not-verified"
+    status = "pending-owner-membership"
     publisher = $extensionPublisher
     expectedExtensionId = $extensionId
-    verificationMode = "Marketplace publisher management or vsce login with an authorized identity is required outside this local gate."
+    verificationMode = "The owner must add the resolved Entra identity to the Marketplace publisher before an authorized publish can succeed."
     ownerOrContributorVerified = $false
     credentialRecorded = $false
     claimAllowed = $false
     verifiedBy = $null
-    blockers = @("Publisher ownership or contributor access for hitsuki-ban is not verified by this local gate.")
+    blockers = @("The resolved Entra identity is not yet verified as an owner or contributor of publisher hitsuki-ban.")
   }
   publishAuth = [pscustomobject]@{
-    status = "not-configured"
+    status = "entra-federated-workflow-configured"
     primaryMode = "microsoft-entra-id-workload-identity"
     requiredTool = "@vscode/vsce"
     minimumVsceForAzureCredential = "2.26.1"
-    currentVsceDependency = [string]$rootPackage.devDependencies."@vscode/vsce"
-    azureCredentialCommandShape = "vsce publish --azure-credential"
-    legacyPatSecretName = "VSCE_PAT"
-    legacyPatRetirementDate = "2026-12-01"
+    currentVsceDependency = $vsceDependency
+    workflowPath = Get-RepoRelativePath $marketplacePublishWorkflowResolved
+    githubEnvironment = "marketplace"
+    requiredRepositoryVariables = @("AZURE_CLIENT_ID", "AZURE_TENANT_ID")
+    requiredPermissions = @("contents: read", "id-token: write")
+    azureCredentialCommandShape = "vsce publish --packagePath <attested-vsix> --pre-release --azure-credential"
+    allowNoSubscriptions = $true
     environmentRead = $false
-    azureCredentialConfigured = $false
-    legacyPatConfigured = $false
+    azureCredentialConfigured = $true
     secretValueRecorded = $false
-    claimAllowed = $false
-    verifiedBy = $null
-    blockers = @("Publish authentication must be configured and verified in the release publisher environment without recording credential values.")
+    claimAllowed = $true
+    verifiedBy = "marketplace-identity-bootstrap-evidence"
+    bootstrap = [pscustomobject]@{
+      status = [string]$marketplaceIdentityBootstrapEvidence.status
+      workflowPath = [string]$marketplaceIdentityBootstrapEvidence.workflow.path
+      runId = [string]$marketplaceIdentityBootstrapEvidence.workflow.runId
+      runUrl = [string]$marketplaceIdentityBootstrapEvidence.workflow.runUrl
+      headSha = [string]$marketplaceIdentityBootstrapEvidence.workflow.headSha
+      sourceRef = [string]$marketplaceIdentityBootstrapEvidence.workflow.sourceRef
+      oidcSubject = [string]$marketplaceIdentityBootstrapEvidence.federation.oidcSubject
+    }
+    blockers = @()
   }
   marketplacePublicInstall = [pscustomobject]@{
     status = "not-run"
@@ -594,7 +683,15 @@ $report = [pscustomobject]@{
     blockers = @("Public Marketplace install evidence must be generated only after Marketplace publication.")
   }
   marketplace = [pscustomobject]@{
-    status = "not-published"
+    status = "current-candidate-not-published"
+    scope = "extension-version"
+    candidateVersion = $extensionVersion
+    existingListing = [pscustomobject]@{
+      status = [string]$marketplaceExistingListingEvidence.listing.status
+      version = [string]$marketplaceExistingListingEvidence.listing.version
+      targetPlatform = [string]$marketplaceExistingListingEvidence.listing.targetPlatform
+      observedAt = [string]$marketplaceExistingListingEvidence.observedAt
+    }
     publicationEvidenceRecorded = $false
     claimAllowed = $false
   }
@@ -711,7 +808,7 @@ $report = [pscustomobject]@{
     "active public default-branch protection and private workflow disablement are recorded from detailed hash-bound owner-state evidence",
     "live GitHub artifact attestation publication and verification are recorded through the hash-bound provenance evidence",
     "the published Beta candidate bundle is self-consistent, contains the exact released VSIX, and passes the unchanged Beta-G verifier",
-    "publisher authorization, publish authentication, Marketplace publication, Marketplace public install, signing, and previous-stable rollback remain blocked gaps"
+    "Entra publish authentication is source-controlled, while current-artifact pre-release eligibility, publisher authorization, Marketplace publication, Marketplace public install, signing, and previous-stable rollback remain blocked gaps"
   )
 }
 

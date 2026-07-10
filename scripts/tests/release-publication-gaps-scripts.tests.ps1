@@ -283,7 +283,7 @@ function New-PublicationGapsFixture([string]$Root) {
   }
 }
 
-function Invoke-GeneratePublicationGaps([object]$Fixture, [string]$OutputPath, [string]$ExtensionPackage = "packages/vscode-extension/package.json", [string]$ProvenancePath = $null, [string]$CutoverEvidencePath = $null) {
+function Invoke-GeneratePublicationGaps([object]$Fixture, [string]$OutputPath, [string]$ExtensionPackage = "packages/vscode-extension/package.json", [string]$ProvenancePath = $null, [string]$CutoverEvidencePath = $null, [string]$BootstrapEvidencePath = "docs/release/marketplace-identity-bootstrap-evidence.json") {
   if ([string]::IsNullOrWhiteSpace($ProvenancePath)) {
     $ProvenancePath = $Fixture.provenancePath
   }
@@ -303,6 +303,9 @@ function Invoke-GeneratePublicationGaps([object]$Fixture, [string]$OutputPath, [
     -PublicCutoverEvidencePath $CutoverEvidencePath `
     -ProvenanceEvidencePath $ProvenancePath `
     -VsixEvidencePath $Fixture.vsixEvidencePath `
+    -MarketplacePublishWorkflowPath ".github/workflows/publish-marketplace.yml" `
+    -MarketplaceIdentityBootstrapEvidencePath $BootstrapEvidencePath `
+    -MarketplaceExistingListingEvidencePath "docs/release/marketplace-existing-listing-evidence.json" `
     -OutputPath $OutputPath
 }
 
@@ -330,12 +333,19 @@ try {
   Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR.git" $report.publicRepositoryMetadata.repositoryUrl "Publication gaps should record the public repository URL."
   Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR#readme" $report.publicRepositoryMetadata.homepageUrl "Publication gaps should record the public homepage URL."
   Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/issues" $report.publicRepositoryMetadata.bugsUrl "Publication gaps should record the public issue tracker URL."
-  Assert-Equal "not-verified" $report.marketplacePublisherAuthorization.status "Publisher authorization should remain not-verified."
+  Assert-Equal "pending-owner-membership" $report.marketplacePublisherAuthorization.status "Publisher authorization should remain pending owner membership."
   Assert-Equal "False" ([string]$report.marketplacePublisherAuthorization.credentialRecorded) "Publisher authorization must not record credentials."
-  Assert-Equal "not-configured" $report.publishAuth.status "Publish auth should remain not-configured."
+  Assert-Equal "entra-federated-workflow-configured" $report.publishAuth.status "Publish auth should record the source-controlled Entra workflow."
   Assert-Equal "microsoft-entra-id-workload-identity" $report.publishAuth.primaryMode "Publish auth should track Entra ID as the primary mode."
-  Assert-Equal "VSCE_PAT" $report.publishAuth.legacyPatSecretName "Publish auth may record only the legacy VSCE_PAT secret name."
+  Assert-Equal ".github/workflows/publish-marketplace.yml" $report.publishAuth.workflowPath "Publish auth should bind the Marketplace workflow."
+  Assert-Equal "marketplace" $report.publishAuth.githubEnvironment "Publish auth should bind the Marketplace environment."
+  Assert-Equal "True" ([string]$report.publishAuth.azureCredentialConfigured) "Publish auth should record Entra workflow configuration."
+  Assert-Equal "True" ([string]$report.publishAuth.claimAllowed) "Publish auth configuration claim should be allowed."
+  Assert-Equal "entra-federated-login-verified" $report.publishAuth.bootstrap.status "Publish auth should bind the successful identity bootstrap."
+  Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29107576798" $report.publishAuth.bootstrap.runUrl "Publish auth should bind the public bootstrap run."
   Assert-Equal "False" ([string]$report.publishAuth.secretValueRecorded) "Publish auth must not record secret values."
+  Assert-Equal "pre-existing-manual-publication" $report.marketplace.existingListing.status "Publication gaps should distinguish the existing listing from the Entra pipeline."
+  Assert-Equal "0.1.0" $report.marketplace.existingListing.version "Publication gaps should record the observed existing listing version."
   Assert-Equal "not-run" $report.marketplacePublicInstall.status "Marketplace public install should remain not-run."
   Assert-Equal "False" ([string]$report.marketplacePublicInstall.installEvidenceRecorded) "Marketplace public install evidence must not be recorded."
   Assert-Equal "recorded-post-cutover" $report.publicCutover.status "Public cutover should record the completed publication state."
@@ -371,8 +381,8 @@ try {
   Assert-Equal "True" ([string]$report.publicCutover.betaCandidateEvidence.consistencyVerified) "Published Beta candidate evidence should record consistency verification."
   Assert-Equal (Get-Sha256 $fixture.vsixPath) $report.artifacts.vsix.sha256 "Publication gaps should bind the exact VSIX hash."
   foreach ($blocker in @(
-      "Marketplace publisher authorization is not verified by this local gap report.",
-      "Marketplace publish authentication is not configured by this local gap report.",
+      "Marketplace publisher authorization is pending owner completion of publisher membership.",
+      "The attested 0.2.0 release VSIX is not eligible for Marketplace pre-release publication because its manifest lacks the pre-release property.",
       "Marketplace publication is not run by this local gap report.",
       "Marketplace public install evidence is not generated by this local gap report.",
       "VSIX signing remains absent in the upstream provenance preflight.",
@@ -416,6 +426,14 @@ try {
     Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-provenance-report.json") -ProvenancePath $badProvenancePath
   } "publication readiness" "Publication gaps generation should reject upstream provenance that claims Marketplace publication readiness."
 
+  $badBootstrapPath = Join-Path $tempRoot "bad-marketplace-identity-bootstrap.json"
+  $badBootstrap = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "docs\release\marketplace-identity-bootstrap-evidence.json") | ConvertFrom-Json
+  $badBootstrap.status = "not-run"
+  Write-JsonFile $badBootstrapPath $badBootstrap
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-bootstrap-report.json") -BootstrapEvidencePath $badBootstrapPath
+  } "must record successful federation" "Publication gaps generation should reject unverified Marketplace identity bootstrap evidence."
+
   $badProvenancePath = Join-Path $tempRoot "bad-signed-provenance.json"
   $badProvenance = Get-Content -Raw -LiteralPath $fixture.provenancePath | ConvertFrom-Json
   $badProvenance.signing.status = "signed"
@@ -451,7 +469,7 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
       -Target win32-x64 `
       -EvidencePath $tamperedPath
-  } "not-verified" "Publication gaps verification should reject publisher authorization overclaims."
+  } "pending owner membership" "Publication gaps verification should reject publisher authorization overclaims."
 
   $tamperedPath = Join-Path $tempRoot "tampered-token-value.json"
   $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
@@ -718,6 +736,9 @@ try {
   Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("generate-publication-gaps.ps1")) "Root package should expose publication gaps generation."
   Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("-PublicCutoverRunbookPath docs/release/public-cutover-runbook.md")) "Root package should pass the public cutover runbook explicitly."
   Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("-PublicCutoverEvidencePath docs/release/public-cutover-evidence.json")) "Root package should pass the public cutover evidence explicitly."
+  Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("-MarketplacePublishWorkflowPath .github/workflows/publish-marketplace.yml")) "Root package should pass the Marketplace publish workflow explicitly."
+  Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("-MarketplaceIdentityBootstrapEvidencePath docs/release/marketplace-identity-bootstrap-evidence.json")) "Root package should pass the Marketplace identity bootstrap evidence explicitly."
+  Assert-True ($packageJson.scripts."release:generate-publication-gaps:win32-x64".Contains("-MarketplaceExistingListingEvidencePath docs/release/marketplace-existing-listing-evidence.json")) "Root package should pass the Marketplace existing-listing evidence explicitly."
   Assert-True ($packageJson.scripts."release:verify-publication-gaps:win32-x64".Contains("verify-publication-gaps.ps1")) "Root package should expose publication gaps verification."
 
   $ciWorkflow = Get-Content -Raw -LiteralPath $ciWorkflowPath

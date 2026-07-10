@@ -339,7 +339,7 @@ This slice intentionally keeps the root package private, records only approved p
 
 ## M7k2b Implemented Slice
 
-The third M7k slice maintains the publication-gaps and publish-auth contract after the public repository cutover while keeping the extension unpublished on Visual Studio Marketplace:
+The third M7k slice maintains the publication-gaps and publish-auth contract after the public repository cutover while keeping the current `0.2.0` candidate unpublished by the controlled Marketplace pipeline:
 
 - `scripts/release/generate-publication-gaps.ps1` writes `subversionr.release.publication-gaps.win32-x64.v1` after the VSIX package evidence and Marketplace provenance preflight have been generated and verified.
 - The gate binds the exact VSIX bytes, VSIX package evidence, provenance preflight, extension/root package manifests, README, LICENSE, CHANGELOG, SUPPORT, the public cutover runbook, and `docs/release/public-cutover-evidence.json` by SHA256.
@@ -349,14 +349,14 @@ The third M7k slice maintains the publication-gaps and publish-auth contract aft
 - The released VSIX asset must match the current candidate bytes exactly. The recorded anchor is `d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb`.
 - The active public `protect-main` ruleset and both `disabled_manually` private workflows are recorded as completed owner operations. Private-repository archive/freeze remains a separate follow-up. Live GitHub artifact attestation publication and verification are recorded through the M7j2b evidence chain.
 - The replaced published Beta candidate ZIP is SHA256 `ca79f8cd2716caadc9c6e1e6c712c6904770a05e3660835b0ab58ce75bbbb266` with size 15,300,834. Its manifest declares 1,462 payloads, with 0 missing and 0 mismatched; the only two additional ZIP entries are the manifest and final consistency JSON. It contains the released `subversionr-win32-x64-0.2.0.vsix` with SHA256 `d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb`, and `betaCandidateEvidence.status` is `consistent` after the unchanged Beta-G verifier passed.
-- Marketplace publisher authorization is recorded as `not-verified`, bound to `hitsuki-ban.subversionr`, and explicitly records no owner/contributor verification, credentials, tokens, or authorization headers.
-- Publish authentication is recorded as `not-configured`, with Microsoft Entra ID workload identity as the primary future mode, `@vscode/vsce` `>=2.26.1` as the `--azure-credential` contract, and legacy `VSCE_PAT` noted only as a secret-name contract with the documented global PAT retirement date of 2026-12-01. The gate does not read the environment or record credential values.
+- Marketplace publisher authorization is recorded as `pending-owner-membership`, bound to `hitsuki-ban.subversionr`, and explicitly records no owner/contributor verification, credentials, tokens, or authorization headers.
+- Publish authentication is recorded as `entra-federated-workflow-configured`. The hash-bound workflow uses the protected `marketplace` environment, GitHub OIDC, owner-managed `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` variable names, `azure/login`, and direct `vsce --azure-credential`; it has no credential fallback and records no variable values.
 - Marketplace public install is recorded as `not-run`, bound to expected extension id/version, and explicitly records no public extension page, acquisition, or install evidence.
 - `scripts/release/verify-publication-gaps.ps1` rejects public-readiness claims, private repository URLs, credential/token-like fields, Cloudflare live IDs, publisher authorization overclaims, publish-auth overclaims, Marketplace publication/public-install overclaims, missing or drifted live-attestation evidence, missing non-claims, hash drift, target/schema mismatch, and output paths outside generated evidence roots.
 - `scripts/tests/release-publication-gaps-scripts.tests.ps1` covers positive generation/verification, output-root containment, unexpected public-resource metadata rejection, upstream provenance overclaim rejection, publisher/credential/public-install overclaim rejection, missing live-attestation evidence, released-VSIX hash drift, invalid public CI URLs, cutover source hash drift, package scripts, CI wiring, and release-readiness verifier terms.
 - Windows CI runs the script tests, then generates and verifies the real `win32-x64` publication-gaps evidence immediately after provenance verification.
 
-This evidence records the consistent published Beta candidate, `main`-anchored verified live GitHub attestation, active public branch ruleset, and disabled private workflows but does not archive the private repository, verify Marketplace publisher ownership, configure Microsoft Entra ID or `VSCE_PAT`, publish to Marketplace, install from Marketplace, sign artifacts, prove previous-stable upgrade/rollback, or claim public release readiness.
+This evidence records the consistent published Beta candidate, `main`-anchored verified live GitHub attestation, active public branch ruleset, disabled private workflows, source-controlled Entra publish-auth contract, and successful hash-bound identity bootstrap run. It does not archive the private repository, verify Marketplace publisher owner/contributor membership, publish the current candidate to Marketplace, install from Marketplace, sign artifacts, prove previous-stable upgrade/rollback, or claim public release readiness.
 
 ## M7k2b Gates
 
@@ -364,6 +364,29 @@ This evidence records the consistent published Beta candidate, `main`-anchored v
 - `pnpm release:generate-publication-gaps:win32-x64` must run after `pnpm release:verify-provenance:win32-x64`.
 - `pnpm release:verify-publication-gaps:win32-x64` must reject any Marketplace publication, publisher-auth, publish-auth, credential, public-install, missing or drifted live-attestation evidence, or public-readiness overclaim and any drift from the hash-bound public cutover facts.
 - `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until public repository metadata is approved, Marketplace publisher authorization is verified, publish authentication is configured, signing is complete, Marketplace/public install evidence exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review and CVE review are complete, and broader accessibility evidence is complete.
+
+## M7k2c Implemented Slice
+
+The fourth M7k slice adds the secretless Marketplace pre-release pipeline without claiming that the current candidate was published:
+
+- `.github/workflows/publish-marketplace.yml` accepts a dispatch `release_tag`, downloads the exact source-controlled release subject, verifies its contract and GitHub artifact attestation before Azure login, and binds the job to the protected `marketplace` environment with `contents: read` and `id-token: write` only.
+- The workflow uses GitHub OIDC with owner-managed `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` repository variables, then publishes only the downloaded path with `vsce publish --packagePath ... --pre-release --azure-credential`. No publish credential, token exchange, or fallback path is stored in the repository.
+- `docs/release/marketplace-identity-bootstrap-evidence.json` records successful public run `29107576798`, the `marketplace` environment OIDC subject, variable names, Azure CLI login, and Marketplace identity resolution without recording variable or identity values. Publisher membership remains owner-pending.
+- The workflow fails before Azure login unless the VSIX already contains `Microsoft.VisualStudio.Code.PreRelease`. The attested `0.2.0` release VSIX lacks that property, and changing its bytes would break its attestation contract, so `0.2.0` cannot be published through this pre-release path.
+- `packages/vscode-extension/README.md` is the Marketplace listing source for the next attested pre-release candidate. The existing `0.2.0` asset keeps its already-attested README bytes; this slice does not rebuild or replace it.
+- `scripts/release/record-marketplace-publication.ps1` can write bounded post-publish evidence only after a successful workflow run. Its publication claim applies to the exact extension version and VSIX subject while `publicReadinessClaim` remains false.
+- `docs/release/marketplace-pre-release-owner-exception.md` records the issue #14 owner decision for `SEC-015`, `MIG-010`, and `MIG-012`. The exception permits one evidence-gated pre-release operation before final SBOM/NOTICE/legal review and real previous-stable rollback evidence, but those rows and the security matrix remain release blockers outside that bounded operation.
+- `docs/release/marketplace-existing-listing-evidence.json` records the public Gallery API observation that the existing `win32-x64` listing is version `0.1.0` and predates this pipeline. It is not evidence that version `0.2.0` was published by this workflow.
+
+This slice intentionally does not publish or rewrite the attested `0.2.0` asset, prove publisher contributor authorization, prove a successful OIDC login, verify Marketplace public install, sign artifacts, complete final review, prove previous-stable rollback, or claim public release readiness.
+
+## M7k2c Gates
+
+- `pnpm release:test-marketplace-publication-scripts` must pass with the workflow order, exact-subject, OIDC, pre-release eligibility, recorder, path-containment, and non-claim fixtures.
+- `pnpm release:test-vsix-scripts` must pass with packaged README hash-continuity evidence while preserving the current release bytes.
+- `pnpm release:test-publication-gaps-scripts` must record the Entra workflow as configured, publisher authorization as pending, and current `0.2.0` pre-release eligibility as blocked.
+- `pnpm release:verify-readiness:smoke` must require the three owner-exception rows while keeping the security evidence matrix release blockers and `publicReadinessClaim=false` contracts unchanged.
+- A real publication claim is allowed only after the source-controlled workflow succeeds and emits `subversionr.release.marketplace-publication.win32-x64.v1` evidence for the exact published subject.
 
 ## M7l1 Implemented Slice
 
