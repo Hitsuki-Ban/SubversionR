@@ -221,7 +221,7 @@ Assert-Equal "live-attestation-verified" (Assert-RequiredString $attestationRead
 Assert-Equal "github-artifact-attestations" (Assert-RequiredString $attestationReadiness "provider" "Attestation readiness") "Attestation readiness provider should be GitHub artifact attestations."
 Assert-Equal "actions/attest@v4" (Assert-RequiredString $attestationReadiness "action" "Attestation readiness") "Attestation readiness action should match the issue #5 workflow contract."
 Assert-Equal "a1948c3f048ba23858d222213b7c278aabede763" (Assert-RequiredString $attestationReadiness "actionDigest" "Attestation readiness") "Attestation readiness action digest should remain pinned."
-$predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+$predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
 Assert-Equal $predicateType (Assert-RequiredString $attestationReadiness "predicateType" "Attestation readiness") "Attestation readiness predicate type should identify the post-release verification schema."
 Assert-Equal "docs/release/post-release-asset-verification-predicate.v1.schema.json" (Assert-RequiredString $attestationReadiness "predicateSchemaPath" "Attestation readiness") "Attestation readiness predicate schema path should remain source-controlled."
 Assert-Equal "subversionr.release.post-release-asset-verification-predicate.v1" (Assert-RequiredString $attestationReadiness "predicateSchema" "Attestation readiness") "Attestation readiness signed predicate schema should match."

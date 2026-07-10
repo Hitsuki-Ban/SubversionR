@@ -87,7 +87,7 @@ $attestation = Get-RequiredProperty $contract "attestation" "Attestation contrac
 Assert-Equal "github-artifact-attestations" ([string](Get-RequiredProperty $attestation "provider" "Attestation contract attestation")) "Attestation provider must match."
 Assert-Equal "actions/attest@v4" ([string](Get-RequiredProperty $attestation "action" "Attestation contract attestation")) "Attestation action must match."
 Assert-Equal "a1948c3f048ba23858d222213b7c278aabede763" ([string](Get-RequiredProperty $attestation "actionDigest" "Attestation contract attestation")) "Attestation action digest must match."
-$predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+$predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
 Assert-Equal $predicateType ([string](Get-RequiredProperty $attestation "predicateType" "Attestation contract attestation")) "Attestation predicate type must match."
 $predicateSchemaPath = [string](Get-RequiredProperty $attestation "predicateSchemaPath" "Attestation contract attestation")
 Assert-Equal "docs/release/post-release-asset-verification-predicate.v1.schema.json" $predicateSchemaPath "Attestation predicate schema path must match."

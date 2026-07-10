@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json",
+  "$id": "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
   "title": "SubversionR post-release asset verification predicate",
   "type": "object",
   "additionalProperties": false,

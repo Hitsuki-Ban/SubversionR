@@ -160,7 +160,7 @@ This generated evidence is not a completed legal review.
         provider = "github-artifact-attestations"
         action = "actions/attest@v4"
         actionDigest = "a1948c3f048ba23858d222213b7c278aabede763"
-        predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+        predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
         predicateSchemaPath = "docs/release/post-release-asset-verification-predicate.v1.schema.json"
       }
       workflow = [pscustomobject]@{
@@ -172,7 +172,7 @@ This generated evidence is not a completed legal review.
       verificationPolicy = [pscustomobject]@{
         repository = "Hitsuki-Ban/SubversionR"
         signerWorkflow = "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml"
-        predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+        predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
         bundleRequired = $true
         sourceRefRequired = $true
         sourceDigestRequired = $true
@@ -237,7 +237,7 @@ This generated evidence is not a completed legal review.
         verifiedTimestamps = @([pscustomobject]@{ type = "Tlog"; uri = "https://rekor.sigstore.dev" })
         statement = [pscustomobject]@{
           subject = @([pscustomobject]@{ name = "subversionr-win32-x64-0.2.0.vsix"; digest = [pscustomobject]@{ sha256 = $vsixSha256 } })
-          predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+          predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
           predicate = $signedPredicate
         }
       }
@@ -245,7 +245,7 @@ This generated evidence is not a completed legal review.
   )
   $attestationVerificationRelativePath = [System.IO.Path]::GetRelativePath($repoRoot, $attestationVerificationPath).Replace("\", "/")
   $liveAttestationEvidencePath = Join-Path $evidenceRoot "github-attestation-evidence.win32-x64.json"
-  $verificationCommand = "gh attestation verify target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix -R Hitsuki-Ban/SubversionR --bundle $attestationBundleRelativePath --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest 0123456789abcdef0123456789abcdef01234567 --source-ref refs/heads/codex/test --source-digest 0123456789abcdef0123456789abcdef01234567 --predicate-type https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json --deny-self-hosted-runners --format json"
+  $verificationCommand = "gh attestation verify target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix -R Hitsuki-Ban/SubversionR --bundle $attestationBundleRelativePath --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest 0123456789abcdef0123456789abcdef01234567 --source-ref refs/heads/codex/test --source-digest 0123456789abcdef0123456789abcdef01234567 --predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1 --deny-self-hosted-runners --format json"
   Write-JsonFile $liveAttestationEvidencePath ([pscustomobject]@{
       schemaVersion = 1
       schema = "subversionr.release.live-github-attestation.win32-x64.v1"
@@ -281,7 +281,7 @@ This generated evidence is not a completed legal review.
         provider = "github-artifact-attestations"
         action = "actions/attest@v4"
         actionDigest = "a1948c3f048ba23858d222213b7c278aabede763"
-        predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+        predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
         predicateSchemaPath = "docs/release/post-release-asset-verification-predicate.v1.schema.json"
         predicateSchema = "subversionr.release.post-release-asset-verification-predicate.v1"
         predicateClaim = "post-release-asset-digest-verification"
@@ -297,7 +297,7 @@ This generated evidence is not a completed legal review.
         verified = $true
         repository = "Hitsuki-Ban/SubversionR"
         signerWorkflow = "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml"
-        predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+        predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
         denySelfHostedRunners = $true
         format = "json"
         bundleMatched = $true
@@ -401,7 +401,7 @@ exit 0
   Assert-Equal "github-artifact-attestations" $report.attestation.readiness.provider "Attestation readiness should record the provider."
   Assert-Equal "actions/attest@v4" $report.attestation.readiness.action "Attestation readiness should record the issue #5 action contract."
   Assert-Equal "a1948c3f048ba23858d222213b7c278aabede763" $report.attestation.readiness.actionDigest "Attestation readiness should record the pinned action digest."
-  Assert-Equal "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json" $report.attestation.readiness.predicateType "Attestation readiness should record the custom post-release verification predicate type."
+  Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1" $report.attestation.readiness.predicateType "Attestation readiness should record the custom post-release verification predicate type."
   Assert-Equal "post-release-asset-digest-verification" $report.attestation.readiness.predicateClaim "Attestation readiness should record the signed post-release verification claim."
   Assert-Equal "False" ([string]$report.attestation.readiness.originalBuildProvenanceClaim) "Attestation readiness must preserve the signed original-build non-claim."
   Assert-Equal "False" ([string]$report.attestation.readiness.artifactSignatureClaim) "Attestation readiness must preserve the signed artifact-signature non-claim."
@@ -425,7 +425,7 @@ exit 0
   Assert-True ($report.attestation.readiness.verificationCommand.Contains("--bundle $($report.attestation.readiness.bundlePath)")) "Attestation readiness verification command should pin the exact bundle."
   Assert-True ($report.attestation.readiness.verificationCommand.Contains("--source-ref refs/heads/codex/test")) "Attestation readiness verification command should pin the source ref."
   Assert-True ($report.attestation.readiness.verificationCommand.Contains("--source-digest 0123456789abcdef0123456789abcdef01234567")) "Attestation readiness verification command should pin the source digest."
-  Assert-True ($report.attestation.readiness.verificationCommand.Contains("--predicate-type https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json")) "Attestation readiness verification command should pin the custom post-release verification predicate."
+  Assert-True ($report.attestation.readiness.verificationCommand.Contains("--predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1")) "Attestation readiness verification command should pin the custom post-release verification predicate."
   Assert-True ($report.attestation.readiness.verificationCommand.Contains("--deny-self-hosted-runners")) "Attestation readiness verification command should reject self-hosted runner attestations."
   Assert-Equal "not-published" $report.marketplace.status "Provenance preflight should keep Marketplace publication status explicit."
   Assert-Equal "False" ([string]$report.marketplaceMetadata.publicationReady) "Marketplace metadata preflight should not claim publication readiness."

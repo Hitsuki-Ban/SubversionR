@@ -63,7 +63,7 @@ try {
       provider = "github-artifact-attestations"
       action = "actions/attest@v4"
       actionDigest = "a1948c3f048ba23858d222213b7c278aabede763"
-      predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+      predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
       predicateSchemaPath = "docs/release/post-release-asset-verification-predicate.v1.schema.json"
     }
     workflow = [pscustomobject]@{
@@ -75,7 +75,7 @@ try {
     verificationPolicy = [pscustomobject]@{
       repository = "Hitsuki-Ban/SubversionR"
       signerWorkflow = "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml"
-      predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+      predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
       bundleRequired = $true
       sourceRefRequired = $true
       sourceDigestRequired = $true
@@ -147,7 +147,7 @@ try {
               digest = [pscustomobject]@{ sha256 = $subjectSha256 }
             }
           )
-          predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+          predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
           predicate = $predicate
         }
       }
@@ -296,7 +296,7 @@ try {
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       "subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix",
       "generate-post-release-asset-verification-predicate.ps1",
-      "predicate-type: https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json",
+      "predicate-type: https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
       "predicate-path: target/release-attestation/win32-x64/post-release-asset-verification-predicate.json",
       "--bundle `$env:ATTESTATION_BUNDLE_PATH",
       "--signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",

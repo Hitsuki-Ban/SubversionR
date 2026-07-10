@@ -67,7 +67,7 @@ jobs:
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
         with:
           subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
-          predicate-type: https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json
+          predicate-type: https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1
           predicate-path: target/release-attestation/win32-x64/post-release-asset-verification-predicate.json
       - name: Verify published attestation
         shell: pwsh
@@ -81,7 +81,7 @@ jobs:
           $subjectPath = "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix"
           $resultPath = "target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json"
           New-Item -ItemType Directory -Force -Path (Split-Path -Parent $resultPath) | Out-Null
-          gh attestation verify $subjectPath -R Hitsuki-Ban/SubversionR --bundle $env:ATTESTATION_BUNDLE_PATH --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest $env:SOURCE_SHA --source-ref $env:SOURCE_REF --source-digest $env:SOURCE_SHA --predicate-type https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json --deny-self-hosted-runners --format json | Set-Content -LiteralPath $resultPath -Encoding utf8
+          gh attestation verify $subjectPath -R Hitsuki-Ban/SubversionR --bundle $env:ATTESTATION_BUNDLE_PATH --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest $env:SOURCE_SHA --source-ref $env:SOURCE_REF --source-digest $env:SOURCE_SHA --predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1 --deny-self-hosted-runners --format json | Set-Content -LiteralPath $resultPath -Encoding utf8
           if ($LASTEXITCODE -ne 0) {
             throw "Published attestation verification failed."
           }
