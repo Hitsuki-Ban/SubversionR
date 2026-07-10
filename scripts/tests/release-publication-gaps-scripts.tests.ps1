@@ -111,7 +111,23 @@ function New-PublicationGapsFixture([string]$Root) {
         status = "unsigned"
       }
       attestation = [pscustomobject]@{
-        status = "not-generated"
+        status = "verified"
+        readiness = [pscustomobject]@{
+          readinessStatus = "live-attestation-verified"
+          action = "actions/attest-build-provenance@v4"
+          workflowPath = ".github/workflows/attest-release-vsix.yml"
+          subjectName = "subversionr-win32-x64-0.2.0.vsix"
+          subjectSha256 = $vsixSha256
+          artifactSize = (Get-Item -LiteralPath $vsixPath).Length
+          repoUrlRecorded = $true
+          bundleRecorded = $true
+          attestationUrlRecorded = $true
+          verified = $true
+          runUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456"
+          attestationUrl = "https://github.com/Hitsuki-Ban/SubversionR/attestations/123"
+          evidencePath = "target/tests/release-publication-gaps-scripts/github-attestation-evidence.win32-x64.json"
+          evidenceSha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
       }
       marketplace = [pscustomobject]@{
         status = "not-published"
@@ -168,7 +184,7 @@ function New-PublicationGapsFixture([string]$Root) {
         url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1"
         prerelease = $true
         publishedAt = "2026-07-10T07:24:13Z"
-        artifactAttestationPublished = $false
+        artifactAttestationPublished = $true
         assets = @(
           [pscustomobject]@{
             name = "subversionr-source-sbom.cdx.json"
@@ -293,7 +309,9 @@ try {
   Assert-Equal "True" ([string]$report.publicCutover.cloudflareBridgeRetirement.disconnected) "Cloudflare bridge should be disconnected."
   Assert-Equal "published" $report.publicCutover.release.status "Public release should be recorded as published."
   Assert-Equal "v0.2.0-beta.1" $report.publicCutover.release.tag "Public cutover should record the first public Beta tag."
-  Assert-Equal "False" ([string]$report.publicCutover.release.artifactAttestationPublished) "Live artifact attestation should remain blocked for public issue #5."
+  Assert-Equal "True" ([string]$report.publicCutover.release.artifactAttestationPublished) "Live artifact attestation should be recorded."
+  Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456" $report.publicCutover.release.attestationRunUrl "Publication gaps should record the attestation run URL."
+  Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/attestations/123" $report.publicCutover.release.attestationUrl "Publication gaps should record the attestation URL."
   Assert-Equal 4 @($report.publicCutover.release.assets).Count "Public cutover should record all four release assets."
   Assert-Equal "blocked-published-bundle-inconsistent" $report.publicCutover.betaCandidateEvidence.status "Published Beta candidate evidence should remain blocked on bundle inconsistency."
   Assert-Equal "False" ([string]$report.publicCutover.betaCandidateEvidence.consistencyVerified) "Published Beta candidate evidence must not claim consistency."
@@ -307,7 +325,6 @@ try {
       "Public branch protection is not configured.",
       "Public repository homepage and social metadata are not fully verified.",
       "Private repository workflows are not disabled.",
-      "Live GitHub artifact attestation is not published or verified."
       "The published Beta candidate bundle is inconsistent with its manifest and cannot close the post-cutover Beta-G chain."
     )) {
     Assert-True (@($report.blockers | Where-Object { $_ -eq $blocker }).Count -eq 1) "Publication gaps should include blocker '$blocker'."
@@ -401,13 +418,13 @@ try {
 
   $tamperedPath = Join-Path $tempRoot "tampered-live-attestation.json"
   $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
-  $tampered.publicCutover.release.artifactAttestationPublished = $true
+  $tampered.publicCutover.release.artifactAttestationPublished = $false
   Write-JsonFile $tamperedPath $tampered
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
       -Target win32-x64 `
       -EvidencePath $tamperedPath
-  } "must remain false" "Publication gaps verification should reject live attestation overclaims."
+  } "must be true" "Publication gaps verification should reject removal of live attestation evidence."
 
   $badCutoverPath = Join-Path $tempRoot "bad-released-vsix-cutover.json"
   $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
@@ -445,6 +462,7 @@ try {
 
   $productionMismatchPath = Join-Path $repoRoot "target\release-evidence\publication-gaps-test-$([Guid]::NewGuid().ToString('N')).json"
   try {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $productionMismatchPath) | Out-Null
     Copy-Item -LiteralPath $fixture.outputPath -Destination $productionMismatchPath
     Assert-NativeCommandFailsContaining {
       & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `

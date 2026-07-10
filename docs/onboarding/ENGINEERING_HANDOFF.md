@@ -33,7 +33,7 @@ The project should currently be classified as:
 | History / SVN Lens | 70% | The most complete and differentiated subsystem |
 | Auth / security / diagnostics | 65% | Strong foundation, limited real protocol and public product coverage |
 | TortoiseSVN integration | 25% | Local read-only log/diff/graph/blame only |
-| Cross-platform and public release | 25% | Mostly win32-x64 private evidence; signing, provenance, Marketplace, rollback, and platform matrix remain blocked |
+| Cross-platform and public release | 30% | The released win32-x64 VSIX has verified live GitHub attestation evidence; artifact signing/signed provenance, Marketplace, rollback, and the platform matrix remain blocked |
 | Overall | 60%-65% for Windows Beta packaging scope | Not yet suitable as public RC or full SVN product completion |
 
 Recent PRs #128-#157 shifted effort back to product closure and Beta packaging readiness: readiness governance, fast PR gates, remote/incoming delta, projection recovery, lifecycle coordination, update revision/depth/externals policy, properties and `svn:ignore`, changelists, lock/unlock, checkout/open URL, branch/tag/switch, installed VSIX workflow evidence, the Beta state-engine floor, same-run Beta candidate consistency, and security release-evidence reconciliation are now aligned for the Windows Beta local workflow claim. Merge, merge preview, and mergeinfo remain explicit post-Beta non-claims.
@@ -133,7 +133,7 @@ High-priority remaining workflows:
 - Current coverage is mostly win32-x64.
 - HTTPS has controlled fixtures only; that is not broad server support.
 - `svn+ssh`, proxy auth, client certificates, Kerberos/NTLM/SASL are not complete.
-- Marketplace, signing, live attestation, and previous-stable rollback are not closed.
+- Live GitHub artifact attestation publication and verification are recorded for the released `win32-x64` VSIX. Marketplace/public install, artifact signing/signed provenance, previous-stable rollback, and the inconsistent Beta candidate ZIP are not closed.
 - `.github/workflows/ci.yml` is currently `workflow_dispatch` only and does not provide automatic PR/push gates.
 
 ## 5. Direction Calibration: Recommended Order
@@ -187,7 +187,7 @@ Recommended remaining sequence:
 - Linux/macOS x64/arm64.
 - WSL, Containers, and Remote SSH.
 - Real HTTPS, `svn+ssh`, and proxy/certificate matrices.
-- Signing, attestation, Marketplace, and previous-stable rollback.
+- Artifact signing/signed provenance, Marketplace/public install, previous-stable rollback, and self-consistent Beta candidate regeneration.
 
 ## 6. Engineering Constraints
 
@@ -286,6 +286,6 @@ Recommended PR order:
 4. Keep Beta-D evidence current: installed local-file Add to Ignore/`svn:ignore`, Set/Clear Changelist, Commit Changelist, and Revert Changelist happy paths are covered; full property editor UX, `svn:externals` editing, load/cancellation breadth, remote/auth/certificate behavior, and commit template/message-history behavior remain outside that evidence.
 5. Keep Branch/Tag create and Switch installed VSIX E2E evidence scoped to the local-file happy path; target browsing, switch-after-copy, broad remote/auth/certificate matrices, repository-browser integration, and switched working-copy edge/load behavior remain outside that evidence. Local-file Lock/Unlock/`svn:needs-lock` happy-path evidence is covered, while broad remote lock-server matrices, cancellation UX, break/steal policy breadth, and load-scale lock behavior remain outside that evidence.
 6. Keep the Beta state-engine performance gate current: `pnpm release:test-state-engine-beta-performance:win32-x64` records that single-file save does not trigger full scan, watcher/event burst stays bounded, nested working copies and externals do not pollute parent providers, dirty-generation supersede does not allow stale results to win, sidecar restart reopens or marks stale explicitly, and a 10k local working-copy fixture stays within the accepted baseline. Native watcher production, adaptive cost feedback, idle CPU measurement, 100k/1M scale, and default background remote polling remain outside that Beta floor.
-7. Keep the Beta candidate consistency gate current: `pnpm release:verify-beta-candidate:win32-x64` must run after VSIX package, native artifact map, provenance, publication gaps, installed VSIX gates, install rollback fixture, state-engine Beta performance evidence, `pnpm release:generate-beta-artifact-bundle-manifest:win32-x64`, and the explicit CI upload allowlist have been regenerated for the same candidate. The manifest writes `subversionr.release.beta-artifact-bundle-manifest.win32-x64.v1` and binds the current VSIX, SBOM, NOTICE, release evidence JSONs, and installed UI artifacts; the final gate writes `subversionr.release.beta-candidate-consistency.win32-x64.v1`, rejects stale VSIX hashes, stale input evidence, stale artifact bundle manifest payload hashes, and drift from the `actions/upload-artifact@v7` `subversionr-win32-x64-beta-candidate` upload contract, and keeps Marketplace/public install, signing, live attestation, previous-stable rollback, broad remote/auth, and public readiness as non-claims.
+7. Keep the Beta candidate consistency gate current: `pnpm release:verify-beta-candidate:win32-x64` must run after VSIX package, native artifact map, provenance, publication gaps, installed VSIX gates, install rollback fixture, state-engine Beta performance evidence, `pnpm release:generate-beta-artifact-bundle-manifest:win32-x64`, and the explicit CI upload allowlist have been regenerated for the same candidate. The manifest writes `subversionr.release.beta-artifact-bundle-manifest.win32-x64.v1` and binds the current VSIX, SBOM, NOTICE, release evidence JSONs, and installed UI artifacts; the final gate writes `subversionr.release.beta-candidate-consistency.win32-x64.v1`, requires the provenance/publication chain to record the verified live GitHub attestation for the current VSIX, rejects stale VSIX hashes, stale input evidence, stale artifact bundle manifest payload hashes, and drift from the `actions/upload-artifact@v7` `subversionr-win32-x64-beta-candidate` upload contract, and keeps Marketplace/public install, artifact signing/signed provenance, previous-stable rollback, broad remote/auth, and public readiness as non-claims. The published candidate ZIP remains blocked as inconsistent.
 
-Each PR should keep Cloudflare PR Fast and readiness smoke green, record local Windows validation in the PR body while GitHub Actions Windows runner coverage is unavailable, and avoid claiming public release, Marketplace, signing/provenance, previous-stable rollback, broad remote/auth, cross-platform, coverage-guided fuzzing, merge, merge preview, or mergeinfo support.
+Each PR should keep Cloudflare PR Fast and readiness smoke green, record local Windows validation in the PR body while GitHub Actions Windows runner coverage is unavailable, and avoid claiming public release, Marketplace, artifact signing/signed provenance, previous-stable rollback, broad remote/auth, cross-platform, coverage-guided fuzzing, merge, merge preview, or mergeinfo support.

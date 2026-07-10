@@ -196,7 +196,7 @@ This slice intentionally does not publish to Marketplace, sign artifacts, publis
 
 - `pnpm release:test-installed-core-workflow-scripts` must pass.
 - `pnpm release:test-installed-core-workflow:win32-x64` must receive explicit `SUBVERSIONR_CODE_CLI` and source-built Apache Subversion 1.14.5 fixture tools, and must run against the generated VSIX after `pnpm release:package-vsix:win32-x64`.
-- `pnpm release:verify-readiness` must continue to keep `SEC-015`, `MIG-009`, `MIG-010`, and `TST-024` as release blockers until signing/provenance, previous-stable upgrade/rollback, Marketplace/public install, final SBOM/NOTICE review, and CVE review are complete.
+- `pnpm release:verify-readiness` must continue to keep `SEC-015`, `MIG-009`, `MIG-010`, and `TST-024` as release blockers until artifact signing/signed provenance, previous-stable upgrade/rollback, Marketplace/public install, final SBOM/NOTICE review, and CVE review are complete.
 
 ## M7j1 Implemented Slice
 
@@ -220,7 +220,7 @@ This slice intentionally does not publish to Marketplace, sign artifacts, publis
 
 ## M7j2a Implemented Slice
 
-The second M7j slice adds unsigned local provenance and Marketplace metadata preflight evidence without claiming signing, GitHub attestation publication, Marketplace publication, public install, or previous-stable rollback readiness:
+The second M7j slice adds unsigned local provenance and Marketplace metadata preflight evidence. M7j2b later supplies live GitHub attestation publication and verification; signing, Marketplace publication/public install, and previous-stable rollback remain non-claims:
 
 - `CHANGELOG.md` and `SUPPORT.md` provide local Marketplace/support metadata inputs for future public publication. Security reports still route through `SECURITY.md`, and support instructions prohibit secrets, credentials, private repository URLs, cookies, certificate private keys, and sensitive working-copy data in public reports.
 - `scripts/release/package-vscode-vsix.ps1` now requires `CHANGELOG.md` and `SUPPORT.md`, packages them into the VSIX, and records their SHA256 hashes in VSIX package evidence.
@@ -228,38 +228,39 @@ The second M7j slice adds unsigned local provenance and Marketplace metadata pre
 - The evidence binds the exact VSIX bytes, VSIX package evidence, backend package manifest, extension/root package manifests, README, LICENSE, CHANGELOG, SUPPORT, source lock, pnpm lock, Cargo lock, generated SBOM, and generated NOTICE by SHA256.
 - The evidence records the current git commit, branch, dirty-working-tree state, and explicitly sets `remoteUrlRecorded: false` so private repository URLs are not copied into release evidence.
 - The Marketplace metadata preflight validates required package fields for `hitsuki-ban.subversionr`, VS Code engine range, categories, compiled entrypoint, README, and LICENSE while keeping `publicationReady: false`.
-- The evidence keeps signing `unsigned`, artifact attestation `not-generated`, Marketplace publication `not-published`, previous-stable rollback `not-proven`, and `publicReadinessClaim: false`.
+- The evidence keeps signing `unsigned`, records the hash-bound M7j2b artifact attestation as `verified`, keeps Marketplace publication `not-published`, previous-stable rollback `not-proven`, and `publicReadinessClaim: false`.
 - `scripts/release/verify-release-provenance.ps1` re-hashes the VSIX, upstream evidence, manifests, locks, SBOM, NOTICE, and docs from the generated evidence and fails on byte drift, missing non-claims, target/schema mismatch, or accidental public-readiness claims.
 - Script-level fixture tests cover generation, verification, VSIX byte drift, output-root containment, upstream VSIX evidence overclaim rejection, extension identity drift, missing CHANGELOG, required non-claims, root package scripts, CI wiring, and VSIX inclusion of CHANGELOG/SUPPORT metadata.
 - Windows CI runs the provenance script tests and then generates and verifies the real `win32-x64` provenance preflight evidence after VSIX packaging.
 
-This slice intentionally does not sign VSIX or native artifacts, generate GitHub artifact attestations, publish to Marketplace, install from Marketplace, prove previous-stable upgrade/rollback, complete final SBOM/NOTICE legal review, complete CVE review, or close public release readiness.
+This slice remains unsigned and does not by itself publish a GitHub artifact attestation; M7j2b supplies the separately verified live GitHub attestation evidence. It does not publish to Marketplace, install from Marketplace, prove previous-stable upgrade/rollback, complete final SBOM/NOTICE legal review, complete CVE review, or close public release readiness.
 
 ## M7j2a Gates
 
 - `pnpm release:test-provenance-scripts` must pass.
 - `pnpm release:generate-provenance:win32-x64` must run after `pnpm release:package-vsix:win32-x64`, `pnpm release:generate-source-sbom`, `pnpm release:generate-third-party-notice`, and `pnpm release:verify-evidence`.
 - `pnpm release:verify-provenance:win32-x64` must pass against the generated provenance preflight evidence.
-- `pnpm release:verify-readiness` must continue to keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, and `TST-024` as release blockers until signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and CVE review are complete.
+- `pnpm release:verify-readiness` must continue to keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, and `TST-024` as release blockers until signing, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and CVE review are complete.
 
 ## M7j2b Implemented Slice
 
-The third M7j slice adds GitHub artifact attestation input-contract readiness without claiming that an attestation was generated, published, or verified:
+The third M7j slice publishes and verifies a post-release GitHub artifact attestation for the exact released `win32-x64` VSIX while preserving the source-controlled subject and verification contract:
 
-- `scripts/release/generate-release-provenance.ps1` keeps `attestation.status` as `not-generated` and adds an `attestation.readiness` block with `readinessStatus` `input-contract-ready` for the exact `win32-x64` VSIX artifact.
-- The readiness block records provider `github-artifact-attestations`, action contract `actions/attest@v4`, predicate type `https://slsa.dev/provenance/v1`, subject name, subject SHA256, artifact relative path, artifact size, workflow path, required GitHub Actions permissions, and the expected `gh attestation verify` command with signer workflow, predicate type, self-hosted-runner denial, and JSON output.
-- The readiness block explicitly records `repoUrlRecorded: false`, `bundleRecorded: false`, `attestationUrlRecorded: false`, and `verified: false`.
-- `scripts/release/verify-release-provenance.ps1` rejects readiness drift from the exact VSIX path, size, or SHA256; missing required `id-token: write`, `contents: read`, and `attestations: write` permissions; missing signer workflow verification command policy; any recorded bundle path, attestation URL, or repository URL; and any local claim that GitHub attestation verification succeeded.
-- `scripts/tests/release-provenance-scripts.tests.ps1` covers the positive readiness contract plus negative fixtures for subject SHA drift, artifact path drift, missing permissions, generated attestation status, recorded bundle/URL/verification success, and removed non-claims.
+- `.github/workflows/attest-release-vsix.yml` is an explicit `workflow_dispatch` workflow. It downloads the release asset named by `docs/release/github-attestation-contract.win32-x64.json`, verifies its name, size, and SHA256, publishes a SLSA v1 predicate attestation with the SHA-pinned `actions/attest-build-provenance` action, verifies the exact output bundle with pinned signer/source ref and digest constraints, and uploads the bundle plus verification records.
+- `docs/release/github-attestation-evidence.win32-x64.json` records the successful public workflow run `https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29083602695`, attestation `https://github.com/Hitsuki-Ban/SubversionR/attestations/34722959`, exact source-controlled `docs/release/github-attestation-bundle.win32-x64.json` and `docs/release/github-attestation-verification.win32-x64.json` bytes, their SHA256 values, the exact released VSIX subject, signer/source refs and digests, predicate type, and self-hosted-runner denial policy.
+- `scripts/release/generate-release-provenance.ps1` requires the source-controlled contract, live record, exact bundle, and exact verification result, validates the released subject, writes `attestation.status` `verified` and `readinessStatus` `live-attestation-verified`, and records their paths and SHA256 bindings.
+- `scripts/release/verify-release-provenance.ps1` rejects drift in the subject, contract, live evidence, required permissions, signer/source policy, run/attestation URLs, exact bundle or verification-result bytes, or source-controlled evidence hashes, then reruns `gh attestation verify --bundle` against the released VSIX.
+- `scripts/release/verify-publication-gaps.ps1` and the Beta-G candidate verifier require the same live attestation facts through the hash-bound provenance and publication-gaps chain.
+- `scripts/tests/release-live-attestation-scripts.tests.ps1`, `scripts/tests/release-provenance-scripts.tests.ps1`, `scripts/tests/release-publication-gaps-scripts.tests.ps1`, and `scripts/tests/release-beta-candidate-evidence-scripts.tests.ps1` cover the direct contract, evidence recording, downstream bindings, and rejection of obsolete input-only evidence.
 
-This slice intentionally does not add a signing key, sign VSIX or native artifacts, publish a GitHub artifact attestation, verify a live attestation through GitHub APIs, publish to Marketplace, install from Marketplace, prove previous-stable upgrade/rollback, complete final SBOM/NOTICE legal review, or complete CVE review.
+This post-release attestation does not prove the original VSIX source-to-binary build provenance. This slice intentionally does not add a signing key, sign VSIX or native artifacts, publish to Marketplace, install from Marketplace, prove previous-stable upgrade/rollback, complete final SBOM/NOTICE legal review, complete CVE review, or claim public release readiness. The published Beta candidate ZIP remains inconsistent and cannot supply regenerated Beta-G evidence.
 
 ## M7j2b Gates
 
-- `pnpm release:test-provenance-scripts` must pass with the attestation readiness fixtures.
-- `pnpm release:generate-provenance:win32-x64` must continue to set `attestation.status` to `not-generated` while recording the exact VSIX subject contract for future GitHub artifact attestations.
-- `pnpm release:verify-provenance:win32-x64` must fail on attestation readiness drift or overclaiming.
-- `pnpm release:verify-readiness` must continue to keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, and `TST-024` as release blockers until signed artifacts, live GitHub attestation publication/verification, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and CVE review are complete.
+- `pnpm release:test-live-attestation-scripts`, `pnpm release:test-provenance-scripts`, `pnpm release:test-publication-gaps-scripts`, and `pnpm release:test-beta-candidate-evidence-scripts` must pass.
+- `pnpm release:generate-provenance:win32-x64` must require the exact source-controlled subject contract and live evidence and set `attestation.status` to `verified`.
+- `pnpm release:verify-provenance:win32-x64` must fail on live attestation evidence drift, removed verification policy, or signing/public-readiness overclaiming.
+- `pnpm release:verify-readiness` must continue to keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, and `TST-024` as release blockers until signed artifacts, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and CVE review are complete.
 
 ## M7j3 Implemented Slice
 
@@ -290,7 +291,7 @@ This slice intentionally does not publish to Marketplace, sign artifacts, publis
 
 - `pnpm release:test-installed-source-control-ui-e2e-scripts` must pass.
 - `pnpm release:test-installed-source-control-ui-e2e:win32-x64` must receive explicit `SUBVERSIONR_CODE_CLI`, the source-built Apache Subversion 1.14.5 fixture tools, the tracked renderer capture driver, and an available remote debugging port, and must run against the generated VSIX after `pnpm release:package-vsix:win32-x64`.
-- `pnpm release:verify-readiness` must continue to keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until signed artifacts, live GitHub attestation publication/verification, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, CVE review, broader accessibility evidence, broader no-repository UX evidence, repository browser, remote/auth/certificate, broader checkout failure matrices, full property editor UX, `svn:externals` editing, property/changelist load or cancellation breadth, lock cancellation beyond local Lock message and Unlock mode prompt cancellation only, broad remote lock-server matrices, break/steal policy breadth, load-scale lock behavior, and commit template/message-history behavior are complete.
+- `pnpm release:verify-readiness` must continue to keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until signed artifacts, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, CVE review, broader accessibility evidence, broader no-repository UX evidence, repository browser, remote/auth/certificate, broader checkout failure matrices, full property editor UX, `svn:externals` editing, property/changelist load or cancellation breadth, lock cancellation beyond local Lock message and Unlock mode prompt cancellation only, broad remote lock-server matrices, break/steal policy breadth, load-scale lock behavior, and commit template/message-history behavior are complete.
 
 ## M7k1 Implemented Slice
 
@@ -312,7 +313,7 @@ This slice intentionally does not publish the repository, enable GitHub Private 
 
 - `pnpm docs:verify-support-intake` must pass.
 - `pnpm release:test-support-intake-scripts` must pass.
-- `pnpm release:verify-readiness` must call the support intake verifier and keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, CVE review, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must call the support intake verifier and keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, CVE review, and broader accessibility evidence are complete.
 
 ## M7k2a Implemented Slice
 
@@ -334,7 +335,7 @@ This slice intentionally keeps the root package private, records only approved p
 - `pnpm release:test-vsix-scripts` must pass with VSIX icon inclusion and hash-continuity evidence.
 - `pnpm release:test-provenance-scripts` must pass with Marketplace icon, keyword, and publication-blocker fixtures.
 - `pnpm release:stage-vscode:win32-x64`, `pnpm release:verify-vscode:win32-x64`, `pnpm release:package-vsix:win32-x64`, `pnpm release:generate-provenance:win32-x64`, and `pnpm release:verify-provenance:win32-x64` must preserve the same icon hash from source package to staged package, VSIX, and provenance evidence.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until public repository metadata, Marketplace publisher authorization, publish authentication, signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, CVE review, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until public repository metadata, Marketplace publisher authorization, publish authentication, artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, CVE review, and broader accessibility evidence are complete.
 
 ## M7k2b Implemented Slice
 
@@ -346,23 +347,23 @@ The third M7k slice maintains the publication-gaps and publish-auth contract aft
 - Public repository metadata fields are recorded from the extension manifest with `repositoryUrlRecorded`, `homepageUrlRecorded`, and `bugsUrlRecorded` all true. The hash-bound cutover evidence records only that `https://github.com/Hitsuki-Ban/SubversionR` resolves publicly; homepage and social metadata remain an explicit follow-up.
 - `docs/release/public-cutover-evidence.json` records the fresh public baseline commit, the successful `PR Fast` main run, Private Vulnerability Reporting enablement, Cloudflare Workers Builds trigger retirement and repository disconnection, and the published `v0.2.0-beta.1` prerelease with its four asset names, sizes, URLs, and SHA256 values.
 - The released VSIX asset must match the current candidate bytes exactly. The recorded anchor is `d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb`.
-- Public branch protection and private workflow disablement remain explicit owner follow-ups. Live GitHub artifact attestation remains false until public issue #5 records generation and verification.
+- Public branch protection and private workflow disablement remain explicit owner follow-ups. Live GitHub artifact attestation publication and verification are recorded through the M7j2b evidence chain.
 - The published Beta candidate ZIP is not a valid source for post-cutover regeneration: its manifest declares 1,462 payloads, with 29 missing and 421 mismatched, and it contains an old `svn-r` 0.1.0 VSIX instead of the released `subversionr` 0.2.0 VSIX. `betaCandidateEvidence.status` remains `blocked-published-bundle-inconsistent` until a self-consistent bundle passes the unchanged Beta-G verifier.
 - Marketplace publisher authorization is recorded as `not-verified`, bound to `hitsuki-ban.subversionr`, and explicitly records no owner/contributor verification, credentials, tokens, or authorization headers.
 - Publish authentication is recorded as `not-configured`, with Microsoft Entra ID workload identity as the primary future mode, `@vscode/vsce` `>=2.26.1` as the `--azure-credential` contract, and legacy `VSCE_PAT` noted only as a secret-name contract with the documented global PAT retirement date of 2026-12-01. The gate does not read the environment or record credential values.
 - Marketplace public install is recorded as `not-run`, bound to expected extension id/version, and explicitly records no public extension page, acquisition, or install evidence.
-- `scripts/release/verify-publication-gaps.ps1` rejects public-readiness claims, private repository URLs, credential/token-like fields, Cloudflare live IDs, publisher authorization overclaims, publish-auth overclaims, Marketplace publication/public-install overclaims, live-attestation overclaims, missing non-claims, hash drift, target/schema mismatch, and output paths outside generated evidence roots.
-- `scripts/tests/release-publication-gaps-scripts.tests.ps1` covers positive generation/verification, output-root containment, unexpected public-resource metadata rejection, upstream provenance overclaim rejection, publisher/credential/public-install/live-attestation overclaim rejection, released-VSIX hash drift, invalid public CI URLs, cutover source hash drift, package scripts, CI wiring, and release-readiness verifier terms.
+- `scripts/release/verify-publication-gaps.ps1` rejects public-readiness claims, private repository URLs, credential/token-like fields, Cloudflare live IDs, publisher authorization overclaims, publish-auth overclaims, Marketplace publication/public-install overclaims, missing or drifted live-attestation evidence, missing non-claims, hash drift, target/schema mismatch, and output paths outside generated evidence roots.
+- `scripts/tests/release-publication-gaps-scripts.tests.ps1` covers positive generation/verification, output-root containment, unexpected public-resource metadata rejection, upstream provenance overclaim rejection, publisher/credential/public-install overclaim rejection, missing live-attestation evidence, released-VSIX hash drift, invalid public CI URLs, cutover source hash drift, package scripts, CI wiring, and release-readiness verifier terms.
 - Windows CI runs the script tests, then generates and verifies the real `win32-x64` publication-gaps evidence immediately after provenance verification.
 
-This evidence does not close post-cutover Beta-G regeneration, configure public branch protection, disable private workflows, verify Marketplace publisher ownership, configure Microsoft Entra ID or `VSCE_PAT`, publish to Marketplace, install from Marketplace, sign artifacts, generate or verify live attestations, or prove previous-stable upgrade/rollback.
+This evidence records the verified live GitHub attestation but does not close post-cutover Beta-G regeneration, configure public branch protection, disable private workflows, verify Marketplace publisher ownership, configure Microsoft Entra ID or `VSCE_PAT`, publish to Marketplace, install from Marketplace, sign artifacts, prove previous-stable upgrade/rollback, or claim public release readiness.
 
 ## M7k2b Gates
 
 - `pnpm release:test-publication-gaps-scripts` must pass.
 - `pnpm release:generate-publication-gaps:win32-x64` must run after `pnpm release:verify-provenance:win32-x64`.
-- `pnpm release:verify-publication-gaps:win32-x64` must reject any Marketplace publication, publisher-auth, publish-auth, credential, public-install, live-attestation, or public-readiness overclaim and any drift from the hash-bound public cutover facts.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until public repository metadata is approved, Marketplace publisher authorization is verified, publish authentication is configured, signing/attestation publication is complete, Marketplace/public install evidence exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review and CVE review are complete, and broader accessibility evidence is complete.
+- `pnpm release:verify-publication-gaps:win32-x64` must reject any Marketplace publication, publisher-auth, publish-auth, credential, public-install, missing or drifted live-attestation evidence, or public-readiness overclaim and any drift from the hash-bound public cutover facts.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until public repository metadata is approved, Marketplace publisher authorization is verified, publish authentication is configured, signing is complete, Marketplace/public install evidence exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review and CVE review are complete, and broader accessibility evidence is complete.
 
 ## M7l1 Implemented Slice
 
@@ -384,7 +385,7 @@ This slice intentionally does not query OSV live services, record vulnerability 
 - `pnpm release:test-vulnerability-review-scripts` must pass.
 - `pnpm release:generate-vulnerability-review:win32-x64` must run after `pnpm release:verify-evidence`.
 - `pnpm release:verify-vulnerability-review:win32-x64` must reject live-result, credential, malformed OSV query, CVE completion, public-readiness, schema, target, or SBOM drift overclaims.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until live CVE/OSV review, native advisory review, remediation/VEX decisions, signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until live CVE/OSV review, native advisory review, remediation/VEX decisions, artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
 
 ## M7l2a Implemented Slice
 
@@ -409,7 +410,7 @@ This slice intentionally does not complete native dependency advisory review, ma
 - `pnpm release:test-live-osv-review-scripts` must pass.
 - `pnpm release:generate-live-osv-review:win32-x64` must run after `pnpm release:verify-vulnerability-review:win32-x64`.
 - `pnpm release:verify-live-osv-review:win32-x64` must reject credential, endpoint, preflight hash, query ordering, missing detail, triage/remediation/VEX completion, vulnerability-completion, public-readiness, schema, or target overclaims.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until native advisory review, remediation/VEX decisions, signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until native advisory review, remediation/VEX decisions, artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
 
 ## M7l2b Implemented Slice
 
@@ -431,7 +432,7 @@ This slice intentionally does not assert that native dependencies are free of kn
 - `pnpm release:test-native-advisory-review-scripts` must pass.
 - `pnpm release:generate-native-advisory-review:win32-x64` must run after `pnpm release:verify-live-osv-review:win32-x64`.
 - `pnpm release:verify-native-advisory-review:win32-x64` must reject stale OSV evidence, credential, source-lock hash, advisory-source hash, live-OSV hash, missing/extra/duplicate component coverage, native-review completion, vulnerability-completion, public-readiness, schema, or target overclaims.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until native advisory triage, remediation/VEX decisions, reproducible build or signed source-to-binary build attestation, signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until native advisory triage, remediation/VEX decisions, reproducible build or signed source-to-binary build attestation, artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
 
 ## M7l2c Implemented Slice
 
@@ -452,7 +453,7 @@ This slice intentionally does not complete native advisory review, complete live
 - `pnpm release:test-native-advisory-triage-input-scripts` must pass.
 - `pnpm release:generate-native-advisory-triage-input:win32-x64` must run after `pnpm release:verify-native-advisory-review:win32-x64`.
 - `pnpm release:verify-native-advisory-triage-input:win32-x64` must reject stale upstream evidence, credential, M7l2b hash, M7l2a hash, missing/extra/duplicate input row, triage/remediation/VEX completion, vulnerability-completion, public-readiness, schema, or target overclaims.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until native/OSV triage decisions, remediation/VEX approval, reproducible build or signed source-to-binary build attestation, signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until native/OSV triage decisions, remediation/VEX approval, reproducible build or signed source-to-binary build attestation, artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
 
 ## M7l2d Implemented Slice
 
@@ -474,7 +475,7 @@ This slice intentionally does not assert that native dependencies are vulnerabil
 - `pnpm release:test-vulnerability-decision-evidence-scripts` must pass.
 - `pnpm release:generate-vulnerability-decision-evidence:win32-x64` must run after `pnpm release:verify-native-advisory-triage-input:win32-x64`.
 - `pnpm release:verify-vulnerability-decision-evidence:win32-x64` must reject credential, M7l2c hash, decision-input hash, missing/extra/duplicate decision row, invalid VEX status, missing justification/action/fix evidence, completion overclaim, public-readiness, schema, or target overclaims.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until terminal vulnerability decisions, remediation approval for affected findings, reproducible build or signed source-to-binary build attestation, signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until terminal vulnerability decisions, remediation approval for affected findings, reproducible build or signed source-to-binary build attestation, artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
 
 ## M7l2e Implemented Slice
 
@@ -496,7 +497,7 @@ This slice intentionally does not assert that native dependencies are vulnerabil
 - `pnpm release:test-vulnerability-decision-input-scripts` must pass.
 - `pnpm release:verify-vulnerability-decision-input:win32-x64` must reject source-lock drift, advisory-source drift, artifact-map package-mode drift, credential-like evidence, stale terminal reviews, terminal decisions without an M7l2f manual terminal grant, `component_not_present` overclaims, public-readiness claims, schema drift, or target drift.
 - `pnpm release:generate-vulnerability-decision-evidence:win32-x64` must run the M7l2f manual review verifier and the decision input verifier before writing M7l2d evidence.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, signing/attestation publication is complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, artifact signing and signed provenance are complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
 
 ## M7l2f Implemented Slice
 
@@ -516,7 +517,7 @@ This slice intentionally does not assert that native dependencies are vulnerabil
 - `pnpm release:test-native-manual-advisory-review-scripts` must pass.
 - `pnpm release:verify-native-manual-advisory-review:win32-x64` must reject source-lock drift, advisory-source drift, artifact-map package-mode drift, missing or extra manual rows, dedicated-index manual rows, stale review rows, weak terminal grants, single-reviewer terminal grants, terminal decisions without matching grants, credential-like evidence, public-readiness claims, schema drift, or target drift.
 - `pnpm release:verify-vulnerability-decision-input:win32-x64` must run after the manual review gate and must require a matching manual terminal grant for any no-dedicated-index component that becomes terminal.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, signing/attestation publication is complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, artifact signing and signed provenance are complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
 
 ## M7l2g Implemented Slice
 
@@ -536,7 +537,7 @@ This slice intentionally does not assert that Expat 2.8.1 is free of all known o
 - `pnpm release:test-expat-terminal-decision-scripts` must pass.
 - `pnpm release:verify-native-manual-advisory-review:win32-x64` must accept the Expat terminal grant only while the finding mapping, fixed version, approvals, source-contract IDs, and matching decision row remain exact.
 - `pnpm release:verify-vulnerability-decision-input:win32-x64` must keep the Expat decision terminal only while it has its matching M7l2f-compliant grant.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, signing/attestation publication is complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, artifact signing and signed provenance are complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
 
 ## M7l2h Implemented Slice
 
@@ -557,7 +558,7 @@ This slice intentionally does not assert that zlib 1.3.2 is free of all known or
 - `pnpm release:test-zlib-terminal-decision-scripts` must pass.
 - `pnpm release:verify-native-manual-advisory-review:win32-x64` must accept the zlib terminal grant only while the finding mapping, not_affected justification, impact statement, approvals, source-contract IDs, and matching decision row remain exact.
 - `pnpm release:verify-vulnerability-decision-input:win32-x64` must keep the zlib decision terminal only while it has its matching M7l2f-compliant grant.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, signing/attestation publication is complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, artifact signing and signed provenance are complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
 
 ## M7l2i Implemented Slice
 
@@ -577,7 +578,7 @@ This slice intentionally does not assert that APR 1.7.6 is free of all known or 
 - `pnpm release:test-apr-terminal-decision-scripts` must pass.
 - `pnpm release:verify-native-manual-advisory-review:win32-x64` must accept the APR terminal grant only while the finding mappings, fixed version, approvals, source-contract IDs, and matching decision row remain exact.
 - `pnpm release:verify-vulnerability-decision-input:win32-x64` must keep the APR decision terminal only while it has its matching M7l2f-compliant grant.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, signing/attestation publication is complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, artifact signing and signed provenance are complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
 
 ## M7l2j Implemented Slice
 
@@ -597,7 +598,7 @@ This slice intentionally does not assert that APR-util 1.6.3 is free of all know
 - `pnpm release:test-apr-util-terminal-decision-scripts` must pass.
 - `pnpm release:verify-native-manual-advisory-review:win32-x64` must accept the APR-util terminal grant only while the finding mappings, fixed version, approvals, source-contract IDs, and matching decision row remain exact.
 - `pnpm release:verify-vulnerability-decision-input:win32-x64` must keep the APR-util decision terminal only while it has its matching M7l2f-compliant grant.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, signing/attestation publication is complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, artifact signing and signed provenance are complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
 
 ## M7l2k Implemented Slice
 
@@ -636,8 +637,8 @@ This slice intentionally does not assert that APR-iconv 1.2.2 is free of all kno
 - `pnpm release:test-apr-iconv-terminal-decision-scripts` must pass.
 - `pnpm release:verify-native-manual-advisory-review:win32-x64` must accept the APR-iconv terminal grant only while the named security-finding mapping, not_affected justification, impact statement, approvals, source-contract IDs, and matching decision row remain exact.
 - `pnpm release:verify-vulnerability-decision-input:win32-x64` must keep the APR-iconv decision terminal only while it has its matching M7l2f-compliant grant.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until final SBOM/NOTICE review, final vulnerability release approval, reproducible build or signed source-to-binary build attestation, signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, and broader accessibility evidence are complete.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, signing/attestation publication is complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until final SBOM/NOTICE review, final vulnerability release approval, reproducible build or signed source-to-binary build attestation, artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until all vulnerability decisions are terminal, affected decisions have approved remediation, reproducible build or signed source-to-binary build attestation exists, artifact signing and signed provenance are complete, Marketplace/public install exists, previous-stable upgrade/rollback is proven, final SBOM/NOTICE review is complete, and broader accessibility evidence is complete.
 
 ## M7l3 Implemented Slice
 
@@ -657,7 +658,7 @@ This slice intentionally does not prove reproducible builds, prove that staged b
 - `pnpm release:test-native-artifact-map-scripts` must pass.
 - `pnpm release:generate-native-artifact-map:win32-x64` must run after `pnpm release:package-vsix:win32-x64`.
 - `pnpm release:verify-native-artifact-map:win32-x64` must reject source-lock hash drift, artifact-map hash drift, backend-manifest hash drift, VSIX-evidence hash drift, missing/extra source component coverage, unmapped packaged native artifacts, unknown package modes, non-shipping rows without reasons, reproducible-build overclaims, signed-attestation overclaims, public-readiness overclaims, schema drift, target drift, or staged artifact byte drift.
-- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until terminal vulnerability decisions, remediation approval for affected findings, reproducible build or signed source-to-binary build attestation, signing/attestation publication, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
+- `pnpm release:verify-readiness` must keep `SEC-015`, `MIG-009`, `MIG-010`, `MIG-012`, `TST-018`, and `TST-024` as release blockers until terminal vulnerability decisions, remediation approval for affected findings, reproducible build or signed source-to-binary build attestation, artifact signing and signed provenance, Marketplace/public install, previous-stable upgrade/rollback, final SBOM/NOTICE review, and broader accessibility evidence are complete.
 
 ## M7l4 Implemented Slice
 
@@ -786,7 +787,7 @@ The next implementation track is Windows `win32-x64` Beta packaging readiness fo
 - Beta-D: covered by M7j3 installed VSIX E2E evidence for local-file Add to Ignore/`svn:ignore`, changelist grouping, Set/Clear Changelist, Commit Changelist, Revert Changelist, prompt capture, and repository/working-copy oracles. Follow-up property and changelist coverage must still cover full property editor UX, `svn:externals` editing, broad load behavior, cancellation UX, remote/auth/certificate behavior, and commit template/message-history behavior.
 - Beta-E: covered by M7j3 installed VSIX E2E evidence for local-file Lock/Unlock/`svn:needs-lock` projection, local Lock message and Unlock mode prompt cancellation only, Branch/Tag create, and Switch happy paths, with prompt capture, lock and branch/switch oracles, post-operation reconcile coverage, and explicit non-claims for switch-after-copy, target browsing, broad remote/auth/certificate matrices, repository-browser integration, break/steal policy breadth, lock cancellation breadth beyond the covered prompts, and edge/load behavior.
 - Beta-F: covered by `pnpm release:test-state-engine-beta-performance:win32-x64`, which writes `subversionr.release.state-engine-beta-performance.win32-x64.v1` evidence for single-file no-full-scan behavior, bounded event bursts, nested/external isolation, dirty-generation supersede, sidecar restart stale/reopen behavior, and a 10k local working-copy baseline. This remains a Windows Beta packaging floor only; native watcher production, adaptive cost feedback, 100k/1M working-copy performance, idle CPU measurement, default background remote polling, Marketplace/public install, signing/provenance, previous-stable rollback, and public readiness remain non-claims.
-- Beta-G: covered by `pnpm release:verify-beta-candidate:win32-x64`, which writes `subversionr.release.beta-candidate-consistency.win32-x64.v1` after package, native artifact map, provenance, publication gaps, installed VSIX gates, install rollback, Beta-F state-engine evidence, and the artifact bundle manifest have been regenerated for the same candidate. `pnpm release:generate-beta-artifact-bundle-manifest:win32-x64` writes `subversionr.release.beta-artifact-bundle-manifest.win32-x64.v1`, enumerates the current VSIX, SBOM, NOTICE, release evidence, and installed UI renderer artifacts, and records the explicit CI upload allowlist. The final verifier checks the current VSIX bytes, VSIX package identity, manifest TargetPlatform, packaged backend ZIP entries, installed evidence VSIX hashes, provenance/publication evidence hashes, native artifact map inputs, state-engine floor, artifact bundle manifest, explicit CI upload allowlist, and manifest SHA256 binding before CI uploads `subversionr-win32-x64-beta-candidate` with `actions/upload-artifact@v7`. It does not close Marketplace/public install, signing, live attestation, previous-stable rollback, broad remote/auth, coverage-guided fuzzing, or public readiness.
+- Beta-G: covered by `pnpm release:verify-beta-candidate:win32-x64`, which writes `subversionr.release.beta-candidate-consistency.win32-x64.v1` after package, native artifact map, provenance, publication gaps, installed VSIX gates, install rollback, Beta-F state-engine evidence, and the artifact bundle manifest have been regenerated for the same candidate. `pnpm release:generate-beta-artifact-bundle-manifest:win32-x64` writes `subversionr.release.beta-artifact-bundle-manifest.win32-x64.v1`, enumerates the current VSIX, SBOM, NOTICE, release evidence, and installed UI renderer artifacts, and records the explicit CI upload allowlist. The final verifier checks the current VSIX bytes, VSIX package identity, manifest TargetPlatform, packaged backend ZIP entries, installed evidence VSIX hashes, provenance/publication evidence hashes and verified live GitHub attestation binding, native artifact map inputs, state-engine floor, artifact bundle manifest, explicit CI upload allowlist, and manifest SHA256 binding before CI uploads `subversionr-win32-x64-beta-candidate` with `actions/upload-artifact@v7`. The published candidate ZIP remains inconsistent, so post-cutover regeneration is still blocked. The gate does not close Marketplace/public install, signing, previous-stable rollback, broad remote/auth, coverage-guided fuzzing, or public readiness.
 
 ## Deferred Public-Release M7 Slices
 

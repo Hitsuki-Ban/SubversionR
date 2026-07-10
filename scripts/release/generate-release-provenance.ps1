@@ -44,6 +44,12 @@ param(
   [string]$BackendManifestPath,
 
   [Parameter(Mandatory = $true)]
+  [string]$AttestationContractPath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$LiveAttestationEvidencePath,
+
+  [Parameter(Mandatory = $true)]
   [string]$OutputPath
 )
 
@@ -109,6 +115,18 @@ function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
     throw $Message
   }
+}
+
+function Assert-JsonBoolean([object]$Object, [string]$Name, [bool]$Expected, [string]$Context) {
+  $value = Get-RequiredProperty $Object $Name $Context
+  if ($value -isnot [bool]) {
+    throw "$Context $Name must be a JSON boolean."
+  }
+  Assert-Equal $Expected ([bool]$value) "$Context $Name must match the live attestation contract."
+}
+
+function ConvertTo-CanonicalJson([object]$Value) {
+  $Value | ConvertTo-Json -Depth 100 -Compress
 }
 
 function Get-GitValue([string[]]$Arguments, [string]$Name) {
@@ -194,6 +212,8 @@ $sbomResolved = Assert-File $SbomPath "SbomPath"
 $noticeResolved = Assert-File $NoticePath "NoticePath"
 $vsixEvidenceResolved = Assert-File $VsixEvidencePath "VsixEvidencePath"
 $backendManifestResolved = Assert-File $BackendManifestPath "BackendManifestPath"
+$attestationContractResolved = Assert-File $AttestationContractPath "AttestationContractPath"
+$liveAttestationEvidenceResolved = Assert-File $LiveAttestationEvidencePath "LiveAttestationEvidencePath"
 $outputResolved = Assert-GeneratedPath -Path $OutputPath -Name "OutputPath" -AllowedRoots @(
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence")),
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\tests\release-provenance-scripts"))
@@ -205,6 +225,8 @@ $sbom = Get-Content -Raw -LiteralPath $sbomResolved | ConvertFrom-Json
 $notice = Get-Content -Raw -LiteralPath $noticeResolved
 $vsixEvidence = Get-Content -Raw -LiteralPath $vsixEvidenceResolved | ConvertFrom-Json
 $backendManifest = Get-Content -Raw -LiteralPath $backendManifestResolved | ConvertFrom-Json
+$attestationContract = Get-Content -Raw -LiteralPath $attestationContractResolved | ConvertFrom-Json
+$liveAttestationEvidence = Get-Content -Raw -LiteralPath $liveAttestationEvidenceResolved | ConvertFrom-Json
 
 $extensionName = [string](Get-RequiredProperty $extensionPackage "name" "Extension package")
 $extensionPublisher = [string](Get-RequiredProperty $extensionPackage "publisher" "Extension package")
@@ -255,6 +277,59 @@ if (-not (Test-Path -LiteralPath $vsixPath -PathType Leaf)) {
 }
 $actualVsixSha256 = Get-Sha256 $vsixPath
 Assert-Equal ([string]$vsixEvidence.vsix.sha256) $actualVsixSha256 "VSIX artifact SHA256 must match VSIX package evidence."
+
+& (Join-Path $PSScriptRoot "verify-release-attestation-subject.ps1") `
+  -Target $Target `
+  -ContractPath $attestationContractResolved `
+  -SubjectPath $vsixPath `
+  -ReleaseTag ([string]$attestationContract.release.tag)
+
+Assert-Equal 1 ([int]$liveAttestationEvidence.schemaVersion) "Live attestation evidence schemaVersion should be 1."
+Assert-Equal "subversionr.release.live-github-attestation.win32-x64.v1" ([string]$liveAttestationEvidence.schema) "Live attestation evidence schema must match."
+Assert-JsonBoolean $liveAttestationEvidence "publicReadinessClaim" $false "Live attestation evidence"
+Assert-JsonBoolean $liveAttestationEvidence "signingClaim" $false "Live attestation evidence"
+Assert-Equal $Target ([string]$liveAttestationEvidence.target) "Live attestation evidence target must match."
+Assert-Equal "live-attestation-verified" ([string]$liveAttestationEvidence.status) "Live attestation evidence status must be verified."
+Assert-Equal (Get-RepoRelativePath $attestationContractResolved) ([string]$liveAttestationEvidence.contract.path) "Live attestation evidence must bind the attestation contract path."
+Assert-Equal (Get-Sha256 $attestationContractResolved) ([string]$liveAttestationEvidence.contract.sha256) "Live attestation evidence must bind the current attestation contract bytes."
+Assert-Equal ([string]$attestationContract.schema) ([string]$liveAttestationEvidence.contract.schema) "Live attestation evidence must bind the attestation contract schema."
+Assert-Equal ([string]$attestationContract.release.tag) ([string]$liveAttestationEvidence.release.tag) "Live attestation release tag must match the contract."
+Assert-Equal ([string]$attestationContract.release.url) ([string]$liveAttestationEvidence.release.url) "Live attestation release URL must match the contract."
+Assert-Equal ([string]$attestationContract.subject.name) ([string]$liveAttestationEvidence.subject.name) "Live attestation subject name must match the contract."
+Assert-Equal ([int64]$attestationContract.subject.size) ([int64]$liveAttestationEvidence.subject.size) "Live attestation subject size must match the contract."
+Assert-Equal $actualVsixSha256 ([string]$liveAttestationEvidence.subject.sha256) "Live attestation subject SHA256 must match current VSIX bytes."
+Assert-Equal ([string]$attestationContract.workflow.path) ([string]$liveAttestationEvidence.workflow.path) "Live attestation workflow path must match the contract."
+Assert-Equal "workflow_dispatch" ([string]$liveAttestationEvidence.workflow.event) "Live attestation workflow event must be workflow_dispatch."
+Assert-True ([string]$liveAttestationEvidence.workflow.runId -match '^[0-9]+$') "Live attestation runId must contain only digits."
+Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/$($liveAttestationEvidence.workflow.runId)" ([string]$liveAttestationEvidence.workflow.runUrl) "Live attestation run URL must match runId."
+Assert-True ([string]$liveAttestationEvidence.workflow.headSha -match '^[a-f0-9]{40}$') "Live attestation workflow headSha must be a full lowercase commit SHA."
+Assert-Equal ([string]$attestationContract.attestation.provider) ([string]$liveAttestationEvidence.attestation.provider) "Live attestation provider must match the contract."
+Assert-Equal ([string]$attestationContract.attestation.action) ([string]$liveAttestationEvidence.attestation.action) "Live attestation action must match the contract."
+Assert-Equal ([string]$attestationContract.attestation.actionDigest) ([string]$liveAttestationEvidence.attestation.actionDigest) "Live attestation action digest must match the contract."
+Assert-Equal ([string]$attestationContract.attestation.predicateType) ([string]$liveAttestationEvidence.attestation.predicateType) "Live attestation predicate type must match the contract."
+Assert-True ([string]$liveAttestationEvidence.attestation.id -match '^[0-9]+$') "Live attestation id must contain only digits."
+Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/attestations/$($liveAttestationEvidence.attestation.id)" ([string]$liveAttestationEvidence.attestation.url) "Live attestation URL must match id."
+$attestationBundleResolved = Assert-File ([string](Get-RequiredProperty $liveAttestationEvidence.attestation "bundlePath" "Live attestation evidence attestation")) "Live attestation bundle"
+Assert-Equal (Get-Sha256 $attestationBundleResolved) ([string]$liveAttestationEvidence.attestation.bundleSha256) "Live attestation bundle SHA256 must match current bytes."
+Assert-JsonBoolean $liveAttestationEvidence.verification "verified" $true "Live attestation verification"
+Assert-JsonBoolean $liveAttestationEvidence.verification "denySelfHostedRunners" $true "Live attestation verification"
+Assert-JsonBoolean $liveAttestationEvidence.verification "bundleMatched" $true "Live attestation verification"
+Assert-Equal ([string]$attestationContract.verificationPolicy.repository) ([string]$liveAttestationEvidence.verification.repository) "Live attestation verification repository must match the contract."
+Assert-Equal ([string]$attestationContract.verificationPolicy.signerWorkflow) ([string]$liveAttestationEvidence.verification.signerWorkflow) "Live attestation signer workflow must match the contract."
+Assert-Equal ([string]$attestationContract.verificationPolicy.predicateType) ([string]$liveAttestationEvidence.verification.predicateType) "Live attestation verification predicate type must match the contract."
+Assert-Equal ([string]$attestationContract.verificationPolicy.format) ([string]$liveAttestationEvidence.verification.format) "Live attestation verification format must match the contract."
+$attestationVerificationResolved = Assert-File ([string](Get-RequiredProperty $liveAttestationEvidence.verification "resultPath" "Live attestation verification")) "Live attestation verification result"
+Assert-Equal (Get-Sha256 $attestationVerificationResolved) ([string]$liveAttestationEvidence.verification.resultSha256) "Live attestation verification result SHA256 must match current bytes."
+$attestationBundles = @(Get-Content -Raw -LiteralPath $attestationBundleResolved | ConvertFrom-Json)
+$attestationVerificationResults = @(Get-Content -Raw -LiteralPath $attestationVerificationResolved | ConvertFrom-Json)
+Assert-Equal 1 $attestationBundles.Count "Source-controlled attestation bundle must contain exactly one bundle."
+Assert-Equal 1 $attestationVerificationResults.Count "Source-controlled attestation verification must contain exactly one result."
+Assert-Equal (ConvertTo-CanonicalJson $attestationBundles[0]) (ConvertTo-CanonicalJson $attestationVerificationResults[0].attestation.bundle) "Source-controlled verification result must contain the exact attestation bundle."
+$expectedProductionAttestationPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "docs\release\github-attestation-evidence.win32-x64.json"))
+if ($liveAttestationEvidenceResolved.Equals($expectedProductionAttestationPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+  Assert-Equal ([System.IO.Path]::GetFullPath((Join-Path $repoRoot "docs\release\github-attestation-bundle.win32-x64.json"))) $attestationBundleResolved "Production provenance must bind the source-controlled attestation bundle."
+  Assert-Equal ([System.IO.Path]::GetFullPath((Join-Path $repoRoot "docs\release\github-attestation-verification.win32-x64.json"))) $attestationVerificationResolved "Production provenance must bind the source-controlled attestation verification result."
+}
 
 Assert-Equal "CycloneDX" ([string]$sbom.bomFormat) "SBOM evidence must use CycloneDX."
 Assert-Equal "1.6" ([string]$sbom.specVersion) "SBOM evidence must use CycloneDX 1.6."
@@ -316,8 +391,8 @@ $metadataBlockers += "Previous stable artifact rollback evidence is not generate
 
 $nonClaims = @(
   "This gate does not prove VSIX signing.",
-  "This gate does not prove GitHub artifact attestation publication.",
-  "This gate does not prove GitHub artifact attestation generation, publication, or verification.",
+  "This gate records live GitHub artifact attestation publication and verification but does not claim artifact signing.",
+  "This post-release attestation does not prove the original VSIX source-to-binary build provenance.",
   "This gate does not prove Marketplace publication or public install.",
   "This gate does not prove previous-stable upgrade or rollback.",
   "This gate does not prove installed Source Control DOM/accessibility-tree/pixel E2E.",
@@ -326,13 +401,9 @@ $nonClaims = @(
 
 $vsixRelativePath = Get-RepoRelativePath $vsixPath
 $vsixFileName = Split-Path -Leaf $vsixPath
-$attestationWorkflowPath = ".github/workflows/ci.yml"
-$attestationRequiredPermissions = @(
-  "id-token: write",
-  "contents: read",
-  "attestations: write"
-)
-$attestationVerifyCommand = "gh attestation verify $vsixRelativePath -R Hitsuki-Ban/SubversionR --signer-workflow Hitsuki-Ban/SubversionR/$attestationWorkflowPath --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners --format json"
+$attestationWorkflowPath = [string]$attestationContract.workflow.path
+$attestationRequiredPermissions = @($attestationContract.workflow.requiredPermissions | ForEach-Object { [string]$_ })
+$attestationVerifyCommand = [string]$liveAttestationEvidence.verification.command
 
 $report = [pscustomobject]@{
   schemaVersion = 1
@@ -394,6 +465,10 @@ $report = [pscustomobject]@{
     cargoLock = [pscustomobject]@{ path = Get-RepoRelativePath $cargoLockResolved; sha256 = Get-Sha256 $cargoLockResolved }
     sbom = [pscustomobject]@{ path = Get-RepoRelativePath $sbomResolved; sha256 = Get-Sha256 $sbomResolved }
     notice = [pscustomobject]@{ path = Get-RepoRelativePath $noticeResolved; sha256 = Get-Sha256 $noticeResolved }
+    attestationContract = [pscustomobject]@{ path = Get-RepoRelativePath $attestationContractResolved; sha256 = Get-Sha256 $attestationContractResolved; schema = [string]$attestationContract.schema }
+    liveAttestation = [pscustomobject]@{ path = Get-RepoRelativePath $liveAttestationEvidenceResolved; sha256 = Get-Sha256 $liveAttestationEvidenceResolved; schema = [string]$liveAttestationEvidence.schema }
+    attestationBundle = [pscustomobject]@{ path = Get-RepoRelativePath $attestationBundleResolved; sha256 = Get-Sha256 $attestationBundleResolved; mediaType = [string]$attestationBundles[0].mediaType }
+    attestationVerification = [pscustomobject]@{ path = Get-RepoRelativePath $attestationVerificationResolved; sha256 = Get-Sha256 $attestationVerificationResolved; mediaType = [string]$attestationVerificationResults[0].verificationResult.mediaType }
   }
   marketplaceMetadata = [pscustomobject]@{
     publicationReady = $false
@@ -413,13 +488,14 @@ $report = [pscustomobject]@{
     requiredNext = "Sign VSIX/native release artifacts with the approved release signing process."
   }
   attestation = [pscustomobject]@{
-    status = "not-generated"
-    reason = "Local preflight only. GitHub artifact attestations must be generated by an eligible Actions workflow for the exact release artifact."
+    status = "verified"
+    reason = "The released VSIX has a post-release GitHub artifact attestation verified against the exact bundle, signer workflow, source ref, source digest, and run policy."
     readiness = [pscustomobject]@{
-      readinessStatus = "input-contract-ready"
-      provider = "github-artifact-attestations"
-      action = "actions/attest@v4"
-      predicateType = "https://slsa.dev/provenance/v1"
+      readinessStatus = "live-attestation-verified"
+      provider = [string]$attestationContract.attestation.provider
+      action = [string]$attestationContract.attestation.action
+      actionDigest = [string]$attestationContract.attestation.actionDigest
+      predicateType = [string]$attestationContract.attestation.predicateType
       subjectName = $vsixFileName
       subjectSha256 = $actualVsixSha256
       artifactPath = $vsixRelativePath
@@ -427,10 +503,22 @@ $report = [pscustomobject]@{
       workflowPath = $attestationWorkflowPath
       requiredPermissions = $attestationRequiredPermissions
       verificationCommand = $attestationVerifyCommand
-      repoUrlRecorded = $false
-      bundleRecorded = $false
-      attestationUrlRecorded = $false
-      verified = $false
+      repoUrlRecorded = $true
+      bundleRecorded = $true
+      attestationUrlRecorded = $true
+      verified = $true
+      repositoryUrl = "https://github.com/Hitsuki-Ban/SubversionR"
+      runUrl = [string]$liveAttestationEvidence.workflow.runUrl
+      attestationUrl = [string]$liveAttestationEvidence.attestation.url
+      bundleSha256 = [string]$liveAttestationEvidence.attestation.bundleSha256
+      bundlePath = Get-RepoRelativePath $attestationBundleResolved
+      verificationResultPath = Get-RepoRelativePath $attestationVerificationResolved
+      verificationResultSha256 = Get-Sha256 $attestationVerificationResolved
+      sourceRef = [string]$liveAttestationEvidence.workflow.sourceRef
+      sourceDigest = [string]$liveAttestationEvidence.workflow.headSha
+      signerDigest = [string]$liveAttestationEvidence.workflow.headSha
+      evidencePath = Get-RepoRelativePath $liveAttestationEvidenceResolved
+      evidenceSha256 = Get-Sha256 $liveAttestationEvidenceResolved
     }
   }
   marketplace = [pscustomobject]@{
@@ -444,12 +532,12 @@ $report = [pscustomobject]@{
   nonClaims = $nonClaims
   assertions = @(
     "exact VSIX bytes are bound by SHA256",
-    "GitHub artifact attestation input contract is bound to the exact VSIX path, size, and SHA256 without recording an attestation bundle or URL",
+    "live GitHub artifact attestation evidence is bound to the exact VSIX, workflow run, attestation URL, source ref/digest, verification policy, bundle bytes, and verification-result bytes",
     "Marketplace icon is present, at least 128x128 pixels, packaged into the VSIX, and bound by SHA256",
     "VSIX package evidence remains publicReadinessClaim false",
     "source lock, pnpm lock, Cargo lock, SBOM, NOTICE, package metadata, and backend manifest are bound by SHA256",
     "repository remote URL is not recorded",
-    "signing, attestation, Marketplace publication, previous-stable rollback, DOM/accessibility/pixel E2E, final SBOM/NOTICE/CVE review, and public readiness remain explicit non-claims"
+    "signing, Marketplace publication, previous-stable rollback, DOM/accessibility/pixel E2E, final SBOM/NOTICE/CVE review, and public readiness remain explicit non-claims"
   )
 }
 

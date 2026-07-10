@@ -217,7 +217,15 @@ Assert-Equal $extensionId ([string]$provenance.extension.id) "Provenance extensi
 Assert-Equal $extensionVersion ([string]$provenance.extension.version) "Provenance extension version must match the extension package."
 Assert-BooleanFalse $provenance.repository "remoteUrlRecorded" "Provenance repository"
 Assert-Equal "not-published" ([string]$provenance.marketplace.status) "Provenance Marketplace status must remain not-published."
-Assert-Equal "not-generated" ([string]$provenance.attestation.status) "Provenance attestation status must remain not-generated."
+Assert-Equal "verified" ([string]$provenance.attestation.status) "Provenance attestation status must record live verification."
+$provenanceAttestation = Get-RequiredProperty $provenance.attestation "readiness" "Provenance attestation"
+Assert-Equal "live-attestation-verified" ([string](Get-RequiredProperty $provenanceAttestation "readinessStatus" "Provenance attestation evidence")) "Provenance attestation readiness must record live verification."
+Assert-Equal "actions/attest-build-provenance@v4" ([string](Get-RequiredProperty $provenanceAttestation "action" "Provenance attestation evidence")) "Provenance attestation action must match issue #5."
+Assert-Equal ".github/workflows/attest-release-vsix.yml" ([string](Get-RequiredProperty $provenanceAttestation "workflowPath" "Provenance attestation evidence")) "Provenance attestation workflow must match issue #5."
+Assert-BooleanTrue $provenanceAttestation "repoUrlRecorded" "Provenance attestation evidence"
+Assert-BooleanTrue $provenanceAttestation "bundleRecorded" "Provenance attestation evidence"
+Assert-BooleanTrue $provenanceAttestation "attestationUrlRecorded" "Provenance attestation evidence"
+Assert-BooleanTrue $provenanceAttestation "verified" "Provenance attestation evidence"
 Assert-Equal "unsigned" ([string]$provenance.signing.status) "Provenance signing status must remain unsigned."
 Assert-Equal "not-proven" ([string]$provenance.previousStableRollback.status) "Provenance previous-stable rollback status must remain not-proven."
 Assert-Equal "False" ([string]$provenance.marketplaceMetadata.publicationReady) "Provenance Marketplace metadata must not claim publication readiness."
@@ -238,6 +246,13 @@ if (-not (Test-Path -LiteralPath $vsixPath -PathType Leaf)) {
 $actualVsixSha256 = Get-Sha256 $vsixPath
 Assert-Equal ([string]$provenance.artifacts.vsix.sha256) $actualVsixSha256 "VSIX SHA256 must match provenance evidence."
 Assert-Equal ([string]$vsixEvidence.vsix.sha256) $actualVsixSha256 "VSIX SHA256 must match VSIX package evidence."
+Assert-Equal $actualVsixSha256 ([string]$provenanceAttestation.subjectSha256) "Live attestation subject SHA256 must match current VSIX bytes."
+Assert-Equal (Split-Path -Leaf $vsixPath) ([string]$provenanceAttestation.subjectName) "Live attestation subject name must match current VSIX."
+Assert-Equal ([int64](Get-Item -LiteralPath $vsixPath).Length) ([int64]$provenanceAttestation.artifactSize) "Live attestation subject size must match current VSIX bytes."
+$attestationRunUrl = [string](Get-RequiredProperty $provenanceAttestation "runUrl" "Provenance attestation evidence")
+Assert-True ($attestationRunUrl -match '^https://github\.com/Hitsuki-Ban/SubversionR/actions/runs/[0-9]+$') "Live attestation run URL must identify a public repository Actions run."
+$attestationUrl = [string](Get-RequiredProperty $provenanceAttestation "attestationUrl" "Provenance attestation evidence")
+Assert-True ($attestationUrl -match '^https://github\.com/Hitsuki-Ban/SubversionR/attestations/[0-9]+$') "Live attestation URL must identify a public repository attestation."
 
 Assert-Equal 1 ([int]$publicCutoverEvidence.schemaVersion) "Public cutover evidence schemaVersion should be 1."
 Assert-Equal "subversionr.release.public-cutover-evidence.v1" ([string]$publicCutoverEvidence.schema) "Public cutover evidence schema must match."
@@ -289,7 +304,7 @@ Assert-Equal $cutoverHeadCommit ([string](Get-RequiredProperty $cutoverRelease "
 Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1" ([string](Get-RequiredProperty $cutoverRelease "url" "Public cutover release")) "Public cutover release URL must match."
 Assert-BooleanTrue $cutoverRelease "prerelease" "Public cutover release"
 [void](Get-RequiredProperty $cutoverRelease "publishedAt" "Public cutover release")
-Assert-BooleanFalse $cutoverRelease "artifactAttestationPublished" "Public cutover release"
+Assert-BooleanTrue $cutoverRelease "artifactAttestationPublished" "Public cutover release"
 $releaseAssets = @($cutoverRelease.assets)
 Assert-Equal 4 $releaseAssets.Count "Public cutover release must record the four published assets."
 foreach ($assetName in @(
@@ -331,7 +346,6 @@ $blockers = @(
   "Public branch protection is not configured.",
   "Public repository homepage and social metadata are not fully verified.",
   "Private repository workflows are not disabled.",
-  "Live GitHub artifact attestation is not published or verified.",
   "The published Beta candidate bundle is inconsistent with its manifest and cannot close the post-cutover Beta-G chain.",
   "Previous stable artifact rollback evidence is not generated by this local gap report."
 )
@@ -343,8 +357,8 @@ $nonClaims = @(
   "This gate does not configure or validate Microsoft Entra ID workload identity, managed identity, PAT, VSCE_PAT, or any other credential.",
   "This gate does not publish to Visual Studio Marketplace.",
   "This gate does not install from Visual Studio Marketplace or prove public acquisition.",
-  "This gate does not configure public branch protection, disable private workflows, or publish and verify a live artifact attestation.",
-  "This gate does not prove VSIX signing, live GitHub artifact attestation generation/publication/verification, previous-stable rollback, final SBOM/NOTICE review, or CVE review."
+  "This gate does not configure public branch protection or disable private workflows.",
+  "This gate records live GitHub artifact attestation publication and verification but does not prove VSIX signing, previous-stable rollback, final SBOM/NOTICE review, or CVE review."
 )
 
 $report = [pscustomobject]@{
@@ -535,14 +549,17 @@ $report = [pscustomobject]@{
       thirdPartyNoticesAttached = $true
       evidenceBundleAttached = $true
       artifactAttestationPublished = [bool]$cutoverRelease.artifactAttestationPublished
-      blockers = @("Publish and verify live GitHub artifact attestation evidence in public issue #5.")
+      attestationRunUrl = $attestationRunUrl
+      attestationUrl = $attestationUrl
+      attestationEvidencePath = [string]$provenanceAttestation.evidencePath
+      attestationEvidenceSha256 = [string]$provenanceAttestation.evidenceSha256
+      blockers = @()
     }
     betaCandidateEvidence = $betaCandidateEvidence
     manualSteps = @(
       "Configure public branch protection for PR Fast / windows.",
       "Verify and complete public repository homepage and social metadata.",
       "Disable private repository workflows through GitHub Actions UI.",
-      "Publish and verify the released VSIX GitHub artifact attestation through public issue #5.",
       "Regenerate a self-consistent Beta candidate bundle from the released VSIX and pass the unchanged Beta-G verifier."
     )
   }
@@ -551,8 +568,9 @@ $report = [pscustomobject]@{
   assertions = @(
     "publication gaps are bound to exact VSIX, VSIX package evidence, provenance preflight evidence, package manifests, README, LICENSE, CHANGELOG, SUPPORT, public cutover runbook, and public cutover evidence by SHA256",
     "public repository baseline, green public CI, Private Vulnerability Reporting, Cloudflare bridge retirement, public prerelease, and release asset records are recorded from hash-bound cutover evidence",
+    "live GitHub artifact attestation publication and verification are recorded through the hash-bound provenance evidence",
     "the published Beta candidate bundle is inconsistent, so post-cutover Beta-G regeneration remains blocked without weakening the consistency verifier",
-    "publisher authorization, publish authentication, Marketplace publication, Marketplace public install, branch protection, private workflow disablement, live attestation, and previous-stable rollback remain blocked gaps"
+    "publisher authorization, publish authentication, Marketplace publication, Marketplace public install, branch protection, private workflow disablement, signing, and previous-stable rollback remain blocked gaps"
   )
 }
 

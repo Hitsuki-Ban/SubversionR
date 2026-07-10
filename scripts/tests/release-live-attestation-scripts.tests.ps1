@@ -5,7 +5,6 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $subjectVerifier = Join-Path $repoRoot "scripts\release\verify-release-attestation-subject.ps1"
 $evidenceRecorder = Join-Path $repoRoot "scripts\release\record-live-github-attestation.ps1"
 $workflowPath = Join-Path $repoRoot ".github\workflows\attest-release-vsix.yml"
-$ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
@@ -62,6 +61,7 @@ try {
     attestation = [pscustomobject]@{
       provider = "github-artifact-attestations"
       action = "actions/attest-build-provenance@v4"
+      actionDigest = "0f67c3f4856b2e3261c31976d6725780e5e4c373"
       predicateType = "https://slsa.dev/provenance/v1"
     }
     workflow = [pscustomobject]@{
@@ -74,6 +74,10 @@ try {
       repository = "Hitsuki-Ban/SubversionR"
       signerWorkflow = "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml"
       predicateType = "https://slsa.dev/provenance/v1"
+      bundleRequired = $true
+      sourceRefRequired = $true
+      sourceDigestRequired = $true
+      signerDigestRequired = $true
       denySelfHostedRunners = $true
       format = "json"
     }
@@ -90,12 +94,33 @@ try {
   }
 
   $bundlePath = Join-Path $tempRoot "sha256-$subjectSha256.jsonl"
-  Set-Content -LiteralPath $bundlePath -Value '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}' -Encoding utf8
+  $bundle = [pscustomobject]@{
+    mediaType = "application/vnd.dev.sigstore.bundle.v0.3+json"
+    verificationMaterial = [pscustomobject]@{ certificate = [pscustomobject]@{ rawBytes = "fixture" } }
+    dsseEnvelope = [pscustomobject]@{ payloadType = "application/vnd.in-toto+json"; payload = "fixture"; signatures = @() }
+  }
+  Write-JsonFile $bundlePath $bundle
   $verificationResultPath = Join-Path $tempRoot "verification.json"
   Write-JsonFile $verificationResultPath @(
     [pscustomobject]@{
-      attestation = [pscustomobject]@{}
+      attestation = [pscustomobject]@{ bundle = $bundle }
       verificationResult = [pscustomobject]@{
+        mediaType = "application/vnd.dev.sigstore.verificationresult+json;version=0.1"
+        signature = [pscustomobject]@{
+          certificate = [pscustomobject]@{
+            subjectAlternativeName = "https://github.com/Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml@refs/heads/codex/issue-5-live-attestation"
+            githubWorkflowRepository = "Hitsuki-Ban/SubversionR"
+            githubWorkflowTrigger = "workflow_dispatch"
+            githubWorkflowSHA = "0123456789abcdef0123456789abcdef01234567"
+            githubWorkflowRef = "refs/heads/codex/issue-5-live-attestation"
+            buildSignerDigest = "0123456789abcdef0123456789abcdef01234567"
+            sourceRepositoryDigest = "0123456789abcdef0123456789abcdef01234567"
+            runnerEnvironment = "github-hosted"
+            sourceRepositoryVisibilityAtSigning = "public"
+            runInvocationURI = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456/attempts/1"
+          }
+        }
+        verifiedTimestamps = @([pscustomobject]@{ type = "Tlog"; uri = "https://rekor.sigstore.dev" })
         statement = [pscustomobject]@{
           subject = @(
             [pscustomobject]@{
@@ -138,6 +163,12 @@ try {
   Assert-Equal $subjectSha256 $evidence.subject.sha256 "Live attestation evidence should bind the subject SHA256."
   Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456" $evidence.workflow.runUrl "Live attestation evidence should record the run URL."
   Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/attestations/123" $evidence.attestation.url "Live attestation evidence should record the attestation URL."
+  Assert-Equal (Get-Sha256 $bundlePath) $evidence.attestation.bundleSha256 "Live attestation evidence should hash the exact bundle."
+  Assert-Equal (Get-Sha256 $verificationResultPath) $evidence.verification.resultSha256 "Live attestation evidence should hash the exact verification result."
+  Assert-Equal "True" ([string]$evidence.verification.bundleMatched) "Live attestation evidence should record exact bundle matching."
+  Assert-True ($evidence.verification.command.Contains("--bundle $($evidence.attestation.bundlePath)")) "Live attestation verification command should bind the exact bundle path."
+  Assert-True ($evidence.verification.command.Contains("--source-ref refs/heads/codex/issue-5-live-attestation")) "Live attestation verification command should bind the source ref."
+  Assert-True ($evidence.verification.command.Contains("--source-digest 0123456789abcdef0123456789abcdef01234567")) "Live attestation verification command should bind the source digest."
   Assert-Equal "True" ([string]$evidence.verification.verified) "Live attestation evidence should record successful verification."
 
   $badContractPath = Join-Path $tempRoot "bad-hash-contract.json"
@@ -187,23 +218,49 @@ try {
       -OutputPath (Join-Path $tempRoot "bad-evidence.json")
   } "must bind the contracted subject" "Evidence recording should reject verification results for another digest."
 
+  $mismatchedBundleVerificationPath = Join-Path $tempRoot "mismatched-bundle-verification.json"
+  $mismatchedBundleVerification = Get-Content -Raw -LiteralPath $verificationResultPath | ConvertFrom-Json
+  @($mismatchedBundleVerification)[0].attestation.bundle.mediaType = "application/vnd.dev.sigstore.bundle.v0.2+json"
+  Write-JsonFile $mismatchedBundleVerificationPath $mismatchedBundleVerification
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $evidenceRecorder `
+      -Target win32-x64 `
+      -ContractPath $contractPath `
+      -SubjectPath $subjectPath `
+      -ReleaseTag v0.2.0-beta.1 `
+      -BundlePath $bundlePath `
+      -VerificationResultPath $mismatchedBundleVerificationPath `
+      -RunId 456 `
+      -RunAttempt 1 `
+      -RunUrl "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456" `
+      -HeadSha "0123456789abcdef0123456789abcdef01234567" `
+      -SourceRef "refs/heads/codex/issue-5-live-attestation" `
+      -EventName workflow_dispatch `
+      -AttestationId 123 `
+      -AttestationUrl "https://github.com/Hitsuki-Ban/SubversionR/attestations/123" `
+      -OutputPath (Join-Path $tempRoot "mismatched-bundle-evidence.json")
+  } "exact BundlePath attestation" "Evidence recording should reject a verification result for a different bundle."
+
   $workflow = Get-Content -Raw -LiteralPath $workflowPath
   foreach ($term in @(
       "workflow_dispatch:",
       "contents: read",
       "id-token: write",
       "attestations: write",
-      "actions/attest-build-provenance@v4",
+      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       "subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix",
+      "--bundle `$env:ATTESTATION_BUNDLE_PATH",
       "--signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",
+      "--signer-digest `$env:SOURCE_SHA",
+      "--source-ref `$env:SOURCE_REF",
+      "--source-digest `$env:SOURCE_SHA",
       "--deny-self-hosted-runners",
       "record-live-github-attestation.ps1"
     )) {
     Assert-True ($workflow.Contains($term)) "Attestation workflow should include '$term'."
   }
-  $ciWorkflow = Get-Content -Raw -LiteralPath $ciWorkflowPath
-  Assert-True ($ciWorkflow.Contains("uses: ./.github/workflows/attest-release-vsix.yml")) "Temporary CI bootstrap should call the dedicated attestation workflow."
-
   Write-Host "Release live GitHub attestation script tests passed."
 }
 finally {

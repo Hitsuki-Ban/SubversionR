@@ -494,6 +494,26 @@ function New-BetaCandidateFixture([string]$Root) {
     componentMappings = @()
   })
 
+  $liveAttestationPath = Join-Path $inputRoot "github-attestation-evidence.win32-x64.json"
+  $attestationBundlePath = Join-Path $inputRoot "github-attestation-bundle.win32-x64.json"
+  $attestationVerificationPath = Join-Path $inputRoot "github-attestation-verification.win32-x64.json"
+  Write-Json $liveAttestationPath ([pscustomobject]@{
+    schema = "subversionr.release.live-github-attestation.win32-x64.v1"
+    status = "live-attestation-verified"
+  })
+  Write-Json $attestationBundlePath ([pscustomobject]@{
+    mediaType = "application/vnd.dev.sigstore.bundle.v0.3+json"
+    verificationMaterial = [pscustomobject]@{ certificate = [pscustomobject]@{ rawBytes = "fixture" } }
+  })
+  Write-Json $attestationVerificationPath @(
+    [pscustomobject]@{
+      verificationResult = "success"
+      attestation = [pscustomobject]@{
+        bundle = Get-Content -Raw -LiteralPath $attestationBundlePath | ConvertFrom-Json
+      }
+    }
+  )
+
   $provenancePath = New-EvidencePath $evidenceRoot "marketplace-provenance-preflight"
   Write-Json $provenancePath ([pscustomobject]@{
     schemaVersion = 1
@@ -516,13 +536,36 @@ function New-BetaCandidateFixture([string]$Root) {
         sha256 = Get-Sha256 $vsixEvidencePath
         schema = "subversionr.release.vsix-package.win32-x64.v1"
       }
+      liveAttestation = New-HashRecord $liveAttestationPath
+      attestationBundle = New-HashRecord $attestationBundlePath
+      attestationVerification = New-HashRecord $attestationVerificationPath
     }
     attestation = [pscustomobject]@{
+      status = "verified"
       readiness = [pscustomobject]@{
-        readinessStatus = "input-contract-ready"
+        readinessStatus = "live-attestation-verified"
+        action = "actions/attest-build-provenance@v4"
+        actionDigest = "0f67c3f4856b2e3261c31976d6725780e5e4c373"
+        workflowPath = ".github/workflows/attest-release-vsix.yml"
+        subjectName = Split-Path -Leaf $vsix.path
         subjectSha256 = $vsix.sha256
         artifactPath = $vsix.relativePath
         artifactSize = $vsix.size
+        repoUrlRecorded = $true
+        bundleRecorded = $true
+        attestationUrlRecorded = $true
+        verified = $true
+        runUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29083602695"
+        attestationUrl = "https://github.com/Hitsuki-Ban/SubversionR/attestations/34722959"
+        bundlePath = Convert-ToRepoRelativePath $attestationBundlePath
+        bundleSha256 = Get-Sha256 $attestationBundlePath
+        verificationResultPath = Convert-ToRepoRelativePath $attestationVerificationPath
+        verificationResultSha256 = Get-Sha256 $attestationVerificationPath
+        sourceRef = "refs/heads/codex/issue-5-live-attestation"
+        sourceDigest = "ff0558a24f3ddccf4f3eb011e0cb85817bd9d917"
+        signerDigest = "ff0558a24f3ddccf4f3eb011e0cb85817bd9d917"
+        evidencePath = Convert-ToRepoRelativePath $liveAttestationPath
+        evidenceSha256 = Get-Sha256 $liveAttestationPath
       }
     }
   })
@@ -532,6 +575,15 @@ function New-BetaCandidateFixture([string]$Root) {
     schema = "subversionr.release.publication-gaps.win32-x64.v1"
     publicReadinessClaim = $false
     target = "win32-x64"
+    publicCutover = [pscustomobject]@{
+      release = [pscustomobject]@{
+        artifactAttestationPublished = $true
+        attestationRunUrl = "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29083602695"
+        attestationUrl = "https://github.com/Hitsuki-Ban/SubversionR/attestations/34722959"
+        attestationEvidencePath = Convert-ToRepoRelativePath $liveAttestationPath
+        attestationEvidenceSha256 = Get-Sha256 $liveAttestationPath
+      }
+    }
     artifacts = [pscustomobject]@{
       vsix = [pscustomobject]@{
         path = $vsix.path
@@ -666,6 +718,9 @@ $uploadPathBlock
     noticePath = $noticePath
     installedUiArtifactRoot = $installedUiArtifactRoot
     artifactBundleManifestPath = $artifactBundleManifestPath
+    liveAttestationPath = $liveAttestationPath
+    attestationBundlePath = $attestationBundlePath
+    attestationVerificationPath = $attestationVerificationPath
     extraLocalDebugJsonPath = Join-Path $evidenceRoot "subversionr-extra-local-debug-win32-x64.json"
   }
   New-BetaArtifactBundleManifest $fixture
@@ -732,6 +787,32 @@ try {
   Assert-True ($manifestFilePaths -notcontains (Convert-ToRepoRelativePath $fixture.artifactBundleManifestPath)) "Artifact bundle manifest should not self-hash."
   Assert-True ($manifestFilePaths -notcontains (Convert-ToRepoRelativePath $fixture.outputPath)) "Artifact bundle manifest should not include the final consistency report before it exists."
   Assert-True (@($report.nonClaims | Where-Object { [string]$_ -like "*Marketplace/public install*" }).Count -gt 0) "Beta candidate consistency report should keep public install non-claims explicit."
+  Assert-True (@($report.assertions | Where-Object { [string]$_ -like "*verified live GitHub artifact attestation*" }).Count -eq 1) "Beta candidate consistency report should record the verified live attestation assertion."
+  Assert-True (@($report.nonClaims | Where-Object { [string]$_ -like "*artifact attestation generation*" }).Count -eq 0) "Beta candidate consistency report should not retain the obsolete live attestation non-claim."
+
+  $staleAttestationBundleFixture = New-BetaCandidateFixture (Join-Path $tempRoot "stale-attestation-bundle")
+  Add-Content -LiteralPath $staleAttestationBundleFixture.attestationBundlePath -Encoding utf8 -NoNewline -Value " "
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $staleAttestationBundleFixture
+  } "marketplaceProvenance attestationBundle SHA256 must match current file" "Beta candidate consistency should reject changed attestation bundle bytes."
+
+  $staleAttestationFixture = New-BetaCandidateFixture (Join-Path $tempRoot "stale-attestation")
+  $staleAttestationPath = New-EvidencePath $staleAttestationFixture.evidenceRoot "marketplace-provenance-preflight"
+  $staleAttestation = Get-Content -Raw -LiteralPath $staleAttestationPath | ConvertFrom-Json
+  $staleAttestation.attestation.readiness.readinessStatus = "input-contract-ready"
+  Write-Json $staleAttestationPath $staleAttestation
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $staleAttestationFixture
+  } "live verification" "Beta candidate consistency should reject obsolete input-only attestation evidence."
+
+  $missingPublishedAttestationFixture = New-BetaCandidateFixture (Join-Path $tempRoot "missing-published-attestation")
+  $missingPublishedAttestationPath = New-EvidencePath $missingPublishedAttestationFixture.evidenceRoot "publication-gaps"
+  $missingPublishedAttestation = Get-Content -Raw -LiteralPath $missingPublishedAttestationPath | ConvertFrom-Json
+  $missingPublishedAttestation.publicCutover.release.artifactAttestationPublished = $false
+  Write-Json $missingPublishedAttestationPath $missingPublishedAttestation
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $missingPublishedAttestationFixture
+  } "must be true" "Beta candidate consistency should require publication gaps to record the live attestation."
 
   $quotedUploadFixture = New-BetaCandidateFixture (Join-Path $tempRoot "quoted-upload-step")
   $quotedUploadCiWorkflow = Get-Content -Raw -LiteralPath $quotedUploadFixture.ciWorkflowPath

@@ -7,12 +7,6 @@ on:
         description: Existing GitHub prerelease tag whose VSIX will be attested
         required: true
         type: string
-  workflow_call:
-    inputs:
-      release_tag:
-        required: true
-        type: string
-
 permissions:
   contents: read
   id-token: write
@@ -22,7 +16,7 @@ jobs:
   attest:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Download released VSIX
         shell: pwsh
         env:
@@ -53,19 +47,22 @@ jobs:
           -ReleaseTag $env:RELEASE_TAG
       - name: Publish build provenance attestation
         id: attest
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
       - name: Verify published attestation
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          ATTESTATION_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           $ErrorActionPreference = "Stop"
           $subjectPath = "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix"
           $resultPath = "target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json"
           New-Item -ItemType Directory -Force -Path (Split-Path -Parent $resultPath) | Out-Null
-          gh attestation verify $subjectPath -R Hitsuki-Ban/SubversionR --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners --format json | Set-Content -LiteralPath $resultPath -Encoding utf8
+          gh attestation verify $subjectPath -R Hitsuki-Ban/SubversionR --bundle $env:ATTESTATION_BUNDLE_PATH --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest $env:SOURCE_SHA --source-ref $env:SOURCE_REF --source-digest $env:SOURCE_SHA --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners --format json | Set-Content -LiteralPath $resultPath -Encoding utf8
           if ($LASTEXITCODE -ne 0) {
             throw "Published attestation verification failed."
           }
@@ -95,7 +92,7 @@ jobs:
           -AttestationUrl $env:ATTESTATION_URL
           -OutputPath target/release-evidence/subversionr-live-github-attestation-win32-x64.json
       - name: Upload live attestation evidence
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: subversionr-live-github-attestation-win32-x64
           if-no-files-found: error
