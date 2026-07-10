@@ -19,7 +19,7 @@ The internal Windows Beta package is not a Stable or Pre-release public channel.
 Public release is blocked until:
 
 - All P0/P1 requirements have explicit evidence or an approved release exception. This includes `PRD-010`, `PRD-012`, and `PRD-015`.
-- Structured requirement status has no unexplained unknowns. `Reference/requirements.csv` records specification approval, and `docs/release/requirements-release-evidence.csv` records release evidence, exceptions, and blockers for every P0/P1 requirement.
+- Structured requirement status has no unexplained unknowns. The requirements catalog recording specification approval lives in the private planning archive since the public cutover; `docs/release/requirements-release-evidence.csv` records release evidence, exceptions, and blockers for every P0/P1 requirement. The public smoke gate verifies the evidence CSV's own integrity, and the maintainer-side `scripts/release/verify-requirement-catalog-alignment.ps1` gate cross-checks it against the archived catalog before release approval.
 - Automatic PR checks run the lightweight TypeScript, Rust, localization, support, readiness smoke, script, and M7l8 no-build/no-run native remote fuzz target preflight gates in `.github/workflows/pr-fast.yml`. The heavy release workflow in `.github/workflows/ci.yml` stays manual until native build, packaging, live vulnerability review, fixed-seed fuzz build/run, signing, and Marketplace work are split into product-ready gates.
 - Differential, integration, VS Code E2E, performance, security, migration, and release-install gates are complete.
 - No high-severity data corruption, secret leakage, Extension Host hang, or unbounded backend failure remains open.

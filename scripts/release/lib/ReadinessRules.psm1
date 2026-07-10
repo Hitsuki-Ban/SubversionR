@@ -3,6 +3,64 @@ Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot "ReadinessModel.psm1")
 
+function Assert-RequirementReleaseEvidenceIntegrity([object]$EvidenceCsv) {
+  Assert-RequiredCsvColumns $EvidenceCsv @(
+    "id",
+    "priority",
+    "requirement_status",
+    "release_evidence_status",
+    "evidence_refs",
+    "exception_ref",
+    "blocker_reason"
+  )
+
+  $allowedEvidenceStatuses = @("blocked", "partial", "verified", "exception")
+  $evidenceById = @{}
+  foreach ($evidence in $EvidenceCsv.Rows) {
+    if ([string]::IsNullOrWhiteSpace($evidence.id)) {
+      throw "$($EvidenceCsv.RelativePath): evidence row has an empty id."
+    }
+    if ($evidence.id -notmatch '^[A-Z][A-Z0-9]{1,7}-\d{3}$') {
+      throw "$($EvidenceCsv.RelativePath): evidence row id '$($evidence.id)' does not match the requirement id format."
+    }
+    if ($evidenceById.ContainsKey($evidence.id)) {
+      throw "$($EvidenceCsv.RelativePath): duplicate evidence row for '$($evidence.id)'."
+    }
+    if ($evidence.priority -notin @("P0", "P1")) {
+      throw "$($EvidenceCsv.RelativePath): evidence row '$($evidence.id)' must be P0 or P1, got '$($evidence.priority)'."
+    }
+    if ([string]::IsNullOrWhiteSpace($evidence.requirement_status)) {
+      throw "$($EvidenceCsv.RelativePath): evidence row '$($evidence.id)' has an empty requirement_status."
+    }
+    if ($allowedEvidenceStatuses -notcontains $evidence.release_evidence_status) {
+      throw "$($EvidenceCsv.RelativePath): '$($evidence.id)' has unsupported release_evidence_status '$($evidence.release_evidence_status)'."
+    }
+    if (
+      $evidence.release_evidence_status -eq "blocked" -and
+      ([string]::IsNullOrWhiteSpace($evidence.blocker_reason) -or $evidence.blocker_reason -eq "none")
+    ) {
+      throw "$($EvidenceCsv.RelativePath): blocked row '$($evidence.id)' must record blocker_reason."
+    }
+    if (
+      $evidence.release_evidence_status -eq "exception" -and
+      ([string]::IsNullOrWhiteSpace($evidence.exception_ref) -or $evidence.exception_ref -eq "none")
+    ) {
+      throw "$($EvidenceCsv.RelativePath): exception row '$($evidence.id)' must record exception_ref."
+    }
+    if (
+      $evidence.release_evidence_status -in @("partial", "verified") -and
+      ([string]::IsNullOrWhiteSpace($evidence.evidence_refs) -or $evidence.evidence_refs -eq "none")
+    ) {
+      throw "$($EvidenceCsv.RelativePath): '$($evidence.id)' must record evidence_refs before it can be partial or verified."
+    }
+
+    $evidenceById[$evidence.id] = $evidence
+  }
+  if ($evidenceById.Count -eq 0) {
+    throw "$($EvidenceCsv.RelativePath): no release evidence rows were found."
+  }
+}
+
 function Assert-RequirementReleaseEvidenceCoverage([object]$RequirementsCsv, [object]$EvidenceCsv) {
   Assert-RequiredCsvColumns $RequirementsCsv @("id", "priority", "status")
   Assert-RequiredCsvColumns $EvidenceCsv @(
@@ -135,6 +193,14 @@ function Assert-RequirementEvidenceRefsResolve(
         throw "$($EvidenceCsv.RelativePath): '$($evidence.id)' evidence ref must be repo-relative without parent segments: '$evidenceRef'."
       }
 
+      if ($evidenceRef -match '^Reference[/\\]') {
+        # Archive refs point into the private planning archive, which is not
+        # part of the public repository since the cutover. Their existence is
+        # verified by the maintainer-side catalog alignment gate
+        # (scripts/release/verify-requirement-catalog-alignment.ps1).
+        continue
+      }
+
       $candidatePath = Join-Path $repoRootPath $evidenceRef
       if (
         -not (Test-Path -LiteralPath $candidatePath -PathType Leaf) -and
@@ -177,6 +243,7 @@ function Assert-RequirementEvidenceRefs([object]$EvidenceCsv, [string]$Id, [stri
 }
 
 Export-ModuleMember -Function `
+  Assert-RequirementReleaseEvidenceIntegrity, `
   Assert-RequirementReleaseEvidenceCoverage, `
   Assert-EvidenceRefHasNoReparsePointSegments, `
   Assert-RequirementEvidenceRefsResolve, `
