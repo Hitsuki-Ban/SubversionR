@@ -47,6 +47,9 @@ jobs:
       - name: Support intake checks
         shell: pwsh
         run: pnpm docs:verify-support-intake
+      - name: Live GitHub attestation script tests
+        shell: pwsh
+        run: pnpm release:test-live-attestation-scripts
       - name: Release readiness document checks
         shell: pwsh
         run: pnpm release:verify-readiness:smoke

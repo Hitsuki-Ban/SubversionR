@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.release.live-github-attestation.win32-x64.v1",
+  "publicReadinessClaim": false,
+  "signingClaim": false,
+  "target": "win32-x64",
+  "status": "live-attestation-verified",
+  "generatedAt": "2026-07-10T11:28:05.0792681Z",
+  "contract": {
+    "path": "docs/release/github-attestation-contract.win32-x64.json",
+    "sha256": "da734e611fa918710d3ac21a2b925fdf4bce0adb8c963403d2959f938605f7ce",
+    "schema": "subversionr.release.github-attestation-contract.win32-x64.v1"
+  },
+  "release": {
+    "tag": "v0.2.0-beta.1",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1"
+  },
+  "subject": {
+    "name": "subversionr-win32-x64-0.2.0.vsix",
+    "path": "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix",
+    "size": 8250996,
+    "sha256": "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb"
+  },
+  "workflow": {
+    "path": ".github/workflows/attest-release-vsix.yml",
+    "event": "workflow_dispatch",
+    "runId": "29089455425",
+    "runAttempt": 1,
+    "runUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
+    "headSha": "99a440316dd281fd9c72f2f432bbc78734c0f127",
+    "sourceRef": "refs/heads/codex/issue-5-live-attestation"
+  },
+  "attestation": {
+    "provider": "github-artifact-attestations",
+    "action": "actions/attest@v4",
+    "actionDigest": "a1948c3f048ba23858d222213b7c278aabede763",
+    "predicateType": "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+    "predicateSchemaPath": "docs/release/post-release-asset-verification-predicate.v1.schema.json",
+    "predicateSchema": "subversionr.release.post-release-asset-verification-predicate.v1",
+    "predicateClaim": "post-release-asset-digest-verification",
+    "originalBuildProvenanceClaim": false,
+    "artifactSignatureClaim": false,
+    "id": "34738487",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
+    "outputSource": "actions/attest outputs",
+    "bundlePath": "docs/release/github-attestation-bundle.win32-x64.json",
+    "bundleSha256": "b6d4112c9d94bd160fbc66c503d3074b2d7071b59782564b320eb8610536d389"
+  },
+  "verification": {
+    "verified": true,
+    "repository": "Hitsuki-Ban/SubversionR",
+    "signerWorkflow": "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",
+    "predicateType": "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+    "denySelfHostedRunners": true,
+    "format": "json",
+    "bundleMatched": true,
+    "command": "gh attestation verify target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix -R Hitsuki-Ban/SubversionR --bundle docs/release/github-attestation-bundle.win32-x64.json --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest 99a440316dd281fd9c72f2f432bbc78734c0f127 --source-ref refs/heads/codex/issue-5-live-attestation --source-digest 99a440316dd281fd9c72f2f432bbc78734c0f127 --predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1 --deny-self-hosted-runners --format json",
+    "resultPath": "docs/release/github-attestation-verification.win32-x64.json",
+    "resultSha256": "1843e92706c67e1f902cebb86d8d92cbb75288e0b539c5e041bfb4b8103faaa2",
+    "certificate": {
+      "signerIdentity": "https://github.com/Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml@refs/heads/codex/issue-5-live-attestation",
+      "workflowSha": "99a440316dd281fd9c72f2f432bbc78734c0f127",
+      "workflowRef": "refs/heads/codex/issue-5-live-attestation",
+      "runnerEnvironment": "github-hosted",
+      "runInvocationUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425/attempts/1",
+      "sourceVisibility": "public"
+    }
+  },
+  "nonClaims": [
+    "This evidence does not claim that the released VSIX is signed.",
+    "This post-release attestation does not prove the original VSIX source-to-binary build provenance.",
+    "This evidence does not claim Marketplace publication or public install.",
+    "This evidence does not claim previous-stable rollback.",
+    "This evidence does not claim public release readiness."
+  ]
+}

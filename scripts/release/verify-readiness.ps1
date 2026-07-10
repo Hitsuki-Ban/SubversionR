@@ -222,6 +222,9 @@ function Assert-PublicCutoverRunbook([object]$Document) {
     "GitHub Private Vulnerability Reporting",
     "subversionr-pr-fast",
     "v0.2.0-beta.1",
+    "docs/release/github-attestation-evidence.win32-x64.json",
+    "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
+    "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
     "publicReadinessClaim=false"
   ) "public cutover runbook"
 }
@@ -394,6 +397,16 @@ $evidenceMatrix = Read-RequiredDocument "docs/release/security-evidence-matrix.m
 $publicClaimMatrix = Read-RequiredDocument "docs/release/public-claim-matrix.md"
 $publicCutoverRunbook = Read-RequiredDocument "docs/release/public-cutover-runbook.md"
 $publicCutoverEvidence = Read-RequiredDocument "docs/release/public-cutover-evidence.json"
+$attestationWorkflow = Read-RequiredDocument ".github/workflows/attest-release-vsix.yml"
+$attestationContract = Read-RequiredDocument "docs/release/github-attestation-contract.win32-x64.json"
+$attestationPredicateSchema = Read-RequiredDocument "docs/release/post-release-asset-verification-predicate.v1.schema.json"
+$attestationBundle = Read-RequiredDocument "docs/release/github-attestation-bundle.win32-x64.json"
+$attestationVerification = Read-RequiredDocument "docs/release/github-attestation-verification.win32-x64.json"
+$liveAttestationEvidence = Read-RequiredDocument "docs/release/github-attestation-evidence.win32-x64.json"
+$attestationSubjectVerifier = Read-RequiredDocument "scripts/release/verify-release-attestation-subject.ps1"
+$attestationPredicateGenerator = Read-RequiredDocument "scripts/release/generate-post-release-asset-verification-predicate.ps1"
+$liveAttestationRecorder = Read-RequiredDocument "scripts/release/record-live-github-attestation.ps1"
+$liveAttestationScriptTests = Read-RequiredDocument "scripts/tests/release-live-attestation-scripts.tests.ps1"
 $projectReadme = Read-RequiredDocument "README.md"
 $engineeringHandoff = Read-RequiredDocument "docs/onboarding/ENGINEERING_HANDOFF.md"
 $m2Plan = Read-RequiredDocument "docs/plans/m2-repository-status-snapshot.md"
@@ -6269,6 +6282,11 @@ Assert-Terms $betaCandidateEvidenceScript @(
   "installed-vsix",
   "installRollbackFixture",
   "attestation",
+  "live-attestation-verified",
+  "actions/attest@v4",
+  "post-release-asset-digest-verification",
+  "originalBuildProvenanceClaim",
+  "provenance and publication gaps record the verified live GitHub artifact attestation for the current VSIX subject",
   "artifactBundle",
   "artifactBundleManifest",
   "subversionr.release.beta-artifact-bundle-manifest.`$Target.v1",
@@ -6287,6 +6305,137 @@ Assert-Terms $betaCandidateEvidenceScript @(
   "coverage-guided fuzzing",
   "Verified SubversionR Beta candidate evidence consistency"
 ) "Beta-G candidate evidence consistency gate coverage"
+Assert-Terms $attestationWorkflow @(
+  "workflow_dispatch:",
+  "release_tag:",
+  "contents: read",
+  "id-token: write",
+  "attestations: write",
+  "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+  "gh release download",
+  "scripts/release/verify-release-attestation-subject.ps1",
+  "scripts/release/generate-post-release-asset-verification-predicate.ps1",
+  "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+  "predicate-type: https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+  "predicate-path: target/release-attestation/win32-x64/post-release-asset-verification-predicate.json",
+  "gh attestation verify",
+  "--bundle",
+  "--signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",
+  "--signer-digest",
+  "--source-ref",
+  "--source-digest",
+  "--predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+  "--deny-self-hosted-runners",
+  "scripts/release/record-live-github-attestation.ps1",
+  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+) "live GitHub artifact attestation workflow coverage"
+Assert-Terms $attestationContract @(
+  "subversionr.release.github-attestation-contract.win32-x64.v1",
+  "subversionr-win32-x64-0.2.0.vsix",
+  "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
+  "actions/attest@v4",
+  "a1948c3f048ba23858d222213b7c278aabede763",
+  "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+  "docs/release/post-release-asset-verification-predicate.v1.schema.json",
+  ".github/workflows/attest-release-vsix.yml",
+  '"bundleRequired": true',
+  '"sourceRefRequired": true',
+  '"sourceDigestRequired": true',
+  '"signerDigestRequired": true',
+  '"denySelfHostedRunners": true'
+) "live GitHub artifact attestation subject contract coverage"
+Assert-Terms $attestationPredicateSchema @(
+  "subversionr.release.post-release-asset-verification-predicate.v1",
+  "post-release-asset-digest-verification",
+  '"originalBuildProvenanceClaim"',
+  '"artifactSignatureClaim"',
+  '"const": false',
+  '"assetDownloadedFromRelease"',
+  '"subjectSha256Matched"'
+) "post-release asset verification predicate schema coverage"
+Assert-Terms $attestationPredicateGenerator @(
+  "verify-release-attestation-subject.ps1",
+  "post-release-asset-digest-verification",
+  "originalBuildProvenanceClaim = `$false",
+  "artifactSignatureClaim = `$false",
+  "assetDownloadedFromRelease = `$true",
+  "subjectSha256Matched = `$true"
+) "post-release asset verification predicate generation coverage"
+Assert-Terms $attestationBundle @(
+  "application/vnd.dev.sigstore.bundle.v0.3+json",
+  '"tlogEntries"',
+  '"dsseEnvelope"',
+  '"payloadType":"application/vnd.in-toto+json"'
+) "source-controlled exact GitHub attestation bundle coverage"
+Assert-Terms $attestationVerification @(
+  '"verificationResult":{',
+  "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
+  '"verifiedTimestamps"',
+  "application/vnd.dev.sigstore.bundle.v0.3+json",
+  "Hitsuki-Ban/SubversionR",
+  "subversionr-win32-x64-0.2.0.vsix",
+  "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
+  "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+  '"claim":"post-release-asset-digest-verification"',
+  '"originalBuildProvenanceClaim":false',
+  '"artifactSignatureClaim":false',
+  "refs/heads/codex/issue-5-live-attestation",
+  "99a440316dd281fd9c72f2f432bbc78734c0f127"
+) "source-controlled exact GitHub attestation verification coverage"
+Assert-Terms $liveAttestationEvidence @(
+  "subversionr.release.live-github-attestation.win32-x64.v1",
+  '"publicReadinessClaim": false',
+  '"signingClaim": false',
+  '"status": "live-attestation-verified"',
+  "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
+  "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
+  "b6d4112c9d94bd160fbc66c503d3074b2d7071b59782564b320eb8610536d389",
+  "1843e92706c67e1f902cebb86d8d92cbb75288e0b539c5e041bfb4b8103faaa2",
+  "refs/heads/codex/issue-5-live-attestation",
+  "99a440316dd281fd9c72f2f432bbc78734c0f127",
+  "--bundle docs/release/github-attestation-bundle.win32-x64.json",
+  '"predicateClaim": "post-release-asset-digest-verification"',
+  '"originalBuildProvenanceClaim": false',
+  '"artifactSignatureClaim": false',
+  "This post-release attestation does not prove the original VSIX source-to-binary build provenance.",
+  '"verified": true'
+) "source-controlled live GitHub artifact attestation evidence coverage"
+Assert-Terms $attestationSubjectVerifier @(
+  "subversionr.release.github-attestation-contract.win32-x64.v1",
+  "Attestation subject SHA256",
+  "Attestation subject size",
+  "Release tag must match the attestation contract"
+) "released attestation subject verification coverage"
+Assert-Terms $liveAttestationRecorder @(
+  "subversionr.release.live-github-attestation.win32-x64.v1",
+  "ConvertTo-CanonicalJson",
+  "Verification result must contain the exact BundlePath attestation.",
+  "post-release-asset-digest-verification",
+  "originalBuildProvenanceClaim",
+  "artifactSignatureClaim",
+  "bundleSha256",
+  "resultSha256",
+  "denySelfHostedRunners",
+  "publicReadinessClaim = `$false",
+  "signingClaim = `$false"
+) "live GitHub artifact attestation evidence recorder coverage"
+Assert-Terms $liveAttestationScriptTests @(
+  "verify-release-attestation-subject.ps1",
+  "generate-post-release-asset-verification-predicate.ps1",
+  "record-live-github-attestation.ps1",
+  "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+  "Evidence recording should reject signed build provenance overclaims.",
+  "Evidence recording should reject a verification result for a different bundle.",
+  "Release live GitHub attestation script tests passed"
+) "live GitHub artifact attestation script fixture coverage"
+Assert-Terms $ciWorkflow @(
+  "Live GitHub attestation script tests",
+  "pnpm release:test-live-attestation-scripts"
+) "live GitHub artifact attestation CI coverage"
+Assert-Terms $fastPrWorkflow @(
+  "Live GitHub attestation script tests",
+  "pnpm release:test-live-attestation-scripts"
+) "live GitHub artifact attestation PR Fast coverage"
 Assert-Terms $betaArtifactBundleManifestScript @(
   "subversionr.release.beta-artifact-bundle-manifest.`$Target.v1",
   "Beta artifact bundle manifest must be generated before the final Beta candidate consistency report",
@@ -6393,10 +6542,10 @@ Assert-Terms $releaseGates @(
   'VSIX `extension.vsixmanifest` TargetPlatform',
   "packaged backend ZIP entries",
   "explicit CI upload allowlist",
-  "final consistency report binds the manifest SHA256",
+  "final consistency report bind the manifest SHA256",
   "subversionr-win32-x64-beta-candidate",
   "actions/upload-artifact@v7",
-  "live GitHub artifact attestation generation/publication/verification",
+  "verified live GitHub attestation",
   "coverage-guided fuzzing"
 ) "Beta-G candidate evidence release gate documentation"
 Assert-Terms $m7Plan @(
@@ -6447,7 +6596,7 @@ Assert-Terms $engineeringHandoff @(
   "subversionr.release.beta-artifact-bundle-manifest.win32-x64.v1",
   "subversionr.release.beta-candidate-consistency.win32-x64.v1",
   "Marketplace/public install",
-  "live attestation"
+  "verified live GitHub attestation"
 ) "Beta-G candidate evidence handoff status"
 
 Assert-Terms $ciWorkflow @(
@@ -6520,8 +6669,8 @@ Assert-Terms $releaseGates @(
   "subversionr.diagnostics.installedSourceControlSurfaceReport",
   "M7j2a unsigned provenance and Marketplace metadata preflight gate",
   "subversionr.release.marketplace-provenance-preflight.win32-x64.v1",
-  "M7j2b GitHub artifact attestation input-contract readiness gate",
-  "live GitHub artifact attestation generation/publication/verification",
+  "M7j2b live post-release GitHub artifact attestation evidence gate",
+  "subversionr.release.live-github-attestation.win32-x64.v1",
   "M7j3 installed Source Control UI E2E gate",
   "subversionr.release.installed-source-control-ui-e2e.win32-x64.v1",
   "subversionr.updateToRevision",
@@ -6644,7 +6793,7 @@ Assert-Terms $publicClaimMatrix @(
   "load-scale lock behavior",
   "installed auth/certificate breadth",
   "Unsigned provenance and Marketplace metadata preflight",
-  "GitHub artifact attestation input contract",
+  "Live GitHub artifact attestation",
   "Signed Marketplace/public install and previous-stable rollback",
   "Public support intake and redaction preflight",
   "Marketplace listing metadata and icon preflight",
@@ -6769,8 +6918,8 @@ Assert-Terms $m7Plan @(
   "pnpm release:test-provenance-scripts",
   "pnpm release:generate-provenance:win32-x64",
   "pnpm release:verify-provenance:win32-x64",
-  "attestation.readiness",
-  "input-contract-ready",
+  "attestation.status",
+  "live-attestation-verified",
   "pnpm docs:verify-support-intake",
   "pnpm release:test-support-intake-scripts",
   "resources/marketplace/icon.png",
@@ -6947,7 +7096,7 @@ Assert-TableStatusIn $publicClaimMatrix "Installed VSIX core workflow E2E" @("fi
 Assert-TableStatusIn $publicClaimMatrix "Installed VSIX Source Control surface" @("fixture-only")
 Assert-TableStatusIn $publicClaimMatrix "Installed VSIX Source Control UI E2E" @("fixture-only")
 Assert-TableStatusIn $publicClaimMatrix "Unsigned provenance and Marketplace metadata preflight" @("fixture-only")
-Assert-TableStatusIn $publicClaimMatrix "GitHub artifact attestation input contract" @("fixture-only")
+Assert-TableStatusIn $publicClaimMatrix "Live GitHub artifact attestation" @("live-recorded")
 Assert-TableStatusIn $publicClaimMatrix "Signed Marketplace/public install and previous-stable rollback" @("deferred")
 Assert-TableStatusIn $publicClaimMatrix "Public support intake and redaction preflight" @("fixture-only")
 Assert-TableStatusIn $publicClaimMatrix "Marketplace listing metadata and icon preflight" @("fixture-only")
@@ -6979,7 +7128,7 @@ Assert-Contains $roadmap "M7h installed VSIX Extension Host version-report comma
 Assert-Contains $roadmap "M7i installed VSIX core workflow E2E gate" "roadmap M7i status"
 Assert-Contains $roadmap "M7j1 installed VSIX Source Control surface gate" "roadmap M7j1 status"
 Assert-Contains $roadmap "M7j2a unsigned provenance and Marketplace metadata preflight gate" "roadmap M7j2a status"
-Assert-Contains $roadmap "M7j2b GitHub artifact attestation input-contract readiness gate" "roadmap M7j2b status"
+Assert-Contains $roadmap "M7j2b live post-release GitHub artifact attestation evidence gate" "roadmap M7j2b status"
 Assert-Contains $roadmap "M7j3 installed VSIX Source Control UI E2E gate" "roadmap M7j3 status"
 Assert-Contains $roadmap "M7k1 public support intake and redaction preflight gate" "roadmap M7k1 status"
 Assert-Contains $roadmap "M7k2a Marketplace listing metadata and icon preflight" "roadmap M7k2a status"
