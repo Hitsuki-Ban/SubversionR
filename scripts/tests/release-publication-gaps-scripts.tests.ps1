@@ -114,7 +114,11 @@ function New-PublicationGapsFixture([string]$Root) {
         status = "verified"
         readiness = [pscustomobject]@{
           readinessStatus = "live-attestation-verified"
-          action = "actions/attest-build-provenance@v4"
+          action = "actions/attest@v4"
+          actionDigest = "a1948c3f048ba23858d222213b7c278aabede763"
+          predicateClaim = "post-release-asset-digest-verification"
+          originalBuildProvenanceClaim = $false
+          artifactSignatureClaim = $false
           workflowPath = ".github/workflows/attest-release-vsix.yml"
           subjectName = "subversionr-win32-x64-0.2.0.vsix"
           subjectSha256 = $vsixSha256

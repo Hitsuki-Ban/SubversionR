@@ -108,6 +108,20 @@ function Get-RequiredProperty([object]$Object, [string]$Name, [string]$Context) 
   $Object.$Name
 }
 
+function Assert-JsonBoolean([object]$Object, [string]$Name, [bool]$Expected, [string]$Context) {
+  $value = Get-RequiredProperty $Object $Name $Context
+  if ($value -isnot [bool]) {
+    throw "$Context $Name must be a JSON boolean."
+  }
+  Assert-Equal $Expected ([bool]$value) "$Context $Name must match the signed predicate contract."
+}
+
+function Assert-ExactPropertyNames([object]$Object, [string[]]$Expected, [string]$Context) {
+  $actualNames = @($Object.PSObject.Properties.Name | Sort-Object)
+  $expectedNames = @($Expected | Sort-Object)
+  Assert-Equal ($expectedNames -join "|") ($actualNames -join "|") "$Context properties must match the signed predicate schema."
+}
+
 function ConvertTo-CanonicalJson([object]$Value) {
   $Value | ConvertTo-Json -Depth 100 -Compress
 }
@@ -186,6 +200,29 @@ $matchingStatements = @(
 if ($matchingStatements.Count -ne 1) {
   throw "Verification result must bind the contracted subject and predicate type."
 }
+$predicate = Get-RequiredProperty $statement "predicate" "Verification result statement"
+Assert-ExactPropertyNames $predicate @("schemaVersion", "schema", "claim", "originalBuildProvenanceClaim", "artifactSignatureClaim", "release", "contract", "verification") "Post-release verification predicate"
+Assert-Equal 1 ([int](Get-RequiredProperty $predicate "schemaVersion" "Post-release verification predicate")) "Signed predicate schemaVersion must match."
+Assert-Equal "subversionr.release.post-release-asset-verification-predicate.v1" ([string](Get-RequiredProperty $predicate "schema" "Post-release verification predicate")) "Signed predicate schema must match."
+Assert-Equal "post-release-asset-digest-verification" ([string](Get-RequiredProperty $predicate "claim" "Post-release verification predicate")) "Signed predicate claim must match."
+Assert-JsonBoolean $predicate "originalBuildProvenanceClaim" $false "Post-release verification predicate"
+Assert-JsonBoolean $predicate "artifactSignatureClaim" $false "Post-release verification predicate"
+$predicateRelease = Get-RequiredProperty $predicate "release" "Post-release verification predicate"
+Assert-ExactPropertyNames $predicateRelease @("tag", "url", "assetName", "assetSize", "assetSha256") "Post-release verification predicate release"
+Assert-Equal $ReleaseTag ([string](Get-RequiredProperty $predicateRelease "tag" "Post-release verification predicate release")) "Signed predicate release tag must match."
+Assert-Equal ([string]$contract.release.url) ([string](Get-RequiredProperty $predicateRelease "url" "Post-release verification predicate release")) "Signed predicate release URL must match."
+Assert-Equal ([string]$contract.subject.name) ([string](Get-RequiredProperty $predicateRelease "assetName" "Post-release verification predicate release")) "Signed predicate asset name must match."
+Assert-Equal ([int64]$contract.subject.size) ([int64](Get-RequiredProperty $predicateRelease "assetSize" "Post-release verification predicate release")) "Signed predicate asset size must match."
+Assert-Equal ([string]$contract.subject.sha256) ([string](Get-RequiredProperty $predicateRelease "assetSha256" "Post-release verification predicate release")) "Signed predicate asset SHA256 must match."
+$predicateContract = Get-RequiredProperty $predicate "contract" "Post-release verification predicate"
+Assert-ExactPropertyNames $predicateContract @("path", "sha256") "Post-release verification predicate contract"
+Assert-Equal (Get-RepoRelativePath $contractResolved) ([string](Get-RequiredProperty $predicateContract "path" "Post-release verification predicate contract")) "Signed predicate contract path must match."
+Assert-Equal (Get-Sha256 $contractResolved) ([string](Get-RequiredProperty $predicateContract "sha256" "Post-release verification predicate contract")) "Signed predicate contract SHA256 must match."
+$predicateVerification = Get-RequiredProperty $predicate "verification" "Post-release verification predicate"
+Assert-ExactPropertyNames $predicateVerification @("assetDownloadedFromRelease", "subjectNameMatched", "subjectSizeMatched", "subjectSha256Matched") "Post-release verification predicate verification"
+foreach ($verificationFlag in @("assetDownloadedFromRelease", "subjectNameMatched", "subjectSizeMatched", "subjectSha256Matched")) {
+  Assert-JsonBoolean $predicateVerification $verificationFlag $true "Post-release verification predicate verification"
+}
 
 if ($RunId -notmatch '^[0-9]+$') {
   throw "RunId must contain only digits."
@@ -244,9 +281,14 @@ $evidence = [pscustomobject]@{
     action = [string]$contract.attestation.action
     actionDigest = [string]$contract.attestation.actionDigest
     predicateType = [string]$contract.attestation.predicateType
+    predicateSchemaPath = [string]$contract.attestation.predicateSchemaPath
+    predicateSchema = [string]$predicate.schema
+    predicateClaim = [string]$predicate.claim
+    originalBuildProvenanceClaim = [bool]$predicate.originalBuildProvenanceClaim
+    artifactSignatureClaim = [bool]$predicate.artifactSignatureClaim
     id = $AttestationId
     url = $AttestationUrl
-    outputSource = "actions/attest-build-provenance outputs"
+    outputSource = "actions/attest outputs"
     bundlePath = Get-RepoRelativePath $bundleResolved
     bundleSha256 = Get-Sha256 $bundleResolved
   }

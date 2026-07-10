@@ -276,6 +276,11 @@ Assert-Equal "verified" ([string]$provenance.attestation.status) "Provenance pre
 $provenanceAttestation = Get-RequiredProperty $provenance.attestation "readiness" "Provenance attestation"
 Assert-Equal "live-attestation-verified" ([string]$provenanceAttestation.readinessStatus) "Provenance attestation readiness must record live verification."
 Assert-RequiredBooleanTrue $provenanceAttestation "verified" "Provenance attestation readiness"
+Assert-Equal "actions/attest@v4" ([string]$provenanceAttestation.action) "Provenance attestation action must match the post-release verification contract."
+Assert-Equal "a1948c3f048ba23858d222213b7c278aabede763" ([string]$provenanceAttestation.actionDigest) "Provenance attestation action digest must remain pinned."
+Assert-Equal "post-release-asset-digest-verification" ([string]$provenanceAttestation.predicateClaim) "Provenance attestation signed predicate claim must match."
+Assert-RequiredBooleanFalse $provenanceAttestation "originalBuildProvenanceClaim" "Provenance attestation signed predicate"
+Assert-RequiredBooleanFalse $provenanceAttestation "artifactSignatureClaim" "Provenance attestation signed predicate"
 
 Assert-Equal "recorded-post-cutover" ([string]$report.publicCutover.status) "Public cutover must record the post-cutover state."
 Assert-Equal "docs/release/public-cutover-runbook.md" ([string]$report.publicCutover.runbookPath) "Public cutover must bind the runbook path."

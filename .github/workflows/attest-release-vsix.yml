@@ -45,11 +45,25 @@ jobs:
           -ContractPath docs/release/github-attestation-contract.win32-x64.json
           -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
           -ReleaseTag $env:RELEASE_TAG
-      - name: Publish post-release artifact attestation
+      - name: Generate post-release asset verification predicate
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass
+          -File scripts/release/generate-post-release-asset-verification-predicate.ps1
+          -Target win32-x64
+          -ContractPath docs/release/github-attestation-contract.win32-x64.json
+          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+          -ReleaseTag $env:RELEASE_TAG
+          -OutputPath target/release-attestation/win32-x64/post-release-asset-verification-predicate.json
+      - name: Publish post-release asset verification attestation
         id: attest
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
         with:
           subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+          predicate-type: https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json
+          predicate-path: target/release-attestation/win32-x64/post-release-asset-verification-predicate.json
       - name: Verify published attestation
         shell: pwsh
         env:
@@ -62,7 +76,7 @@ jobs:
           $subjectPath = "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix"
           $resultPath = "target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json"
           New-Item -ItemType Directory -Force -Path (Split-Path -Parent $resultPath) | Out-Null
-          gh attestation verify $subjectPath -R Hitsuki-Ban/SubversionR --bundle $env:ATTESTATION_BUNDLE_PATH --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest $env:SOURCE_SHA --source-ref $env:SOURCE_REF --source-digest $env:SOURCE_SHA --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners --format json | Set-Content -LiteralPath $resultPath -Encoding utf8
+          gh attestation verify $subjectPath -R Hitsuki-Ban/SubversionR --bundle $env:ATTESTATION_BUNDLE_PATH --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest $env:SOURCE_SHA --source-ref $env:SOURCE_REF --source-digest $env:SOURCE_SHA --predicate-type https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json --deny-self-hosted-runners --format json | Set-Content -LiteralPath $resultPath -Encoding utf8
           if ($LASTEXITCODE -ne 0) {
             throw "Published attestation verification failed."
           }
@@ -98,5 +112,6 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ steps.attest.outputs.bundle-path }}
+            target/release-attestation/win32-x64/post-release-asset-verification-predicate.json
             target/release-evidence/subversionr-live-github-attestation-win32-x64.json
             target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json

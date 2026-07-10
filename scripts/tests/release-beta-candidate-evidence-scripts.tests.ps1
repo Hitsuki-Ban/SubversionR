@@ -544,8 +544,11 @@ function New-BetaCandidateFixture([string]$Root) {
       status = "verified"
       readiness = [pscustomobject]@{
         readinessStatus = "live-attestation-verified"
-        action = "actions/attest-build-provenance@v4"
-        actionDigest = "0f67c3f4856b2e3261c31976d6725780e5e4c373"
+        action = "actions/attest@v4"
+        actionDigest = "a1948c3f048ba23858d222213b7c278aabede763"
+        predicateClaim = "post-release-asset-digest-verification"
+        originalBuildProvenanceClaim = $false
+        artifactSignatureClaim = $false
         workflowPath = ".github/workflows/attest-release-vsix.yml"
         subjectName = Split-Path -Leaf $vsix.path
         subjectSha256 = $vsix.sha256

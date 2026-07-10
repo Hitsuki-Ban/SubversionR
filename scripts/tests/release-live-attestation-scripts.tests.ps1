@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $subjectVerifier = Join-Path $repoRoot "scripts\release\verify-release-attestation-subject.ps1"
+$predicateGenerator = Join-Path $repoRoot "scripts\release\generate-post-release-asset-verification-predicate.ps1"
 $evidenceRecorder = Join-Path $repoRoot "scripts\release\record-live-github-attestation.ps1"
 $workflowPath = Join-Path $repoRoot ".github\workflows\attest-release-vsix.yml"
 
@@ -60,9 +61,10 @@ try {
     }
     attestation = [pscustomobject]@{
       provider = "github-artifact-attestations"
-      action = "actions/attest-build-provenance@v4"
-      actionDigest = "0f67c3f4856b2e3261c31976d6725780e5e4c373"
-      predicateType = "https://slsa.dev/provenance/v1"
+      action = "actions/attest@v4"
+      actionDigest = "a1948c3f048ba23858d222213b7c278aabede763"
+      predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+      predicateSchemaPath = "docs/release/post-release-asset-verification-predicate.v1.schema.json"
     }
     workflow = [pscustomobject]@{
       path = ".github/workflows/attest-release-vsix.yml"
@@ -73,7 +75,7 @@ try {
     verificationPolicy = [pscustomobject]@{
       repository = "Hitsuki-Ban/SubversionR"
       signerWorkflow = "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml"
-      predicateType = "https://slsa.dev/provenance/v1"
+      predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
       bundleRequired = $true
       sourceRefRequired = $true
       sourceDigestRequired = $true
@@ -92,6 +94,23 @@ try {
   if ($LASTEXITCODE -ne 0) {
     throw "verify-release-attestation-subject.ps1 failed with exit code $LASTEXITCODE."
   }
+
+  $predicatePath = Join-Path $tempRoot "post-release-asset-verification-predicate.json"
+  & pwsh -NoProfile -ExecutionPolicy Bypass -File $predicateGenerator `
+    -Target win32-x64 `
+    -ContractPath $contractPath `
+    -SubjectPath $subjectPath `
+    -ReleaseTag v0.2.0-beta.1 `
+    -OutputPath $predicatePath
+  if ($LASTEXITCODE -ne 0) {
+    throw "generate-post-release-asset-verification-predicate.ps1 failed with exit code $LASTEXITCODE."
+  }
+  $predicate = Get-Content -Raw -LiteralPath $predicatePath | ConvertFrom-Json
+  Assert-Equal "post-release-asset-digest-verification" $predicate.claim "Generated predicate should record the post-release verification claim."
+  Assert-Equal "False" ([string]$predicate.originalBuildProvenanceClaim) "Generated predicate must reject original build provenance claims."
+  Assert-Equal "False" ([string]$predicate.artifactSignatureClaim) "Generated predicate must reject artifact signature claims."
+  Assert-Equal $subjectSha256 $predicate.release.assetSha256 "Generated predicate should bind the verified asset digest."
+  Assert-Equal (Get-Sha256 $contractPath) $predicate.contract.sha256 "Generated predicate should bind the contract digest."
 
   $bundlePath = Join-Path $tempRoot "sha256-$subjectSha256.jsonl"
   $bundle = [pscustomobject]@{
@@ -128,8 +147,8 @@ try {
               digest = [pscustomobject]@{ sha256 = $subjectSha256 }
             }
           )
-          predicateType = "https://slsa.dev/provenance/v1"
-          predicate = [pscustomobject]@{}
+          predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+          predicate = $predicate
         }
       }
     }
@@ -166,6 +185,8 @@ try {
   Assert-Equal (Get-Sha256 $bundlePath) $evidence.attestation.bundleSha256 "Live attestation evidence should hash the exact bundle."
   Assert-Equal (Get-Sha256 $verificationResultPath) $evidence.verification.resultSha256 "Live attestation evidence should hash the exact verification result."
   Assert-Equal "True" ([string]$evidence.verification.bundleMatched) "Live attestation evidence should record exact bundle matching."
+  Assert-Equal "False" ([string]$evidence.attestation.originalBuildProvenanceClaim) "Live attestation evidence must preserve the signed original-build non-claim."
+  Assert-Equal "False" ([string]$evidence.attestation.artifactSignatureClaim) "Live attestation evidence must preserve the signed artifact-signature non-claim."
   Assert-True ($evidence.verification.command.Contains("--bundle $($evidence.attestation.bundlePath)")) "Live attestation verification command should bind the exact bundle path."
   Assert-True ($evidence.verification.command.Contains("--source-ref refs/heads/codex/issue-5-live-attestation")) "Live attestation verification command should bind the source ref."
   Assert-True ($evidence.verification.command.Contains("--source-digest 0123456789abcdef0123456789abcdef01234567")) "Live attestation verification command should bind the source digest."
@@ -218,6 +239,29 @@ try {
       -OutputPath (Join-Path $tempRoot "bad-evidence.json")
   } "must bind the contracted subject" "Evidence recording should reject verification results for another digest."
 
+  $overclaimVerificationPath = Join-Path $tempRoot "overclaim-verification.json"
+  $overclaimVerification = Get-Content -Raw -LiteralPath $verificationResultPath | ConvertFrom-Json
+  @($overclaimVerification)[0].verificationResult.statement.predicate.originalBuildProvenanceClaim = $true
+  Write-JsonFile $overclaimVerificationPath $overclaimVerification
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $evidenceRecorder `
+      -Target win32-x64 `
+      -ContractPath $contractPath `
+      -SubjectPath $subjectPath `
+      -ReleaseTag v0.2.0-beta.1 `
+      -BundlePath $bundlePath `
+      -VerificationResultPath $overclaimVerificationPath `
+      -RunId 456 `
+      -RunAttempt 1 `
+      -RunUrl "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456" `
+      -HeadSha "0123456789abcdef0123456789abcdef01234567" `
+      -SourceRef "refs/heads/codex/issue-5-live-attestation" `
+      -EventName workflow_dispatch `
+      -AttestationId 123 `
+      -AttestationUrl "https://github.com/Hitsuki-Ban/SubversionR/attestations/123" `
+      -OutputPath (Join-Path $tempRoot "overclaim-evidence.json")
+  } "originalBuildProvenanceClaim must match the signed predicate contract" "Evidence recording should reject signed build provenance overclaims."
+
   $mismatchedBundleVerificationPath = Join-Path $tempRoot "mismatched-bundle-verification.json"
   $mismatchedBundleVerification = Get-Content -Raw -LiteralPath $verificationResultPath | ConvertFrom-Json
   @($mismatchedBundleVerification)[0].attestation.bundle.mediaType = "application/vnd.dev.sigstore.bundle.v0.2+json"
@@ -248,9 +292,12 @@ try {
       "id-token: write",
       "attestations: write",
       "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-      "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
+      "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       "subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix",
+      "generate-post-release-asset-verification-predicate.ps1",
+      "predicate-type: https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json",
+      "predicate-path: target/release-attestation/win32-x64/post-release-asset-verification-predicate.json",
       "--bundle `$env:ATTESTATION_BUNDLE_PATH",
       "--signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",
       "--signer-digest `$env:SOURCE_SHA",

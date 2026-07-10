@@ -14,9 +14,10 @@
   },
   "attestation": {
     "provider": "github-artifact-attestations",
-    "action": "actions/attest-build-provenance@v4",
-    "actionDigest": "0f67c3f4856b2e3261c31976d6725780e5e4c373",
-    "predicateType": "https://slsa.dev/provenance/v1"
+    "action": "actions/attest@v4",
+    "actionDigest": "a1948c3f048ba23858d222213b7c278aabede763",
+    "predicateType": "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json",
+    "predicateSchemaPath": "docs/release/post-release-asset-verification-predicate.v1.schema.json"
   },
   "workflow": {
     "path": ".github/workflows/attest-release-vsix.yml",
@@ -31,7 +32,7 @@
   "verificationPolicy": {
     "repository": "Hitsuki-Ban/SubversionR",
     "signerWorkflow": "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",
-    "predicateType": "https://slsa.dev/provenance/v1",
+    "predicateType": "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json",
     "bundleRequired": true,
     "sourceRefRequired": true,
     "sourceDigestRequired": true,

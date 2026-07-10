@@ -85,9 +85,15 @@ Assert-Equal $subjectSha256 (Get-Sha256 $subjectResolved) "Attestation subject S
 
 $attestation = Get-RequiredProperty $contract "attestation" "Attestation contract"
 Assert-Equal "github-artifact-attestations" ([string](Get-RequiredProperty $attestation "provider" "Attestation contract attestation")) "Attestation provider must match."
-Assert-Equal "actions/attest-build-provenance@v4" ([string](Get-RequiredProperty $attestation "action" "Attestation contract attestation")) "Attestation action must match."
-Assert-Equal "0f67c3f4856b2e3261c31976d6725780e5e4c373" ([string](Get-RequiredProperty $attestation "actionDigest" "Attestation contract attestation")) "Attestation action digest must match."
-Assert-Equal "https://slsa.dev/provenance/v1" ([string](Get-RequiredProperty $attestation "predicateType" "Attestation contract attestation")) "Attestation predicate type must match."
+Assert-Equal "actions/attest@v4" ([string](Get-RequiredProperty $attestation "action" "Attestation contract attestation")) "Attestation action must match."
+Assert-Equal "a1948c3f048ba23858d222213b7c278aabede763" ([string](Get-RequiredProperty $attestation "actionDigest" "Attestation contract attestation")) "Attestation action digest must match."
+$predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+Assert-Equal $predicateType ([string](Get-RequiredProperty $attestation "predicateType" "Attestation contract attestation")) "Attestation predicate type must match."
+$predicateSchemaPath = [string](Get-RequiredProperty $attestation "predicateSchemaPath" "Attestation contract attestation")
+Assert-Equal "docs/release/post-release-asset-verification-predicate.v1.schema.json" $predicateSchemaPath "Attestation predicate schema path must match."
+$predicateSchema = Get-Content -Raw -LiteralPath (Assert-File $predicateSchemaPath "Attestation predicate schema") | ConvertFrom-Json
+Assert-Equal $predicateType ([string](Get-RequiredProperty $predicateSchema '$id' "Attestation predicate schema")) "Attestation predicate schema ID must match the predicate type."
+Assert-Equal "SubversionR post-release asset verification predicate" ([string](Get-RequiredProperty $predicateSchema "title" "Attestation predicate schema")) "Attestation predicate schema title must match."
 
 $workflow = Get-RequiredProperty $contract "workflow" "Attestation contract"
 Assert-Equal ".github/workflows/attest-release-vsix.yml" ([string](Get-RequiredProperty $workflow "path" "Attestation contract workflow")) "Attestation workflow path must match."
@@ -103,7 +109,7 @@ foreach ($permission in $expectedPermissions) {
 $verification = Get-RequiredProperty $contract "verificationPolicy" "Attestation contract"
 Assert-Equal "Hitsuki-Ban/SubversionR" ([string](Get-RequiredProperty $verification "repository" "Attestation verification policy")) "Attestation verification repository must match."
 Assert-Equal "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml" ([string](Get-RequiredProperty $verification "signerWorkflow" "Attestation verification policy")) "Attestation signer workflow must match."
-Assert-Equal "https://slsa.dev/provenance/v1" ([string](Get-RequiredProperty $verification "predicateType" "Attestation verification policy")) "Attestation verification predicate type must match."
+Assert-Equal $predicateType ([string](Get-RequiredProperty $verification "predicateType" "Attestation verification policy")) "Attestation verification predicate type must match."
 Assert-JsonBoolean $verification "bundleRequired" $true "Attestation verification policy"
 Assert-JsonBoolean $verification "sourceRefRequired" $true "Attestation verification policy"
 Assert-JsonBoolean $verification "sourceDigestRequired" $true "Attestation verification policy"

@@ -219,9 +219,15 @@ $vsixFileName = Split-Path -Leaf $vsixPath
 $vsixSize = (Get-Item -LiteralPath $vsixPath).Length
 Assert-Equal "live-attestation-verified" (Assert-RequiredString $attestationReadiness "readinessStatus" "Attestation readiness") "Attestation readiness status should record live verification."
 Assert-Equal "github-artifact-attestations" (Assert-RequiredString $attestationReadiness "provider" "Attestation readiness") "Attestation readiness provider should be GitHub artifact attestations."
-Assert-Equal "actions/attest-build-provenance@v4" (Assert-RequiredString $attestationReadiness "action" "Attestation readiness") "Attestation readiness action should match the issue #5 workflow contract."
-Assert-Equal "0f67c3f4856b2e3261c31976d6725780e5e4c373" (Assert-RequiredString $attestationReadiness "actionDigest" "Attestation readiness") "Attestation readiness action digest should remain pinned."
-Assert-Equal "https://slsa.dev/provenance/v1" (Assert-RequiredString $attestationReadiness "predicateType" "Attestation readiness") "Attestation readiness predicate type should match GitHub CLI default provenance verification."
+Assert-Equal "actions/attest@v4" (Assert-RequiredString $attestationReadiness "action" "Attestation readiness") "Attestation readiness action should match the issue #5 workflow contract."
+Assert-Equal "a1948c3f048ba23858d222213b7c278aabede763" (Assert-RequiredString $attestationReadiness "actionDigest" "Attestation readiness") "Attestation readiness action digest should remain pinned."
+$predicateType = "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json"
+Assert-Equal $predicateType (Assert-RequiredString $attestationReadiness "predicateType" "Attestation readiness") "Attestation readiness predicate type should identify the post-release verification schema."
+Assert-Equal "docs/release/post-release-asset-verification-predicate.v1.schema.json" (Assert-RequiredString $attestationReadiness "predicateSchemaPath" "Attestation readiness") "Attestation readiness predicate schema path should remain source-controlled."
+Assert-Equal "subversionr.release.post-release-asset-verification-predicate.v1" (Assert-RequiredString $attestationReadiness "predicateSchema" "Attestation readiness") "Attestation readiness signed predicate schema should match."
+Assert-Equal "post-release-asset-digest-verification" (Assert-RequiredString $attestationReadiness "predicateClaim" "Attestation readiness") "Attestation readiness signed predicate claim should match."
+Assert-RequiredBooleanFalse $attestationReadiness "originalBuildProvenanceClaim" "Attestation readiness"
+Assert-RequiredBooleanFalse $attestationReadiness "artifactSignatureClaim" "Attestation readiness"
 Assert-Equal $vsixFileName (Assert-RequiredString $attestationReadiness "subjectName" "Attestation readiness") "Attestation readiness subjectName must match the VSIX file name."
 Assert-Equal ([string]$report.artifacts.vsix.sha256) (Assert-RequiredString $attestationReadiness "subjectSha256" "Attestation readiness") "Attestation readiness subjectSha256 must match the exact VSIX SHA256."
 Assert-Equal $vsixRelativePath (Assert-RequiredString $attestationReadiness "artifactPath" "Attestation readiness") "Attestation readiness artifactPath must match the VSIX relative path."
@@ -316,6 +322,11 @@ Assert-Equal ([string]$liveAttestation.verification.resultSha256) ([string]$atte
 Assert-Equal ([string]$liveAttestation.workflow.sourceRef) ([string]$attestationReadiness.sourceRef) "Attestation source ref must match live evidence."
 Assert-Equal ([string]$liveAttestation.workflow.headSha) ([string]$attestationReadiness.sourceDigest) "Attestation source digest must match live evidence."
 Assert-Equal ([string]$liveAttestation.workflow.headSha) ([string]$attestationReadiness.signerDigest) "Attestation signer digest must match live evidence."
+Assert-Equal ([string]$liveAttestation.attestation.predicateSchemaPath) ([string]$attestationReadiness.predicateSchemaPath) "Attestation predicate schema path must match live evidence."
+Assert-Equal ([string]$liveAttestation.attestation.predicateSchema) ([string]$attestationReadiness.predicateSchema) "Attestation signed predicate schema must match live evidence."
+Assert-Equal ([string]$liveAttestation.attestation.predicateClaim) ([string]$attestationReadiness.predicateClaim) "Attestation signed predicate claim must match live evidence."
+Assert-RequiredBooleanFalse $liveAttestation.attestation "originalBuildProvenanceClaim" "Live attestation signed predicate"
+Assert-RequiredBooleanFalse $liveAttestation.attestation "artifactSignatureClaim" "Live attestation signed predicate"
 
 $bundlePath = Assert-File ([string]$report.evidence.attestationBundle.path) "Attestation bundle"
 $recordedVerificationPath = Assert-File ([string]$report.evidence.attestationVerification.path) "Attestation verification result"
@@ -353,6 +364,21 @@ $verifiedStatement = $verifiedResult.verificationResult.statement
 $verifiedSubjects = @($verifiedStatement.subject | Where-Object { [string]$_.name -eq [string]$liveAttestation.subject.name -and [string]$_.digest.sha256 -eq [string]$liveAttestation.subject.sha256 })
 Assert-Equal 1 $verifiedSubjects.Count "Live verification must bind the exact released VSIX subject."
 Assert-Equal ([string]$liveAttestation.verification.predicateType) ([string]$verifiedStatement.predicateType) "Live verification predicate type must match the policy."
+$verifiedPredicate = $verifiedStatement.predicate
+Assert-Equal "subversionr.release.post-release-asset-verification-predicate.v1" ([string]$verifiedPredicate.schema) "Live verification signed predicate schema must match."
+Assert-Equal "post-release-asset-digest-verification" ([string]$verifiedPredicate.claim) "Live verification signed predicate claim must match."
+Assert-RequiredBooleanFalse $verifiedPredicate "originalBuildProvenanceClaim" "Live verification signed predicate"
+Assert-RequiredBooleanFalse $verifiedPredicate "artifactSignatureClaim" "Live verification signed predicate"
+Assert-Equal ([string]$liveAttestation.release.tag) ([string]$verifiedPredicate.release.tag) "Live verification signed predicate release tag must match."
+Assert-Equal ([string]$liveAttestation.release.url) ([string]$verifiedPredicate.release.url) "Live verification signed predicate release URL must match."
+Assert-Equal ([string]$liveAttestation.subject.name) ([string]$verifiedPredicate.release.assetName) "Live verification signed predicate asset name must match."
+Assert-Equal ([int64]$liveAttestation.subject.size) ([int64]$verifiedPredicate.release.assetSize) "Live verification signed predicate asset size must match."
+Assert-Equal ([string]$liveAttestation.subject.sha256) ([string]$verifiedPredicate.release.assetSha256) "Live verification signed predicate asset SHA256 must match."
+Assert-Equal ([string]$liveAttestation.contract.path) ([string]$verifiedPredicate.contract.path) "Live verification signed predicate contract path must match."
+Assert-Equal ([string]$liveAttestation.contract.sha256) ([string]$verifiedPredicate.contract.sha256) "Live verification signed predicate contract SHA256 must match."
+foreach ($verificationFlag in @("assetDownloadedFromRelease", "subjectNameMatched", "subjectSizeMatched", "subjectSha256Matched")) {
+  Assert-RequiredBooleanTrue $verifiedPredicate.verification $verificationFlag "Live verification signed predicate verification"
+}
 $verifiedCertificate = $verifiedResult.verificationResult.signature.certificate
 Assert-Equal ([string]$liveAttestation.verification.certificate.signerIdentity) ([string]$verifiedCertificate.subjectAlternativeName) "Live verification signer identity must match the recorded certificate."
 Assert-Equal ([string]$liveAttestation.workflow.headSha) ([string]$verifiedCertificate.buildSignerDigest) "Live verification signer digest must match the recorded workflow SHA."

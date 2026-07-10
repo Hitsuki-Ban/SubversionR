@@ -307,6 +307,11 @@ Assert-Equal ([string]$attestationContract.attestation.provider) ([string]$liveA
 Assert-Equal ([string]$attestationContract.attestation.action) ([string]$liveAttestationEvidence.attestation.action) "Live attestation action must match the contract."
 Assert-Equal ([string]$attestationContract.attestation.actionDigest) ([string]$liveAttestationEvidence.attestation.actionDigest) "Live attestation action digest must match the contract."
 Assert-Equal ([string]$attestationContract.attestation.predicateType) ([string]$liveAttestationEvidence.attestation.predicateType) "Live attestation predicate type must match the contract."
+Assert-Equal ([string]$attestationContract.attestation.predicateSchemaPath) ([string]$liveAttestationEvidence.attestation.predicateSchemaPath) "Live attestation predicate schema path must match the contract."
+Assert-Equal "subversionr.release.post-release-asset-verification-predicate.v1" ([string]$liveAttestationEvidence.attestation.predicateSchema) "Live attestation signed predicate schema must match."
+Assert-Equal "post-release-asset-digest-verification" ([string]$liveAttestationEvidence.attestation.predicateClaim) "Live attestation signed predicate claim must match."
+Assert-JsonBoolean $liveAttestationEvidence.attestation "originalBuildProvenanceClaim" $false "Live attestation signed predicate"
+Assert-JsonBoolean $liveAttestationEvidence.attestation "artifactSignatureClaim" $false "Live attestation signed predicate"
 Assert-True ([string]$liveAttestationEvidence.attestation.id -match '^[0-9]+$') "Live attestation id must contain only digits."
 Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/attestations/$($liveAttestationEvidence.attestation.id)" ([string]$liveAttestationEvidence.attestation.url) "Live attestation URL must match id."
 $attestationBundleResolved = Assert-File ([string](Get-RequiredProperty $liveAttestationEvidence.attestation "bundlePath" "Live attestation evidence attestation")) "Live attestation bundle"
@@ -496,6 +501,11 @@ $report = [pscustomobject]@{
       action = [string]$attestationContract.attestation.action
       actionDigest = [string]$attestationContract.attestation.actionDigest
       predicateType = [string]$attestationContract.attestation.predicateType
+      predicateSchemaPath = [string]$attestationContract.attestation.predicateSchemaPath
+      predicateSchema = [string]$liveAttestationEvidence.attestation.predicateSchema
+      predicateClaim = [string]$liveAttestationEvidence.attestation.predicateClaim
+      originalBuildProvenanceClaim = [bool]$liveAttestationEvidence.attestation.originalBuildProvenanceClaim
+      artifactSignatureClaim = [bool]$liveAttestationEvidence.attestation.artifactSignatureClaim
       subjectName = $vsixFileName
       subjectSha256 = $actualVsixSha256
       artifactPath = $vsixRelativePath

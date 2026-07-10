@@ -52,6 +52,16 @@ function Assert-RequiredBooleanTrue([object]$Object, [string]$Name, [string]$Con
   Assert-Equal $true ([bool]$Object.$Name) "$Context $Name must be true."
 }
 
+function Assert-RequiredBooleanFalse([object]$Object, [string]$Name, [string]$Context) {
+  if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$Name]) {
+    throw "$Context must define $Name."
+  }
+  if ($Object.$Name -isnot [bool]) {
+    throw "$Context $Name must be a JSON boolean."
+  }
+  Assert-Equal $false ([bool]$Object.$Name) "$Context $Name must remain false."
+}
+
 function Assert-ExplicitPath([string]$Path, [string]$Name) {
   Assert-True (-not [string]::IsNullOrWhiteSpace($Path)) "$Name is required."
   Assert-True (-not $Path.Contains("%")) "$Name must be an explicit path, not an unresolved environment placeholder."
@@ -1319,8 +1329,11 @@ $provenanceAttestation = Get-RequiredProperty $marketplaceProvenance.json "attes
 Assert-Equal "verified" (Get-RequiredString $provenanceAttestation "status" "marketplaceProvenance.attestation") "marketplaceProvenance attestation status must record live verification."
 $attestationReadiness = Get-RequiredProperty $provenanceAttestation "readiness" "marketplaceProvenance.attestation"
 Assert-Equal "live-attestation-verified" (Get-RequiredString $attestationReadiness "readinessStatus" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation readiness must record live verification."
-Assert-Equal "actions/attest-build-provenance@v4" (Get-RequiredString $attestationReadiness "action" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation action must match the live workflow contract."
-Assert-Equal "0f67c3f4856b2e3261c31976d6725780e5e4c373" (Get-RequiredString $attestationReadiness "actionDigest" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation action digest must remain pinned."
+Assert-Equal "actions/attest@v4" (Get-RequiredString $attestationReadiness "action" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation action must match the live workflow contract."
+Assert-Equal "a1948c3f048ba23858d222213b7c278aabede763" (Get-RequiredString $attestationReadiness "actionDigest" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation action digest must remain pinned."
+Assert-Equal "post-release-asset-digest-verification" (Get-RequiredString $attestationReadiness "predicateClaim" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation signed predicate claim must match."
+Assert-RequiredBooleanFalse $attestationReadiness "originalBuildProvenanceClaim" "marketplaceProvenance.attestation.readiness"
+Assert-RequiredBooleanFalse $attestationReadiness "artifactSignatureClaim" "marketplaceProvenance.attestation.readiness"
 Assert-Equal ".github/workflows/attest-release-vsix.yml" (Get-RequiredString $attestationReadiness "workflowPath" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation workflow path must match the live workflow contract."
 Assert-Equal $vsixSha256 (Get-RequiredString $attestationReadiness "subjectSha256" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation subjectSha256 must match current VSIX."
 Assert-Equal (Split-Path -Leaf $vsixResolved) (Get-RequiredString $attestationReadiness "subjectName" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation subjectName must match current VSIX."

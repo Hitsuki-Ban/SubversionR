@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Hitsuki-Ban/SubversionR/main/docs/release/post-release-asset-verification-predicate.v1.schema.json",
+  "title": "SubversionR post-release asset verification predicate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "schema",
+    "claim",
+    "originalBuildProvenanceClaim",
+    "artifactSignatureClaim",
+    "release",
+    "contract",
+    "verification"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "schema": {
+      "const": "subversionr.release.post-release-asset-verification-predicate.v1"
+    },
+    "claim": {
+      "const": "post-release-asset-digest-verification"
+    },
+    "originalBuildProvenanceClaim": {
+      "const": false
+    },
+    "artifactSignatureClaim": {
+      "const": false
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "url", "assetName", "assetSize", "assetSha256"],
+      "properties": {
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "assetName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assetSize": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "assetSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetDownloadedFromRelease",
+        "subjectNameMatched",
+        "subjectSizeMatched",
+        "subjectSha256Matched"
+      ],
+      "properties": {
+        "assetDownloadedFromRelease": {
+          "const": true
+        },
+        "subjectNameMatched": {
+          "const": true
+        },
+        "subjectSizeMatched": {
+          "const": true
+        },
+        "subjectSha256Matched": {
+          "const": true
+        }
+      }
+    }
+  }
+}
