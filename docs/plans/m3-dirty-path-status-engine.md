@@ -63,7 +63,7 @@ M3b does not apply status deltas to SCM UI, does not start the backend from acti
 
 The third M3 slice connects the VS Code adapter to the Rust sidecar lifecycle over the existing Content-Length JSON-RPC transport:
 
-- `subversionr.backend.executablePath` and `subversionr.backend.bridgeDllPath` were contributed as machine-scoped settings for the private development build. This first-stage path was superseded by M6f packaged backend resource resolution.
+- `subversionr.backend.executablePath` and `subversionr.backend.bridgeDllPath` were contributed as machine-scoped settings for the first-stage development build. This path was superseded by M6f packaged backend resource resolution.
 - The settings had no default value. Before M6f, missing paths failed fast instead of probing `PATH`, system SVN, TortoiseSVN, or random libsvn locations.
 - Before M6f, untrusted workspaces rejected custom backend paths before spawning a process.
 - The sidecar is spawned with `shell: false`, `stdio: ["pipe", "pipe", "pipe"]`, `windowsHide: true`, and an explicit `SUBVERSIONR_BRIDGE_DLL` environment value.
@@ -90,7 +90,7 @@ The fourth M3 slice adds the VS Code watcher lifecycle adapter for repository-sc
 - `unregisterRepository` and `dispose` remove all event listeners, dispose the watcher, and unregister the dirty-path pipeline scope.
 - `createVscodeRepositoryWatcherFactory` is a thin adapter from repository watcher requests to VS Code `createFileSystemWatcher` using a relative pattern.
 - The VS Code extension activation now constructs the watcher service with a backend-backed `status/refresh` client but does not register watchers until a repository scope is provided.
-- The private build activation events stay command-driven for this slice so activation does not depend on probing `.svn/wc.db`; repository-driven activation/discovery is deferred to the repository-open binding.
+- The first-stage activation events stay command-driven for this slice so activation does not depend on probing `.svn/wc.db`; repository-driven activation/discovery is deferred to the repository-open binding.
 - `deactivate` disposes repository watchers before shutting down the backend.
 - `BackendConnection` exposes a narrow JSON-RPC sender surface so typed status clients can reuse the initialized sidecar connection.
 - Unit tests cover event routing, create/delete planner behavior, duplicate registration, rollback, unregister, and bulk disposal.
@@ -117,7 +117,7 @@ M3e does not implement SCM resource commands, QuickDiff, commit input behavior, 
 
 ## M3f Implemented Slice
 
-The sixth M3 slice binds repository open and close to explicit private-build VS Code commands:
+The sixth M3 slice binds repository open and close to explicit development VS Code commands:
 
 - `subversionr.openRepository` discovers SVN working copies from the current workspace folders through the existing `repository/discover` RPC.
 - `subversionr.closeRepository` closes repository sessions through `RepositorySessionService.closeRepository`.

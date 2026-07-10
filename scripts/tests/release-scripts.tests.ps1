@@ -14,6 +14,23 @@ $prFastWorkflowPath = Join-Path $repoRoot ".github\workflows\pr-fast.yml"
 $githubActionsRestorationPath = Join-Path $repoRoot "docs\ci\github-actions-restoration.md"
 $roadmapPath = Join-Path $repoRoot "docs\roadmap\README.md"
 $engineeringHandoffPath = Join-Path $repoRoot "docs\onboarding\ENGINEERING_HANDOFF.md"
+$adrIndexPath = Join-Path $repoRoot "docs\adr\README.md"
+$stableVsCodeApiAdrPath = Join-Path $repoRoot "docs\adr\ADR-008-stable-vscode-apis.md"
+$credentialStorageAdrPath = Join-Path $repoRoot "docs\adr\ADR-010-credential-storage.md"
+$architectureDecisionPaths = @(
+  "docs\adr\ADR-001-typescript-rust-libsvn-architecture.md",
+  "docs\adr\ADR-002-stdio-rpc-transport.md",
+  "docs\adr\ADR-003-bundled-libsvn-runtime.md",
+  "docs\adr\ADR-004-working-copy-database-integrity.md",
+  "docs\adr\ADR-005-dirty-path-status-refresh.md",
+  "docs\adr\ADR-006-local-and-remote-status-scheduling.md",
+  "docs\adr\ADR-007-sidecar-process-lifetime.md",
+  "docs\adr\ADR-008-stable-vscode-apis.md",
+  "docs\adr\ADR-009-optional-tortoisesvn-adapter.md",
+  "docs\adr\ADR-010-credential-storage.md",
+  "docs\adr\ADR-011-cache-source-of-truth.md",
+  "docs\adr\ADR-012-svn-terminology.md"
+)
 
 Import-Module (Join-Path $repoRoot "scripts\release\lib\ReadinessModel.psm1") -Force -Global
 Import-Module (Join-Path $repoRoot "scripts\release\lib\ReadinessRules.psm1") -Force -Global
@@ -330,58 +347,39 @@ function Assert-ReleaseReadinessUsesCustomRequirementsEvidencePath([string]$Temp
   } $sentinelStatus "verify-readiness should read the explicit requirements evidence path."
 }
 
-function Add-CloudflarePrFastBridgeFixture([string]$FixtureRoot) {
+function Add-RetiredCloudflareBridgeFixture([string]$FixtureRoot) {
   $docPath = Join-Path $FixtureRoot "docs\ci\cloudflare-pr-fast-bridge.md"
-  $bridgeScriptPath = Join-Path $FixtureRoot "scripts\ci\cloudflare-pr-fast-bridge.mjs"
-  $workerScriptPath = Join-Path $FixtureRoot "scripts\ci\cloudflare-pr-fast-worker.mjs"
-  $wranglerConfigPath = Join-Path $FixtureRoot "scripts\ci\cloudflare-pr-fast.wrangler.jsonc"
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $docPath) | Out-Null
-  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $bridgeScriptPath) | Out-Null
   Set-Content -LiteralPath $docPath -Encoding utf8 -Value @'
-# Cloudflare PR Fast Bridge
+# Retired Cloudflare PR Fast Bridge
 
-This document records the temporary Cloudflare Workers Builds bridge.
+Retirement date: `2026-07-10`.
 
-- Build command: `node scripts/ci/cloudflare-pr-fast-bridge.mjs`
-- Preview deploy command: `corepack enable && corepack prepare pnpm@11.5.2 --activate && pnpm dlx wrangler@4.105.0 versions upload --config scripts/ci/cloudflare-pr-fast.wrangler.jsonc`
-1. `pnpm release:test-state-engine-beta-performance:win32-x64`
+- The final state has zero build triggers.
+- The repository connection was removed.
+- The account no longer has a build configuration associated with `subversionr-pr-fast`.
+- The current gate is `.github/workflows/pr-fast.yml`.
+- Git history preserves the exact implementation.
 
-The bridge is scheduled for retirement at the public repository migration. After the public `Hitsuki-Ban/SubversionR` repository has the baseline and the GitHub Actions `PR Fast / windows` check is green there, disconnect Workers Builds from the repository, disable non-production branch triggers, record the retirement date and final state here, and keep this document for historical evidence.
-
-Do not store the GitHub token, Cloudflare API token, webhook secret, deploy hook URL, or build token in this repository.
+No Cloudflare live identifiers are recorded here.
 '@
-  Set-Content -LiteralPath $bridgeScriptPath -Encoding utf8 -Value @'
-run("pnpm install --frozen-lockfile");
-run("pnpm -r check");
-run("pnpm -r test");
-const powershellVersion = "7.6.3";
-commandExists("pwsh");
-run(`curl -L -o ${powershellArchivePath} https://github.com/PowerShell/PowerShell/releases/download/v${powershellVersion}/powershell-${powershellVersion}-linux-x64.tar.gz`);
-process.env.PATH = `${powershellInstallDirectory}:${process.env.PATH}`;
-run("corepack pnpm release:test-state-engine-beta-performance:win32-x64");
-run(`cargo +${rustToolchain} fmt --all -- --check`);
-run(`cargo +${rustToolchain} test --workspace --lib`);
-run(`cargo +${rustToolchain} test -p subversionr-protocol --test protocol_contract`);
-'@
-  Set-Content -LiteralPath $workerScriptPath -Encoding utf8 -Value @'
-export default {
-  fetch() {
-    return new Response("SubversionR PR Fast Cloudflare bridge\n", {
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-      },
-    });
-  },
-};
-'@
-  Set-Content -LiteralPath $wranglerConfigPath -Encoding utf8 -Value @'
-{
-  "name": "subversionr-pr-fast",
-  "main": "cloudflare-pr-fast-worker.mjs",
-  "workers_dev": true,
-  "preview_urls": false
 }
-'@
+
+function Assert-ReleaseReadinessSmokeRejectsRetiredCloudflareDocTerm(
+  [string]$TempRoot,
+  [string]$ForbiddenContent,
+  [string]$ExpectedText
+) {
+  $fixtureRoot = Join-Path $TempRoot "smoke-retired-cloudflare-$([Guid]::NewGuid().ToString('N'))"
+  $workflowPath = Join-Path $fixtureRoot ".github\workflows\pr-fast.yml"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $workflowPath) | Out-Null
+  Copy-Item -LiteralPath $prFastWorkflowPath -Destination $workflowPath
+  Add-RetiredCloudflareBridgeFixture $fixtureRoot
+  Add-Content -LiteralPath (Join-Path $fixtureRoot "docs\ci\cloudflare-pr-fast-bridge.md") -Encoding utf8 -Value $ForbiddenContent
+
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyReadinessScript -Mode smoke -RepoRoot $fixtureRoot
+  } $ExpectedText "verify-readiness smoke should reject retired deployment and private infrastructure details."
 }
 
 function Assert-ReleaseReadinessSmokeRejectsHeavyPrFastGate(
@@ -394,7 +392,7 @@ function Assert-ReleaseReadinessSmokeRejectsHeavyPrFastGate(
   $workflowPath = Join-Path $fixtureRoot ".github\workflows\pr-fast.yml"
   $parent = Split-Path -Parent $workflowPath
   New-Item -ItemType Directory -Force -Path $parent | Out-Null
-  Add-CloudflarePrFastBridgeFixture $fixtureRoot
+  Add-RetiredCloudflareBridgeFixture $fixtureRoot
   Set-Content -LiteralPath $workflowPath -Encoding utf8 -Value @"
 name: PR Fast
 on:
@@ -563,10 +561,6 @@ try {
     $verifyReadinessScript `
     '(?s)Assert-Terms \$roadmap @\(.+?"artifact bundle manifest".+?"explicit CI upload allowlist".+?\) "Beta-G candidate evidence roadmap coverage"' `
     "Release readiness should require roadmap Beta-G artifact bundle manifest coverage."
-  Assert-TextFileMatches `
-    $verifyReadinessScript `
-    '(?s)Assert-Terms \$engineeringHandoff @\(.+?"artifact bundle manifest".+?"explicit CI upload allowlist".+?\) "Beta-G candidate evidence handoff status"' `
-    "Release readiness should require handoff Beta-G artifact bundle manifest coverage."
   Assert-TextFileContainsTokens $roadmapPath @(
     "Candidate bundle consistency",
     "artifact bundle manifest",
@@ -575,15 +569,66 @@ try {
     "actions/upload-artifact@v7"
   ) "Roadmap should describe the Beta-G artifact bundle manifest."
   Assert-TextFileContainsTokens $engineeringHandoffPath @(
-    "Beta candidate consistency gate",
-    "artifact bundle manifest",
-    "explicit CI upload allowlist",
-    "subversionr-win32-x64-beta-candidate",
-    "actions/upload-artifact@v7"
-  ) "Engineering handoff should describe the Beta-G artifact bundle manifest."
+    "# SubversionR Engineering Guide",
+    "Public Fact Sources",
+    "docs/adr/README.md",
+    "docs/roadmap/README.md",
+    "docs/release/public-claim-matrix.md",
+    "pnpm install --frozen-lockfile",
+    "cargo test --workspace"
+  ) "Public engineering guide should contain stable onboarding and architecture entry points."
+  $engineeringHandoffText = Get-Content -Raw -LiteralPath $engineeringHandoffPath
+  foreach ($forbiddenTerm in @(
+      "Reference/",
+      "Review Estimate",
+      "Completion percentages",
+      "PR #157",
+      "Cloudflare PR Fast",
+      "Windows runner coverage is unavailable"
+    )) {
+    Assert-True (-not $engineeringHandoffText.Contains($forbiddenTerm, [System.StringComparison]::Ordinal)) "Public engineering guide should not contain stale or private-only term '$forbiddenTerm'."
+  }
+  Assert-TextFileContainsTokens $adrIndexPath @(
+    "## Governance",
+    "ADR numbers are stable and are never reused or renumbered.",
+    "requires a new ADR and product, architecture, security, and QA review",
+    "each superseded record must link to its replacement",
+    "ADR-001: TypeScript UI, Rust Sidecar, and libsvn",
+    "ADR-008: Stable VS Code APIs",
+    "ADR-012: SVN Terminology"
+  ) "Public ADR index should expose the accepted architecture decisions."
+  foreach ($relativePath in $architectureDecisionPaths) {
+    $decisionPath = Join-Path $repoRoot $relativePath
+    Assert-True (Test-Path -LiteralPath $decisionPath -PathType Leaf) "Public ADR should exist: $relativePath"
+    Assert-TextFileContainsTokens $decisionPath @(
+      "Status: Accepted",
+      "## Context",
+      "## Decision",
+      "## Consequences"
+    ) "Public ADR should retain the required record structure: $relativePath"
+  }
+  Assert-TextFileMatches `
+    $verifyReadinessScript `
+    '(?s)if \(\$Mode -eq "smoke"\).+?Read-AndAssertArchitectureDecisionRecords' `
+    "PR Fast readiness smoke should verify all public ADR contracts."
+  Assert-TextFileContainsTokens $stableVsCodeApiAdrPath @(
+    "Status: Accepted",
+    "Core functionality uses stable VS Code APIs and does not depend on proposed APIs.",
+    "## Consequences"
+  ) "Stable VS Code API ADR should record the accepted public decision."
+  Assert-TextFileContainsTokens $credentialStorageAdrPath @(
+    "Status: Accepted",
+    "Persistent credentials are stored only in VS Code SecretStorage.",
+    "credential persistence fails closed",
+    "does not fall back to settings, extension caches, sidecar storage, diagnostics, or the standard SVN auth cache"
+  ) "Credential storage ADR should require fail-closed SecretStorage persistence."
   Assert-ReleaseReadinessUsesCustomRequirementsEvidencePath $tempRoot
   Assert-ReleaseReadinessSmokeRejectsHeavyPrFastGate $tempRoot "pnpm release:generate-native-remote-fuzz-fixed-seed-smoke:win32-x64" "fixed-seed fuzz build/run"
   Assert-ReleaseReadinessSmokeRejectsHeavyPrFastGate $tempRoot "pnpm release:verify-live-osv-review:win32-x64" "live vulnerability review"
+  Assert-ReleaseReadinessSmokeRejectsRetiredCloudflareDocTerm $tempRoot "Hitsuki-Ban/SubversionR-private" "private repository identifier"
+  Assert-ReleaseReadinessSmokeRejectsRetiredCloudflareDocTerm $tempRoot "wrangler deploy --config retired.jsonc" "Wrangler deployment command"
+  Assert-ReleaseReadinessSmokeRejectsRetiredCloudflareDocTerm $tempRoot "Reconnect the GitHub integration for this repository." "GitHub integration reconnection"
+  Assert-ReleaseReadinessSmokeRejectsRetiredCloudflareDocTerm $tempRoot "Verify the webhook signature before relaying status." "webhook signature relay"
   Assert-TextFileContainsTokens $deleteUnversionedTrashPolicyPath @(
     "OPS-004",
     "subversionr.deleteUnversionedResource",
@@ -1074,9 +1119,8 @@ try {
   ) "Release readiness should verify M7d cache schema, privacy, and migration report evidence."
   Assert-TextFileContainsTokens $verifyReadinessScript @(
     "PRD-014",
-    "docs/onboarding/ENGINEERING_HANDOFF.md",
-    "The extension uses only stable VS Code APIs for core functionality",
-    "proposed APIs are not required",
+    "docs/adr/ADR-008-stable-vscode-apis.md",
+    "Core functionality uses stable VS Code APIs and does not depend on proposed APIs.",
     "packages/vscode-extension/tsconfig.json",
     "does not request proposed VS Code APIs",
     "enabledApiProposals",

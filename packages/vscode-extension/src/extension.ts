@@ -1387,7 +1387,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const historyCopyRevisionCommand = vscode.commands.registerCommand("subversionr.history.copyRevision", (element: unknown) =>
     runHistoryCommand(() => copyHistoryRevision(historyTreeDataProvider, element)),
   );
-  // Explicit legacy command aliases from Reference/legacy_migration.csv.
+  // Explicitly reviewed legacy command aliases; public scope is recorded in the M5 plan.
   const historyCopyMessageAliasCommands = HISTORY_COPY_MESSAGE_LEGACY_ALIASES.map((command) =>
     vscode.commands.registerCommand(command, (element: unknown) =>
       runHistoryCommand(() => copyHistoryMessage(historyTreeDataProvider, element)),

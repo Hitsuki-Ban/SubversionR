@@ -706,7 +706,7 @@ The M7l6 slice adds a deterministic native malicious `svn://` server-response fi
 
 - `crates/subversionr-daemon/tests/native_bridge.rs` now contains `native_bridge_malicious_svn_server_response_history_log_fails_without_auth_prompts_or_crash`, an ignored native bridge test that creates a source-built authenticated `svnserve` working copy, proves a real control `history_log` succeeds through `libsvn`, stops the real server, binds a stateful malicious loopback `svn://` responder to the same port, and proves a malformed log response returns the stable `SVN_HISTORY_LOG_FAILED` key without credential or certificate prompts.
 - `scripts/native/smoke-malicious-svn-server-response.ps1` exposes the exact ignored Rust test as a native smoke entrypoint that requires the staged bridge, source-built `svn.exe`, `svnadmin.exe`, `svnserve.exe`, `libsvn_client-1.dll`, `libsvn_ra-1.dll`, and `libsvn_subr-1.dll`.
-- `native:smoke-malicious-svn-server-response:staged` and the Windows workflow definition run the deterministic native `svn://` server-response smoke after the source-built native bridge is built and smoke-tested. While GitHub Actions minutes are exhausted, this gate is verified locally before merge.
+- `native:smoke-malicious-svn-server-response:staged` and the scheduled/manual Windows workflow run the deterministic native `svn://` server-response smoke after the source-built native bridge is built and smoke-tested.
 - `docs/security/malicious-input-corpus.win32-x64.json` maps `NATIVE-SVN-SERVER-001` to the exact Rust fixture test and keeps `NATIVE-REMOTE-FUZZ-001` as the release-blocker entry for coverage-guided libsvn remote-protocol fuzzing.
 
 This slice intentionally does not implement coverage-guided fuzzing, prove arbitrary `svn://` server safety, exercise installed VSIX behavior, close `SEC-016` or `TST-020`, install from Marketplace, or claim public release readiness.
@@ -735,7 +735,7 @@ This slice intentionally does not create a fuzzer target, run `cargo fuzz`, prov
 - `pnpm release:test-native-remote-fuzz-contract-scripts` must pass locally.
 - `pnpm release:generate-native-remote-fuzz-contract:win32-x64` and `pnpm release:verify-native-remote-fuzz-contract:win32-x64` must pass against the real repository contract, malicious corpus, and security matrix.
 - `pnpm release:verify-readiness` must require the M7l7 contract docs, package scripts, public claim row, security evidence row text, and roadmap entry while keeping `SEC-016` and `TST-020` as release blockers.
-- This gate is intentionally local-first while GitHub Actions minutes are unavailable; workflow execution is not required as evidence for this slice.
+- This heavy gate remains scheduled/manual and is not part of automatic pull-request validation.
 
 ## M7l8 Implemented Slice
 
@@ -756,7 +756,7 @@ This slice intentionally does not compile, link, run, or execute `cargo-fuzz`, e
 - `pnpm release:test-native-remote-fuzz-target-preflight-scripts` must pass locally.
 - `pnpm release:generate-native-remote-fuzz-target-preflight:win32-x64` and `pnpm release:verify-native-remote-fuzz-target-preflight:win32-x64` must pass against the real repository contract, malicious corpus, security matrix, fuzz target source, and seed manifest.
 - `pnpm release:verify-readiness` must require the M7l8 source preflight docs, package scripts, public claim row, security evidence row text, roadmap entry, and manual-only GitHub Actions trigger state while keeping `SEC-016` and `TST-020` as release blockers.
-- This gate is intentionally local-first while GitHub Actions minutes are unavailable; workflow execution is not required as evidence for this slice.
+- The source-only target preflight runs in PR Fast; coverage-guided and fixed-seed build/run evidence remains outside the automatic pull-request gate.
 
 ## M7l9 Implemented Slice
 
@@ -775,13 +775,13 @@ This slice intentionally does not call libsvn, run a coverage-guided campaign, p
 - `pnpm release:test-native-remote-fuzz-fixed-seed-smoke-scripts` must pass locally.
 - `pnpm release:generate-native-remote-fuzz-fixed-seed-smoke:win32-x64` and `pnpm release:verify-native-remote-fuzz-fixed-seed-smoke:win32-x64` must pass against the real repository contract, malicious corpus, security matrix, fuzz manifest, fuzz lock, target source, seed manifest, local nightly toolchain, cargo-fuzz, and explicit VS Build Tools developer command.
 - `pnpm release:verify-readiness` must require the M7l9 fixed seed harness smoke docs, package scripts, public claim row, security evidence row text, roadmap entry, and manual-only GitHub Actions trigger state while keeping `SEC-016` and `TST-020` as release blockers.
-- This gate is intentionally local-first while GitHub Actions minutes are unavailable; workflow execution is not required as evidence for this slice.
+- This heavy fixed-seed build/run gate remains scheduled/manual and is not part of automatic pull-request validation.
 
 ## Windows Beta Packaging Slices
 
-The next implementation track is Windows `win32-x64` Beta packaging readiness for local file-backed SVN workflows. It must not broaden the Beta feature set or convert public-release blockers into Beta blockers.
+This section records the Windows `win32-x64` Beta packaging-readiness slices for local file-backed SVN workflows. They do not broaden the Beta feature set or convert public-release blockers into Beta blockers.
 
-- Beta-A: keep handoff, roadmap, release gates, public claim matrix, and requirement evidence aligned with PR #138 and later packaging evidence.
+- Beta-A: keep the public engineering guide, roadmap, release gates, public claim matrix, and requirement evidence aligned with current packaging evidence.
 - Beta-B: covered by installed VSIX E2E coverage for the local-file Checkout Repository URL prompt cancellation, pre-existing obstructing target file failure/no-state-pollution flow, invalid URL failure/no-state-pollution flow, pre-existing local directory target success path, pre-existing local directory obstruction tree-conflict projection path, and happy path: no-repository welcome, cancellation without checkout state pollution, obstructing-file failure without checkout state pollution, invalid-URL failure without checkout state pollution, existing-directory local file preservation plus unversioned projection, obstruction preservation plus tree-conflict projection and working-copy oracle confirmation, prompt flow, libsvn checkout, automatic repository open, Source Control projection, and repository-baseline content oracle. Follow-up checkout negative-flow coverage must still cover repository browser, remote/auth/certificate, and broader checkout failure cases.
 - Beta-C: covered by M7j3 installed VSIX E2E evidence for local-file update to revision, revision prompt cancellation without working-copy or Source Control projection mutation, update depth, sticky depth, externals policy prompt selection, post-update reconcile behavior, and repository-oracle content comparison; follow-up update coverage must still cover remote failures, auth/certificate flows, backend failure UX, mixed-revision edge analysis, and load behavior.
 - Beta-D: covered by M7j3 installed VSIX E2E evidence for local-file Add to Ignore/`svn:ignore`, changelist grouping, Set/Clear Changelist, Commit Changelist, Revert Changelist, prompt capture, and repository/working-copy oracles. Follow-up property and changelist coverage must still cover full property editor UX, `svn:externals` editing, broad load behavior, cancellation UX, remote/auth/certificate behavior, and commit template/message-history behavior.
@@ -792,6 +792,6 @@ The next implementation track is Windows `win32-x64` Beta packaging readiness fo
 ## Deferred Public-Release M7 Slices
 
 - M7j4: previous-stable installed-product upgrade/rollback once a real previous stable artifact exists.
-- M7k2c: live public repository metadata, Marketplace publisher authorization, publish-auth configuration, and Marketplace/public install evidence once the public repository and publisher environment exist.
+- M7k2c: Marketplace publisher authorization, publish-auth configuration, and Marketplace/public install evidence once the publisher environment is ready.
 - M7l2 continuation: produce final vulnerability release approval evidence after terminal rows receive final release review, keep affected-row remediation explicit if future findings are introduced, and avoid turning terminal VEX inputs into broad vulnerability-free claims.
 - Future coverage-guided native remote-protocol fuzzing: run coverage-guided campaigns from the source-controlled fuzzer target, prove sanitizer-instrumented libsvn coverage, record edge growth and crash/run artifacts, and close the M7l7/M7l8/M7l9 blockers only after evidence exists.

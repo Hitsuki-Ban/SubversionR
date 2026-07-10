@@ -1,8 +1,8 @@
-# M1 Private Repo And Protocol Smoke Plan
+# M1 Repository Foundation And Protocol Smoke Plan
 
 ## Goal
 
-Establish a private but publishable repository with a real Apache Subversion source gate, a hand-written bridge boundary, and protocol smoke tests across Rust and TypeScript.
+Establish a publishable repository foundation with a real Apache Subversion source gate, a hand-written bridge boundary, and protocol smoke tests across Rust and TypeScript.
 
 ## Gates
 

@@ -1,27 +1,25 @@
 # GitHub Actions Restoration
 
-This note records the prepared GitHub Actions trigger design for the public SubversionR repository migration.
+This note records the active GitHub Actions trigger design after the public repository cutover.
 
 ## Trigger Design
 
-- `.github/workflows/pr-fast.yml` runs automatically on every `pull_request`, on `push` to `main`, and still supports `workflow_dispatch` for manual reruns.
-- `.github/workflows/ci.yml` remains explicit for release-grade native and packaging gates: it supports `workflow_dispatch` and a weekly schedule, but it does not run on `pull_request` or `push`.
-- Both workflows use concurrency groups so superseded PR Fast runs can cancel while scheduled/manual heavy CI runs remain serialized by branch or run identity.
+- `.github/workflows/pr-fast.yml` runs automatically on every `pull_request`, on `push` to `main`, and supports `workflow_dispatch` for manual reruns.
+- `.github/workflows/ci.yml` is the scheduled/manual release-grade workflow with a weekly schedule. It does not run automatically on `pull_request` or `push`.
+- Both workflows use concurrency groups. Superseded PR Fast runs can cancel, while heavy CI runs remain serialized by branch or run identity.
 
 ## Required Check
 
-Branch protection for the public repository should require the `PR Fast / windows` check. That check name comes from the workflow name `PR Fast` and the job id `windows`.
+Public branch protection should require `PR Fast / windows`. The context comes from workflow name `PR Fast` and job id `windows`.
 
-## Public Cutover Checklist
+Branch protection is an owner-managed repository setting and is not inferred from workflow files. The public cutover evidence records its separately verified state.
 
-1. Push the fresh public baseline to `Hitsuki-Ban/SubversionR`.
-2. Confirm the first public `PR Fast / windows` run is green.
-3. Require `PR Fast / windows` on public `main` branch protection.
-4. Keep `.github/workflows/ci.yml` scheduled/manual on the public repository only.
-5. Disable both workflows in the private repository through the GitHub Actions UI.
-6. Record the private workflow disable date here after the cutover.
+## Cutover State
 
-Private workflow disable date: not cut over.
+- The public baseline is on `main`.
+- `PR Fast / windows` has passed on public pull requests and `main` pushes.
+- The temporary Cloudflare Workers Builds bridge was retired on 2026-07-10; its final state is recorded in `docs/ci/cloudflare-pr-fast-bridge.md`.
+- Private-repository workflow disablement remains a separate owner operation and no completion date is recorded in this public document.
 
 ## Heavy Gates
 
