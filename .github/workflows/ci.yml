@@ -2,6 +2,11 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      attestation_release_tag:
+        description: Branch-only bootstrap for the dedicated release VSIX attestation workflow
+        required: false
+        type: string
   schedule:
     - cron: "17 3 * * 1"
 
@@ -11,6 +16,7 @@ concurrency:
 
 jobs:
   windows:
+    if: ${{ inputs.attestation_release_tag == '' }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -433,3 +439,12 @@ jobs:
             target/release-evidence/installed-source-control-ui-e2e/win32-x64/**/*.json
           if-no-files-found: error
           retention-days: 14
+  attest-release-vsix:
+    if: ${{ inputs.attestation_release_tag != '' }}
+    uses: ./.github/workflows/attest-release-vsix.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      release_tag: ${{ inputs.attestation_release_tag }}

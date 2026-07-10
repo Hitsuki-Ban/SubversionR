@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.release.github-attestation-contract.win32-x64.v1",
+  "publicReadinessClaim": false,
+  "target": "win32-x64",
+  "release": {
+    "tag": "v0.2.0-beta.1",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1"
+  },
+  "subject": {
+    "name": "subversionr-win32-x64-0.2.0.vsix",
+    "size": 8250996,
+    "sha256": "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb"
+  },
+  "attestation": {
+    "provider": "github-artifact-attestations",
+    "action": "actions/attest-build-provenance@v4",
+    "predicateType": "https://slsa.dev/provenance/v1"
+  },
+  "workflow": {
+    "path": ".github/workflows/attest-release-vsix.yml",
+    "runner": "ubuntu-24.04",
+    "trigger": "workflow_dispatch",
+    "requiredPermissions": [
+      "contents: read",
+      "id-token: write",
+      "attestations: write"
+    ]
+  },
+  "verificationPolicy": {
+    "repository": "Hitsuki-Ban/SubversionR",
+    "signerWorkflow": "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "denySelfHostedRunners": true,
+    "format": "json"
+  }
+}

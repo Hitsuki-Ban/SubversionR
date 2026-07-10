@@ -21,6 +21,7 @@
     "release:test-state-engine-beta-performance-scripts": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-state-engine-beta-performance-scripts.tests.ps1",
     "release:test-beta-candidate-evidence-scripts": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-beta-candidate-evidence-scripts.tests.ps1",
     "release:test-provenance-scripts": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-provenance-scripts.tests.ps1",
+    "release:test-live-attestation-scripts": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-live-attestation-scripts.tests.ps1",
     "release:test-publication-gaps-scripts": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-publication-gaps-scripts.tests.ps1",
     "release:test-vulnerability-review-scripts": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-vulnerability-review-scripts.tests.ps1",
     "release:test-live-osv-review-scripts": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-live-osv-review-scripts.tests.ps1",

@@ -1,0 +1,105 @@
+name: Attest Release VSIX
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub prerelease tag whose VSIX will be attested
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download released VSIX
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $contract = Get-Content -Raw -LiteralPath docs/release/github-attestation-contract.win32-x64.json | ConvertFrom-Json
+          if ($env:RELEASE_TAG -ne [string]$contract.release.tag) {
+            throw "release_tag must match the attestation contract."
+          }
+          $subjectRoot = "target/release-attestation/win32-x64"
+          New-Item -ItemType Directory -Force -Path $subjectRoot | Out-Null
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern ([string]$contract.subject.name) --dir $subjectRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download the contracted release subject."
+          }
+      - name: Verify released VSIX against M7j2b contract
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass
+          -File scripts/release/verify-release-attestation-subject.ps1
+          -Target win32-x64
+          -ContractPath docs/release/github-attestation-contract.win32-x64.json
+          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+          -ReleaseTag $env:RELEASE_TAG
+      - name: Publish build provenance attestation
+        id: attest
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+      - name: Verify published attestation
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $subjectPath = "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix"
+          $resultPath = "target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json"
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $resultPath) | Out-Null
+          gh attestation verify $subjectPath -R Hitsuki-Ban/SubversionR --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners --format json | Set-Content -LiteralPath $resultPath -Encoding utf8
+          if ($LASTEXITCODE -ne 0) {
+            throw "Published attestation verification failed."
+          }
+      - name: Record live attestation evidence
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ATTESTATION_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          ATTESTATION_ID: ${{ steps.attest.outputs.attestation-id }}
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass
+          -File scripts/release/record-live-github-attestation.ps1
+          -Target win32-x64
+          -ContractPath docs/release/github-attestation-contract.win32-x64.json
+          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+          -ReleaseTag $env:RELEASE_TAG
+          -BundlePath $env:ATTESTATION_BUNDLE_PATH
+          -VerificationResultPath target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json
+          -RunId $env:GITHUB_RUN_ID
+          -RunAttempt $env:GITHUB_RUN_ATTEMPT
+          -RunUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          -HeadSha $env:GITHUB_SHA
+          -SourceRef $env:GITHUB_REF
+          -EventName $env:GITHUB_EVENT_NAME
+          -AttestationId $env:ATTESTATION_ID
+          -AttestationUrl $env:ATTESTATION_URL
+          -OutputPath target/release-evidence/subversionr-live-github-attestation-win32-x64.json
+      - name: Upload live attestation evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: subversionr-live-github-attestation-win32-x64
+          if-no-files-found: error
+          path: |
+            ${{ steps.attest.outputs.bundle-path }}
+            target/release-evidence/subversionr-live-github-attestation-win32-x64.json
+            target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json
