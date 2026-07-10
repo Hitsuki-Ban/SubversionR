@@ -93,6 +93,25 @@ function Get-RequiredProperty([object]$Object, [string]$Name, [string]$Context) 
   $Object.$Name
 }
 
+function Get-RequiredString([object]$Object, [string]$Name, [string]$Context) {
+  if (-not (Test-HasProperty $Object $Name)) {
+    throw "$Context must define $Name."
+  }
+  $value = $Object.$Name
+  if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value)) {
+    throw "$Context $Name must be a non-empty JSON string."
+  }
+  $value
+}
+
+function Assert-OnlyProperties([object]$Object, [string[]]$Allowed, [string]$Context) {
+  foreach ($property in @($Object.PSObject.Properties.Name)) {
+    if ($property -notin $Allowed) {
+      throw "$Context contains unexpected property '$property'."
+    }
+  }
+}
+
 function Assert-Equal($Expected, $Actual, [string]$Message) {
   if ($Expected -ne $Actual) {
     throw "$Message Expected '$Expected', got '$Actual'."
@@ -115,6 +134,14 @@ function Assert-BooleanFalse([object]$Object, [string]$Name, [string]$Context) {
   Assert-Equal $false ([bool]$Object.$Name) "$Context $Name must remain false."
 }
 
+function Get-RequiredUtcTimestamp([object]$Object, [string]$Name, [string]$Context) {
+  $value = Get-RequiredProperty $Object $Name $Context
+  if ($value -isnot [datetime] -or ([datetime]$value).Kind -eq [System.DateTimeKind]::Unspecified) {
+    throw "$Context $Name must be an ISO-8601 timestamp with an explicit timezone."
+  }
+  ([datetime]$value).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Assert-BooleanTrue([object]$Object, [string]$Name, [string]$Context) {
   if (-not (Test-HasProperty $Object $Name)) {
     throw "$Context must define $Name."
@@ -125,20 +152,31 @@ function Assert-BooleanTrue([object]$Object, [string]$Name, [string]$Context) {
   Assert-Equal $true ([bool]$Object.$Name) "$Context $Name must be true."
 }
 
+function Assert-Int64([object]$Object, [string]$Name, [int64]$Expected, [string]$Context) {
+  if (-not (Test-HasProperty $Object $Name)) {
+    throw "$Context must define $Name."
+  }
+  if ($Object.$Name -isnot [int64]) {
+    throw "$Context $Name must be a JSON integer."
+  }
+  Assert-Equal $Expected ([int64]$Object.$Name) "$Context $Name must match."
+}
+
 function Assert-NoForbiddenCutoverEvidenceText([string]$Text) {
   $patterns = @(
-    'ghp_[A-Za-z0-9_]{20,}',
+    'gh[pousr]_[A-Za-z0-9_]{20,}',
     'github_pat_[A-Za-z0-9_]+',
     '://[^/\s:@"]+:[^/\s:@"]+@',
     '(?i)Authorization:\s*Bearer\s+',
     '(?i)"tokenValue"\s*:',
     '(?i)"credential"\s*:',
     '(?i)"authorizationHeader"\s*:',
-    'github\.com/Hitsuki-Ban/SubversionR-private',
+    '(?i)Hitsuki-Ban[/:]SubversionR-private(?:\.git)?',
     'repo_id',
     'repo_connection_uuid',
     'build_token_uuid',
-    'trigger_uuid'
+    'trigger_uuid',
+    '(?i)"(?:account_?id|zone_?id|worker_?id|script_?id|deploy_hook_uuid)"\s*:'
   )
 
   foreach ($pattern in $patterns) {
@@ -261,22 +299,63 @@ Assert-True ($attestationUrl -match '^https://github\.com/Hitsuki-Ban/Subversion
 Assert-Equal 1 ([int]$publicCutoverEvidence.schemaVersion) "Public cutover evidence schemaVersion should be 1."
 Assert-Equal "subversionr.release.public-cutover-evidence.v1" ([string]$publicCutoverEvidence.schema) "Public cutover evidence schema must match."
 Assert-Equal "recorded-post-cutover" ([string]$publicCutoverEvidence.status) "Public cutover evidence must record the post-cutover state."
+Assert-OnlyProperties $publicCutoverEvidence @("schemaVersion", "schema", "status", "repository", "ci", "cloudflareBridgeRetirement", "release", "betaCandidateEvidence") "Public cutover evidence"
 
 $cutoverRepository = Get-RequiredProperty $publicCutoverEvidence "repository" "Public cutover evidence"
+Assert-OnlyProperties $cutoverRepository @("url", "defaultBranch", "baselineCommit", "cutoverHeadCommit", "resolvesToPublic", "branchProtectionRequiredCheck", "branchProtectionConfigured", "branchProtection", "privateVulnerabilityReportingEnabled", "metadataVerified") "Public cutover repository"
 Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR" ([string](Get-RequiredProperty $cutoverRepository "url" "Public cutover repository")) "Public cutover repository URL must match."
 Assert-Equal "main" ([string](Get-RequiredProperty $cutoverRepository "defaultBranch" "Public cutover repository")) "Public cutover default branch must be main."
 $baselineCommit = [string](Get-RequiredProperty $cutoverRepository "baselineCommit" "Public cutover repository")
 Assert-True ($baselineCommit -match '^[a-f0-9]{40}$') "Public cutover baselineCommit must be a full lowercase commit SHA."
 $cutoverHeadCommit = [string](Get-RequiredProperty $cutoverRepository "cutoverHeadCommit" "Public cutover repository")
 Assert-True ($cutoverHeadCommit -match '^[a-f0-9]{40}$') "Public cutover cutoverHeadCommit must be a full lowercase commit SHA."
-Assert-True ($cutoverHeadCommit -ne $baselineCommit) "Public cutover cutoverHeadCommit must identify the post-baseline cutover head."
-Assert-BooleanTrue $cutoverRepository "resolvesToPublic" "Public cutover repository"
-Assert-Equal "PR Fast / windows" ([string](Get-RequiredProperty $cutoverRepository "branchProtectionRequiredCheck" "Public cutover repository")) "Public branch protection required check must match."
-Assert-BooleanFalse $cutoverRepository "branchProtectionConfigured" "Public cutover repository"
-Assert-BooleanTrue $cutoverRepository "privateVulnerabilityReportingEnabled" "Public cutover repository"
-Assert-BooleanFalse $cutoverRepository "metadataVerified" "Public cutover repository"
+  Assert-True ($cutoverHeadCommit -ne $baselineCommit) "Public cutover cutoverHeadCommit must identify the post-baseline cutover head."
+  Assert-BooleanTrue $cutoverRepository "resolvesToPublic" "Public cutover repository"
+  Assert-Equal "PR Fast / windows" (Get-RequiredString $cutoverRepository "branchProtectionRequiredCheck" "Public cutover repository") "Public branch protection required check must match."
+  Assert-BooleanTrue $cutoverRepository "branchProtectionConfigured" "Public cutover repository"
+  $branchProtection = Get-RequiredProperty $cutoverRepository "branchProtection" "Public cutover repository"
+  Assert-OnlyProperties $branchProtection @("status", "provider", "rulesetId", "rulesetName", "target", "enforcement", "refIncludes", "refExcludes", "requiredStatusCheck", "pullRequestRequired", "requiredApprovingReviewCount", "nonFastForwardBlocked", "bypassActorCount", "updatedAt") "Public branch protection"
+  Assert-Equal "active" (Get-RequiredString $branchProtection "status" "Public branch protection") "Public branch protection status must be active."
+  Assert-Equal "github-repository-ruleset" (Get-RequiredString $branchProtection "provider" "Public branch protection") "Public branch protection provider must be a GitHub repository ruleset."
+  Assert-Int64 $branchProtection "rulesetId" 18761017 "Public branch protection"
+  Assert-Equal "protect-main" (Get-RequiredString $branchProtection "rulesetName" "Public branch protection") "Public branch protection ruleset name must match."
+  Assert-Equal "branch" (Get-RequiredString $branchProtection "target" "Public branch protection") "Public branch protection target must be branch."
+  Assert-Equal "active" (Get-RequiredString $branchProtection "enforcement" "Public branch protection") "Public branch protection enforcement must be active."
+  if (-not (Test-HasProperty $branchProtection "refIncludes")) {
+    throw "Public branch protection must define refIncludes."
+  }
+  $branchProtectionRefIncludesValue = $branchProtection.refIncludes
+  if ($branchProtectionRefIncludesValue -isnot [System.Array]) {
+    throw "Public branch protection refIncludes must be a JSON array."
+  }
+  $branchProtectionRefIncludes = @($branchProtectionRefIncludesValue)
+  Assert-Equal 1 $branchProtectionRefIncludes.Count "Public branch protection must target exactly one ref selector."
+  Assert-True ($branchProtectionRefIncludes[0] -is [string]) "Public branch protection refIncludes entries must be JSON strings."
+  Assert-Equal "~DEFAULT_BRANCH" $branchProtectionRefIncludes[0] "Public branch protection must target the default branch."
+  if (-not (Test-HasProperty $branchProtection "refExcludes")) {
+    throw "Public branch protection must define refExcludes."
+  }
+  if ($branchProtection.refExcludes -isnot [System.Array]) {
+    throw "Public branch protection refExcludes must be a JSON array."
+  }
+  $branchProtectionRefExcludes = @($branchProtection.refExcludes)
+  Assert-Equal 0 $branchProtectionRefExcludes.Count "Public branch protection must not exclude any refs."
+  $requiredStatusCheck = Get-RequiredProperty $branchProtection "requiredStatusCheck" "Public branch protection"
+  Assert-OnlyProperties $requiredStatusCheck @("displayName", "context", "integrationId", "strict") "Public branch protection required status check"
+  Assert-Equal "PR Fast / windows" (Get-RequiredString $requiredStatusCheck "displayName" "Public branch protection required status check") "Public branch protection display check must match."
+  Assert-Equal "windows" (Get-RequiredString $requiredStatusCheck "context" "Public branch protection required status check") "Public branch protection context must match the GitHub Actions job id."
+  Assert-Int64 $requiredStatusCheck "integrationId" 15368 "Public branch protection required status check"
+  Assert-BooleanFalse $requiredStatusCheck "strict" "Public branch protection required status check"
+  Assert-BooleanTrue $branchProtection "pullRequestRequired" "Public branch protection"
+  Assert-Int64 $branchProtection "requiredApprovingReviewCount" 0 "Public branch protection"
+  Assert-BooleanTrue $branchProtection "nonFastForwardBlocked" "Public branch protection"
+  Assert-Int64 $branchProtection "bypassActorCount" 0 "Public branch protection"
+  $branchProtectionUpdatedAt = Get-RequiredUtcTimestamp $branchProtection "updatedAt" "Public branch protection"
+  Assert-BooleanTrue $cutoverRepository "privateVulnerabilityReportingEnabled" "Public cutover repository"
+  Assert-BooleanFalse $cutoverRepository "metadataVerified" "Public cutover repository"
 
 $cutoverCi = Get-RequiredProperty $publicCutoverEvidence "ci" "Public cutover evidence"
+Assert-OnlyProperties $cutoverCi @("status", "workflow", "requiredCheck", "runUrl", "headSha", "event", "conclusion", "startedAt", "completedAt", "publicPrFastFirstRunGreen", "publicHeavyWorkflowScheduleOnly", "privateWorkflowsDisabled", "privateWorkflowDisableDateRecorded", "privateWorkflowDisablement") "Public cutover CI"
 Assert-Equal "green" ([string](Get-RequiredProperty $cutoverCi "status" "Public cutover CI")) "Public cutover CI status must be green."
 Assert-Equal "PR Fast" ([string](Get-RequiredProperty $cutoverCi "workflow" "Public cutover CI")) "Public cutover CI workflow must be PR Fast."
 Assert-Equal "PR Fast / windows" ([string](Get-RequiredProperty $cutoverCi "requiredCheck" "Public cutover CI")) "Public cutover CI required check must match."
@@ -286,13 +365,48 @@ Assert-Equal $cutoverHeadCommit ([string](Get-RequiredProperty $cutoverCi "headS
 Assert-Equal "push" ([string](Get-RequiredProperty $cutoverCi "event" "Public cutover CI")) "Public cutover CI event must be push."
 Assert-Equal "success" ([string](Get-RequiredProperty $cutoverCi "conclusion" "Public cutover CI")) "Public cutover CI conclusion must be success."
 [void](Get-RequiredProperty $cutoverCi "startedAt" "Public cutover CI")
-[void](Get-RequiredProperty $cutoverCi "completedAt" "Public cutover CI")
-Assert-BooleanTrue $cutoverCi "publicPrFastFirstRunGreen" "Public cutover CI"
-Assert-BooleanTrue $cutoverCi "publicHeavyWorkflowScheduleOnly" "Public cutover CI"
-Assert-BooleanFalse $cutoverCi "privateWorkflowsDisabled" "Public cutover CI"
-Assert-BooleanFalse $cutoverCi "privateWorkflowDisableDateRecorded" "Public cutover CI"
+  [void](Get-RequiredProperty $cutoverCi "completedAt" "Public cutover CI")
+  Assert-BooleanTrue $cutoverCi "publicPrFastFirstRunGreen" "Public cutover CI"
+  Assert-BooleanTrue $cutoverCi "publicHeavyWorkflowScheduleOnly" "Public cutover CI"
+  Assert-BooleanTrue $cutoverCi "privateWorkflowsDisabled" "Public cutover CI"
+  Assert-BooleanTrue $cutoverCi "privateWorkflowDisableDateRecorded" "Public cutover CI"
+  $privateWorkflowDisablement = Get-RequiredProperty $cutoverCi "privateWorkflowDisablement" "Public cutover CI"
+  Assert-OnlyProperties $privateWorkflowDisablement @("status", "disableDate", "workflows") "Private workflow disablement"
+  Assert-Equal "complete" (Get-RequiredString $privateWorkflowDisablement "status" "Private workflow disablement") "Private workflow disablement status must be complete."
+  $privateWorkflowDisableDate = Get-RequiredString $privateWorkflowDisablement "disableDate" "Private workflow disablement"
+  Assert-Equal "2026-07-10" $privateWorkflowDisableDate "Private workflow disableDate must match the owner operation date."
+  if (-not (Test-HasProperty $privateWorkflowDisablement "workflows")) {
+    throw "Private workflow disablement must define workflows."
+  }
+  if ($privateWorkflowDisablement.workflows -isnot [System.Array]) {
+    throw "Private workflow disablement workflows must be a JSON array."
+  }
+  $privateWorkflowSources = @($privateWorkflowDisablement.workflows)
+  Assert-Equal 2 $privateWorkflowSources.Count "Private workflow disablement must record exactly two workflows."
+  $privateWorkflowContracts = @(
+    [pscustomobject]@{ name = "CI"; workflowId = [int64]300115281; path = ".github/workflows/ci.yml" },
+    [pscustomobject]@{ name = "PR Fast"; workflowId = [int64]303103620; path = ".github/workflows/pr-fast.yml" }
+  )
+  $privateWorkflowRecords = @()
+  foreach ($contract in $privateWorkflowContracts) {
+    $matches = @($privateWorkflowSources | Where-Object { $_.name -is [string] -and $_.name -eq $contract.name })
+    Assert-Equal 1 $matches.Count "Private workflow '$($contract.name)' must be recorded exactly once."
+    $workflow = $matches[0]
+    Assert-OnlyProperties $workflow @("name", "workflowId", "path", "state") "Private workflow '$($contract.name)'"
+    Assert-Equal $contract.name (Get-RequiredString $workflow "name" "Private workflow '$($contract.name)'") "Private workflow '$($contract.name)' name must match."
+    Assert-Int64 $workflow "workflowId" $contract.workflowId "Private workflow '$($contract.name)'"
+    Assert-Equal $contract.path (Get-RequiredString $workflow "path" "Private workflow '$($contract.name)'") "Private workflow '$($contract.name)' path must match."
+    Assert-Equal "disabled_manually" (Get-RequiredString $workflow "state" "Private workflow '$($contract.name)'") "Private workflow '$($contract.name)' state must be disabled_manually."
+    $privateWorkflowRecords += [pscustomobject]@{
+      name = $contract.name
+      workflowId = $contract.workflowId
+      path = $contract.path
+      state = "disabled_manually"
+    }
+  }
 
 $cutoverCloudflare = Get-RequiredProperty $publicCutoverEvidence "cloudflareBridgeRetirement" "Public cutover evidence"
+Assert-OnlyProperties $cutoverCloudflare @("status", "workerName", "publicCiReplacement", "disconnected", "triggersDisabled", "retirementDate") "Cloudflare bridge retirement"
 Assert-Equal "retired" ([string](Get-RequiredProperty $cutoverCloudflare "status" "Cloudflare bridge retirement")) "Cloudflare bridge status must be retired."
 Assert-Equal "subversionr-pr-fast" ([string](Get-RequiredProperty $cutoverCloudflare "workerName" "Cloudflare bridge retirement")) "Cloudflare bridge worker name must match."
 Assert-Equal "PR Fast / windows" ([string](Get-RequiredProperty $cutoverCloudflare "publicCiReplacement" "Cloudflare bridge retirement")) "Cloudflare bridge replacement check must match."
@@ -302,6 +416,7 @@ $cloudflareRetirementDate = [string](Get-RequiredProperty $cutoverCloudflare "re
 Assert-True ($cloudflareRetirementDate -match '^20[0-9]{2}-[0-9]{2}-[0-9]{2}$') "Cloudflare retirementDate must use YYYY-MM-DD."
 
 $cutoverRelease = Get-RequiredProperty $publicCutoverEvidence "release" "Public cutover evidence"
+Assert-OnlyProperties $cutoverRelease @("status", "tag", "tagCommit", "url", "prerelease", "publishedAt", "artifactAttestationPublished", "assets") "Public cutover release"
 Assert-Equal "published" ([string](Get-RequiredProperty $cutoverRelease "status" "Public cutover release")) "Public cutover release status must be published."
 Assert-Equal "v0.2.0-beta.1" ([string](Get-RequiredProperty $cutoverRelease "tag" "Public cutover release")) "Public cutover release tag must match."
 Assert-Equal $cutoverHeadCommit ([string](Get-RequiredProperty $cutoverRelease "tagCommit" "Public cutover release")) "Public cutover release tagCommit must match the recorded cutover head commit."
@@ -311,6 +426,9 @@ Assert-BooleanTrue $cutoverRelease "prerelease" "Public cutover release"
 Assert-BooleanTrue $cutoverRelease "artifactAttestationPublished" "Public cutover release"
 $releaseAssets = @($cutoverRelease.assets)
 Assert-Equal 4 $releaseAssets.Count "Public cutover release must record the four published assets."
+foreach ($asset in $releaseAssets) {
+  Assert-OnlyProperties $asset @("name", "size", "sha256", "url") "Public cutover release asset"
+}
 foreach ($assetName in @(
     "subversionr-source-sbom.cdx.json",
     "subversionr-win32-x64-0.2.0.vsix",
@@ -327,6 +445,7 @@ Assert-Equal $actualVsixSha256 ([string]$releasedVsix.sha256) "Released VSIX SHA
 Assert-Equal ([int64](Get-Item -LiteralPath $vsixPath).Length) ([int64]$releasedVsix.size) "Released VSIX size must match current VSIX bytes."
 
 $betaCandidateEvidence = Get-RequiredProperty $publicCutoverEvidence "betaCandidateEvidence" "Public cutover evidence"
+Assert-OnlyProperties $betaCandidateEvidence @("status", "publishedBundleAssetName", "publishedBundleSha256", "expectedVsixName", "expectedVsixSha256", "containedVsixName", "containedVsixSha256", "declaredPayloadCount", "missingPayloadCount", "mismatchedPayloadCount", "consistencyVerified", "regenerationCompleted") "Beta candidate evidence"
 Assert-Equal "blocked-published-bundle-inconsistent" ([string](Get-RequiredProperty $betaCandidateEvidence "status" "Beta candidate evidence")) "Published Beta candidate evidence must remain blocked on bundle inconsistency."
 Assert-Equal "subversionr-win32-x64-beta-candidate.zip" ([string](Get-RequiredProperty $betaCandidateEvidence "publishedBundleAssetName" "Beta candidate evidence")) "Beta candidate evidence must bind the published bundle asset."
 $publishedBundleAsset = Get-RequiredReleaseAsset -Assets $releaseAssets -Name "subversionr-win32-x64-beta-candidate.zip"
@@ -347,9 +466,7 @@ $blockers = @(
   "Marketplace publication is not run by this local gap report.",
   "Marketplace public install evidence is not generated by this local gap report.",
   "VSIX signing remains absent in the upstream provenance preflight.",
-  "Public branch protection is not configured.",
   "Public repository homepage and social metadata are not fully verified.",
-  "Private repository workflows are not disabled.",
   "The published Beta candidate bundle is inconsistent with its manifest and cannot close the post-cutover Beta-G chain.",
   "Previous stable artifact rollback evidence is not generated by this local gap report."
 )
@@ -361,7 +478,7 @@ $nonClaims = @(
   "This gate does not configure or validate Microsoft Entra ID workload identity, managed identity, PAT, VSCE_PAT, or any other credential.",
   "This gate does not publish to Visual Studio Marketplace.",
   "This gate does not install from Visual Studio Marketplace or prove public acquisition.",
-  "This gate does not configure public branch protection or disable private workflows.",
+  "This gate records owner-managed branch protection and private workflow disablement from hash-bound evidence; it does not perform repository-owner API mutations.",
   "This gate records live GitHub artifact attestation publication and verification but does not prove VSIX signing, previous-stable rollback, final SBOM/NOTICE review, or CVE review."
 )
 
@@ -507,16 +624,34 @@ $report = [pscustomobject]@{
       cutoverHeadCommit = $cutoverHeadCommit
       branchProtectionRequiredCheck = [string]$cutoverRepository.branchProtectionRequiredCheck
       branchProtectionConfigured = [bool]$cutoverRepository.branchProtectionConfigured
+      branchProtection = [pscustomobject]@{
+        status = [string]$branchProtection.status
+        provider = [string]$branchProtection.provider
+        rulesetId = [int64]$branchProtection.rulesetId
+        rulesetName = [string]$branchProtection.rulesetName
+        target = [string]$branchProtection.target
+        enforcement = [string]$branchProtection.enforcement
+        refIncludes = @($branchProtectionRefIncludes)
+        refExcludes = @($branchProtectionRefExcludes)
+        requiredStatusCheck = [pscustomobject]@{
+          displayName = [string]$requiredStatusCheck.displayName
+          context = [string]$requiredStatusCheck.context
+          integrationId = [int64]$requiredStatusCheck.integrationId
+          strict = [bool]$requiredStatusCheck.strict
+        }
+        pullRequestRequired = [bool]$branchProtection.pullRequestRequired
+        requiredApprovingReviewCount = [int]$branchProtection.requiredApprovingReviewCount
+        nonFastForwardBlocked = [bool]$branchProtection.nonFastForwardBlocked
+        bypassActorCount = [int]$branchProtection.bypassActorCount
+        updatedAt = $branchProtectionUpdatedAt
+      }
       privateVulnerabilityReportingEnabled = [bool]$cutoverRepository.privateVulnerabilityReportingEnabled
       metadataVerified = [bool]$cutoverRepository.metadataVerified
       topics = @("svn", "subversion", "vscode-extension", "scm")
-      blockers = @(
-        "Configure branch protection to require PR Fast / windows.",
-        "Verify and complete public repository homepage and social metadata."
-      )
+      blockers = @("Verify and complete public repository homepage and social metadata.")
     }
     ciHomeMigration = [pscustomobject]@{
-      status = "public-pr-fast-green-owner-follow-up"
+      status = "complete"
       workflow = [string]$cutoverCi.workflow
       requiredCheck = [string]$cutoverCi.requiredCheck
       runUrl = $ciRunUrl
@@ -529,7 +664,12 @@ $report = [pscustomobject]@{
       publicHeavyWorkflowScheduleOnly = [bool]$cutoverCi.publicHeavyWorkflowScheduleOnly
       privateWorkflowsDisabled = [bool]$cutoverCi.privateWorkflowsDisabled
       privateWorkflowDisableDateRecorded = [bool]$cutoverCi.privateWorkflowDisableDateRecorded
-      blockers = @("Disable private repository workflows and record the disablement date.")
+      privateWorkflowDisablement = [pscustomobject]@{
+        status = [string]$privateWorkflowDisablement.status
+        disableDate = $privateWorkflowDisableDate
+        workflows = @($privateWorkflowRecords)
+      }
+      blockers = @()
     }
     cloudflareBridgeRetirement = [pscustomobject]@{
       status = [string]$cutoverCloudflare.status
@@ -561,9 +701,7 @@ $report = [pscustomobject]@{
     }
     betaCandidateEvidence = $betaCandidateEvidence
     manualSteps = @(
-      "Configure public branch protection for PR Fast / windows.",
       "Verify and complete public repository homepage and social metadata.",
-      "Disable private repository workflows through GitHub Actions UI.",
       "Regenerate a self-consistent Beta candidate bundle from the released VSIX and pass the unchanged Beta-G verifier."
     )
   }
@@ -572,9 +710,10 @@ $report = [pscustomobject]@{
   assertions = @(
     "publication gaps are bound to exact VSIX, VSIX package evidence, provenance preflight evidence, package manifests, README, LICENSE, CHANGELOG, SUPPORT, public cutover runbook, and public cutover evidence by SHA256",
     "public repository baseline, green public CI, Private Vulnerability Reporting, Cloudflare bridge retirement, public prerelease, and release asset records are recorded from hash-bound cutover evidence",
+    "active public default-branch protection and private workflow disablement are recorded from detailed hash-bound owner-state evidence",
     "live GitHub artifact attestation publication and verification are recorded through the hash-bound provenance evidence",
     "the published Beta candidate bundle is inconsistent, so post-cutover Beta-G regeneration remains blocked without weakening the consistency verifier",
-    "publisher authorization, publish authentication, Marketplace publication, Marketplace public install, branch protection, private workflow disablement, signing, and previous-stable rollback remain blocked gaps"
+    "publisher authorization, publish authentication, Marketplace publication, Marketplace public install, signing, and previous-stable rollback remain blocked gaps"
   )
 }
 

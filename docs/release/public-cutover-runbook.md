@@ -26,7 +26,7 @@ Baseline verification before the public push:
 
 - Repository: `https://github.com/Hitsuki-Ban/SubversionR`
 - Default branch: `main`
-- Public branch protection must require the exact `PR Fast / windows` check after the first public run creates it.
+- The active `protect-main` repository ruleset requires the exact `PR Fast / windows` check on the default branch, requires pull requests, blocks non-fast-forward updates, and allows no bypass actors.
 - Repository metadata after baseline:
   - Description: `Native Subversion client for VS Code`
   - Topics: `svn`, `subversion`, `vscode-extension`, `scm`
@@ -45,7 +45,7 @@ After the public baseline is pushed:
 
 ## Cloudflare Bridge Retirement
 
-The temporary private-repository Workers Builds bridge was retired on 2026-07-10 after `PR Fast / windows` passed on a public pull request and the resulting public `main` push. Public branch protection remained a separate owner UI follow-up and had not been configured at the time of retirement.
+The temporary private-repository Workers Builds bridge was retired on 2026-07-10 after `PR Fast / windows` passed on a public pull request and the resulting public `main` push. The owner-managed `protect-main` ruleset and private workflow disablement were subsequently completed and are recorded in the hash-bound cutover evidence.
 
 Completed retirement state:
 
@@ -84,14 +84,14 @@ Before public announcement:
 After the public repository baseline and CI home are confirmed:
 
 1. The private repository becomes a read-only archive: no new branches, pull requests, or merges after the cutover.
-2. Development, Codex slices, and all CI move to the public repository; private GitHub Actions workflows stay disabled so no scheduled or PR runs consume paid minutes.
-3. Record the freeze date in this runbook when it happens.
+2. Development, Codex slices, and all CI move to the public repository; the private `CI` and `PR Fast` workflows have remained `disabled_manually` since 2026-07-10 so no scheduled or PR runs consume paid minutes.
+3. Archive/freeze remains pending until active private worktrees and branches finish. Record the freeze date in this runbook when it happens.
 
 ## Post-Cutover Evidence
 
 After the public cutover:
 
-1. Record confirmed public repository, CI, Cloudflare retirement, and GitHub prerelease facts in `docs/release/public-cutover-evidence.json`; do not infer unverified repository metadata or owner-only settings.
+1. Record confirmed public repository, detailed branch ruleset, CI, private workflow disablement, Cloudflare retirement, and GitHub prerelease facts in `docs/release/public-cutover-evidence.json`; do not infer unverified repository metadata or owner-only settings.
 2. Regenerate and verify `subversionr.release.publication-gaps.win32-x64.v1` only from the exact released VSIX bytes and matching upstream VSIX/provenance evidence. The released VSIX SHA256 must remain `d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb`.
 3. Keep the post-cutover Beta-G chain blocked. The published `subversionr-win32-x64-beta-candidate.zip` declares 1,462 manifest payloads but has 29 missing payloads and 421 size or SHA256 mismatches; it contains `svn-r-win32-x64-0.1.0.vsix` (`ff7094c02b27914351fde4d9ae9b09dd8a3cf4af00f983ddf085adb808a3167b`) instead of the released VSIX.
 4. Regenerate a self-consistent Beta candidate bundle from matching candidate inputs, then run the unchanged bundle-manifest and candidate-consistency verifiers. Do not recover evidence from the inconsistent published ZIP or weaken either verifier.
