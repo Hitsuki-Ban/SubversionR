@@ -7,11 +7,6 @@ on:
         description: Existing GitHub prerelease tag whose VSIX will be attested
         required: true
         type: string
-  workflow_call:
-    inputs:
-      release_tag:
-        required: true
-        type: string
 permissions:
   contents: read
   id-token: write
@@ -50,7 +45,7 @@ jobs:
           -ContractPath docs/release/github-attestation-contract.win32-x64.json
           -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
           -ReleaseTag $env:RELEASE_TAG
-      - name: Publish build provenance attestation
+      - name: Publish post-release artifact attestation
         id: attest
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:

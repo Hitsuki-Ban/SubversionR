@@ -223,8 +223,8 @@ function Assert-PublicCutoverRunbook([object]$Document) {
     "subversionr-pr-fast",
     "v0.2.0-beta.1",
     "docs/release/github-attestation-evidence.win32-x64.json",
-    "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29083602695",
-    "https://github.com/Hitsuki-Ban/SubversionR/attestations/34722959",
+    "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29087683655",
+    "https://github.com/Hitsuki-Ban/SubversionR/attestations/34733676",
     "publicReadinessClaim=false"
   ) "public cutover runbook"
 }
@@ -6351,19 +6351,19 @@ Assert-Terms $attestationVerification @(
   "subversionr-win32-x64-0.2.0.vsix",
   "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
   "refs/heads/codex/issue-5-live-attestation",
-  "ff0558a24f3ddccf4f3eb011e0cb85817bd9d917"
+  "4a84e7a601f86227756af1e377dc4fa4bcc5caaf"
 ) "source-controlled exact GitHub attestation verification coverage"
 Assert-Terms $liveAttestationEvidence @(
   "subversionr.release.live-github-attestation.win32-x64.v1",
   '"publicReadinessClaim": false',
   '"signingClaim": false',
   '"status": "live-attestation-verified"',
-  "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29083602695",
-  "https://github.com/Hitsuki-Ban/SubversionR/attestations/34722959",
-  "c609e0ab61221b92829f646dad1063d055c87733277a0dbdab6b4142283f8445",
-  "f8b9ffa24ade3846b78d6d585848bd0c6b95cc07c05964304eab9e26bd8c082b",
+  "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29087683655",
+  "https://github.com/Hitsuki-Ban/SubversionR/attestations/34733676",
+  "e58d44b305296c9a0c7736064787ffec007febe8c84de9da630218a52aebeb4e",
+  "ed56af2832064ffc4274f1eee172b9fb4e233ee4d3e494da5556a3b513ddb1b9",
   "refs/heads/codex/issue-5-live-attestation",
-  "ff0558a24f3ddccf4f3eb011e0cb85817bd9d917",
+  "4a84e7a601f86227756af1e377dc4fa4bcc5caaf",
   "--bundle docs/release/github-attestation-bundle.win32-x64.json",
   "This post-release attestation does not prove the original VSIX source-to-binary build provenance.",
   '"verified": true'
