@@ -100,8 +100,8 @@
       },
       {
         "name": "subversionr-win32-x64-beta-candidate.zip",
-        "size": 15243662,
-        "sha256": "7b1c82e90261d893e2fb41809dc11b39ffd088de428abd32c9d55800be266db8",
+        "size": 15300834,
+        "sha256": "ca79f8cd2716caadc9c6e1e6c712c6904770a05e3660835b0ab58ce75bbbb266",
         "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/download/v0.2.0-beta.1/subversionr-win32-x64-beta-candidate.zip"
       },
       {
@@ -113,17 +113,17 @@
     ]
   },
   "betaCandidateEvidence": {
-    "status": "blocked-published-bundle-inconsistent",
+    "status": "consistent",
     "publishedBundleAssetName": "subversionr-win32-x64-beta-candidate.zip",
-    "publishedBundleSha256": "7b1c82e90261d893e2fb41809dc11b39ffd088de428abd32c9d55800be266db8",
+    "publishedBundleSha256": "ca79f8cd2716caadc9c6e1e6c712c6904770a05e3660835b0ab58ce75bbbb266",
     "expectedVsixName": "subversionr-win32-x64-0.2.0.vsix",
     "expectedVsixSha256": "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
-    "containedVsixName": "svn-r-win32-x64-0.1.0.vsix",
-    "containedVsixSha256": "ff7094c02b27914351fde4d9ae9b09dd8a3cf4af00f983ddf085adb808a3167b",
+    "containedVsixName": "subversionr-win32-x64-0.2.0.vsix",
+    "containedVsixSha256": "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
     "declaredPayloadCount": 1462,
-    "missingPayloadCount": 29,
-    "mismatchedPayloadCount": 421,
-    "consistencyVerified": false,
-    "regenerationCompleted": false
+    "missingPayloadCount": 0,
+    "mismatchedPayloadCount": 0,
+    "consistencyVerified": true,
+    "regenerationCompleted": true
   }
 }

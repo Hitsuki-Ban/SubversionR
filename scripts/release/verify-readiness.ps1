@@ -298,8 +298,9 @@ function Assert-PublicCutoverRunbook([object]$Document) {
     "subversionr-pr-fast",
     "v0.2.0-beta.1",
     "docs/release/github-attestation-evidence.win32-x64.json",
-    "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
-    "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
+    "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29104476735",
+    "https://github.com/Hitsuki-Ban/SubversionR/attestations/34774737",
+    "superseded",
     "publicReadinessClaim=false"
   ) "public cutover runbook"
 }
@@ -6480,20 +6481,20 @@ Assert-Terms $attestationVerification @(
   '"claim":"post-release-asset-digest-verification"',
   '"originalBuildProvenanceClaim":false',
   '"artifactSignatureClaim":false',
-  "refs/heads/codex/issue-5-live-attestation",
-  "99a440316dd281fd9c72f2f432bbc78734c0f127"
+  "refs/heads/main",
+  "720c92c3f1747a7e7dcf6143f2bf47171cfd9051"
 ) "source-controlled exact GitHub attestation verification coverage"
 Assert-Terms $liveAttestationEvidence @(
   "subversionr.release.live-github-attestation.win32-x64.v1",
   '"publicReadinessClaim": false',
   '"signingClaim": false',
   '"status": "live-attestation-verified"',
-  "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
-  "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
-  "b6d4112c9d94bd160fbc66c503d3074b2d7071b59782564b320eb8610536d389",
-  "1843e92706c67e1f902cebb86d8d92cbb75288e0b539c5e041bfb4b8103faaa2",
-  "refs/heads/codex/issue-5-live-attestation",
-  "99a440316dd281fd9c72f2f432bbc78734c0f127",
+  "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29104476735",
+  "https://github.com/Hitsuki-Ban/SubversionR/attestations/34774737",
+  "50916ecb09fc175b6f1745ba56ff67e9c2a25a779cdd5f64e6dada175aba0a55",
+  "dacdabab706d5bec6870d40d9c8b655ea178d645940960876abb78604bd1f9d0",
+  "refs/heads/main",
+  "720c92c3f1747a7e7dcf6143f2bf47171cfd9051",
   "--bundle docs/release/github-attestation-bundle.win32-x64.json",
   '"predicateClaim": "post-release-asset-digest-verification"',
   '"originalBuildProvenanceClaim": false',
@@ -6715,9 +6716,12 @@ Assert-Terms $publicCutoverEvidence @(
   "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/",
   "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1",
   "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
-  "blocked-published-bundle-inconsistent",
-  '"missingPayloadCount": 29',
-  '"mismatchedPayloadCount": 421'
+  "ca79f8cd2716caadc9c6e1e6c712c6904770a05e3660835b0ab58ce75bbbb266",
+  '"status": "consistent"',
+  '"missingPayloadCount": 0',
+  '"mismatchedPayloadCount": 0',
+  '"consistencyVerified": true',
+  '"regenerationCompleted": true'
 ) "public cutover evidence contract"
 
 Assert-Terms $securityPolicy @(
