@@ -282,7 +282,7 @@ function Assert-GithubActionsRestorationDoc([object]$Document) {
     "weekly schedule",
     "PR Fast / windows",
     "## Cutover State",
-    "Private-repository workflow disablement remains a separate owner operation",
+    'were both set to `disabled_manually` on 2026-07-10',
     "scheduled/manual",
     "not part of automatic PR validation"
   ) "GitHub Actions restoration documentation"
@@ -6704,6 +6704,14 @@ Assert-PublicCutoverRunbook $publicCutoverRunbook
 Assert-Terms $publicCutoverEvidence @(
   "subversionr.release.public-cutover-evidence.v1",
   "recorded-post-cutover",
+  '"branchProtectionConfigured": true',
+  '"rulesetId": 18761017',
+  '"rulesetName": "protect-main"',
+  '"integrationId": 15368',
+  '"privateWorkflowsDisabled": true',
+  '"workflowId": 300115281',
+  '"workflowId": 303103620',
+  '"state": "disabled_manually"',
   "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/",
   "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1",
   "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",

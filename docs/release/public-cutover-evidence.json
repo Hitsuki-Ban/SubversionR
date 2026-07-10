@@ -9,7 +9,30 @@
     "cutoverHeadCommit": "5acc0c5cfc2cfbf0b299951a5a97a0c2b1863777",
     "resolvesToPublic": true,
     "branchProtectionRequiredCheck": "PR Fast / windows",
-    "branchProtectionConfigured": false,
+    "branchProtectionConfigured": true,
+    "branchProtection": {
+      "status": "active",
+      "provider": "github-repository-ruleset",
+      "rulesetId": 18761017,
+      "rulesetName": "protect-main",
+      "target": "branch",
+      "enforcement": "active",
+      "refIncludes": [
+        "~DEFAULT_BRANCH"
+      ],
+      "refExcludes": [],
+      "requiredStatusCheck": {
+        "displayName": "PR Fast / windows",
+        "context": "windows",
+        "integrationId": 15368,
+        "strict": false
+      },
+      "pullRequestRequired": true,
+      "requiredApprovingReviewCount": 0,
+      "nonFastForwardBlocked": true,
+      "bypassActorCount": 0,
+      "updatedAt": "2026-07-10T07:29:42.633Z"
+    },
     "privateVulnerabilityReportingEnabled": true,
     "metadataVerified": false
   },
@@ -25,8 +48,26 @@
     "completedAt": "2026-07-10T07:02:49Z",
     "publicPrFastFirstRunGreen": true,
     "publicHeavyWorkflowScheduleOnly": true,
-    "privateWorkflowsDisabled": false,
-    "privateWorkflowDisableDateRecorded": false
+    "privateWorkflowsDisabled": true,
+    "privateWorkflowDisableDateRecorded": true,
+    "privateWorkflowDisablement": {
+      "status": "complete",
+      "disableDate": "2026-07-10",
+      "workflows": [
+        {
+          "name": "CI",
+          "workflowId": 300115281,
+          "path": ".github/workflows/ci.yml",
+          "state": "disabled_manually"
+        },
+        {
+          "name": "PR Fast",
+          "workflowId": 303103620,
+          "path": ".github/workflows/pr-fast.yml",
+          "state": "disabled_manually"
+        }
+      ]
+    }
   },
   "cloudflareBridgeRetirement": {
     "status": "retired",

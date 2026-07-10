@@ -154,7 +154,28 @@ function New-PublicationGapsFixture([string]$Root) {
         cutoverHeadCommit = $cutoverHeadCommit
         resolvesToPublic = $true
         branchProtectionRequiredCheck = "PR Fast / windows"
-        branchProtectionConfigured = $false
+        branchProtectionConfigured = $true
+        branchProtection = [pscustomobject]@{
+          status = "active"
+          provider = "github-repository-ruleset"
+          rulesetId = [int64]18761017
+          rulesetName = "protect-main"
+          target = "branch"
+          enforcement = "active"
+          refIncludes = @("~DEFAULT_BRANCH")
+          refExcludes = @()
+          requiredStatusCheck = [pscustomobject]@{
+            displayName = "PR Fast / windows"
+            context = "windows"
+            integrationId = [int64]15368
+            strict = $false
+          }
+          pullRequestRequired = $true
+          requiredApprovingReviewCount = 0
+          nonFastForwardBlocked = $true
+          bypassActorCount = 0
+          updatedAt = "2026-07-10T07:29:42.633Z"
+        }
         privateVulnerabilityReportingEnabled = $true
         metadataVerified = $false
       }
@@ -170,8 +191,26 @@ function New-PublicationGapsFixture([string]$Root) {
         completedAt = "2026-07-10T07:02:49Z"
         publicPrFastFirstRunGreen = $true
         publicHeavyWorkflowScheduleOnly = $true
-        privateWorkflowsDisabled = $false
-        privateWorkflowDisableDateRecorded = $false
+        privateWorkflowsDisabled = $true
+        privateWorkflowDisableDateRecorded = $true
+        privateWorkflowDisablement = [pscustomobject]@{
+          status = "complete"
+          disableDate = "2026-07-10"
+          workflows = @(
+            [pscustomobject]@{
+              name = "CI"
+              workflowId = [int64]300115281
+              path = ".github/workflows/ci.yml"
+              state = "disabled_manually"
+            },
+            [pscustomobject]@{
+              name = "PR Fast"
+              workflowId = [int64]303103620
+              path = ".github/workflows/pr-fast.yml"
+              state = "disabled_manually"
+            }
+          )
+        }
       }
       cloudflareBridgeRetirement = [pscustomobject]@{
         status = "retired"
@@ -307,8 +346,19 @@ try {
   Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/123456789" $report.publicCutover.ciHomeMigration.runUrl "Public cutover should record the green public CI run."
   Assert-Equal "True" ([string]$report.publicCutover.publicRepository.privateVulnerabilityReportingEnabled) "Public cutover should record Private Vulnerability Reporting enablement."
   Assert-Equal "PR Fast / windows" $report.publicCutover.publicRepository.branchProtectionRequiredCheck "Public cutover should record the public PR Fast branch-protection check."
-  Assert-Equal "False" ([string]$report.publicCutover.publicRepository.branchProtectionConfigured) "Public branch protection should remain an explicit owner follow-up."
+  Assert-Equal "True" ([string]$report.publicCutover.publicRepository.branchProtectionConfigured) "Public branch protection should record the active ruleset."
+  Assert-Equal 18761017 ([int64]$report.publicCutover.publicRepository.branchProtection.rulesetId) "Public branch protection should bind the exact ruleset."
+  Assert-Equal "windows" $report.publicCutover.publicRepository.branchProtection.requiredStatusCheck.context "Public branch protection should bind the exact check context."
+  Assert-Equal "True" ([string]$report.publicCutover.publicRepository.branchProtection.pullRequestRequired) "Public branch protection should require pull requests."
+  Assert-Equal "True" ([string]$report.publicCutover.publicRepository.branchProtection.nonFastForwardBlocked) "Public branch protection should block non-fast-forward updates."
+  Assert-Equal 0 @($report.publicCutover.publicRepository.branchProtection.refExcludes).Count "Public branch protection should not exclude the default branch."
   Assert-Equal "False" ([string]$report.publicCutover.publicRepository.metadataVerified) "Incomplete public repository metadata should remain explicit."
+  Assert-Equal "complete" $report.publicCutover.ciHomeMigration.status "CI home migration should record completed owner operations."
+  Assert-Equal "True" ([string]$report.publicCutover.ciHomeMigration.privateWorkflowsDisabled) "Private workflows should be recorded as disabled."
+  Assert-Equal "2026-07-10" $report.publicCutover.ciHomeMigration.privateWorkflowDisablement.disableDate "Private workflow disablement should bind its date."
+  Assert-Equal 2 @($report.publicCutover.ciHomeMigration.privateWorkflowDisablement.workflows).Count "Private workflow disablement should record both workflows."
+  Assert-Equal 0 @($report.publicCutover.ciHomeMigration.blockers).Count "Completed CI home migration should not retain blockers."
+  Assert-Equal 2 @($report.publicCutover.manualSteps).Count "Public cutover should retain only metadata and Beta candidate manual work."
   Assert-Equal "retired" $report.publicCutover.cloudflareBridgeRetirement.status "Cloudflare bridge retirement should be recorded."
   Assert-Equal "True" ([string]$report.publicCutover.cloudflareBridgeRetirement.disconnected) "Cloudflare bridge should be disconnected."
   Assert-Equal "published" $report.publicCutover.release.status "Public release should be recorded as published."
@@ -326,12 +376,16 @@ try {
       "Marketplace publication is not run by this local gap report.",
       "Marketplace public install evidence is not generated by this local gap report.",
       "VSIX signing remains absent in the upstream provenance preflight.",
-      "Public branch protection is not configured.",
       "Public repository homepage and social metadata are not fully verified.",
-      "Private repository workflows are not disabled.",
       "The published Beta candidate bundle is inconsistent with its manifest and cannot close the post-cutover Beta-G chain."
     )) {
     Assert-True (@($report.blockers | Where-Object { $_ -eq $blocker }).Count -eq 1) "Publication gaps should include blocker '$blocker'."
+  }
+  foreach ($resolvedBlocker in @(
+      "Public branch protection is not configured.",
+      "Private repository workflows are not disabled."
+    )) {
+    Assert-Equal 0 @($report.blockers | Where-Object { $_ -eq $resolvedBlocker }).Count "Publication gaps should remove resolved blocker '$resolvedBlocker'."
   }
 
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
@@ -448,11 +502,129 @@ try {
 
   $badCutoverPath = Join-Path $tempRoot "bad-string-boolean-cutover.json"
   $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
-  $badCutover.repository.branchProtectionConfigured = "False"
+  $badCutover.repository.branchProtectionConfigured = "True"
   Write-JsonFile $badCutoverPath $badCutover
   Assert-NativeCommandFailsContaining {
     Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-string-boolean-report.json") -CutoverEvidencePath $badCutoverPath
   } "must be a JSON boolean" "Publication gaps generation should reject string values for boolean cutover fields."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-disabled-branch-protection-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtectionConfigured = $false
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-disabled-branch-protection-report.json") -CutoverEvidencePath $badCutoverPath
+  } "must be true" "Publication gaps generation should reject unresolved branch protection state."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-missing-ruleset-check-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtection.PSObject.Properties.Remove("requiredStatusCheck")
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-missing-ruleset-check-report.json") -CutoverEvidencePath $badCutoverPath
+  } "must define requiredStatusCheck" "Publication gaps generation should reject incomplete ruleset evidence."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-scalar-ruleset-ref-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtection.refIncludes = "~DEFAULT_BRANCH"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-scalar-ruleset-ref-report.json") -CutoverEvidencePath $badCutoverPath
+  } "refIncludes must be a JSON array" "Publication gaps generation should reject a scalar ruleset ref selector."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-nested-ruleset-ref-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtection.refIncludes = [object[]]@(, [object[]]@("~DEFAULT_BRANCH"))
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-nested-ruleset-ref-report.json") -CutoverEvidencePath $badCutoverPath
+  } "entries must be JSON strings" "Publication gaps generation should reject a nested ruleset ref selector."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-ruleset-ref-exclusion-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtection.refExcludes = @("refs/heads/main")
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-ruleset-ref-exclusion-report.json") -CutoverEvidencePath $badCutoverPath
+  } "must not exclude any refs" "Publication gaps generation should reject a ruleset that excludes main."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-scalar-ruleset-ref-exclusion-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtection.refExcludes = "refs/heads/main"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-scalar-ruleset-ref-exclusion-report.json") -CutoverEvidencePath $badCutoverPath
+  } "refExcludes must be a JSON array" "Publication gaps generation should reject a scalar ruleset exclusion."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-ruleset-integration-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtection.requiredStatusCheck.integrationId = [int64]0
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-ruleset-integration-report.json") -CutoverEvidencePath $badCutoverPath
+  } "integrationId must match" "Publication gaps generation should reject a different required-check integration."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-string-ruleset-integration-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtection.requiredStatusCheck.integrationId = "15368"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-string-ruleset-integration-report.json") -CutoverEvidencePath $badCutoverPath
+  } "must be a JSON integer" "Publication gaps generation should reject string values for numeric ruleset fields."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-array-ruleset-status-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository.branchProtection.status = @("active")
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-array-ruleset-status-report.json") -CutoverEvidencePath $badCutoverPath
+  } "must be a non-empty JSON string" "Publication gaps generation should reject an array ruleset status."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-private-workflow-state-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  @($badCutover.ci.privateWorkflowDisablement.workflows | Where-Object { $_.name -eq "CI" })[0].state = "active"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-private-workflow-state-report.json") -CutoverEvidencePath $badCutoverPath
+  } "state must be disabled_manually" "Publication gaps generation should reject an active private workflow."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-array-private-workflow-state-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  @($badCutover.ci.privateWorkflowDisablement.workflows | Where-Object { $_.name -eq "CI" })[0].state = @("disabled_manually")
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-array-private-workflow-state-report.json") -CutoverEvidencePath $badCutoverPath
+  } "must be a non-empty JSON string" "Publication gaps generation should reject an array private workflow state."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-private-workflow-date-cutover.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.ci.privateWorkflowDisablement.disableDate = "2026-07-11"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-private-workflow-date-report.json") -CutoverEvidencePath $badCutoverPath
+  } "must match the owner operation date" "Publication gaps generation should reject a different private workflow disable date."
+
+  $badCutoverPath = Join-Path $tempRoot "bad-unknown-cutover-property.json"
+  $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+  $badCutover.repository | Add-Member -NotePropertyName "unexpectedOwnerState" -NotePropertyValue "present"
+  Write-JsonFile $badCutoverPath $badCutover
+  Assert-NativeCommandFailsContaining {
+    Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-unknown-cutover-property-report.json") -CutoverEvidencePath $badCutoverPath
+  } "contains unexpected property" "Publication gaps generation should reject unknown cutover fields."
+
+  foreach ($sensitiveCase in @(
+      [pscustomobject]@{ name = "private-ssh"; property = "ownerRemote"; value = "git@github.com:Hitsuki-Ban/SubversionR-private.git"; target = "repository" },
+      [pscustomobject]@{ name = "github-token-family"; property = "ownerToken"; value = "gho_aaaaaaaaaaaaaaaaaaaaaaaa"; target = "ci" },
+      [pscustomobject]@{ name = "cloudflare-account-id"; property = "accountId"; value = "0123456789abcdef0123456789abcdef"; target = "cloudflareBridgeRetirement" }
+    )) {
+    $badCutoverPath = Join-Path $tempRoot "bad-$($sensitiveCase.name)-cutover.json"
+    $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
+    $badCutover.($sensitiveCase.target) | Add-Member -NotePropertyName $sensitiveCase.property -NotePropertyValue $sensitiveCase.value
+    Write-JsonFile $badCutoverPath $badCutover
+    Assert-NativeCommandFailsContaining {
+      Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-$($sensitiveCase.name)-report.json") -CutoverEvidencePath $badCutoverPath
+    } "must not record credentials" "Publication gaps generation should reject sensitive case '$($sensitiveCase.name)'."
+  }
 
   $tamperedPath = Join-Path $tempRoot "tampered-source-divergence.json"
   $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
@@ -511,7 +683,27 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
       -Target win32-x64 `
       -EvidencePath $tamperedPath
-  } "nonClaims" "Publication gaps verification should reject missing non-claims."
+  } "non-claim count must match" "Publication gaps verification should reject missing non-claims."
+
+  $tamperedPath = Join-Path $tempRoot "tampered-stale-blocker.json"
+  $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
+  $tampered.blockers = @($tampered.blockers) + "Public branch protection is not configured."
+  Write-JsonFile $tamperedPath $tampered
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
+      -Target win32-x64 `
+      -EvidencePath $tamperedPath
+  } "blocker count must match" "Publication gaps verification should reject stale resolved blockers."
+
+  $tamperedPath = Join-Path $tempRoot "tampered-scalar-repository-blocker.json"
+  $tampered = Get-Content -Raw -LiteralPath $fixture.outputPath | ConvertFrom-Json
+  $tampered.publicCutover.publicRepository.blockers = "Verify and complete public repository homepage and social metadata."
+  Write-JsonFile $tamperedPath $tampered
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyPublicationGapsScript `
+      -Target win32-x64 `
+      -EvidencePath $tamperedPath
+  } "blockers must be a JSON array" "Publication gaps verification should reject a scalar repository blocker."
 
   $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   Assert-True ($packageJson.scripts."release:test-publication-gaps-scripts".Contains("release-publication-gaps-scripts.tests.ps1")) "Root package should expose publication gaps script tests."
@@ -536,6 +728,10 @@ try {
       "subversionr.release.publication-gaps.win32-x64.v1",
       "docs/release/public-cutover-runbook.md",
       "docs/release/public-cutover-evidence.json",
+      '"rulesetId": 18761017',
+      '"integrationId": 15368',
+      '"workflowId": 300115281',
+      '"workflowId": 303103620',
       "pnpm release:test-publication-gaps-scripts",
       "pnpm release:generate-publication-gaps:win32-x64",
       "pnpm release:verify-publication-gaps:win32-x64"
