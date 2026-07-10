@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.release.marketplace-publisher-authorization.v1",
+  "publicReadinessClaim": false,
+  "status": "verified",
+  "publisher": "hitsuki-ban",
+  "expectedExtensionId": "hitsuki-ban.subversionr",
+  "authorization": {
+    "role": "Contributor",
+    "verificationMode": "owner-attestation",
+    "ownerOrContributorVerified": true,
+    "verifiedAt": "2026-07-10T18:05:38Z",
+    "issueUrl": "https://github.com/Hitsuki-Ban/SubversionR/issues/14",
+    "commentUrl": "https://github.com/Hitsuki-Ban/SubversionR/issues/14#issuecomment-4938167334"
+  },
+  "bootstrap": {
+    "runId": "29107576798",
+    "runUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29107576798"
+  },
+  "dataHandling": {
+    "credentialValuesRecorded": false,
+    "identityValuesRecorded": false
+  },
+  "marketplacePublication": {
+    "status": "not-run-by-entra-pipeline",
+    "publicationEvidenceRecorded": false
+  },
+  "nonClaims": [
+    "This evidence records only the repository owner's attestation that the resolved Entra identity has Marketplace Contributor authorization.",
+    "This evidence does not record Azure tenant, application, Marketplace identity, or credential values.",
+    "This evidence does not claim Marketplace publication, public install, artifact signing, previous-stable rollback, or public release readiness."
+  ]
+}
