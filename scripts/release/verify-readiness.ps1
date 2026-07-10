@@ -7056,6 +7056,7 @@ Assert-Terms $m7Plan @(
   "subversionr.release.marketplace-publication.win32-x64.v1",
   "docs/release/marketplace-pre-release-owner-exception.md",
   "docs/release/marketplace-identity-bootstrap-evidence.json",
+  "docs/release/marketplace-publisher-authorization-evidence.json",
   "docs/release/marketplace-existing-listing-evidence.json",
   "subversionr.release.vulnerability-review-preflight.win32-x64.v1",
   "pnpm release:test-vulnerability-review-scripts",
