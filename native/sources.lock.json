@@ -1,0 +1,113 @@
+{
+  "sources": [
+    {
+      "name": "apache-subversion",
+      "version": "1.14.5",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "url": "https://downloads.apache.org/subversion/subversion-1.14.5.zip",
+      "sha512": "595844a8c69d0ad6a56a8f831d7d793a9eed28b63e5ac0373cc9b969e1c408ac25ccaf6bd97c32d5789ac8787030c80bdb33eee8b8e80330d53f0eb7c5cd96d1",
+      "signatureUrl": "https://downloads.apache.org/subversion/subversion-1.14.5.zip.asc",
+      "keysUrl": "https://downloads.apache.org/subversion/KEYS"
+    },
+    {
+      "name": "apache-httpd",
+      "version": "2.4.68",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "url": "https://downloads.apache.org/httpd/httpd-2.4.68.tar.gz",
+      "sha512": "de3d6e2dd37a600b99b63b6740a06348d6f7642109f3c35e7eb1b82088ade8a5da9145b52c232587b9c2604c33ae908d0009ada4ea3168679e7f061b3135112d",
+      "sha256": "ed9a9d4500fb48bb28eaffb3ba71d06ccf86d498fa13ab9f781da010cc488498",
+      "signatureUrl": "https://downloads.apache.org/httpd/httpd-2.4.68.tar.gz.asc",
+      "keysUrl": "https://downloads.apache.org/httpd/KEYS"
+    },
+    {
+      "name": "pcre2",
+      "version": "10.47",
+      "license": "BSD-3-Clause WITH PCRE2-exception",
+      "licenseUrl": "https://github.com/PCRE2Project/pcre2/blob/pcre2-10.47/LICENCE.md",
+      "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.gz",
+      "sha512": "e461a95f623fe70136b1a070847f317c56f9a31801181cc8fd7eef8077ae6cccd385d5ccb983f6e9b49245830535e7acddb10c6831c20afb9bdf4f9a45ae48eb",
+      "sha256": "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16",
+      "signatureUrl": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.gz.sig",
+      "keysUrl": "https://keys.openpgp.org/vks/v1/by-fingerprint/A95536204A3BB489715231282A98E77EB6F24CA8"
+    },
+    {
+      "name": "serf",
+      "version": "1.3.10",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "url": "https://downloads.apache.org/serf/serf-1.3.10.zip",
+      "sha512": "82e1c7342b0fa102c0e853989da0f6b590584e5a1d7737f891edd1d49b2a3ec271fd71f2642813455f73230c57230aebdc3a83808335dd53c5ce9fdab8506e2f",
+      "signatureUrl": "https://downloads.apache.org/serf/serf-1.3.10.zip.asc",
+      "keysUrl": "https://downloads.apache.org/serf/KEYS"
+    },
+    {
+      "name": "openssl",
+      "version": "3.5.7",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://openssl-library.org/source/license/",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.7/openssl-3.5.7.tar.gz",
+      "sha512": "de5351d2d532e1a3908a738f7d8aae448d32bc60bdb24808c556a24bc37a3f53daedf12b5d432eeb8c235e16939d842f908332ede8a447ca103ad1c493c820d7",
+      "sha256": "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8",
+      "signatureUrl": "https://github.com/openssl/openssl/releases/download/openssl-3.5.7/openssl-3.5.7.tar.gz.asc",
+      "keysUrl": "https://openssl-library.org/source/pubkeys.asc"
+    },
+    {
+      "name": "apr",
+      "version": "1.7.6",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "url": "https://downloads.apache.org/apr/apr-1.7.6-win32-src.zip",
+      "sha512": "3402d2e3d5b052539c636eecdcd5e6d5944e5d5ca2358fad5abc10d2040f8bd72b4cf673d0a8b3ed2288cd3093e773f77899ccf3fbdac7ecad234ddd89bf9b2e",
+      "signatureUrl": "https://downloads.apache.org/apr/apr-1.7.6-win32-src.zip.asc",
+      "keysUrl": "https://downloads.apache.org/apr/KEYS"
+    },
+    {
+      "name": "apr-util",
+      "version": "1.6.3",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "url": "https://downloads.apache.org/apr/apr-util-1.6.3-win32-src.zip",
+      "sha512": "e4d36d9374b62d88beb557705d99332e4b7ea6b253ff7b134fb025d69b2075a9471b2eaf7ec626d3fa7eb85993768c9b2b6d212f42fcc337dd3bd936ac281978",
+      "signatureUrl": "https://downloads.apache.org/apr/apr-util-1.6.3-win32-src.zip.asc",
+      "keysUrl": "https://downloads.apache.org/apr/KEYS"
+    },
+    {
+      "name": "apr-iconv",
+      "version": "1.2.2",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "url": "https://downloads.apache.org/apr/apr-iconv-1.2.2-win32-src.zip",
+      "sha512": "f7238674872b5595928bc9b9247d36aa58979748c8c5783fa7fa6ec3c061cb8f6d7e46a6b5b95a6a2b439278e72d2679cc8ae25902b1a5d2a8d6e44c6440f1b4",
+      "signatureUrl": "https://downloads.apache.org/apr/apr-iconv-1.2.2-win32-src.zip.asc",
+      "keysUrl": "https://downloads.apache.org/apr/KEYS"
+    },
+    {
+      "name": "expat",
+      "version": "2.8.1",
+      "license": "MIT",
+      "licenseUrl": "https://github.com/libexpat/libexpat/blob/R_2_8_1/expat/COPYING",
+      "url": "https://github.com/libexpat/libexpat/releases/download/R_2_8_1/expat-2.8.1.tar.gz",
+      "sha512": "2b17c1210d7267bdd0bd98d3e093279c56487efec1f2ae725bbc87b834c3f7aa789791ddb89ee324d1a823dc4e65b2f0d1555afb95cc06d64d75821e565dfc8c",
+      "sha256": "a52eb72108be160e190b5cafa5bba8663f1313f2013e26060d1c18e26e31067b"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.2",
+      "license": "Zlib",
+      "licenseUrl": "https://github.com/madler/zlib/blob/v1.3.2/LICENSE",
+      "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",
+      "sha512": "70963771ea5d763614278a69b474f09b7d237ef8f53b675a10fe31d9923aeef601504b35d7ebd1b1e7f347e9ebb048e6b3b47fffdf137e7bdc7e8d5eb4ec4692"
+    },
+    {
+      "name": "sqlite-amalgamation",
+      "version": "3.53.2",
+      "license": "Blessing",
+      "licenseUrl": "https://sqlite.org/copyright.html",
+      "url": "https://sqlite.org/2026/sqlite-amalgamation-3530200.zip",
+      "sha512": "d809699eaabbd531ba4bc2fae89b313eaa905a8ab6297bc62c269ab6b08558b5c088852a41ea22ca4945adcf1ee8ddbc1d82c14eff73b9e8649918ffc677077e",
+      "sha3_256": "81142986038e18f96c4a54e1a72562ae17e502a916f2a7701eff43388cbf1a40"
+    }
+  ]
+}

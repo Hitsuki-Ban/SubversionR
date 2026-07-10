@@ -1,0 +1,68 @@
+name: PR Fast
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+      - name: TypeScript checks
+        run: pnpm check
+      - name: TypeScript tests
+        run: pnpm test
+      - name: Test state-engine Beta performance
+        shell: pwsh
+        run: pnpm release:test-state-engine-beta-performance:win32-x64
+      - name: Localization checks
+        shell: pwsh
+        run: pnpm i18n:verify
+      - name: Public security documentation checks
+        shell: pwsh
+        run: pnpm docs:verify-security
+      - name: Support intake checks
+        shell: pwsh
+        run: pnpm docs:verify-support-intake
+      - name: Release readiness document checks
+        shell: pwsh
+        run: pnpm release:verify-readiness:smoke
+      - name: Native remote fuzz target preflight script tests
+        shell: pwsh
+        run: pnpm release:test-native-remote-fuzz-target-preflight-scripts
+      - name: Generate native remote fuzz target preflight
+        shell: pwsh
+        run: pnpm release:generate-native-remote-fuzz-target-preflight:win32-x64
+      - name: Verify native remote fuzz target preflight
+        shell: pwsh
+        run: pnpm release:verify-native-remote-fuzz-target-preflight:win32-x64
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Rust tests
+        run: cargo test --workspace
+      - name: Native script tests
+        shell: pwsh
+        run: pnpm native:test-scripts

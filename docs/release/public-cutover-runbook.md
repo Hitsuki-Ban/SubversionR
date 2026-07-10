@@ -1,0 +1,95 @@
+# Public Cutover Runbook
+
+This runbook defines the controlled move from the private development repository to the public `Hitsuki-Ban/SubversionR` repository. It is intentionally written as a pre-cutover checklist until the command namespace rename and Beta candidate evidence PRs are merged.
+
+## Preconditions
+
+- #236 has merged and the public command namespace is the only supported command namespace.
+- #243 has merged and the `win32-x64` Beta candidate evidence bundle has been regenerated and verified from that merge base.
+- The private repository working tree has no unrelated uncommitted changes before the baseline is prepared.
+- `.gitignore` excludes `target/`, `.cache/`, `node_modules/`, generated VSIX files, and transient logs.
+- `Reference/` remains private and is excluded from the public baseline history.
+
+## Baseline
+
+The public repository history starts from one fresh squash-style baseline commit. Do not push private history, private issue references, local handoff notes, release evidence caches, build outputs, or generated dependency directories.
+
+Baseline verification before the public push:
+
+1. Create the baseline from the merged private `main` tree after removing private-only material.
+2. Confirm `Reference/` is absent from the public baseline tree.
+3. Confirm ignored generated paths are absent: `target/`, `.cache/`, `node_modules/`, `packages/vscode-extension/dist/`, and `*.vsix`.
+4. Run a secrets scan on the public baseline tree.
+5. Confirm `README.md`, `SECURITY.md`, `SUPPORT.md`, `CHANGELOG.md`, `.github/workflows/pr-fast.yml`, `.github/workflows/ci.yml`, and `.github/ISSUE_TEMPLATE/` are present.
+
+## Public Repository
+
+- Repository: `https://github.com/Hitsuki-Ban/SubversionR`
+- Default branch: `main`
+- Public branch protection must require the exact `PR Fast / windows` check after the first public run creates it.
+- Repository metadata after baseline:
+  - Description: `Native Subversion client for VS Code`
+  - Topics: `svn`, `subversion`, `vscode-extension`, `scm`
+  - Homepage: `https://github.com/Hitsuki-Ban/SubversionR#readme`
+  - Social preview: SubversionR-branded image prepared outside the private evidence tree.
+
+## CI Home Migration
+
+After the public baseline is pushed:
+
+1. Open a public test PR or push a temporary branch to confirm `.github/workflows/pr-fast.yml` creates `PR Fast / windows`.
+2. Require `PR Fast / windows` on public `main` branch protection.
+3. Confirm `.github/workflows/ci.yml` remains `workflow_dispatch` plus weekly schedule only.
+4. Disable both workflows in the private repository through GitHub Actions UI.
+5. Record the private workflow disable date in `docs/ci/github-actions-restoration.md`.
+
+## Cloudflare Bridge Retirement
+
+The Cloudflare Workers Builds bridge is temporary private-repository infrastructure. The current live state observed on 2026-07-07 is that `subversionr-pr-fast` remains connected to the private repository and both default-branch and non-production branch triggers are enabled.
+
+Retire it only after public `PR Fast / windows` is green and required by branch protection:
+
+1. Disconnect Workers Builds from the private repository.
+2. Disable or delete the non-production branch trigger and default-branch trigger.
+3. Confirm no new private-repository push or pull-request builds are created.
+4. Record the retirement date and final state in `docs/ci/cloudflare-pr-fast-bridge.md`.
+
+Do not record Cloudflare API tokens, deploy hook URLs, build tokens, webhook secrets, or credential values in this repository.
+
+## Release
+
+The first public Beta release is `v0.2.0-beta.1`.
+
+Release checklist:
+
+1. Tag `v0.2.0-beta.1` in the public repository after the baseline and CI home migration are complete.
+2. Create a GitHub pre-release.
+3. Attach the audited `win32-x64` VSIX, SBOM, `THIRD-PARTY-NOTICES.md`, and Beta evidence bundle.
+4. Generate artifact attestation with the public GitHub Actions release workflow and verify it with the command recorded by the M7j2b provenance input contract.
+5. Keep Marketplace publication and Marketplace public install as blocked until a separate release gate closes them.
+
+## Public Information Surface
+
+Before public announcement:
+
+1. Confirm `README.md` describes install-from-Releases VSIX sideloading, Beta scope, current limits, support paths, and screenshots or release-evidence image locations.
+2. Confirm `SECURITY.md` routes vulnerability reports to GitHub Private Vulnerability Reporting after it is enabled.
+3. Enable GitHub Private Vulnerability Reporting on the public repository.
+4. Confirm issue forms render in the public repository and blank issues remain disabled.
+5. Confirm `CHANGELOG.md` and release notes describe the same `0.2.0` Beta scope and non-claims as `docs/release/public-claim-matrix.md`.
+
+## Private Repository Freeze
+
+After the public repository baseline and CI home are confirmed:
+
+1. The private repository becomes a read-only archive: no new branches, pull requests, or merges after the cutover.
+2. Development, Codex slices, and all CI move to the public repository; private GitHub Actions workflows stay disabled so no scheduled or PR runs consume paid minutes.
+3. Record the freeze date in this runbook when it happens.
+
+## Post-Cutover Evidence
+
+After the public cutover:
+
+1. Regenerate `subversionr.release.publication-gaps.win32-x64.v1`.
+2. Update the generated evidence only when public repository URLs, public CI run URLs, release URLs, and attestation URLs are available.
+3. Keep `publicReadinessClaim=false` until Marketplace/public install, signing or attestation publication, previous-stable rollback, and final approval gates are closed.

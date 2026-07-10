@@ -1,0 +1,102 @@
+name: Bug report
+description: Report a reproducible SubversionR defect with sanitized evidence.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security / セキュリティ / 安全
+
+        Security vulnerabilities must be reported through `SECURITY.md`, not this public issue form.
+
+        Do not include / 含めないでください / 请勿包含: credentials, tokens, cookies, private repository URLs, client certificate private keys, `.svn/wc.db`, raw logs, or source content.
+
+        Maintainers review public evidence against `docs/security/support-redaction-checklist.md` before asking for more diagnostics.
+  - type: input
+    id: subversionr-version
+    attributes:
+      label: SubversionR version
+      description: Use the installed extension version or exact commit. Do not include private repository URLs.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: vscode-version
+    attributes:
+      label: VS Code version
+      placeholder: 1.101.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      options:
+        - Windows x64
+        - Windows ARM64
+        - macOS arm64
+        - macOS x64
+        - Linux x64
+        - Linux ARM64
+    validations:
+      required: true
+  - type: dropdown
+    id: repository-transport
+    attributes:
+      label: Repository transport
+      description: Select the transport category only. Do not paste the repository URL.
+      options:
+        - Local file working copy
+        - localhost svn:// fixture
+        - localhost HTTPS DAV fixture
+        - Remote svn://
+        - Remote HTTP/HTTPS
+        - Other or unknown
+    validations:
+      required: true
+  - type: dropdown
+    id: workspace-trust
+    attributes:
+      label: VS Code Workspace Trust state
+      options:
+        - Trusted workspace
+        - Restricted workspace
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use a synthetic repository or working copy. Do not include raw logs, source content, or private paths.
+      placeholder: |
+        1. Create a synthetic working copy.
+        2. Run the SubversionR command.
+        3. Observe the failure.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Summarize the failure. Share only redacted diagnostics if a maintainer requests them.
+    validations:
+      required: true
+  - type: checkboxes
+    id: sensitive-data-check
+    attributes:
+      label: Sensitive data check
+      options:
+        - label: I have not included credentials, tokens, cookies, private repository URLs, client certificate private keys, `.svn/wc.db`, raw logs, or source content.
+          required: true
+        - label: Security vulnerabilities must be reported through `SECURITY.md`, not this public issue form.
+          required: true
+        - label: Any diagnostics evidence is redacted diagnostics and was reviewed before sharing.
+          required: true

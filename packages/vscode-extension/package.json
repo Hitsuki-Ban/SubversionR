@@ -1,0 +1,1519 @@
+{
+  "name": "subversionr",
+  "displayName": "SubversionR",
+  "description": "%extension.description%",
+  "version": "0.2.0",
+  "publisher": "hitsuki-ban",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR.git"
+  },
+  "homepage": "https://github.com/Hitsuki-Ban/SubversionR#readme",
+  "bugs": {
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "%workspaceTrust.description%",
+      "restrictedConfigurations": [
+        "subversionr.tortoise.executablePath",
+        "subversionr.tortoise.configDirectory",
+        "subversionr.svn.configDirectory",
+        "subversionr.svn.tunnelCommand"
+      ]
+    }
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "keywords": [
+    "svn",
+    "subversion",
+    "source-control",
+    "scm",
+    "apache-subversion"
+  ],
+  "galleryBanner": {
+    "color": "#2F6F73",
+    "theme": "dark"
+  },
+  "icon": "resources/marketplace/icon.png",
+  "activationEvents": [
+    "workspaceContains:**/.svn",
+    "onCommand:subversionr.initialize",
+    "onCommand:subversionr.diagnostics.collect",
+    "onCommand:subversionr.diagnostics.versionReport",
+    "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
+    "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eArmFullReconcileCancellation",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eFullReconcileCancellationReport",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eArmDirtyGenerationCancellation",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eDirtyGenerationCancellationReport",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eDirtyEvent",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eCloseReport",
+    "onCommand:subversionr.diagnostics.installedSourceControlUiE2eLazyExternalProviderReport",
+    "onCommand:subversionr.diagnostics.installedRepositoryLifecycleReport",
+    "onCommand:subversionr.cache.clear",
+    "onCommand:subversionr.credentials.clearSaved",
+    "onCommand:subversionr.migration.showReport",
+    "onCommand:subversionr.tortoise.openRepositoryLog",
+    "onCommand:subversionr.tortoise.openResourceLog",
+    "onCommand:subversionr.tortoise.diffResource",
+    "onCommand:subversionr.tortoise.openRevisionGraph",
+    "onCommand:subversionr.tortoise.openRepositoryBrowser",
+    "onCommand:subversionr.tortoise.blameResource",
+    "onCommand:subversionr.openRepository",
+    "onCommand:subversionr.checkoutRepository",
+    "onCommand:subversionr.closeRepository",
+    "onCommand:subversionr.refreshRepository",
+    "onCommand:subversionr.checkRemoteChanges",
+    "onCommand:subversionr.refreshResource",
+    "onCommand:subversionr.addResource",
+    "onCommand:subversionr.addToIgnoreResource",
+    "onCommand:subversionr.removeFromIgnoreResource",
+    "onCommand:subversionr.setResourceChangelist",
+    "onCommand:subversionr.clearResourceChangelist",
+    "onCommand:subversionr.lockResource",
+    "onCommand:subversionr.unlockResource",
+    "onCommand:subversionr.deleteUnversionedResource",
+    "onCommand:subversionr.deleteAllUnversionedResources",
+    "onCommand:subversionr.commitResource",
+    "onCommand:subversionr.commitAll",
+    "onCommand:subversionr.pickCommitMessageHistory",
+    "onCommand:subversionr.commitChangelist",
+    "onCommand:subversionr.reviewCommit",
+    "onCommand:subversionr.revertChangelist",
+    "onCommand:subversionr.revertAll",
+    "onCommand:subversionr.removeResource",
+    "onCommand:subversionr.removeResourceKeepLocal",
+    "onCommand:subversionr.moveResource",
+    "onCommand:subversionr.resolveResource",
+    "onCommand:subversionr.resolveAll",
+    "onCommand:subversionr.revertResource",
+    "onCommand:subversionr.cleanupRepository",
+    "onCommand:subversionr.upgradeWorkingCopy",
+    "onCommand:subversionr.updateRepository",
+    "onCommand:subversionr.updateToRevision",
+    "onCommand:subversionr.branchCreateRepository",
+    "onCommand:subversionr.switchRepository",
+    "onCommand:subversionr.relocateRepository",
+    "onCommand:subversionr.mergeRangeRepository",
+    "onCommand:subversionr.previewMergeRangeRepository",
+    "onCommand:subversionr.showRepositoryMergeinfo",
+    "onCommand:subversionr.showRepositoryProperties",
+    "onCommand:subversionr.showResourceMergeinfo",
+    "onCommand:subversionr.showResourceProperties",
+    "onCommand:subversionr.setResourceProperty",
+    "onCommand:subversionr.deleteResourceProperty",
+    "onCommand:subversionr.editRepositoryExternals",
+    "onCommand:subversionr.editResourceExternals",
+    "onCommand:subversionr.updateResource",
+    "onCommand:subversionr.updateAllIncoming",
+    "onCommand:subversionr.diffWithBase",
+    "onCommand:subversionr.openBase",
+    "onCommand:subversionr.diffWithHead",
+    "onCommand:subversionr.openHead",
+    "onCommand:subversionr.diffWithPrevious",
+    "onCommand:subversionr.showRepositoryLog",
+    "onCommand:subversionr.showFileHistory",
+    "onCommand:subversionr.showLineHistory",
+    "onCommand:subversionr.showBlame",
+    "onCommand:subversionr.history.refresh",
+    "onCommand:subversionr.history.searchLoaded",
+    "onCommand:subversionr.history.loadMore",
+    "onCommand:subversionr.history.openRevision",
+    "onCommand:subversionr.history.compareWithPrevious",
+    "onCommand:subversionr.history.compareRevisions",
+    "onCommand:subversionr.history.openRevisionDetails",
+    "onCommand:subversionr.history.copyMessage",
+    "onCommand:subversionr.history.copyRevision",
+    "onCommand:svn.itemlog.openDiff",
+    "onCommand:svn.repolog.openDiff",
+    "onCommand:svn.itemlog.copymsg",
+    "onCommand:svn.repolog.copymsg",
+    "onCommand:svn.itemlog.copyrevision",
+    "onCommand:svn.repolog.copyrevision",
+    "onCommand:svn.searchLogByText",
+    "onCommand:svn.openHEADFile",
+    "onCommand:svn.openChangeHead",
+    "onCommand:svn.openChangePrev",
+    "onCommand:subversionr.fullReconcile"
+  ],
+  "main": "./dist/extension.js",
+  "l10n": "./l10n",
+  "contributes": {
+    "submenus": [
+      {
+        "id": "subversionr.editorContext",
+        "label": "%submenu.editorContext.label%"
+      }
+    ],
+    "commands": [
+      {
+        "command": "subversionr.initialize",
+        "title": "%command.initialize.title%"
+      },
+      {
+        "command": "subversionr.diagnostics.collect",
+        "title": "%command.diagnostics.collect.title%"
+      },
+      {
+        "command": "subversionr.diagnostics.versionReport",
+        "title": "%command.diagnostics.versionReport.title%"
+      },
+      {
+        "command": "subversionr.cache.clear",
+        "title": "%command.cache.clear.title%"
+      },
+      {
+        "command": "subversionr.credentials.clearSaved",
+        "title": "%command.credentials.clearSaved.title%"
+      },
+      {
+        "command": "subversionr.migration.showReport",
+        "title": "%command.migration.showReport.title%"
+      },
+      {
+        "command": "subversionr.tortoise.openRepositoryLog",
+        "title": "%command.tortoise.openRepositoryLog.title%"
+      },
+      {
+        "command": "subversionr.tortoise.openResourceLog",
+        "title": "%command.tortoise.openResourceLog.title%"
+      },
+      {
+        "command": "subversionr.tortoise.diffResource",
+        "title": "%command.tortoise.diffResource.title%"
+      },
+      {
+        "command": "subversionr.tortoise.openRevisionGraph",
+        "title": "%command.tortoise.openRevisionGraph.title%"
+      },
+      {
+        "command": "subversionr.tortoise.openRepositoryBrowser",
+        "title": "%command.tortoise.openRepositoryBrowser.title%"
+      },
+      {
+        "command": "subversionr.tortoise.blameResource",
+        "title": "%command.tortoise.blameResource.title%"
+      },
+      {
+        "command": "subversionr.openRepository",
+        "title": "%command.openRepository.title%"
+      },
+      {
+        "command": "subversionr.checkoutRepository",
+        "title": "%command.checkoutRepository.title%"
+      },
+      {
+        "command": "subversionr.closeRepository",
+        "title": "%command.closeRepository.title%"
+      },
+      {
+        "command": "subversionr.refreshRepository",
+        "title": "%command.refreshRepository.title%"
+      },
+      {
+        "command": "subversionr.checkRemoteChanges",
+        "title": "%command.checkRemoteChanges.title%"
+      },
+      {
+        "command": "subversionr.refreshResource",
+        "title": "%command.refreshResource.title%"
+      },
+      {
+        "command": "subversionr.addResource",
+        "title": "%command.addResource.title%"
+      },
+      {
+        "command": "subversionr.addToIgnoreResource",
+        "title": "%command.addToIgnoreResource.title%"
+      },
+      {
+        "command": "subversionr.removeFromIgnoreResource",
+        "title": "%command.removeFromIgnoreResource.title%"
+      },
+      {
+        "command": "subversionr.setResourceChangelist",
+        "title": "%command.setResourceChangelist.title%"
+      },
+      {
+        "command": "subversionr.clearResourceChangelist",
+        "title": "%command.clearResourceChangelist.title%"
+      },
+      {
+        "command": "subversionr.lockResource",
+        "title": "%command.lockResource.title%"
+      },
+      {
+        "command": "subversionr.unlockResource",
+        "title": "%command.unlockResource.title%"
+      },
+      {
+        "command": "subversionr.deleteUnversionedResource",
+        "title": "%command.deleteUnversionedResource.title%"
+      },
+      {
+        "command": "subversionr.deleteAllUnversionedResources",
+        "title": "%command.deleteAllUnversionedResources.title%"
+      },
+      {
+        "command": "subversionr.commitResource",
+        "title": "%command.commitResource.title%"
+      },
+      {
+        "command": "subversionr.commitAll",
+        "title": "%command.commitAll.title%"
+      },
+      {
+        "command": "subversionr.pickCommitMessageHistory",
+        "title": "%command.pickCommitMessageHistory.title%"
+      },
+      {
+        "command": "subversionr.commitChangelist",
+        "title": "%command.commitChangelist.title%"
+      },
+      {
+        "command": "subversionr.reviewCommit",
+        "title": "%command.reviewCommit.title%"
+      },
+      {
+        "command": "subversionr.revertChangelist",
+        "title": "%command.revertChangelist.title%"
+      },
+      {
+        "command": "subversionr.revertAll",
+        "title": "%command.revertAll.title%"
+      },
+      {
+        "command": "subversionr.removeResource",
+        "title": "%command.removeResource.title%"
+      },
+      {
+        "command": "subversionr.removeResourceKeepLocal",
+        "title": "%command.removeResourceKeepLocal.title%"
+      },
+      {
+        "command": "subversionr.moveResource",
+        "title": "%command.moveResource.title%"
+      },
+      {
+        "command": "subversionr.resolveResource",
+        "title": "%command.resolveResource.title%"
+      },
+      {
+        "command": "subversionr.resolveAll",
+        "title": "%command.resolveAll.title%"
+      },
+      {
+        "command": "subversionr.revertResource",
+        "title": "%command.revertResource.title%"
+      },
+      {
+        "command": "subversionr.cleanupRepository",
+        "title": "%command.cleanupRepository.title%"
+      },
+      {
+        "command": "subversionr.upgradeWorkingCopy",
+        "title": "%command.upgradeWorkingCopy.title%"
+      },
+      {
+        "command": "subversionr.updateRepository",
+        "title": "%command.updateRepository.title%"
+      },
+      {
+        "command": "subversionr.updateToRevision",
+        "title": "%command.updateToRevision.title%"
+      },
+      {
+        "command": "subversionr.branchCreateRepository",
+        "title": "%command.branchCreateRepository.title%"
+      },
+      {
+        "command": "subversionr.switchRepository",
+        "title": "%command.switchRepository.title%"
+      },
+      {
+        "command": "subversionr.relocateRepository",
+        "title": "%command.relocateRepository.title%"
+      },
+      {
+        "command": "subversionr.mergeRangeRepository",
+        "title": "%command.mergeRangeRepository.title%"
+      },
+      {
+        "command": "subversionr.previewMergeRangeRepository",
+        "title": "%command.previewMergeRangeRepository.title%"
+      },
+      {
+        "command": "subversionr.showRepositoryMergeinfo",
+        "title": "%command.showRepositoryMergeinfo.title%"
+      },
+      {
+        "command": "subversionr.showRepositoryProperties",
+        "title": "%command.showRepositoryProperties.title%"
+      },
+      {
+        "command": "subversionr.showResourceMergeinfo",
+        "title": "%command.showResourceMergeinfo.title%"
+      },
+      {
+        "command": "subversionr.showResourceProperties",
+        "title": "%command.showResourceProperties.title%"
+      },
+      {
+        "command": "subversionr.setResourceProperty",
+        "title": "%command.setResourceProperty.title%"
+      },
+      {
+        "command": "subversionr.deleteResourceProperty",
+        "title": "%command.deleteResourceProperty.title%"
+      },
+      {
+        "command": "subversionr.editRepositoryExternals",
+        "title": "%command.editRepositoryExternals.title%"
+      },
+      {
+        "command": "subversionr.editResourceExternals",
+        "title": "%command.editResourceExternals.title%"
+      },
+      {
+        "command": "subversionr.updateResource",
+        "title": "%command.updateResource.title%"
+      },
+      {
+        "command": "subversionr.updateAllIncoming",
+        "title": "%command.updateAllIncoming.title%"
+      },
+      {
+        "command": "subversionr.diffWithBase",
+        "title": "%command.diffWithBase.title%"
+      },
+      {
+        "command": "subversionr.openBase",
+        "title": "%command.openBase.title%"
+      },
+      {
+        "command": "subversionr.diffWithHead",
+        "title": "%command.diffWithHead.title%"
+      },
+      {
+        "command": "subversionr.openHead",
+        "title": "%command.openHead.title%"
+      },
+      {
+        "command": "subversionr.diffWithPrevious",
+        "title": "%command.diffWithPrevious.title%"
+      },
+      {
+        "command": "subversionr.showRepositoryLog",
+        "title": "%command.showRepositoryLog.title%"
+      },
+      {
+        "command": "subversionr.showFileHistory",
+        "title": "%command.showFileHistory.title%"
+      },
+      {
+        "command": "subversionr.showLineHistory",
+        "title": "%command.showLineHistory.title%"
+      },
+      {
+        "command": "subversionr.showBlame",
+        "title": "%command.showBlame.title%"
+      },
+      {
+        "command": "subversionr.history.refresh",
+        "title": "%command.history.refresh.title%"
+      },
+      {
+        "command": "subversionr.history.searchLoaded",
+        "title": "%command.history.searchLoaded.title%"
+      },
+      {
+        "command": "subversionr.history.loadMore",
+        "title": "%command.history.loadMore.title%"
+      },
+      {
+        "command": "subversionr.history.openRevision",
+        "title": "%command.history.openRevision.title%"
+      },
+      {
+        "command": "subversionr.history.compareWithPrevious",
+        "title": "%command.history.compareWithPrevious.title%"
+      },
+      {
+        "command": "subversionr.history.compareRevisions",
+        "title": "%command.history.compareRevisions.title%"
+      },
+      {
+        "command": "subversionr.history.openRevisionDetails",
+        "title": "%command.history.openRevisionDetails.title%"
+      },
+      {
+        "command": "subversionr.history.copyMessage",
+        "title": "%command.history.copyMessage.title%"
+      },
+      {
+        "command": "subversionr.history.copyRevision",
+        "title": "%command.history.copyRevision.title%"
+      },
+      {
+        "command": "subversionr.fullReconcile",
+        "title": "%command.fullReconcile.title%"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "subversionr.commitAll",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.reviewCommit",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.pickCommitMessageHistory",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.refreshRepository",
+          "when": "scmProvider == svn-r",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.checkRemoteChanges",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.updateRepository",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.updateToRevision",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.revertAll",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.branchCreateRepository",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.switchRepository",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.relocateRepository",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.mergeRangeRepository",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.previewMergeRangeRepository",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showRepositoryMergeinfo",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showRepositoryProperties",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.editRepositoryExternals",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showRepositoryLog",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.tortoise.openRepositoryLog",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
+          "group": "tortoise@1"
+        },
+        {
+          "command": "subversionr.tortoise.openRevisionGraph",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
+          "group": "tortoise@2"
+        },
+        {
+          "command": "subversionr.tortoise.openRepositoryBrowser",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
+          "group": "tortoise@3"
+        },
+        {
+          "command": "subversionr.closeRepository",
+          "when": "scmProvider == svn-r",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.fullReconcile",
+          "when": "scmProvider == svn-r",
+          "group": "repository"
+        },
+        {
+          "command": "subversionr.cleanupRepository",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "repository"
+        },
+        {
+          "command": "subversionr.upgradeWorkingCopy",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "repository"
+        }
+      ],
+      "scm/resourceGroup/context": [
+        {
+          "command": "subversionr.deleteAllUnversionedResources",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceGroup == unversioned",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.resolveAll",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceGroupState == subversionr.conflicts",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.commitChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceGroupState == subversionr.changelist",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.revertChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceGroupState == subversionr.changelist",
+          "group": "inline@2"
+        },
+        {
+          "command": "subversionr.updateAllIncoming",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceGroupState == subversionr.incoming",
+          "group": "inline"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showFileHistory",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showBlame",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.tortoise.openResourceLog",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "tortoise@1"
+        },
+        {
+          "command": "subversionr.tortoise.blameResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "tortoise@2"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showFileHistory",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showBlame",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.tortoise.openResourceLog",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "tortoise@1"
+        },
+        {
+          "command": "subversionr.tortoise.blameResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "tortoise@2"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.diffWithBase",
+          "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.openBase",
+          "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.diffWithHead",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.openHead",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showFileHistory",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showBlame",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.tortoise.openResourceLog",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "tortoise@1"
+        },
+        {
+          "command": "subversionr.tortoise.diffResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "tortoise@2"
+        },
+        {
+          "command": "subversionr.tortoise.blameResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "tortoise@3"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && scmResourceState == subversionr.changedUnknown",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && (scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showResourceMergeinfo",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.showResourceProperties",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.setResourceProperty",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.deleteResourceProperty",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.editResourceExternals",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/ || scmResourceState == subversionr.workingCopyMetadata)",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.revertResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.revertResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.commitResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.setResourceChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "subversionr.clearResourceChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.changelisted(\\.locked)?$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "subversionr.lockResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?$/",
+          "group": "inline@4"
+        },
+        {
+          "command": "subversionr.unlockResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?\\.locked$/",
+          "group": "inline@5"
+        },
+        {
+          "command": "subversionr.commitResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.setResourceChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "subversionr.clearResourceChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable\\.changelisted(\\.locked)?$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "subversionr.lockResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?$/",
+          "group": "inline@4"
+        },
+        {
+          "command": "subversionr.unlockResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?\\.locked$/",
+          "group": "inline@5"
+        },
+        {
+          "command": "subversionr.lockResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.workingCopyMetadataFile",
+          "group": "inline@4"
+        },
+        {
+          "command": "subversionr.unlockResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.workingCopyMetadataFile.locked",
+          "group": "inline@5"
+        },
+        {
+          "command": "subversionr.removeResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.removeResourceKeepLocal",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.moveResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.removeResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.removeResourceKeepLocal",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.moveResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.revertResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.commitResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.setResourceChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "subversionr.clearResourceChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.changedDirectory.changelisted",
+          "group": "inline@3"
+        },
+        {
+          "command": "subversionr.removeResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.removeResourceKeepLocal",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.moveResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.revertResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.resolveResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.setResourceChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "subversionr.clearResourceChangelist",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted\\.changelisted(\\.locked)?$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "subversionr.lockResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?$/",
+          "group": "inline@4"
+        },
+        {
+          "command": "subversionr.unlockResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?\\.locked$/",
+          "group": "inline@5"
+        },
+        {
+          "command": "subversionr.removeResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.removeResourceKeepLocal",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.moveResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && scmResourceState == subversionr.unversioned",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.addResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.addToIgnoreResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
+          "group": "inline@2"
+        },
+        {
+          "command": "subversionr.deleteUnversionedResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && scmResourceState == subversionr.external",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "scmProvider == svn-r && scmResourceState == subversionr.ignored",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.removeFromIgnoreResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.ignored",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.updateResource",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incoming(File)?(\\.locked)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.diffWithHead",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incomingFile(\\.locked)?$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "subversionr.openHead",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incomingFile(\\.locked)?$/",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "submenu": "subversionr.editorContext",
+          "when": "resourceScheme == file && subversionr.activeEditorHistoryFile",
+          "group": "subversionr@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "subversionr.moveResource",
+          "when": "resourceScheme == file && isWorkspaceTrusted",
+          "group": "subversionr@1"
+        }
+      ],
+      "subversionr.editorContext": [
+        {
+          "command": "subversionr.diffWithPrevious",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorPreviousDiffable",
+          "group": "diff@1"
+        },
+        {
+          "command": "subversionr.diffWithBase",
+          "when": "resourceScheme == file && subversionr.activeEditorBaseDiffable",
+          "group": "diff@2"
+        },
+        {
+          "command": "subversionr.openBase",
+          "when": "resourceScheme == file && subversionr.activeEditorBaseDiffable",
+          "group": "diff@3"
+        },
+        {
+          "command": "subversionr.diffWithHead",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorBaseDiffable",
+          "group": "diff@4"
+        },
+        {
+          "command": "subversionr.openHead",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorBaseDiffable",
+          "group": "diff@5"
+        },
+        {
+          "command": "subversionr.moveResource",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
+          "group": "operation@1"
+        },
+        {
+          "command": "subversionr.showFileHistory",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
+          "group": "history@1"
+        },
+        {
+          "command": "subversionr.showLineHistory",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorLineHistoryFile",
+          "group": "history@2"
+        },
+        {
+          "command": "subversionr.showBlame",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
+          "group": "history@3"
+        },
+        {
+          "command": "subversionr.showResourceMergeinfo",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
+          "group": "history@4"
+        },
+        {
+          "command": "subversionr.showResourceProperties",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
+          "group": "history@5"
+        },
+        {
+          "command": "subversionr.tortoise.openResourceLog",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.tortoiseAvailable && subversionr.activeEditorHistoryFile",
+          "group": "tortoise@1"
+        },
+        {
+          "command": "subversionr.tortoise.diffResource",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.tortoiseAvailable && subversionr.activeEditorBaseDiffable",
+          "group": "tortoise@2"
+        },
+        {
+          "command": "subversionr.tortoise.blameResource",
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.tortoiseAvailable && subversionr.activeEditorHistoryFile",
+          "group": "tortoise@3"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "subversionr.history.refresh",
+          "when": "view == subversionr.history && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "subversionr.history.searchLoaded",
+          "when": "view == subversionr.history",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "subversionr.history.openRevision",
+          "when": "view == subversionr.history && isWorkspaceTrusted && (viewItem == subversionr.history.fileRevision || viewItem == subversionr.history.fileRevision.previousDiffable) && !listMultiSelection",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.history.compareWithPrevious",
+          "when": "view == subversionr.history && isWorkspaceTrusted && viewItem == subversionr.history.fileRevision.previousDiffable && !listMultiSelection",
+          "group": "inline@1"
+        },
+        {
+          "command": "subversionr.history.compareRevisions",
+          "when": "view == subversionr.history && isWorkspaceTrusted && (viewItem == subversionr.history.fileRevision || viewItem == subversionr.history.fileRevision.previousDiffable) && listMultiSelection",
+          "group": "inline@2"
+        },
+        {
+          "command": "subversionr.history.openRevisionDetails",
+          "when": "view == subversionr.history && (viewItem == subversionr.history.repositoryRevision || viewItem == subversionr.history.fileRevision || viewItem == subversionr.history.fileRevision.previousDiffable || viewItem == subversionr.history.lineRevision) && !listMultiSelection",
+          "group": "inline"
+        },
+        {
+          "command": "subversionr.history.copyMessage",
+          "when": "view == subversionr.history && (viewItem == subversionr.history.repositoryRevision || viewItem == subversionr.history.fileRevision || viewItem == subversionr.history.fileRevision.previousDiffable || viewItem == subversionr.history.lineRevision) && !listMultiSelection",
+          "group": "clipboard"
+        },
+        {
+          "command": "subversionr.history.copyRevision",
+          "when": "view == subversionr.history && (viewItem == subversionr.history.repositoryRevision || viewItem == subversionr.history.fileRevision || viewItem == subversionr.history.fileRevision.previousDiffable || viewItem == subversionr.history.lineRevision) && !listMultiSelection",
+          "group": "clipboard"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "subversionr.tortoise.openRepositoryLog",
+          "when": "isWorkspaceTrusted && subversionr.tortoiseAvailable"
+        },
+        {
+          "command": "subversionr.tortoise.openRevisionGraph",
+          "when": "isWorkspaceTrusted && subversionr.tortoiseAvailable"
+        },
+        {
+          "command": "subversionr.tortoise.openRepositoryBrowser",
+          "when": "isWorkspaceTrusted && subversionr.tortoiseAvailable"
+        },
+        {
+          "command": "subversionr.refreshResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.checkRemoteChanges",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.addResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.addToIgnoreResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.removeFromIgnoreResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.setResourceChangelist",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.clearResourceChangelist",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.lockResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.unlockResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.deleteUnversionedResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.deleteAllUnversionedResources",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.commitResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.commitChangelist",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.revertChangelist",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.revertAll",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.removeResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.removeResourceKeepLocal",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.moveResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.resolveResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.resolveAll",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.revertResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.updateResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.updateAllIncoming",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.tortoise.openResourceLog",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.tortoise.diffResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.tortoise.blameResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.diffWithBase",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.openBase",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.diffWithHead",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.openHead",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.diffWithPrevious",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.showFileHistory",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.showLineHistory",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.showBlame",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.showResourceMergeinfo",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.showResourceProperties",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.setResourceProperty",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.deleteResourceProperty",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.editRepositoryExternals",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.editResourceExternals",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.refresh",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.searchLoaded",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.loadMore",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.openRevision",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.compareWithPrevious",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.compareRevisions",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.openRevisionDetails",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.copyMessage",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.history.copyRevision",
+          "when": "false"
+        }
+      ]
+    },
+    "views": {
+      "scm": [
+        {
+          "id": "subversionr.history",
+          "name": "%view.history.name%"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "scm",
+        "contents": "%view.scm.emptyState.content%"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "subversionr.betaWorkflow",
+        "title": "%walkthrough.betaWorkflow.title%",
+        "description": "%walkthrough.betaWorkflow.description%",
+        "steps": [
+          {
+            "id": "subversionr.betaWorkflow.openOrCheckout",
+            "title": "%walkthrough.betaWorkflow.openOrCheckout.title%",
+            "description": "%walkthrough.betaWorkflow.openOrCheckout.description%",
+            "media": {
+              "image": "media/walkthrough/subversionr-workflow.svg",
+              "altText": "%walkthrough.betaWorkflow.openOrCheckout.alt%"
+            },
+            "completionEvents": [
+              "onCommand:subversionr.openRepository",
+              "onCommand:subversionr.checkoutRepository"
+            ]
+          },
+          {
+            "id": "subversionr.betaWorkflow.reviewStatus",
+            "title": "%walkthrough.betaWorkflow.reviewStatus.title%",
+            "description": "%walkthrough.betaWorkflow.reviewStatus.description%",
+            "media": {
+              "image": "media/walkthrough/subversionr-workflow.svg",
+              "altText": "%walkthrough.betaWorkflow.reviewStatus.alt%"
+            },
+            "completionEvents": [
+              "onCommand:subversionr.refreshRepository",
+              "onCommand:subversionr.checkRemoteChanges"
+            ]
+          },
+          {
+            "id": "subversionr.betaWorkflow.reviewAndCommit",
+            "title": "%walkthrough.betaWorkflow.reviewAndCommit.title%",
+            "description": "%walkthrough.betaWorkflow.reviewAndCommit.description%",
+            "media": {
+              "image": "media/walkthrough/subversionr-workflow.svg",
+              "altText": "%walkthrough.betaWorkflow.reviewAndCommit.alt%"
+            },
+            "completionEvents": [
+              "onCommand:subversionr.reviewCommit"
+            ]
+          },
+          {
+            "id": "subversionr.betaWorkflow.inspectHistory",
+            "title": "%walkthrough.betaWorkflow.inspectHistory.title%",
+            "description": "%walkthrough.betaWorkflow.inspectHistory.description%",
+            "media": {
+              "image": "media/walkthrough/subversionr-workflow.svg",
+              "altText": "%walkthrough.betaWorkflow.inspectHistory.alt%"
+            },
+            "completionEvents": [
+              "onCommand:subversionr.showRepositoryLog",
+              "onCommand:subversionr.showRepositoryProperties"
+            ]
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "%configuration.title%",
+      "properties": {
+        "subversionr.tortoise.executablePath": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "markdownDescription": "%configuration.tortoise.executablePath.description%"
+        },
+        "subversionr.tortoise.configDirectory": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "markdownDescription": "%configuration.tortoise.configDirectory.description%"
+        },
+        "subversionr.svn.configDirectory": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "markdownDescription": "%configuration.svn.configDirectory.description%"
+        },
+        "subversionr.svn.tunnelCommand": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "markdownDescription": "%configuration.svn.tunnelCommand.description%"
+        },
+        "subversionr.status.countUnversioned": {
+          "type": "boolean",
+          "scope": "window",
+          "default": false,
+          "markdownDescription": "%configuration.status.countUnversioned.description%"
+        },
+        "subversionr.status.ignoreChangelistsInCount": {
+          "type": "array",
+          "scope": "window",
+          "default": [
+            "ignore-on-commit"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "%configuration.status.ignoreChangelistsInCount.description%"
+        },
+        "subversionr.history.pageSize": {
+          "type": "integer",
+          "scope": "window",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 500,
+          "markdownDescription": "%configuration.history.pageSize.description%"
+        },
+        "subversionr.history.includeMergedRevisions": {
+          "type": "boolean",
+          "scope": "window",
+          "default": false,
+          "markdownDescription": "%configuration.history.includeMergedRevisions.description%"
+        },
+        "subversionr.lens.enabled": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "markdownDescription": "%configuration.lens.enabled.description%"
+        },
+        "subversionr.lens.fileHeader": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "markdownDescription": "%configuration.lens.fileHeader.description%"
+        },
+        "subversionr.lens.currentLine": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "markdownDescription": "%configuration.lens.currentLine.description%"
+        },
+        "subversionr.lens.hover": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "markdownDescription": "%configuration.lens.hover.description%"
+        },
+        "subversionr.lens.symbols": {
+          "type": "boolean",
+          "scope": "window",
+          "default": false,
+          "markdownDescription": "%configuration.lens.symbols.description%"
+        },
+        "subversionr.lens.maxFileLines": {
+          "type": "integer",
+          "scope": "window",
+          "default": 20000,
+          "minimum": 1,
+          "markdownDescription": "%configuration.lens.maxFileLines.description%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.101.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}

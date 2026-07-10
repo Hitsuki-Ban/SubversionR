@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.release.native-artifact-map.win32-x64.v1",
+  "target": "win32-x64",
+  "packageModes": [
+    "packaged-runtime",
+    "static-link-input",
+    "fixture-runtime"
+  ],
+  "components": [
+    {
+      "sourceName": "apache-subversion",
+      "expectedVersion": "1.14.5",
+      "packageMode": "packaged-runtime",
+      "requiredArtifactPaths": [
+        "resources/backend/win32-x64/libsvn_client-1.dll",
+        "resources/backend/win32-x64/libsvn_delta-1.dll",
+        "resources/backend/win32-x64/libsvn_diff-1.dll",
+        "resources/backend/win32-x64/libsvn_fs-1.dll",
+        "resources/backend/win32-x64/libsvn_fs_fs-1.dll",
+        "resources/backend/win32-x64/libsvn_fs_util-1.dll",
+        "resources/backend/win32-x64/libsvn_fs_x-1.dll",
+        "resources/backend/win32-x64/libsvn_ra-1.dll",
+        "resources/backend/win32-x64/libsvn_repos-1.dll",
+        "resources/backend/win32-x64/libsvn_subr-1.dll",
+        "resources/backend/win32-x64/libsvn_wc-1.dll"
+      ],
+      "artifactPathPatterns": [
+        "resources/backend/win32-x64/libsvn_*-1.dll"
+      ],
+      "rationale": "Apache Subversion 1.14.5 is the authoritative SVN runtime, and the packaged bridge loads its private libsvn DLL set from the VSIX backend resource root."
+    },
+    {
+      "sourceName": "apache-httpd",
+      "expectedVersion": "2.4.68",
+      "packageMode": "fixture-runtime",
+      "nonShippingReason": "Apache HTTP Server is built only for localhost DAV/HTTPS release fixtures and is not shipped in the VSIX backend runtime.",
+      "rationale": "The product runtime is a libsvn client bridge; httpd is a release fixture server substrate."
+    },
+    {
+      "sourceName": "pcre2",
+      "expectedVersion": "10.47",
+      "packageMode": "fixture-runtime",
+      "nonShippingReason": "PCRE2 is a static input to the source-built Apache HTTP Server fixture stage and is not shipped in the VSIX backend runtime.",
+      "rationale": "PCRE2 supports fixture-server validation, not the packaged client runtime."
+    },
+    {
+      "sourceName": "serf",
+      "expectedVersion": "1.3.10",
+      "packageMode": "static-link-input",
+      "carrierArtifactPaths": [
+        "resources/backend/win32-x64/libsvn_ra-1.dll"
+      ],
+      "nonShippingReason": "Serf is linked into the Subversion RA runtime graph and has no standalone DLL in the packaged backend resource root.",
+      "rationale": "The Windows Subversion build links libsvn_ra_serf into libsvn_ra-1.dll; this map records the packaged carrier but does not prove symbol-level linkage."
+    },
+    {
+      "sourceName": "openssl",
+      "expectedVersion": "3.5.7",
+      "packageMode": "packaged-runtime",
+      "requiredArtifactPaths": [
+        "resources/backend/win32-x64/libcrypto-3-x64.dll",
+        "resources/backend/win32-x64/libssl-3-x64.dll"
+      ],
+      "artifactPathPatterns": [
+        "resources/backend/win32-x64/libcrypto-*.dll",
+        "resources/backend/win32-x64/libssl-*.dll"
+      ],
+      "rationale": "The packaged Subversion RA runtime depends on the source-built OpenSSL runtime DLLs for HTTPS support."
+    },
+    {
+      "sourceName": "apr",
+      "expectedVersion": "1.7.6",
+      "packageMode": "packaged-runtime",
+      "requiredArtifactPaths": [
+        "resources/backend/win32-x64/libapr-1.dll"
+      ],
+      "artifactPathPatterns": [
+        "resources/backend/win32-x64/libapr-1.dll"
+      ],
+      "rationale": "APR is a required private runtime dependency for the packaged libsvn DLL set."
+    },
+    {
+      "sourceName": "apr-util",
+      "expectedVersion": "1.6.3",
+      "packageMode": "packaged-runtime",
+      "requiredArtifactPaths": [
+        "resources/backend/win32-x64/libaprutil-1.dll"
+      ],
+      "artifactPathPatterns": [
+        "resources/backend/win32-x64/libaprutil-1.dll"
+      ],
+      "rationale": "APR-util is a required private runtime dependency for the packaged libsvn DLL set."
+    },
+    {
+      "sourceName": "apr-iconv",
+      "expectedVersion": "1.2.2",
+      "packageMode": "packaged-runtime",
+      "requiredArtifactPaths": [
+        "resources/backend/win32-x64/libapriconv-1.dll"
+      ],
+      "artifactPathPatterns": [
+        "resources/backend/win32-x64/libapriconv-1.dll",
+        "resources/backend/win32-x64/iconv/*.so"
+      ],
+      "rationale": "APR-iconv ships as a private runtime DLL plus converter modules required by the packaged APR/libsvn runtime."
+    },
+    {
+      "sourceName": "expat",
+      "expectedVersion": "2.8.1",
+      "packageMode": "packaged-runtime",
+      "requiredArtifactPaths": [
+        "resources/backend/win32-x64/libexpat.dll"
+      ],
+      "artifactPathPatterns": [
+        "resources/backend/win32-x64/libexpat.dll"
+      ],
+      "rationale": "Expat is a required private XML parser runtime dependency for the packaged APR-util/libsvn stack."
+    },
+    {
+      "sourceName": "zlib",
+      "expectedVersion": "1.3.2",
+      "packageMode": "static-link-input",
+      "carrierArtifactPaths": [
+        "resources/backend/win32-x64/libsvn_subr-1.dll",
+        "resources/backend/win32-x64/libsvn_ra-1.dll"
+      ],
+      "nonShippingReason": "zlib is staged as a static dependency input and has no standalone zlib DLL in the packaged backend resource root.",
+      "rationale": "This map records the packaged runtime artifacts that consume the zlib-linked native stack but does not prove symbol-level linkage."
+    },
+    {
+      "sourceName": "sqlite-amalgamation",
+      "expectedVersion": "3.53.2",
+      "packageMode": "static-link-input",
+      "carrierArtifactPaths": [
+        "resources/backend/win32-x64/libsvn_subr-1.dll",
+        "resources/backend/win32-x64/libsvn_wc-1.dll"
+      ],
+      "nonShippingReason": "SQLite is staged from the amalgamation as a static build input and has no standalone SQLite DLL in the packaged backend resource root.",
+      "rationale": "The packaged libsvn WC/subr runtime uses the source-built SQLite input; this map records package coverage without claiming symbol-level proof."
+    }
+  ]
+}

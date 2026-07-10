@@ -1,0 +1,10 @@
+.cache/
+.vscode-test/
+coverage/
+dist/
+node_modules/
+out/
+target/
+*.vsix
+*.log
+

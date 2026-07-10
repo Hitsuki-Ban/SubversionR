@@ -1,0 +1,19 @@
+[package]
+name = "subversionr-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+libloading = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subversionr-protocol = { path = "../subversionr-protocol" }
+time = { version = "0.3", features = ["formatting"] }
+
+[dev-dependencies]
+serde_json = "1"

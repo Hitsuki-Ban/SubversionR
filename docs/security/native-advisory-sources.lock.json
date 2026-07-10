@@ -1,0 +1,387 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.security.native-advisory-sources.v1",
+  "capturedAt": "2026-07-07",
+  "policy": {
+    "manualReviewRequired": true,
+    "noDedicatedAdvisoryFeedMeansReleaseBlocking": true,
+    "notes": [
+      "This contract records where maintainers must review native dependency advisories; it is not a vulnerability-free assertion.",
+      "A source contract does not replace built-artifact provenance, triage, remediation approval, or VEX decisions."
+    ]
+  },
+  "components": [
+    {
+      "name": "apache-subversion",
+      "displayName": "Apache Subversion",
+      "primaryAuthority": "Apache Software Foundation",
+      "dedicatedAdvisoryIndex": true,
+      "reviewLimitation": "Release review must check Subversion security guidance and release announcements for fixed CVEs affecting the locked version and SubversionR's use of libsvn.",
+      "advisorySources": [
+        {
+          "id": "apache-subversion-security",
+          "type": "project-security",
+          "authority": "project",
+          "url": "https://subversion.apache.org/security/",
+          "purpose": "Project security reporting and handling guidance."
+        },
+        {
+          "id": "apache-subversion-news",
+          "type": "project-release-advisories",
+          "authority": "project",
+          "url": "https://subversion.apache.org/news.html",
+          "purpose": "Subversion release announcements and fixed-CVE notes."
+        }
+      ]
+    },
+    {
+      "name": "apache-httpd",
+      "displayName": "Apache HTTP Server",
+      "primaryAuthority": "Apache Software Foundation",
+      "dedicatedAdvisoryIndex": true,
+      "reviewLimitation": "Release review must check Apache HTTP Server 2.4 vulnerability entries for the locked DAV fixture substrate version and enabled modules.",
+      "advisorySources": [
+        {
+          "id": "apache-httpd-24-vulnerabilities",
+          "type": "project-vulnerability-index",
+          "authority": "project",
+          "url": "https://httpd.apache.org/security/vulnerabilities_24.html",
+          "purpose": "Apache HTTP Server 2.4 vulnerability index."
+        },
+        {
+          "id": "asf-security",
+          "type": "asf-security-process",
+          "authority": "asf",
+          "url": "https://www.apache.org/security/",
+          "purpose": "ASF CNA and vulnerability handling process."
+        }
+      ]
+    },
+    {
+      "name": "pcre2",
+      "displayName": "PCRE2",
+      "primaryAuthority": "PCRE2 project",
+      "dedicatedAdvisoryIndex": true,
+      "reviewLimitation": "Release review must check the PCRE2 security policy and GitHub advisories for affected ranges and release-integrity notes.",
+      "advisorySources": [
+        {
+          "id": "pcre2-security",
+          "type": "project-security-policy",
+          "authority": "github-security",
+          "url": "https://github.com/PCRE2Project/pcre2/security",
+          "purpose": "PCRE2 security policy, previous vulnerabilities, and reporting guidance."
+        },
+        {
+          "id": "pcre2-github-advisories",
+          "type": "github-advisory-index",
+          "authority": "github-security",
+          "url": "https://github.com/PCRE2Project/pcre2/security/advisories",
+          "purpose": "PCRE2 GitHub Security Advisories index."
+        }
+      ]
+    },
+    {
+      "name": "serf",
+      "displayName": "Apache Serf",
+      "primaryAuthority": "Apache Software Foundation",
+      "dedicatedAdvisoryIndex": false,
+      "reviewLimitation": "The Serf project site does not expose a dedicated versioned vulnerability index; release review must check Serf 1.3 changelog security-relevant entries, named CVE records, and remain manual/blocking for any other finding.",
+      "advisorySources": [
+        {
+          "id": "apache-serf-project",
+          "type": "project-home",
+          "authority": "project",
+          "url": "https://serf.apache.org/",
+          "purpose": "Apache Serf project home and relationship to Subversion/APR."
+        },
+        {
+          "id": "asf-security",
+          "type": "asf-security-process",
+          "authority": "asf",
+          "url": "https://www.apache.org/security/",
+          "purpose": "ASF CNA and vulnerability handling process."
+        },
+        {
+          "id": "serf-changes-1-3",
+          "type": "project-release-changelog",
+          "authority": "project",
+          "url": "https://svn.apache.org/repos/asf/serf/tags/1.3.10/CHANGES",
+          "purpose": "Serf 1.3 release changelog with locked-version and security-relevant fix entries."
+        },
+        {
+          "id": "nvd-cve-2014-3504",
+          "type": "cve-record",
+          "authority": "nvd",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2014-3504",
+          "purpose": "Named CVE record used for the Serf 1.3.10 terminal fixed review."
+        }
+      ]
+    },
+    {
+      "name": "openssl",
+      "displayName": "OpenSSL",
+      "primaryAuthority": "OpenSSL project",
+      "dedicatedAdvisoryIndex": true,
+      "reviewLimitation": "Release review must check OpenSSL vulnerability entries and security policy for the locked OpenSSL line and SubversionR's TLS usage.",
+      "advisorySources": [
+        {
+          "id": "openssl-vulnerabilities",
+          "type": "vendor-vulnerability-index",
+          "authority": "vendor",
+          "url": "https://openssl-library.org/news/vulnerabilities/",
+          "purpose": "OpenSSL vulnerability index and advisory links."
+        },
+        {
+          "id": "openssl-security-policy",
+          "type": "vendor-security-policy",
+          "authority": "vendor",
+          "url": "https://openssl-library.org/policies/general/security-policy/",
+          "purpose": "OpenSSL severity and vulnerability handling policy."
+        }
+      ]
+    },
+    {
+      "name": "apr",
+      "displayName": "Apache Portable Runtime",
+      "primaryAuthority": "Apache Software Foundation",
+      "dedicatedAdvisoryIndex": false,
+      "reviewLimitation": "The APR security page is reporting guidance rather than a versioned public advisory index; release review must check APR 1.7 changelog security entries, named CVE records, and remain manual/blocking for any other finding.",
+      "advisorySources": [
+        {
+          "id": "apr-security-report",
+          "type": "project-security-reporting",
+          "authority": "project",
+          "url": "https://apr.apache.org/security_report.html",
+          "purpose": "APR security reporting and vulnerability handling guidance."
+        },
+        {
+          "id": "asf-security",
+          "type": "asf-security-process",
+          "authority": "asf",
+          "url": "https://www.apache.org/security/",
+          "purpose": "ASF CNA and vulnerability handling process."
+        },
+        {
+          "id": "apr-changes-1-7",
+          "type": "project-release-changelog",
+          "authority": "project",
+          "url": "https://downloads.apache.org/apr/CHANGES-APR-1.7",
+          "purpose": "APR 1.7 release changelog with locked-version and security-fix entries."
+        },
+        {
+          "id": "nvd-cve-2023-49582",
+          "type": "cve-record",
+          "authority": "nvd",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2023-49582",
+          "purpose": "Named CVE record used for the APR 1.7.6 terminal fixed review."
+        },
+        {
+          "id": "nvd-cve-2022-24963",
+          "type": "cve-record",
+          "authority": "nvd",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-24963",
+          "purpose": "Named CVE record used for the APR 1.7.6 terminal fixed review."
+        },
+        {
+          "id": "nvd-cve-2022-28331",
+          "type": "cve-record",
+          "authority": "nvd",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-28331",
+          "purpose": "Named CVE record used for the APR 1.7.6 terminal fixed review."
+        },
+        {
+          "id": "nvd-cve-2021-35940",
+          "type": "cve-record",
+          "authority": "nvd",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-35940",
+          "purpose": "Named CVE record used for the APR 1.7.6 terminal fixed review."
+        }
+      ]
+    },
+    {
+      "name": "apr-util",
+      "displayName": "Apache Portable Runtime Utility",
+      "primaryAuthority": "Apache Software Foundation",
+      "dedicatedAdvisoryIndex": false,
+      "reviewLimitation": "APR-util shares the APR security reporting path; release review must check APR-util 1.6 changelog security entries, named CVE records, and remain manual/blocking for any other finding.",
+      "advisorySources": [
+        {
+          "id": "apr-security-report",
+          "type": "project-security-reporting",
+          "authority": "project",
+          "url": "https://apr.apache.org/security_report.html",
+          "purpose": "APR security reporting and vulnerability handling guidance."
+        },
+        {
+          "id": "asf-security",
+          "type": "asf-security-process",
+          "authority": "asf",
+          "url": "https://www.apache.org/security/",
+          "purpose": "ASF CNA and vulnerability handling process."
+        },
+        {
+          "id": "apr-util-changes-1-6",
+          "type": "project-release-changelog",
+          "authority": "project",
+          "url": "https://downloads.apache.org/apr/CHANGES-APR-UTIL-1.6",
+          "purpose": "APR-util 1.6 release changelog with locked-version and security-fix entries."
+        },
+        {
+          "id": "nvd-cve-2022-25147",
+          "type": "cve-record",
+          "authority": "nvd",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-25147",
+          "purpose": "Named CVE record used for the APR-util 1.6.3 terminal fixed review."
+        },
+        {
+          "id": "nvd-cve-2017-12618",
+          "type": "cve-record",
+          "authority": "nvd",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2017-12618",
+          "purpose": "Named CVE record used for the APR-util 1.6.3 terminal fixed review."
+        }
+      ]
+    },
+    {
+      "name": "apr-iconv",
+      "displayName": "Apache Portable Runtime Iconv",
+      "primaryAuthority": "Apache Software Foundation",
+      "dedicatedAdvisoryIndex": false,
+      "reviewLimitation": "APR-iconv shares the APR security reporting path; release review must check current APR-iconv release metadata, APR-iconv changelog entries, repository advisories, and vulnerability database query evidence before any terminal manual decision.",
+      "advisorySources": [
+        {
+          "id": "apr-security-report",
+          "type": "project-security-reporting",
+          "authority": "project",
+          "url": "https://apr.apache.org/security_report.html",
+          "purpose": "APR security reporting and vulnerability handling guidance."
+        },
+        {
+          "id": "asf-security",
+          "type": "asf-security-process",
+          "authority": "asf",
+          "url": "https://www.apache.org/security/",
+          "purpose": "ASF CNA and vulnerability handling process."
+        },
+        {
+          "id": "apr-iconv-download",
+          "type": "project-release-download",
+          "authority": "project",
+          "url": "https://apr.apache.org/download.cgi",
+          "purpose": "APR-iconv current recommended release metadata and Windows apr_xlate package context."
+        },
+        {
+          "id": "apr-iconv-changes-1-2",
+          "type": "project-release-changelog",
+          "authority": "project",
+          "url": "https://downloads.apache.org/apr/CHANGES-APR-ICONV-1.2",
+          "purpose": "APR-iconv 1.2 release changelog for locked-version review."
+        },
+        {
+          "id": "apr-iconv-github-advisories",
+          "type": "github-advisory-index",
+          "authority": "github-security",
+          "url": "https://github.com/apache/apr-iconv/security/advisories",
+          "purpose": "Repository-published GitHub Security Advisories index for APR-iconv."
+        },
+        {
+          "id": "nvd-apr-iconv-keyword-search",
+          "type": "cve-database-keyword-search",
+          "authority": "nvd",
+          "url": "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=apr-iconv",
+          "purpose": "NVD keyword-search evidence for APR-iconv advisory discovery."
+        },
+        {
+          "id": "osv-apr-iconv-query",
+          "type": "vulnerability-database-query",
+          "authority": "osv",
+          "url": "https://api.osv.dev/v1/query",
+          "purpose": "OSV package and repository query evidence for APR-iconv advisory discovery."
+        }
+      ]
+    },
+    {
+      "name": "expat",
+      "displayName": "Expat",
+      "primaryAuthority": "libexpat project",
+      "dedicatedAdvisoryIndex": false,
+      "reviewLimitation": "The GitHub security overview has reporting guidance but no published advisory feed; release review must check the Expat changelog and remain manual/blocking.",
+      "advisorySources": [
+        {
+          "id": "libexpat-security",
+          "type": "project-security-policy",
+          "authority": "github-security",
+          "url": "https://github.com/libexpat/libexpat/security",
+          "purpose": "Expat security policy and reporting guidance."
+        },
+        {
+          "id": "libexpat-changes",
+          "type": "project-release-changelog",
+          "authority": "project",
+          "url": "https://github.com/libexpat/libexpat/blob/master/expat/Changes",
+          "purpose": "Expat release changelog with security-fix entries."
+        }
+      ]
+    },
+    {
+      "name": "zlib",
+      "displayName": "zlib",
+      "primaryAuthority": "zlib project",
+      "dedicatedAdvisoryIndex": false,
+      "reviewLimitation": "The project security page has no published advisory feed; release review must check release notes, project issue evidence, named CVE records, and remain manual/blocking for any other finding.",
+      "advisorySources": [
+        {
+          "id": "zlib-github-security",
+          "type": "github-security-overview",
+          "authority": "github-security",
+          "url": "https://github.com/madler/zlib/security",
+          "purpose": "Project GitHub security overview records lack of published advisories/policy."
+        },
+        {
+          "id": "zlib-release-notes",
+          "type": "project-release-notes",
+          "authority": "project",
+          "url": "https://github.com/madler/zlib/releases/tag/v1.3.2",
+          "purpose": "Project release notes for the locked source version."
+        },
+        {
+          "id": "zlib-issue-1142",
+          "type": "project-issue",
+          "authority": "project",
+          "url": "https://github.com/madler/zlib/issues/1142",
+          "purpose": "Project issue tracking CVE-2026-22184 in the standalone contrib/untgz utility."
+        },
+        {
+          "id": "nvd-cve-2026-22184",
+          "type": "cve-record",
+          "authority": "nvd",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-22184",
+          "purpose": "Named CVE record used for the zlib 1.3.2 terminal not_affected review."
+        }
+      ]
+    },
+    {
+      "name": "sqlite-amalgamation",
+      "displayName": "SQLite amalgamation",
+      "primaryAuthority": "SQLite project",
+      "dedicatedAdvisoryIndex": true,
+      "reviewLimitation": "SQLite's official CVE page warns that third-party CVEs can be inaccurate or context-dependent; release review must check project context rather than treating CVE labels as final.",
+      "advisorySources": [
+        {
+          "id": "sqlite-cves",
+          "type": "project-cve-context",
+          "authority": "project",
+          "url": "https://www.sqlite.org/cves.html",
+          "purpose": "SQLite project CVE context and guidance."
+        },
+        {
+          "id": "sqlite-release-log",
+          "type": "project-release-log",
+          "authority": "project",
+          "url": "https://www.sqlite.org/changes.html",
+          "purpose": "SQLite release log for version-specific fixes."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,263 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.security.malicious-input-corpus.win32-x64.v1",
+  "target": "win32-x64",
+  "publicReadinessClaim": false,
+  "completeFuzzClaim": false,
+  "localCorpusOnly": true,
+  "evidenceBoundary": "Deterministic malicious-input corpus evidence floor; not coverage-guided fuzzing and not complete libsvn remote-protocol fuzz coverage.",
+  "requiredTraceIds": [
+    "SEC-016",
+    "TST-020"
+  ],
+  "requiredCategories": [
+    "unsafe-paths",
+    "credential-url-redaction",
+    "log-rendering",
+    "json-rpc-server-response",
+    "svn-server-response",
+    "xml-dtd-payloads"
+  ],
+  "entries": [
+    {
+      "id": "TS-CONTENT-PATH-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "unsafe-paths",
+      "boundary": "typescript-extension-content-client",
+      "payloadClasses": [
+        "absolute working-copy paths",
+        "parent-relative paths"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "packages/vscode-extension/tests/contentGetRpcClient.test.ts",
+        "name": "rejects invalid request paths before sending"
+      }
+    },
+    {
+      "id": "RUST-CONTENT-PATH-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "unsafe-paths",
+      "boundary": "rust-daemon-content-rpc",
+      "payloadClasses": [
+        "absolute request paths",
+        "parent-relative request paths"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "crates/subversionr-daemon/tests/rpc_dispatch.rs",
+        "name": "content_get_rejects_absolute_or_parent_relative_path"
+      }
+    },
+    {
+      "id": "RUST-STATUS-PATH-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "unsafe-paths",
+      "boundary": "rust-daemon-status-rpc",
+      "payloadClasses": [
+        "absolute status targets",
+        "parent-relative status targets"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "crates/subversionr-daemon/tests/rpc_dispatch.rs",
+        "name": "status_refresh_rejects_absolute_or_parent_relative_targets"
+      }
+    },
+    {
+      "id": "TS-WATCHER-PATH-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "unsafe-paths",
+      "boundary": "typescript-file-watcher",
+      "payloadClasses": [
+        "repository-external paths",
+        ".svn internal paths",
+        "dot segments",
+        "parent traversal segments"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "packages/vscode-extension/tests/watcherEvents.test.ts",
+        "name": "drops paths containing dot or parent traversal segments"
+      }
+    },
+    {
+      "id": "TS-DIAGNOSTICS-URL-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "credential-url-redaction",
+      "boundary": "typescript-diagnostics-redaction",
+      "payloadClasses": [
+        "encoded credential URLs",
+        "svn+ssh URLs",
+        "long Windows paths",
+        "UNC paths"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "packages/vscode-extension/tests/diagnosticsRedaction.test.ts",
+        "name": "handles encoded credentials svn ssh urls long windows paths unc paths and repeated redaction safely"
+      }
+    },
+    {
+      "id": "TS-DIAGNOSTICS-SUPPORT-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "credential-url-redaction",
+      "boundary": "typescript-public-support-redaction",
+      "payloadClasses": [
+        "authorization headers",
+        "cookies",
+        "working-copy metadata paths",
+        "private path fragments"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "packages/vscode-extension/tests/diagnosticsRedaction.test.ts",
+        "name": "redacts the public support redaction fixture categories"
+      }
+    },
+    {
+      "id": "TS-HISTORY-LOG-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "log-rendering",
+      "boundary": "typescript-history-revision-details",
+      "payloadClasses": [
+        "CRLF log injection",
+        "HTML-like log messages",
+        "DTD-like log messages",
+        "NUL control characters"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "packages/vscode-extension/tests/historyRevisionDetailsDocument.test.ts",
+        "name": "renders malicious log messages as escaped text without synthetic section breaks"
+      }
+    },
+    {
+      "id": "TS-RPC-FRAMING-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "json-rpc-server-response",
+      "boundary": "typescript-stdio-transport",
+      "payloadClasses": [
+        "malformed Content-Length headers",
+        "malformed JSON payloads"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "packages/vscode-extension/tests/jsonRpcStreamClient.test.ts",
+        "name": "rejects pending requests when inbound framing is malformed"
+      }
+    },
+    {
+      "id": "RUST-STDIO-FRAME-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "json-rpc-server-response",
+      "boundary": "rust-daemon-stdio-auth-wait",
+      "payloadClasses": [
+        "oversized auth response frames",
+        "payloads rejected before body read"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "crates/subversionr-daemon/tests/stdio_rpc.rs",
+        "name": "stdio_loop_rejects_oversized_auth_response_frame_before_reading_payload"
+      }
+    },
+    {
+      "id": "RUST-STDIO-ENVELOPE-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "json-rpc-server-response",
+      "boundary": "rust-daemon-stdio-auth-wait",
+      "payloadClasses": [
+        "invalid JSON-RPC envelopes",
+        "result and error in the same response"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "crates/subversionr-daemon/tests/stdio_rpc.rs",
+        "name": "stdio_loop_rejects_auth_response_with_result_and_error"
+      }
+    },
+    {
+      "id": "NATIVE-SVN-SERVER-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "svn-server-response",
+      "boundary": "native-libsvn-remote-protocols",
+      "payloadClasses": [
+        "malformed SVN server responses",
+        "stateful remote protocol sequences"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "crates/subversionr-daemon/tests/native_bridge.rs",
+        "name": "native_bridge_malicious_svn_server_response_history_log_fails_without_auth_prompts_or_crash"
+      }
+    },
+    {
+      "id": "NATIVE-REMOTE-FUZZ-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "svn-server-response",
+      "boundary": "native-libsvn-remote-protocol-fuzzing",
+      "payloadClasses": [
+        "coverage-guided remote protocol fuzzing",
+        "cross-provider libsvn server-response fuzzing"
+      ],
+      "status": "release-blocker",
+      "blocker": "Coverage-guided fuzzing across libsvn remote access providers is not complete."
+    },
+    {
+      "id": "NATIVE-XML-DAV-001",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ],
+      "category": "xml-dtd-payloads",
+      "boundary": "native-libsvn-dav",
+      "payloadClasses": [
+        "DTD declarations",
+        "external entities",
+        "malformed DAV XML"
+      ],
+      "status": "covered",
+      "test": {
+        "file": "crates/subversionr-daemon/tests/native_bridge.rs",
+        "name": "native_bridge_malicious_dav_xml_history_log_fails_without_auth_prompts_or_crash"
+      }
+    }
+  ]
+}

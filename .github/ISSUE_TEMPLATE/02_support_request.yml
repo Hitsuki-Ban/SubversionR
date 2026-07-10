@@ -1,0 +1,96 @@
+name: Support request
+description: Ask for SubversionR usage help with sanitized environment details.
+title: "[Support]: "
+labels: ["support", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security / セキュリティ / 安全
+
+        Security vulnerabilities must be reported through `SECURITY.md`, not this public issue form.
+
+        Do not include / 含めないでください / 请勿包含: credentials, tokens, cookies, private repository URLs, client certificate private keys, `.svn/wc.db`, raw logs, or source content.
+
+        Maintainers review public evidence against `docs/security/support-redaction-checklist.md` before asking for more diagnostics.
+  - type: dropdown
+    id: request-type
+    attributes:
+      label: Request type
+      options:
+        - Installation or packaging
+        - Working-copy discovery
+        - Status or Source Control view
+        - Authentication or certificate trust
+        - Optional TortoiseSVN handoff
+        - Diagnostics or support bundle
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: subversionr-version
+    attributes:
+      label: SubversionR version
+      description: Use the installed extension version or exact commit. Do not include private repository URLs.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: vscode-version
+    attributes:
+      label: VS Code version
+      placeholder: 1.101.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      options:
+        - Windows x64
+        - Windows ARM64
+        - macOS arm64
+        - macOS x64
+        - Linux x64
+        - Linux ARM64
+    validations:
+      required: true
+  - type: dropdown
+    id: repository-transport
+    attributes:
+      label: Repository transport
+      description: Select the transport category only. Do not paste the repository URL.
+      options:
+        - Local file working copy
+        - localhost svn:// fixture
+        - localhost HTTPS DAV fixture
+        - Remote svn://
+        - Remote HTTP/HTTPS
+        - Other or unknown
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Support question
+      description: Describe the workflow and sanitized error shape. Do not include source content, private paths, raw logs, or repository URLs.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics summary
+      description: Share only redacted diagnostics when requested. Do not paste a full support bundle unless a maintainer asks for a reviewed private artifact.
+    validations:
+      required: false
+  - type: checkboxes
+    id: sensitive-data-check
+    attributes:
+      label: Sensitive data check
+      options:
+        - label: I have not included credentials, tokens, cookies, private repository URLs, client certificate private keys, `.svn/wc.db`, raw logs, or source content.
+          required: true
+        - label: Security vulnerabilities must be reported through `SECURITY.md`, not this public issue form.
+          required: true
+        - label: Any diagnostics evidence is redacted diagnostics and was reviewed before sharing.
+          required: true

@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.security.native-remote-fuzz-contract.win32-x64.v1",
+  "target": "win32-x64",
+  "publicReadinessClaim": false,
+  "completeFuzzClaim": false,
+  "coverageGuidedLibsvnClaim": false,
+  "localPreflightOnly": true,
+  "requiredTraceIds": [
+    "SEC-016",
+    "TST-020"
+  ],
+  "blockerEntryId": "NATIVE-REMOTE-FUZZ-001",
+  "scope": {
+    "provider": "svn://",
+    "operation": "history/log",
+    "seedCorpus": [
+      "native_bridge_malicious_svn_server_response_history_log_fails_without_auth_prompts_or_crash"
+    ],
+    "excludedProviders": [
+      "dav/http(s)",
+      "svn+ssh"
+    ],
+    "evidenceBoundary": "Readiness contract only for coverage-guided claims; the fixed-seed local smoke does not prove coverage-guided fuzzing, sanitizer coverage proof, edge-growth proof, or provider-complete claim."
+  },
+  "sourcePreflight": {
+    "status": "source-created",
+    "packageManifest": "fuzz/Cargo.toml",
+    "targetName": "svn_server_response_history_log",
+    "targetPath": "fuzz/fuzz_targets/svn_server_response_history_log.rs",
+    "seedCorpusDirectory": "fuzz/corpus/svn_server_response_history_log",
+    "seedCorpusManifest": "fuzz/corpus/svn_server_response_history_log/manifest.json",
+    "evidenceBoundary": "Source preflight only for target-shape claims; the fixed-seed local smoke does not prove coverage-guided fuzzing, sanitizer coverage, crash, or edge-growth evidence."
+  },
+  "toolchainRequirements": {
+    "rustToolchain": "nightly-x86_64-pc-windows-msvc",
+    "cargoSubcommand": "cargo-fuzz",
+    "msvcCompiler": "MSVC cl.exe",
+    "msvcFlags": [
+      "/fsanitize=fuzzer",
+      "/fsanitize=address"
+    ],
+    "nativeRuntime": "source-built libsvn/APR/bridge with sanitizer coverage instrumentation"
+  },
+  "requiredEvidence": [
+    {
+      "id": "instrumented-libsvn-build",
+      "required": true,
+      "status": "not-proven"
+    },
+    {
+      "id": "fuzzer-target",
+      "required": true,
+      "status": "source-created"
+    },
+    {
+      "id": "seed-corpus",
+      "required": true,
+      "status": "source-created"
+    },
+    {
+      "id": "fixed-seed-smoke",
+      "required": true,
+      "status": "local-smoke-required"
+    },
+    {
+      "id": "run-evidence",
+      "required": true,
+      "status": "not-run"
+    },
+    {
+      "id": "coverage-evidence",
+      "required": true,
+      "status": "not-proven"
+    }
+  ],
+  "blockers": [
+    "Source-built libsvn/APR/bridge sanitizer coverage instrumentation has not been proven.",
+    "The fixed-seed smoke gate is not a coverage-guided fuzz run and does not prove edge growth."
+  ],
+  "nonClaims": [
+    "This gate is a local fuzz readiness contract, not a coverage-guided fuzz run.",
+    "This gate records a local cargo-fuzz build and fixed seed execution requirement, not a coverage-guided campaign.",
+    "This gate does not prove sanitizer coverage, libsvn edge growth, crash discovery, or provider-complete remote-protocol fuzzing.",
+    "This gate does not close SEC-016, TST-020, NATIVE-REMOTE-FUZZ-001, or public release readiness."
+  ],
+  "currentStatus": {
+    "status": "blocked",
+    "publicReadinessAllowed": false
+  }
+}

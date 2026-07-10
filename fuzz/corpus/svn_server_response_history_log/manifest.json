@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.fuzz.seed-corpus.svn-server-response-history-log.v1",
+  "target": "svn_server_response_history_log",
+  "provider": "svn://",
+  "operation": "history/log",
+  "publicReadinessClaim": false,
+  "fuzzRunPerformed": false,
+  "coverageEvidenceRecorded": false,
+  "seeds": [
+    {
+      "id": "malicious-log-response-v1",
+      "path": "fuzz/corpus/svn_server_response_history_log/malicious-log-response.seed",
+      "sha256": "9b8078d83f31ddb692f8273cfd33fb7901d2ed1898d3581c79aebd773e43594d",
+      "source": "Protocol-faithful seed derived from the M7l6 malicious svn:// history/log fixture shape; auth material is intentionally omitted.",
+      "traceIds": [
+        "SEC-016",
+        "TST-020"
+      ]
+    }
+  ],
+  "nonClaims": [
+    "This seed corpus is for source preflight only and is not coverage-guided fuzz evidence.",
+    "This seed corpus does not prove arbitrary svn:// server safety or provider-complete remote-protocol fuzzing."
+  ]
+}

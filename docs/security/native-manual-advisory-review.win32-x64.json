@@ -1,0 +1,551 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.security.native-manual-advisory-review.win32-x64.v1",
+  "target": "win32-x64",
+  "capturedAt": "2026-06-25",
+  "publicReadinessClaim": false,
+  "nativeManualAdvisoryReviewComplete": false,
+  "reviewPolicy": {
+    "appliesToDedicatedAdvisoryIndex": false,
+    "terminalDecisionMaxAgeDays": 90,
+    "terminalDecisionRequiresFindingMapping": true,
+    "terminalDecisionRequiresTwoApprovals": true,
+    "underInvestigationIsReleaseBlocking": true,
+    "notes": [
+      "This input covers only native source-lock components whose advisory source contract has no dedicated advisory index.",
+      "Terminal decisions require explicit CVE or named security-finding mapping to the locked source version plus two distinct approvals.",
+      "Current-release, recommended-release, and generic security-fix wording are not sufficient for terminal public-release vulnerability decisions."
+    ]
+  },
+  "reviews": [
+    {
+      "key": "native:serf@1.3.10",
+      "componentName": "serf",
+      "version": "1.3.10",
+      "packageMode": "static-link-input",
+      "dedicatedAdvisoryIndex": false,
+      "reviewer": "SubversionR release security review",
+      "reviewedAt": "2026-06-25T00:00:00.0000000Z",
+      "advisorySourceIds": [
+        "apache-serf-project",
+        "asf-security",
+        "serf-changes-1-3",
+        "nvd-cve-2014-3504"
+      ],
+      "terminalDecisionAllowed": true,
+      "terminalVexStatus": "fixed",
+      "triageStatus": "complete",
+      "vexStatus": "fixed",
+      "remediationDecision": "fixed",
+      "fixedVersion": "1.3.10",
+      "releaseBlocking": false,
+      "evidence": [
+        {
+          "type": "official-source-review",
+          "sourceId": "apache-serf-project",
+          "url": "https://serf.apache.org/download",
+          "summary": "Apache Serf download metadata identifies 1.3.10 as the latest stable release and provides release integrity material, but it is not a versioned vulnerability advisory index."
+        },
+        {
+          "type": "official-source-review",
+          "sourceId": "asf-security",
+          "url": "https://www.apache.org/security/",
+          "summary": "ASF security process material is a reporting and CNA process source; it does not provide a Serf-specific terminal finding map for the locked version."
+        },
+        {
+          "type": "release-changelog-review",
+          "sourceId": "serf-changes-1-3",
+          "url": "https://svn.apache.org/repos/asf/serf/tags/1.3.10/CHANGES",
+          "summary": "The Serf 1.3 changelog records Serf 1.3.7: Handle NUL bytes in fields of an X.509 certificate; NVD maps CVE-2014-3504 to Serf 0.2.0 through 1.3.x before 1.3.7, while the locked SubversionR Serf source is 1.3.10."
+        },
+        {
+          "type": "cve-record-review",
+          "sourceId": "nvd-cve-2014-3504",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2014-3504",
+          "summary": "NVD records CVE-2014-3504 as affecting Serf 0.2.0 through 1.3.x before 1.3.7, while the locked SubversionR Serf source is 1.3.10."
+        }
+      ],
+      "terminalFindings": [
+        {
+          "id": "CVE-2014-3504",
+          "type": "cve",
+          "affectedComponent": "serf",
+          "resolvedInVersion": "1.3.10",
+          "sourceId": "nvd-cve-2014-3504",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2014-3504",
+          "resolutionStatement": "Serf 1.3.7 handled NUL bytes in fields of an X.509 certificate for the issue NVD records as affecting Serf 1.3.x before 1.3.7, and the locked static-link input source is Serf 1.3.10."
+        }
+      ],
+      "approvals": [
+        {
+          "reviewer": "codex-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-fixed"
+        },
+        {
+          "reviewer": "subagent-readonly-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-fixed"
+        }
+      ],
+      "nonClaims": [
+        "This record only permits the exact fixed decision for CVE-2014-3504 on Serf 1.3.10.",
+        "This record does not assert that Serf 1.3.10 is free of all known or unknown vulnerabilities.",
+        "This record does not claim public release readiness."
+      ]
+    },
+    {
+      "key": "native:apr@1.7.6",
+      "componentName": "apr",
+      "version": "1.7.6",
+      "packageMode": "packaged-runtime",
+      "dedicatedAdvisoryIndex": false,
+      "reviewer": "SubversionR release security review",
+      "reviewedAt": "2026-06-25T00:00:00.0000000Z",
+      "advisorySourceIds": [
+        "apr-security-report",
+        "asf-security",
+        "apr-changes-1-7",
+        "nvd-cve-2023-49582",
+        "nvd-cve-2022-24963",
+        "nvd-cve-2022-28331",
+        "nvd-cve-2021-35940"
+      ],
+      "terminalDecisionAllowed": true,
+      "terminalVexStatus": "fixed",
+      "triageStatus": "complete",
+      "vexStatus": "fixed",
+      "remediationDecision": "fixed",
+      "fixedVersion": "1.7.6",
+      "releaseBlocking": false,
+      "evidence": [
+        {
+          "type": "official-source-review",
+          "sourceId": "apr-security-report",
+          "url": "https://apr.apache.org/security_report.html",
+          "summary": "APR security material is reporting guidance rather than a versioned public advisory index for APR 1.7.6."
+        },
+        {
+          "type": "official-source-review",
+          "sourceId": "asf-security",
+          "url": "https://www.apache.org/security/",
+          "summary": "ASF security process material does not provide a component-specific terminal finding map for APR 1.7.6."
+        },
+        {
+          "type": "release-changelog-review",
+          "sourceId": "apr-changes-1-7",
+          "url": "https://downloads.apache.org/apr/CHANGES-APR-1.7",
+          "summary": "The APR 1.7 changelog records Changes for APR 1.7.5 fixing CVE-2023-49582 and Changes for APR 1.7.1 fixing CVE-2022-24963, CVE-2022-28331, and CVE-2021-35940; the locked packaged runtime source is APR 1.7.6."
+        },
+        {
+          "type": "cve-record-review",
+          "sourceId": "nvd-cve-2023-49582",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2023-49582",
+          "summary": "NVD records CVE-2023-49582 as affecting APR versions before 1.7.5, while the locked SubversionR APR source is 1.7.6."
+        },
+        {
+          "type": "cve-record-review",
+          "sourceId": "nvd-cve-2022-24963",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-24963",
+          "summary": "NVD records CVE-2022-24963 as affecting APR 1.7.0, while the locked SubversionR APR source is 1.7.6."
+        },
+        {
+          "type": "cve-record-review",
+          "sourceId": "nvd-cve-2022-28331",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-28331",
+          "summary": "NVD records CVE-2022-28331 as affecting APR 1.7.0 and earlier on Windows, while the locked SubversionR Windows APR source is 1.7.6."
+        },
+        {
+          "type": "cve-record-review",
+          "sourceId": "nvd-cve-2021-35940",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-35940",
+          "summary": "NVD records CVE-2021-35940 as an APR 1.7.0 branch regression; the APR 1.7 changelog records the restore fix in APR 1.7.1 and the locked SubversionR APR source is 1.7.6."
+        }
+      ],
+      "terminalFindings": [
+        {
+          "id": "CVE-2023-49582",
+          "type": "cve",
+          "affectedComponent": "apr",
+          "resolvedInVersion": "1.7.6",
+          "sourceId": "nvd-cve-2023-49582",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2023-49582",
+          "resolutionStatement": "APR 1.7.5 fixed CVE-2023-49582, and the locked packaged runtime source is APR 1.7.6."
+        },
+        {
+          "id": "CVE-2022-24963",
+          "type": "cve",
+          "affectedComponent": "apr",
+          "resolvedInVersion": "1.7.6",
+          "sourceId": "nvd-cve-2022-24963",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-24963",
+          "resolutionStatement": "APR 1.7.1 fixed CVE-2022-24963, and the locked packaged runtime source is APR 1.7.6."
+        },
+        {
+          "id": "CVE-2022-28331",
+          "type": "cve",
+          "affectedComponent": "apr",
+          "resolvedInVersion": "1.7.6",
+          "sourceId": "nvd-cve-2022-28331",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-28331",
+          "resolutionStatement": "APR 1.7.1 fixed the Windows apr_socket_sendv() issue tracked as CVE-2022-28331, and the locked packaged runtime source is APR 1.7.6."
+        },
+        {
+          "id": "CVE-2021-35940",
+          "type": "cve",
+          "affectedComponent": "apr",
+          "resolvedInVersion": "1.7.6",
+          "sourceId": "nvd-cve-2021-35940",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-35940",
+          "resolutionStatement": "APR 1.7.1 restored the apr_time_exp*() fix tracked as CVE-2021-35940, and the locked packaged runtime source is APR 1.7.6."
+        }
+      ],
+      "approvals": [
+        {
+          "reviewer": "codex-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-fixed"
+        },
+        {
+          "reviewer": "subagent-readonly-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-fixed"
+        }
+      ],
+      "nonClaims": [
+        "This record only permits the exact fixed decision for CVE-2023-49582, CVE-2022-24963, CVE-2022-28331, and CVE-2021-35940 on APR 1.7.6.",
+        "This record does not assert that APR 1.7.6 is free of all known or unknown vulnerabilities.",
+        "This record does not claim public release readiness."
+      ]
+    },
+    {
+      "key": "native:apr-util@1.6.3",
+      "componentName": "apr-util",
+      "version": "1.6.3",
+      "packageMode": "packaged-runtime",
+      "dedicatedAdvisoryIndex": false,
+      "reviewer": "SubversionR release security review",
+      "reviewedAt": "2026-06-25T00:00:00.0000000Z",
+      "advisorySourceIds": [
+        "apr-security-report",
+        "asf-security",
+        "apr-util-changes-1-6",
+        "nvd-cve-2022-25147",
+        "nvd-cve-2017-12618"
+      ],
+      "terminalDecisionAllowed": true,
+      "terminalVexStatus": "fixed",
+      "triageStatus": "complete",
+      "vexStatus": "fixed",
+      "remediationDecision": "fixed",
+      "fixedVersion": "1.6.3",
+      "releaseBlocking": false,
+      "evidence": [
+        {
+          "type": "official-source-review",
+          "sourceId": "apr-security-report",
+          "url": "https://apr.apache.org/security_report.html",
+          "summary": "APR-util shares the APR security reporting path, which is not a versioned public advisory index for APR-util 1.6.3."
+        },
+        {
+          "type": "official-source-review",
+          "sourceId": "asf-security",
+          "url": "https://www.apache.org/security/",
+          "summary": "ASF security process material does not provide a component-specific terminal finding map for APR-util 1.6.3."
+        },
+        {
+          "type": "release-changelog-review",
+          "sourceId": "apr-util-changes-1-6",
+          "url": "https://downloads.apache.org/apr/CHANGES-APR-UTIL-1.6",
+          "summary": "The APR-util 1.6 changelog records Changes with APR-util 1.6.2 fixing CVE-2022-25147 and Changes with APR-util 1.6.1 including the SDBM corrupted database validation fix for CVE-2017-12618; the locked packaged runtime source is APR-util 1.6.3."
+        },
+        {
+          "type": "cve-record-review",
+          "sourceId": "nvd-cve-2022-25147",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-25147",
+          "summary": "NVD records CVE-2022-25147 as affecting APR-util 1.6.1 and prior versions, while the locked SubversionR APR-util source is 1.6.3."
+        },
+        {
+          "type": "cve-record-review",
+          "sourceId": "nvd-cve-2017-12618",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2017-12618",
+          "summary": "NVD records CVE-2017-12618 as affecting APR-util 1.6.0 and prior versions, while the locked SubversionR APR-util source is 1.6.3."
+        }
+      ],
+      "terminalFindings": [
+        {
+          "id": "CVE-2022-25147",
+          "type": "cve",
+          "affectedComponent": "apr-util",
+          "resolvedInVersion": "1.6.3",
+          "sourceId": "nvd-cve-2022-25147",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-25147",
+          "resolutionStatement": "APR-util 1.6.2 fixed CVE-2022-25147, and the locked packaged runtime source is APR-util 1.6.3."
+        },
+        {
+          "id": "CVE-2017-12618",
+          "type": "cve",
+          "affectedComponent": "apr-util",
+          "resolvedInVersion": "1.6.3",
+          "sourceId": "nvd-cve-2017-12618",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2017-12618",
+          "resolutionStatement": "APR-util 1.6.1 added the SDBM corrupted database validation fix tracked as CVE-2017-12618, and the locked packaged runtime source is APR-util 1.6.3."
+        }
+      ],
+      "approvals": [
+        {
+          "reviewer": "codex-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-fixed"
+        },
+        {
+          "reviewer": "subagent-readonly-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-fixed"
+        }
+      ],
+      "nonClaims": [
+        "This record only permits the exact fixed decision for CVE-2022-25147 and CVE-2017-12618 on APR-util 1.6.3.",
+        "This record does not assert that APR-util 1.6.3 is free of all known or unknown vulnerabilities.",
+        "This record does not claim public release readiness."
+      ]
+    },
+    {
+      "key": "native:apr-iconv@1.2.2",
+      "componentName": "apr-iconv",
+      "version": "1.2.2",
+      "packageMode": "packaged-runtime",
+      "dedicatedAdvisoryIndex": false,
+      "reviewer": "SubversionR release security review",
+      "reviewedAt": "2026-07-07T00:00:00.0000000Z",
+      "advisorySourceIds": [
+        "apr-security-report",
+        "asf-security",
+        "apr-iconv-download",
+        "apr-iconv-changes-1-2",
+        "apr-iconv-github-advisories",
+        "nvd-apr-iconv-keyword-search",
+        "osv-apr-iconv-query"
+      ],
+      "terminalDecisionAllowed": true,
+      "terminalVexStatus": "not_affected",
+      "triageStatus": "complete",
+      "vexStatus": "not_affected",
+      "remediationDecision": "not_required",
+      "vexJustification": "vulnerable_code_not_present",
+      "impactStatement": "APR-ICONV-1.2.2-NO-PUBLISHED-ADVISORY is a source-review finding for APR-iconv 1.2.2 in SubversionR's win32-x64 packaged-runtime scope: the recorded Apache release metadata, APR-iconv changelog, GitHub advisory index, NVD keyword searches, and OSV queries identify no applicable published vulnerability for the locked packaged runtime. This does not assert that APR-iconv 1.2.2 is vulnerability-free.",
+      "releaseBlocking": false,
+      "evidence": [
+        {
+          "type": "official-source-review",
+          "sourceId": "apr-security-report",
+          "url": "https://apr.apache.org/security_report.html",
+          "summary": "APR-iconv shares the APR security reporting path, so this terminal decision is based on explicit release, repository advisory, NVD, and OSV evidence instead of a dedicated project advisory feed."
+        },
+        {
+          "type": "official-source-review",
+          "sourceId": "asf-security",
+          "url": "https://www.apache.org/security/",
+          "summary": "ASF security process material remains the reporting path and does not itself assert APR-iconv vulnerability-free status."
+        },
+        {
+          "type": "official-source-review",
+          "sourceId": "apr-iconv-download",
+          "url": "https://apr.apache.org/download.cgi",
+          "summary": "Apache APR download metadata says APR iconv 1.2.2 is the best available version and that Windows APR-iconv is required to enable APR-util's apr_xlate feature."
+        },
+        {
+          "type": "official-source-review",
+          "sourceId": "apr-iconv-changes-1-2",
+          "url": "https://downloads.apache.org/apr/CHANGES-APR-ICONV-1.2",
+          "summary": "APR-iconv 1.2.2 CHANGES records 'Win32: Resolve build issues with modern Visual Studio toolchains' and no CVE or security-fix entry for the locked 1.2.2 release."
+        },
+        {
+          "type": "repository-advisory-review",
+          "sourceId": "apr-iconv-github-advisories",
+          "url": "https://github.com/apache/apr-iconv/security/advisories",
+          "summary": "The apache/apr-iconv GitHub Security Advisories page reports: There aren't any published security advisories."
+        },
+        {
+          "type": "cve-database-keyword-review",
+          "sourceId": "nvd-apr-iconv-keyword-search",
+          "url": "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=apr-iconv",
+          "summary": "Manual NVD keyword checks for apr-iconv, APR-iconv, apriconv, libapriconv, and Apache Portable Runtime Iconv returned totalResults 0 for each query on 2026-07-07."
+        },
+        {
+          "type": "vulnerability-database-query-review",
+          "sourceId": "osv-apr-iconv-query",
+          "url": "https://api.osv.dev/v1/query",
+          "summary": "Manual OSV /v1/query checks for the apache/apr-iconv Git repository and APR-iconv 1.2.2 package names returned empty vulnerability result objects on 2026-07-07."
+        }
+      ],
+      "terminalFindings": [
+        {
+          "id": "APR-ICONV-1.2.2-NO-PUBLISHED-ADVISORY",
+          "type": "named-security-finding",
+          "affectedComponent": "apr-iconv",
+          "resolvedInVersion": "1.2.2",
+          "sourceId": "apr-iconv-github-advisories",
+          "url": "https://github.com/apache/apr-iconv/security/advisories",
+          "resolutionStatement": "Manual review of Apache APR-iconv release metadata, APR-iconv 1.2 CHANGES, apache/apr-iconv GitHub advisories, NVD keyword searches, and OSV queries found no applicable published vulnerability for APR-iconv 1.2.2 in SubversionR's win32-x64 packaged-runtime scope; this does not assert that APR-iconv 1.2.2 is vulnerability-free."
+        }
+      ],
+      "approvals": [
+        {
+          "reviewer": "codex-release-security-review",
+          "approvedAt": "2026-07-07T00:00:00.0000000Z",
+          "decision": "approve-terminal-not_affected"
+        },
+        {
+          "reviewer": "subagent-readonly-release-security-review",
+          "approvedAt": "2026-07-07T00:00:00.0000000Z",
+          "decision": "approve-terminal-not_affected"
+        }
+      ],
+      "nonClaims": [
+        "This record only permits the exact not_affected decision for APR-ICONV-1.2.2-NO-PUBLISHED-ADVISORY on APR-iconv 1.2.2 in SubversionR's win32-x64 packaged-runtime scope.",
+        "This record does not assert that APR-iconv 1.2.2 is free of all known or unknown vulnerabilities.",
+        "This record does not claim public release readiness."
+      ]
+    },
+    {
+      "key": "native:expat@2.8.1",
+      "componentName": "expat",
+      "version": "2.8.1",
+      "packageMode": "packaged-runtime",
+      "dedicatedAdvisoryIndex": false,
+      "reviewer": "SubversionR release security review",
+      "reviewedAt": "2026-06-25T00:00:00.0000000Z",
+      "advisorySourceIds": [
+        "libexpat-security",
+        "libexpat-changes"
+      ],
+      "terminalDecisionAllowed": true,
+      "terminalVexStatus": "fixed",
+      "triageStatus": "complete",
+      "vexStatus": "fixed",
+      "remediationDecision": "fixed",
+      "fixedVersion": "2.8.1",
+      "releaseBlocking": false,
+      "evidence": [
+        {
+          "type": "official-source-review",
+          "sourceId": "libexpat-changes",
+          "url": "https://raw.githubusercontent.com/libexpat/libexpat/R_2_8_1/expat/Changes",
+          "summary": "Expat 2.8.1 release changes list CVE-2026-45186 as fixed in the locked version."
+        },
+        {
+          "type": "official-source-review",
+          "sourceId": "libexpat-security",
+          "url": "https://github.com/libexpat/libexpat/security",
+          "summary": "The project security overview is reporting guidance; the terminal grant is scoped to the CVE-2026-45186 release changelog evidence, not a broad clean-component claim."
+        }
+      ],
+      "terminalFindings": [
+        {
+          "id": "CVE-2026-45186",
+          "type": "cve",
+          "affectedComponent": "expat",
+          "resolvedInVersion": "2.8.1",
+          "sourceId": "libexpat-changes",
+          "url": "https://raw.githubusercontent.com/libexpat/libexpat/R_2_8_1/expat/Changes",
+          "resolutionStatement": "Expat 2.8.1 security fixes list CVE-2026-45186, and the locked packaged-runtime source version is 2.8.1."
+        }
+      ],
+      "approvals": [
+        {
+          "reviewer": "codex-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-fixed"
+        },
+        {
+          "reviewer": "subagent-readonly-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-fixed"
+        }
+      ],
+      "nonClaims": [
+        "This record only permits the exact fixed decision for CVE-2026-45186 on Expat 2.8.1.",
+        "This record does not assert that Expat 2.8.1 is free of all known or unknown vulnerabilities.",
+        "This record does not claim public release readiness."
+      ]
+    },
+    {
+      "key": "native:zlib@1.3.2",
+      "componentName": "zlib",
+      "version": "1.3.2",
+      "packageMode": "static-link-input",
+      "dedicatedAdvisoryIndex": false,
+      "reviewer": "SubversionR release security review",
+      "reviewedAt": "2026-06-25T00:00:00.0000000Z",
+      "advisorySourceIds": [
+        "zlib-github-security",
+        "zlib-release-notes",
+        "zlib-issue-1142",
+        "nvd-cve-2026-22184"
+      ],
+      "terminalDecisionAllowed": true,
+      "terminalVexStatus": "not_affected",
+      "triageStatus": "complete",
+      "vexStatus": "not_affected",
+      "remediationDecision": "not_required",
+      "vexJustification": "vulnerable_code_not_present",
+      "impactStatement": "CVE-2026-22184 is limited to zlib's standalone contrib/untgz demonstration utility. SubversionR uses zlib 1.3.2 as a static-link input to the packaged libsvn runtime and does not build or ship the untgz utility or contrib/untgz artifacts.",
+      "releaseBlocking": false,
+      "evidence": [
+        {
+          "type": "official-source-review",
+          "sourceId": "zlib-release-notes",
+          "url": "https://github.com/madler/zlib/releases/tag/v1.3.2",
+          "summary": "zlib 1.3.2 release notes say the release addresses 7ASecurity audit findings, and the locked SubversionR source version is 1.3.2."
+        },
+        {
+          "type": "official-source-review",
+          "sourceId": "zlib-github-security",
+          "url": "https://github.com/madler/zlib/security",
+          "summary": "The project GitHub security overview does not provide a published advisory feed that can be treated as a versioned terminal decision source."
+        },
+        {
+          "type": "project-issue-review",
+          "sourceId": "zlib-issue-1142",
+          "url": "https://github.com/madler/zlib/issues/1142",
+          "summary": "The zlib project issue for CVE-2026-22184 describes a global buffer overflow in TGZfname() under contrib/untgz/untgz.c, reached through the standalone untgz utility command-line argument."
+        },
+        {
+          "type": "cve-record-review",
+          "sourceId": "nvd-cve-2026-22184",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-22184",
+          "summary": "NVD records CVE-2026-22184 as affecting zlib versions up to and including 1.3.1.2, limited to the standalone demonstration utility under contrib/untgz, and not affecting the core zlib compression library."
+        }
+      ],
+      "terminalFindings": [
+        {
+          "id": "CVE-2026-22184",
+          "type": "cve",
+          "affectedComponent": "zlib",
+          "resolvedInVersion": "1.3.2",
+          "sourceId": "nvd-cve-2026-22184",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-22184",
+          "resolutionStatement": "NVD records CVE-2026-22184 as affecting zlib versions up to and including 1.3.1.2 and limited to contrib/untgz; SubversionR locks zlib 1.3.2 and does not build or ship the vulnerable untgz utility."
+        }
+      ],
+      "approvals": [
+        {
+          "reviewer": "codex-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-not_affected"
+        },
+        {
+          "reviewer": "subagent-readonly-release-security-review",
+          "approvedAt": "2026-06-25T00:00:00.0000000Z",
+          "decision": "approve-terminal-not_affected"
+        }
+      ],
+      "nonClaims": [
+        "This record only permits the exact not_affected decision for CVE-2026-22184 on zlib 1.3.2 in SubversionR's packaged runtime scope.",
+        "This record does not assert that zlib 1.3.2 is free of all known or unknown vulnerabilities.",
+        "This record does not claim public release readiness."
+      ]
+    }
+  ]
+}

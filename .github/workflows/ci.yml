@@ -1,0 +1,435 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+concurrency:
+  group: ci-${{ github.ref || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: 0.11.19
+      - name: Install CMake 4.3.4
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "4.3.4"
+          $archiveName = "cmake-$version-windows-x86_64.zip"
+          $archiveUrl = "https://cmake.org/files/v4.3/$archiveName"
+          $expectedSha256 = "86e5fcafb38bdf58346a78b187c7b6b4f252ae5242cffe24c463a92bbd2e77d1"
+          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
+          $installRoot = Join-Path $env:RUNNER_TEMP "cmake-$version"
+          Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "SHA256 mismatch for $archiveName. Expected $expectedSha256, got $actualSha256."
+          }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $installRoot -Force
+          $cmakeBin = Join-Path $installRoot "cmake-$version-windows-x86_64\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value $cmakeBin
+          & (Join-Path $cmakeBin "cmake.exe") --version
+      - name: Install NASM 3.01
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "3.01"
+          $archiveName = "nasm-$version-win64.zip"
+          $archiveUrl = "https://www.nasm.us/pub/nasm/releasebuilds/$version/win64/$archiveName"
+          $expectedSha256 = "e0ba5157007abc7b1a65118a96657a961ddf55f7e3f632ee035366dfce039ca4"
+          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
+          $installRoot = Join-Path $env:RUNNER_TEMP "nasm-$version"
+          Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "SHA256 mismatch for $archiveName. Expected $expectedSha256, got $actualSha256."
+          }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $installRoot -Force
+          $nasmBin = Join-Path $installRoot "nasm-$version"
+          Add-Content -Path $env:GITHUB_PATH -Value $nasmBin
+          & (Join-Path $nasmBin "nasm.exe") -v
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check native prerequisite entrypoints
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-Command cmake -ErrorAction Stop | Out-Null
+          Get-Command gpg -ErrorAction Stop | Out-Null
+          Get-Command nasm -ErrorAction Stop | Out-Null
+          Get-Command pwsh -ErrorAction Stop | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+            throw "vswhere is required to locate Visual Studio with MSVC tools."
+          }
+          $cmakeLine = cmake --version | Select-Object -First 1
+          if ($cmakeLine -notmatch '^cmake version (?<version>\d+\.\d+\.\d+)') {
+            throw "Unable to parse CMake version from: $cmakeLine"
+          }
+          if ([version]$Matches.version -lt [version]"4.3.0") {
+            throw "CMake >= 4.3.0 is required; found $($Matches.version)."
+          }
+          nasm -v
+          $vsInstall = & $vswhere -latest -products * -version "[17.0,18.0)" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsInstall) {
+            throw "Visual Studio 2022 with MSVC x64 tools is required."
+          }
+          $vsDevCmd = Join-Path $vsInstall "Common7\Tools\VsDevCmd.bat"
+          if (-not (Test-Path -LiteralPath $vsDevCmd -PathType Leaf)) {
+            throw "Visual Studio 2022 Build Tools developer command is missing: $vsDevCmd"
+          }
+          "SUBVERSIONR_VSDEVCMD=$vsDevCmd" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $cmd = 'call "' + $vsDevCmd + '" -arch=x64 -host_arch=x64 && where cl && msbuild -version -nologo'
+          cmd.exe /d /s /c $cmd
+          if ($LASTEXITCODE -ne 0) {
+            throw "Visual Studio 2022 Build Tools x64 environment is not usable."
+          }
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+      - name: TypeScript checks
+        run: pnpm check
+      - name: Build VS Code extension JavaScript
+        run: pnpm release:build-vscode-extension
+      - name: Localization checks
+        shell: pwsh
+        run: pnpm i18n:verify
+      - name: Public security documentation checks
+        shell: pwsh
+        run: pnpm docs:verify-security
+      - name: Support intake checks
+        shell: pwsh
+        run: pnpm docs:verify-support-intake
+      - name: Release readiness checks
+        shell: pwsh
+        run: pnpm release:verify-readiness
+      - name: Release script tests
+        shell: pwsh
+        run: pnpm release:test-scripts
+      - name: Support intake script tests
+        shell: pwsh
+        run: pnpm release:test-support-intake-scripts
+      - name: Release install rollback fixture tests
+        shell: pwsh
+        run: pnpm release:test-install-rollback-fixture
+      - name: Release VSIX script tests
+        shell: pwsh
+        run: pnpm release:test-vsix-scripts
+      - name: Release installed Extension Host script tests
+        shell: pwsh
+        run: pnpm release:test-installed-extension-host-scripts
+      - name: Release installed core workflow script tests
+        shell: pwsh
+        run: pnpm release:test-installed-core-workflow-scripts
+      - name: Release installed Source Control surface script tests
+        shell: pwsh
+        run: pnpm release:test-installed-source-control-surface-scripts
+      - name: Release installed Source Control UI E2E script tests
+        shell: pwsh
+        run: pnpm release:test-installed-source-control-ui-e2e-scripts
+      - name: Release state-engine Beta performance script tests
+        shell: pwsh
+        run: pnpm release:test-state-engine-beta-performance-scripts
+      - name: Release Beta candidate evidence script tests
+        shell: pwsh
+        run: pnpm release:test-beta-candidate-evidence-scripts
+      - name: Release provenance script tests
+        shell: pwsh
+        run: pnpm release:test-provenance-scripts
+      - name: Release publication gaps script tests
+        shell: pwsh
+        run: pnpm release:test-publication-gaps-scripts
+      - name: Release vulnerability review script tests
+        shell: pwsh
+        run: pnpm release:test-vulnerability-review-scripts
+      - name: Release live OSV review script tests
+        shell: pwsh
+        run: pnpm release:test-live-osv-review-scripts
+      - name: Release native advisory review script tests
+        shell: pwsh
+        run: pnpm release:test-native-advisory-review-scripts
+      - name: Release native advisory triage input script tests
+        shell: pwsh
+        run: pnpm release:test-native-advisory-triage-input-scripts
+      - name: Release native manual advisory review script tests
+        shell: pwsh
+        run: pnpm release:test-native-manual-advisory-review-scripts
+      - name: Release vulnerability decision input script tests
+        shell: pwsh
+        run: pnpm release:test-vulnerability-decision-input-scripts
+      - name: Release vulnerability decision evidence script tests
+        shell: pwsh
+        run: pnpm release:test-vulnerability-decision-evidence-scripts
+      - name: Release native artifact map script tests
+        shell: pwsh
+        run: pnpm release:test-native-artifact-map-scripts
+      - name: Release malicious input corpus script tests
+        shell: pwsh
+        run: pnpm release:test-malicious-input-corpus-scripts
+      - name: Release native remote fuzz target preflight script tests
+        shell: pwsh
+        run: pnpm release:test-native-remote-fuzz-target-preflight-scripts
+      - name: Release native remote fixed seed smoke script tests
+        shell: pwsh
+        run: pnpm release:test-native-remote-fuzz-fixed-seed-smoke-scripts
+      - name: Release evidence script tests
+        shell: pwsh
+        run: pnpm release:test-evidence-scripts
+      - name: Generate source SBOM
+        shell: pwsh
+        run: pnpm release:generate-source-sbom
+      - name: Generate third-party notices
+        shell: pwsh
+        run: pnpm release:generate-third-party-notice
+      - name: Verify release evidence
+        shell: pwsh
+        run: pnpm release:verify-evidence
+      - name: Generate vulnerability review preflight
+        shell: pwsh
+        run: pnpm release:generate-vulnerability-review:win32-x64
+      - name: Verify vulnerability review preflight
+        shell: pwsh
+        run: pnpm release:verify-vulnerability-review:win32-x64
+      - name: Generate live OSV vulnerability review
+        shell: pwsh
+        run: pnpm release:generate-live-osv-review:win32-x64
+      - name: Verify live OSV vulnerability review
+        shell: pwsh
+        run: pnpm release:verify-live-osv-review:win32-x64
+      - name: Generate native advisory review
+        shell: pwsh
+        run: pnpm release:generate-native-advisory-review:win32-x64
+      - name: Verify native advisory review
+        shell: pwsh
+        run: pnpm release:verify-native-advisory-review:win32-x64
+      - name: Generate native advisory triage input
+        shell: pwsh
+        run: pnpm release:generate-native-advisory-triage-input:win32-x64
+      - name: Verify native advisory triage input
+        shell: pwsh
+        run: pnpm release:verify-native-advisory-triage-input:win32-x64
+      - name: Generate vulnerability decision evidence
+        shell: pwsh
+        run: pnpm release:generate-vulnerability-decision-evidence:win32-x64
+      - name: Verify vulnerability decision evidence
+        shell: pwsh
+        run: pnpm release:verify-vulnerability-decision-evidence:win32-x64
+      - name: TypeScript tests
+        run: pnpm test
+      - name: Test state-engine Beta performance
+        shell: pwsh
+        run: pnpm release:test-state-engine-beta-performance:win32-x64
+      - name: Rust tests
+        run: cargo test --workspace
+      - name: Generate malicious input corpus preflight
+        shell: pwsh
+        run: pnpm release:generate-malicious-input-corpus:win32-x64
+      - name: Verify malicious input corpus preflight
+        shell: pwsh
+        run: pnpm release:verify-malicious-input-corpus:win32-x64
+      - name: Generate native remote fuzz target preflight
+        shell: pwsh
+        run: pnpm release:generate-native-remote-fuzz-target-preflight:win32-x64
+      - name: Verify native remote fuzz target preflight
+        shell: pwsh
+        run: pnpm release:verify-native-remote-fuzz-target-preflight:win32-x64
+      - name: Install native remote fuzz fixed seed toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly --version
+          cargo install cargo-fuzz --version 0.13.2 --locked
+          cargo fuzz --version
+      - name: Generate native remote fuzz fixed seed smoke
+        shell: pwsh
+        run: pnpm release:generate-native-remote-fuzz-fixed-seed-smoke:win32-x64
+      - name: Verify native remote fuzz fixed seed smoke
+        shell: pwsh
+        run: pnpm release:verify-native-remote-fuzz-fixed-seed-smoke:win32-x64
+      - name: Build release sidecar
+        run: cargo build -p subversionr-daemon --release
+      - name: Native script tests
+        shell: pwsh
+        run: pnpm native:test-scripts
+      - name: Verify native sources
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/verify-sources.ps1
+      - name: Build native dependency stage
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/build-dependencies.ps1 -Only all -SkipVerifySources -VsDevCmd "$env:SUBVERSIONR_VSDEVCMD"
+      - name: Build Apache HTTP Server DAV fixture substrate
+        shell: pwsh
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/build-httpd.ps1
+          -VsDevCmd "$env:SUBVERSIONR_VSDEVCMD"
+          -DependencyStageRoot .cache/native/stage/subversion-deps-win-x64
+          -StageRoot .cache/native/stage/httpd-win-x64
+          -SkipVerifySources
+      - name: Build Apache Subversion library gate
+        shell: pwsh
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/build-subversion.ps1
+          -VsDevCmd "$env:SUBVERSIONR_VSDEVCMD"
+          -AprRoot .cache/native/stage/subversion-deps-win-x64
+          -AprUtilRoot .cache/native/stage/subversion-deps-win-x64
+          -AprIconvRoot .cache/native/stage/subversion-deps-win-x64
+          -SqliteRoot .cache/native/stage/subversion-deps-win-x64
+          -ZlibRoot .cache/native/stage/subversion-deps-win-x64
+          -SerfRoot .cache/native/stage/subversion-deps-win-x64
+          -OpenSslRoot .cache/native/stage/subversion-deps-win-x64
+          -DependencyStageRoot .cache/native/stage/subversion-deps-win-x64
+          -StageRoot .cache/native/stage/subversion-win-x64
+      - name: Build Subversion Apache DAV modules
+        shell: pwsh
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/build-subversion-dav-modules.ps1
+          -VsDevCmd "$env:SUBVERSIONR_VSDEVCMD"
+          -DependencyStageRoot .cache/native/stage/subversion-deps-win-x64
+          -HttpdStageRoot .cache/native/stage/httpd-win-x64
+          -SubversionStageRoot .cache/native/stage/subversion-win-x64
+          -StageRoot .cache/native/stage/httpd-subversion-dav-win-x64
+          -SkipVerifySources
+      - name: Build native bridge
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/build-bridge.ps1 -SvnRoot .cache/native/stage/subversion-win-x64 -VsDevCmd "$env:SUBVERSIONR_VSDEVCMD"
+      - name: Smoke native bridge
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/smoke-bridge.ps1 -BridgeOutputDirectory target/native/svn-bridge/x64/Release/Release -ExpectedVersion 1.14.5 -VsDevCmd "$env:SUBVERSIONR_VSDEVCMD"
+      - name: Smoke native malicious DAV XML fixture
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/smoke-malicious-dav-xml.ps1 -BridgeOutputDirectory target/native/svn-bridge/x64/Release/Release
+      - name: Smoke native malicious SVN server-response fixture
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/smoke-malicious-svn-server-response.ps1 -BridgeOutputDirectory target/native/svn-bridge/x64/Release/Release
+      - name: Stage VS Code win32-x64 package layout
+        shell: pwsh
+        run: pnpm release:stage-vscode:win32-x64
+      - name: Verify VS Code win32-x64 package layout
+        shell: pwsh
+        run: pnpm release:verify-vscode:win32-x64
+      - name: Package VS Code win32-x64 VSIX
+        shell: pwsh
+        run: pnpm release:package-vsix:win32-x64
+      - name: Generate native artifact map preflight
+        shell: pwsh
+        run: pnpm release:generate-native-artifact-map:win32-x64
+      - name: Verify native artifact map preflight
+        shell: pwsh
+        run: pnpm release:verify-native-artifact-map:win32-x64
+      - name: Generate release provenance preflight
+        shell: pwsh
+        run: pnpm release:generate-provenance:win32-x64
+      - name: Verify release provenance preflight
+        shell: pwsh
+        run: pnpm release:verify-provenance:win32-x64
+      - name: Generate publication gaps preflight
+        shell: pwsh
+        run: pnpm release:generate-publication-gaps:win32-x64
+      - name: Verify publication gaps preflight
+        shell: pwsh
+        run: pnpm release:verify-publication-gaps:win32-x64
+      - name: Locate VS Code CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archivePath = Join-Path $env:RUNNER_TEMP "vscode-win32-x64.zip"
+          $extractRoot = Join-Path $env:RUNNER_TEMP "vscode-win32-x64"
+          Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64-archive/stable" -OutFile $archivePath
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot -Force
+          $codeCmd = Get-ChildItem -LiteralPath $extractRoot -Recurse -File -Filter "code.cmd" |
+            Where-Object { $_.FullName -like "*\bin\code.cmd" } |
+            Select-Object -First 1
+          if ($null -eq $codeCmd) {
+            throw "VS Code archive did not contain bin\code.cmd."
+          }
+          & $codeCmd.FullName --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "VS Code CLI is not usable: $($codeCmd.FullName)"
+          }
+          "SUBVERSIONR_CODE_CLI=$($codeCmd.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Test VS Code CLI VSIX install
+        shell: pwsh
+        run: pnpm release:test-vsix-cli-install:win32-x64
+      - name: Test installed VSIX Extension Host version report
+        shell: pwsh
+        run: pnpm release:test-installed-extension-host:win32-x64
+      - name: Test installed VSIX core workflow E2E
+        shell: pwsh
+        run: pnpm release:test-installed-core-workflow:win32-x64
+      - name: Test installed VSIX Source Control surface
+        shell: pwsh
+        run: pnpm release:test-installed-source-control-surface:win32-x64
+      - name: Test installed VSIX Source Control UI E2E
+        shell: pwsh
+        run: pnpm release:test-installed-source-control-ui-e2e:win32-x64
+      - name: Test VS Code install upgrade rollback fixture
+        shell: pwsh
+        run: pnpm release:install-rollback:win32-x64
+      - name: Generate Beta artifact bundle manifest
+        shell: pwsh
+        run: pnpm release:generate-beta-artifact-bundle-manifest:win32-x64
+      - name: Verify Beta candidate evidence consistency
+        shell: pwsh
+        run: pnpm release:verify-beta-candidate:win32-x64
+      - name: Rust native bridge integration test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bridgeDll = Resolve-Path -LiteralPath "target/native/svn-bridge/x64/Release/Release/subversionr_svn_bridge.dll" -ErrorAction Stop
+          $opensslExe = Resolve-Path -LiteralPath ".cache/native/stage/subversion-deps-win-x64/bin/openssl.exe" -ErrorAction Stop
+          $httpdDavStage = Resolve-Path -LiteralPath ".cache/native/stage/httpd-subversion-dav-win-x64" -ErrorAction Stop
+          $env:SUBVERSIONR_TEST_BRIDGE_DLL = $bridgeDll.Path
+          $env:SUBVERSIONR_TEST_OPENSSL_EXE = $opensslExe.Path
+          $env:SUBVERSIONR_TEST_HTTPD_DAV_STAGE = $httpdDavStage.Path
+          cargo test -p subversionr-daemon --test native_bridge -- --ignored
+      - name: Validate native build entrypoints fail fast
+        shell: pwsh
+        run: |
+          $result = pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/build-subversion.ps1 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            throw "build-subversion.ps1 must require explicit dependency roots."
+          }
+          $text = $result | Out-String
+          if ($text -notmatch "AprRoot") {
+            throw "build-subversion.ps1 did not report the missing AprRoot parameter."
+          }
+          exit 0
+      - name: Upload Beta candidate VSIX and evidence bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: subversionr-win32-x64-beta-candidate
+          path: |
+            target/vsix/subversionr-win32-x64-0.2.0.vsix
+            target/release-evidence/subversionr-source-sbom.cdx.json
+            target/release-evidence/subversionr-vsix-package-win32-x64.json
+            target/release-evidence/subversionr-vsix-cli-install-win32-x64.json
+            target/release-evidence/subversionr-installed-extension-host-win32-x64.json
+            target/release-evidence/subversionr-installed-core-workflow-win32-x64.json
+            target/release-evidence/subversionr-installed-source-control-surface-win32-x64.json
+            target/release-evidence/subversionr-installed-source-control-ui-e2e-win32-x64.json
+            target/release-evidence/subversionr-install-rollback-fixture-win32-x64.json
+            target/release-evidence/subversionr-native-artifact-map-preflight-win32-x64.json
+            target/release-evidence/subversionr-marketplace-provenance-preflight-win32-x64.json
+            target/release-evidence/subversionr-publication-gaps-win32-x64.json
+            target/release-evidence/subversionr-state-engine-beta-performance-win32-x64.json
+            target/release-evidence/subversionr-beta-artifact-bundle-manifest-win32-x64.json
+            target/release-evidence/subversionr-beta-candidate-consistency-win32-x64.json
+            target/release-evidence/THIRD-PARTY-NOTICES.md
+            target/release-evidence/installed-source-control-ui-e2e/win32-x64/**/*.png
+            target/release-evidence/installed-source-control-ui-e2e/win32-x64/**/*.txt
+            target/release-evidence/installed-source-control-ui-e2e/win32-x64/**/*.json
+          if-no-files-found: error
+          retention-days: 14
