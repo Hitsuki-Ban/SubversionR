@@ -45,14 +45,15 @@ After the public baseline is pushed:
 
 ## Cloudflare Bridge Retirement
 
-The Cloudflare Workers Builds bridge is temporary private-repository infrastructure. The current live state observed on 2026-07-07 is that `subversionr-pr-fast` remains connected to the private repository and both default-branch and non-production branch triggers are enabled.
+The temporary private-repository Workers Builds bridge was retired on 2026-07-10 after `PR Fast / windows` passed on a public pull request and the resulting public `main` push. Public branch protection remained a separate owner UI follow-up and had not been configured at the time of retirement.
 
-Retire it only after public `PR Fast / windows` is green and required by branch protection:
+Completed retirement state:
 
-1. Disconnect Workers Builds from the private repository.
-2. Disable or delete the non-production branch trigger and default-branch trigger.
-3. Confirm no new private-repository push or pull-request builds are created.
-4. Record the retirement date and final state in `docs/ci/cloudflare-pr-fast-bridge.md`.
+1. The non-production branch trigger and default-branch trigger were removed.
+2. The private GitHub repository connection was disconnected.
+3. The post-retirement trigger count is zero and no build configuration remains for `subversionr-pr-fast`.
+4. The known Phase 1 successful build record remains readable as historical evidence.
+5. The retirement date and final state are recorded in `docs/ci/cloudflare-pr-fast-bridge.md`.
 
 Do not record Cloudflare API tokens, deploy hook URLs, build tokens, webhook secrets, or credential values in this repository.
 

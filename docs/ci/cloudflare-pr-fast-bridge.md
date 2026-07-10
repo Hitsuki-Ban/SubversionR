@@ -1,13 +1,13 @@
 # Cloudflare PR Fast Bridge
 
-This document records the temporary Cloudflare Workers Builds bridge for the SubversionR PR-fast gate while GitHub Actions cannot start Windows runners.
+This document records the retired Cloudflare Workers Builds bridge that carried the SubversionR PR-fast gate while GitHub Actions could not start Windows runners.
 
-## Cloudflare Workers Project
+## Historical Cloudflare Workers Project
 
 - Worker name: `subversionr-pr-fast`
 - Source: GitHub repository `Hitsuki-Ban/SubversionR-private`
 - Production branch: `main`
-- Non-production branch trigger: enabled for all branches except `main`
+- Non-production branch trigger while active: enabled for all branches except `main`
 - Workers.dev route: enabled
 - Worker Preview URLs: disabled
 - PR comments: disabled
@@ -19,9 +19,23 @@ This document records the temporary Cloudflare Workers Builds bridge for the Sub
   - `NODE_VERSION=24.16.0`
   - `PNPM_VERSION=11.5.2`
 
-## Authorization Recovery
+## Retirement
 
-Cloudflare API setup failed on 2026-06-28 before authorization was repaired because the account Git integration reported a disconnected GitHub installation. Use this sequence if the integration disconnects again:
+Retirement completed on 2026-07-10 after the public repository baseline was published and `PR Fast / windows` passed on both a public pull request and the resulting `main` push.
+
+The Cloudflare API retirement sequence:
+
+1. Removed the non-production branch trigger.
+2. Removed the default-branch trigger.
+3. Confirmed the Worker build trigger list was empty.
+4. Disconnected the GitHub repository connection.
+5. Confirmed no build configuration remained for `subversionr-pr-fast` and that the known Phase 1 success record was still readable.
+
+Final state: Workers Builds is disconnected, zero build triggers remain, and the Worker deployment plus historical build records were not deleted. Public `main` branch protection remained a separate owner setting and was not configured by this retirement operation. No Cloudflare live identifiers or credentials are recorded here.
+
+## Historical Authorization Recovery
+
+Cloudflare API setup failed on 2026-06-28 before authorization was repaired because the account Git integration reported a disconnected GitHub installation. The following sequence is retained as historical evidence and must not be used to reconnect the retired bridge without a new reviewed infrastructure decision:
 
 1. Open Cloudflare Dashboard > Workers & Pages > Git integrations.
 2. Reconnect or reinstall the GitHub integration for the `Hitsuki-Ban` account.
@@ -52,11 +66,11 @@ Excluded from the bridge:
 - Native script tests that depend on Windows paths, MSVC, `VsDevCmd.bat`, or staged native binaries.
 - Daemon integration tests that assert Windows-specific path handling.
 
-The bridge is scheduled for retirement at the public repository migration. After the public `Hitsuki-Ban/SubversionR` repository has the baseline and the GitHub Actions `PR Fast / windows` check is green there, disconnect Workers Builds from the repository, disable non-production branch triggers, record the retirement date and final state here, and keep this document for historical evidence.
+The historical plan stated: the bridge is scheduled for retirement at the public repository migration. After the public `Hitsuki-Ban/SubversionR` repository has the baseline and the GitHub Actions `PR Fast / windows` check is green there, disconnect Workers Builds from the repository, disable non-production branch triggers, record the retirement date and final state here, and keep this document for historical evidence.
 
-Current cutover state as of 2026-07-07: Cloudflare API inspection confirmed that the `subversionr-pr-fast` Workers Builds bridge is still connected to the private repository and that both default-branch and non-production branch triggers are still active. Do not retire it until the public repository has a green `PR Fast / windows` check and public branch protection requires that check.
+Cutover evidence: the public baseline, public pull-request check, and public `main` push check are green. The bridge was then disconnected through the Cloudflare API; both trigger records were removed and the post-retirement trigger count is zero.
 
-Retirement date: not cut over.
+Retirement date: 2026-07-10.
 
 ## Required Check Naming
 
