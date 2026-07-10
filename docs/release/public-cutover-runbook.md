@@ -1,6 +1,6 @@
 # Public Cutover Runbook
 
-This runbook defines the controlled move from the private development repository to the public `Hitsuki-Ban/SubversionR` repository. It is intentionally written as a pre-cutover checklist until the command namespace rename and Beta candidate evidence PRs are merged.
+This runbook records the controlled move from the private development repository to the public `Hitsuki-Ban/SubversionR` repository. The cutover procedure remains for auditability; the post-cutover section records current evidence and unresolved owner or release-evidence work.
 
 ## Preconditions
 
@@ -91,6 +91,9 @@ After the public repository baseline and CI home are confirmed:
 
 After the public cutover:
 
-1. Regenerate `subversionr.release.publication-gaps.win32-x64.v1`.
-2. Update the generated evidence only when public repository URLs, public CI run URLs, release URLs, and attestation URLs are available.
-3. Keep `publicReadinessClaim=false` until Marketplace/public install, signing or attestation publication, previous-stable rollback, and final approval gates are closed.
+1. Record confirmed public repository, CI, Cloudflare retirement, and GitHub prerelease facts in `docs/release/public-cutover-evidence.json`; do not infer unverified repository metadata or owner-only settings.
+2. Regenerate and verify `subversionr.release.publication-gaps.win32-x64.v1` only from the exact released VSIX bytes and matching upstream VSIX/provenance evidence. The released VSIX SHA256 must remain `d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb`.
+3. Keep the post-cutover Beta-G chain blocked. The published `subversionr-win32-x64-beta-candidate.zip` declares 1,462 manifest payloads but has 29 missing payloads and 421 size or SHA256 mismatches; it contains `svn-r-win32-x64-0.1.0.vsix` (`ff7094c02b27914351fde4d9ae9b09dd8a3cf4af00f983ddf085adb808a3167b`) instead of the released VSIX.
+4. Regenerate a self-consistent Beta candidate bundle from matching candidate inputs, then run the unchanged bundle-manifest and candidate-consistency verifiers. Do not recover evidence from the inconsistent published ZIP or weaken either verifier.
+5. Add attestation URLs only after the live GitHub attestation workflow has published and verified the released VSIX subject.
+6. Keep `publicReadinessClaim=false` until the Beta-G inconsistency, Marketplace/public install, signing or attestation publication, previous-stable rollback, and final approval gates are closed.
