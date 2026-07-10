@@ -1,0 +1,28 @@
+name: Bootstrap Marketplace Identity
+
+# One-shot helper for the Marketplace publisher membership setup: signs in as
+# the federated publisher identity through GitHub OIDC (no secrets) and prints
+# the service principal's VSSPS profile so its identity GUID can be entered in
+# the Marketplace publisher Members dialog. Safe to re-run; publishes nothing.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    environment: marketplace
+    steps:
+      - name: Azure login (federated, no subscription)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Resolve VSSPS identity for the publisher membership dialog
+        run: |
+          az rest -u "https://app.vssps.visualstudio.com/_apis/profile/profiles/me" --resource 499b84ac-1321-427f-aa17-267ca6975798
