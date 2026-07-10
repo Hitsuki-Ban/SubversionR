@@ -4,8 +4,8 @@ This runbook records the controlled move from the private development repository
 
 ## Preconditions
 
-- #236 has merged and the public command namespace is the only supported command namespace.
-- #243 has merged and the `win32-x64` Beta candidate evidence bundle has been regenerated and verified from that merge base.
+- The public command namespace migration has merged, and the public command namespace is the only supported command namespace.
+- The `win32-x64` Beta candidate evidence work has merged, and the bundle has been regenerated and verified from that merge base.
 - The private repository working tree has no unrelated uncommitted changes before the baseline is prepared.
 - `.gitignore` excludes `target/`, `.cache/`, `node_modules/`, generated VSIX files, and transient logs.
 - `Reference/` remains private and is excluded from the public baseline history.
@@ -93,7 +93,7 @@ After the public cutover:
 
 1. Record confirmed public repository, detailed branch ruleset, CI, private workflow disablement, Cloudflare retirement, and GitHub prerelease facts in `docs/release/public-cutover-evidence.json`; do not infer unverified repository metadata or owner-only settings.
 2. Regenerate and verify `subversionr.release.publication-gaps.win32-x64.v1` only from the exact released VSIX bytes and matching upstream VSIX/provenance evidence. The released VSIX SHA256 must remain `d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb`.
-3. Keep the post-cutover Beta-G chain blocked. The published `subversionr-win32-x64-beta-candidate.zip` declares 1,462 manifest payloads but has 29 missing payloads and 421 size or SHA256 mismatches; it contains `svn-r-win32-x64-0.1.0.vsix` (`ff7094c02b27914351fde4d9ae9b09dd8a3cf4af00f983ddf085adb808a3167b`) instead of the released VSIX.
-4. Regenerate a self-consistent Beta candidate bundle from matching candidate inputs, then run the unchanged bundle-manifest and candidate-consistency verifiers. Do not recover evidence from the inconsistent published ZIP or weaken either verifier.
-5. The released VSIX subject was published and verified by workflow run `https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425`; the attestation is `https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487`, with the hash-bound record, exact Sigstore bundle, and exact verification result in `docs/release/github-attestation-evidence.win32-x64.json`, `docs/release/github-attestation-bundle.win32-x64.json`, and `docs/release/github-attestation-verification.win32-x64.json`. Its signed custom predicate records `originalBuildProvenanceClaim=false` and `artifactSignatureClaim=false`; this post-release attestation does not prove the original VSIX source-to-binary build provenance.
-6. Keep `publicReadinessClaim=false` until the Beta-G inconsistency, Marketplace/public install, signing, previous-stable rollback, and final approval gates are closed.
+3. Record the replaced `subversionr-win32-x64-beta-candidate.zip` as SHA256 `ca79f8cd2716caadc9c6e1e6c712c6904770a05e3660835b0ab58ce75bbbb266` and size 15,300,834. Its manifest declares 1,462 payloads; all 1,462 are present and hash-verified, and the ZIP contains only those payloads plus the manifest and consistency JSONs for 1,464 total entries.
+4. Regenerate the post-cutover provenance, publication-gaps, bundle-manifest, and candidate-consistency chain from matching candidate inputs, then run the unchanged candidate-consistency verifier.
+5. The canonical released-VSIX attestation is anchored to `refs/heads/main`: workflow run `https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29104476735` published `https://github.com/Hitsuki-Ban/SubversionR/attestations/34774737`. The hash-bound record, exact Sigstore bundle, and exact verification result are in `docs/release/github-attestation-evidence.win32-x64.json`, `docs/release/github-attestation-bundle.win32-x64.json`, and `docs/release/github-attestation-verification.win32-x64.json`. The earlier branch-anchored run `29089455425` and attestation `34738487` are superseded and are not part of the canonical verification path. The signed custom predicate records `originalBuildProvenanceClaim=false` and `artifactSignatureClaim=false`; this post-release attestation does not prove the original VSIX source-to-binary build provenance.
+6. Keep `publicReadinessClaim=false` until Marketplace/public install, signing, previous-stable rollback, and final approval gates are closed.

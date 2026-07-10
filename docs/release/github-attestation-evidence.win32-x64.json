@@ -5,7 +5,7 @@
   "signingClaim": false,
   "target": "win32-x64",
   "status": "live-attestation-verified",
-  "generatedAt": "2026-07-10T11:28:05.0792681Z",
+  "generatedAt": "2026-07-10T15:59:13.7173249Z",
   "contract": {
     "path": "docs/release/github-attestation-contract.win32-x64.json",
     "sha256": "da734e611fa918710d3ac21a2b925fdf4bce0adb8c963403d2959f938605f7ce",
@@ -24,11 +24,11 @@
   "workflow": {
     "path": ".github/workflows/attest-release-vsix.yml",
     "event": "workflow_dispatch",
-    "runId": "29089455425",
+    "runId": "29104476735",
     "runAttempt": 1,
-    "runUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425",
-    "headSha": "99a440316dd281fd9c72f2f432bbc78734c0f127",
-    "sourceRef": "refs/heads/codex/issue-5-live-attestation"
+    "runUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29104476735",
+    "headSha": "720c92c3f1747a7e7dcf6143f2bf47171cfd9051",
+    "sourceRef": "refs/heads/main"
   },
   "attestation": {
     "provider": "github-artifact-attestations",
@@ -40,11 +40,11 @@
     "predicateClaim": "post-release-asset-digest-verification",
     "originalBuildProvenanceClaim": false,
     "artifactSignatureClaim": false,
-    "id": "34738487",
-    "url": "https://github.com/Hitsuki-Ban/SubversionR/attestations/34738487",
+    "id": "34774737",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/attestations/34774737",
     "outputSource": "actions/attest outputs",
     "bundlePath": "docs/release/github-attestation-bundle.win32-x64.json",
-    "bundleSha256": "b6d4112c9d94bd160fbc66c503d3074b2d7071b59782564b320eb8610536d389"
+    "bundleSha256": "50916ecb09fc175b6f1745ba56ff67e9c2a25a779cdd5f64e6dada175aba0a55"
   },
   "verification": {
     "verified": true,
@@ -54,15 +54,15 @@
     "denySelfHostedRunners": true,
     "format": "json",
     "bundleMatched": true,
-    "command": "gh attestation verify target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix -R Hitsuki-Ban/SubversionR --bundle docs/release/github-attestation-bundle.win32-x64.json --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest 99a440316dd281fd9c72f2f432bbc78734c0f127 --source-ref refs/heads/codex/issue-5-live-attestation --source-digest 99a440316dd281fd9c72f2f432bbc78734c0f127 --predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1 --deny-self-hosted-runners --format json",
+    "command": "gh attestation verify target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix -R Hitsuki-Ban/SubversionR --bundle docs/release/github-attestation-bundle.win32-x64.json --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest 720c92c3f1747a7e7dcf6143f2bf47171cfd9051 --source-ref refs/heads/main --source-digest 720c92c3f1747a7e7dcf6143f2bf47171cfd9051 --predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1 --deny-self-hosted-runners --format json",
     "resultPath": "docs/release/github-attestation-verification.win32-x64.json",
-    "resultSha256": "1843e92706c67e1f902cebb86d8d92cbb75288e0b539c5e041bfb4b8103faaa2",
+    "resultSha256": "dacdabab706d5bec6870d40d9c8b655ea178d645940960876abb78604bd1f9d0",
     "certificate": {
-      "signerIdentity": "https://github.com/Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml@refs/heads/codex/issue-5-live-attestation",
-      "workflowSha": "99a440316dd281fd9c72f2f432bbc78734c0f127",
-      "workflowRef": "refs/heads/codex/issue-5-live-attestation",
+      "signerIdentity": "https://github.com/Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml@refs/heads/main",
+      "workflowSha": "720c92c3f1747a7e7dcf6143f2bf47171cfd9051",
+      "workflowRef": "refs/heads/main",
       "runnerEnvironment": "github-hosted",
-      "runInvocationUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29089455425/attempts/1",
+      "runInvocationUrl": "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29104476735/attempts/1",
       "sourceVisibility": "public"
     }
   },

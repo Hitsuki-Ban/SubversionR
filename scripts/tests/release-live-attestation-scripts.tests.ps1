@@ -127,11 +127,11 @@ try {
         mediaType = "application/vnd.dev.sigstore.verificationresult+json;version=0.1"
         signature = [pscustomobject]@{
           certificate = [pscustomobject]@{
-            subjectAlternativeName = "https://github.com/Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml@refs/heads/codex/issue-5-live-attestation"
+            subjectAlternativeName = "https://github.com/Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml@refs/heads/main"
             githubWorkflowRepository = "Hitsuki-Ban/SubversionR"
             githubWorkflowTrigger = "workflow_dispatch"
             githubWorkflowSHA = "0123456789abcdef0123456789abcdef01234567"
-            githubWorkflowRef = "refs/heads/codex/issue-5-live-attestation"
+            githubWorkflowRef = "refs/heads/main"
             buildSignerDigest = "0123456789abcdef0123456789abcdef01234567"
             sourceRepositoryDigest = "0123456789abcdef0123456789abcdef01234567"
             runnerEnvironment = "github-hosted"
@@ -165,7 +165,7 @@ try {
     -RunAttempt 1 `
     -RunUrl "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456" `
     -HeadSha "0123456789abcdef0123456789abcdef01234567" `
-    -SourceRef "refs/heads/codex/issue-5-live-attestation" `
+    -SourceRef "refs/heads/main" `
     -EventName workflow_dispatch `
     -AttestationId 123 `
     -AttestationUrl "https://github.com/Hitsuki-Ban/SubversionR/attestations/123" `
@@ -188,7 +188,7 @@ try {
   Assert-Equal "False" ([string]$evidence.attestation.originalBuildProvenanceClaim) "Live attestation evidence must preserve the signed original-build non-claim."
   Assert-Equal "False" ([string]$evidence.attestation.artifactSignatureClaim) "Live attestation evidence must preserve the signed artifact-signature non-claim."
   Assert-True ($evidence.verification.command.Contains("--bundle $($evidence.attestation.bundlePath)")) "Live attestation verification command should bind the exact bundle path."
-  Assert-True ($evidence.verification.command.Contains("--source-ref refs/heads/codex/issue-5-live-attestation")) "Live attestation verification command should bind the source ref."
+  Assert-True ($evidence.verification.command.Contains("--source-ref refs/heads/main")) "Live attestation verification command should bind the source ref."
   Assert-True ($evidence.verification.command.Contains("--source-digest 0123456789abcdef0123456789abcdef01234567")) "Live attestation verification command should bind the source digest."
   Assert-Equal "True" ([string]$evidence.verification.verified) "Live attestation evidence should record successful verification."
 
@@ -232,7 +232,7 @@ try {
       -RunAttempt 1 `
       -RunUrl "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456" `
       -HeadSha "0123456789abcdef0123456789abcdef01234567" `
-      -SourceRef "refs/heads/codex/issue-5-live-attestation" `
+      -SourceRef "refs/heads/main" `
       -EventName workflow_dispatch `
       -AttestationId 123 `
       -AttestationUrl "https://github.com/Hitsuki-Ban/SubversionR/attestations/123" `
@@ -255,7 +255,7 @@ try {
       -RunAttempt 1 `
       -RunUrl "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456" `
       -HeadSha "0123456789abcdef0123456789abcdef01234567" `
-      -SourceRef "refs/heads/codex/issue-5-live-attestation" `
+      -SourceRef "refs/heads/main" `
       -EventName workflow_dispatch `
       -AttestationId 123 `
       -AttestationUrl "https://github.com/Hitsuki-Ban/SubversionR/attestations/123" `
@@ -278,7 +278,7 @@ try {
       -RunAttempt 1 `
       -RunUrl "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/456" `
       -HeadSha "0123456789abcdef0123456789abcdef01234567" `
-      -SourceRef "refs/heads/codex/issue-5-live-attestation" `
+      -SourceRef "refs/heads/main" `
       -EventName workflow_dispatch `
       -AttestationId 123 `
       -AttestationUrl "https://github.com/Hitsuki-Ban/SubversionR/attestations/123" `
