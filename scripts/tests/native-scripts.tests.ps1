@@ -133,7 +133,6 @@ try {
     "CARGO_BUILD_TARGET_DIR",
     "CARGO_BUILD_BUILD_DIR",
     "CARGO_BUILD_TARGET",
-    "CARGO_HOME",
     "RUSTUP_TOOLCHAIN"
   )) {
     Assert-True ($buildDaemonText.Contains('"' + $variableName + '"')) "Release daemon build should reject ambient $variableName."
@@ -142,6 +141,7 @@ try {
   Assert-True ($buildDaemonText.Contains('release: 1.96.0')) "Release daemon build should require the repository-pinned Rust release."
   Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release --target-dir $targetRoot')) "Release daemon build should invoke the exact Cargo package, profile, and repository output directory."
   Assert-True ($buildDaemonText.Contains('$legacyRepositoryCargoConfig')) "Release daemon build should reject a legacy repository Cargo config that would override config.toml."
+  Assert-True ($buildDaemonText.Contains('[Environment]::GetEnvironmentVariable("CARGO_HOME")')) "Release daemon build should inspect Cargo's configured home directory."
   Assert-True ($buildDaemonText.Contains('[Environment+SpecialFolder]::UserProfile')) "Release daemon build should inspect the default Cargo home for external configuration."
   Assert-True ($buildDaemonText.Contains('[IO.Directory]::GetParent($repoRoot)')) "Release daemon build should inspect parent directories for merged Cargo configuration."
   Assert-True ($buildDaemonText.Contains('Remove-Item -LiteralPath $staleOutput -Force')) "Release daemon build should fail on fixed-path output deletion errors."

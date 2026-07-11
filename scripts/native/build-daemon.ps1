@@ -28,7 +28,6 @@ $repositoryOwnedEnvironment = @(
   "CARGO_BUILD_TARGET_DIR",
   "CARGO_BUILD_BUILD_DIR",
   "CARGO_BUILD_TARGET",
-  "CARGO_HOME",
   "RUSTUP_TOOLCHAIN"
 )
 foreach ($variableName in $repositoryOwnedEnvironment) {
@@ -46,7 +45,16 @@ $externalCargoConfigs = [Collections.Generic.List[string]]::new()
 $legacyRepositoryCargoConfig = Join-Path $repoRoot ".cargo\config"
 $externalCargoConfigs.Add($legacyRepositoryCargoConfig)
 
-$cargoHome = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) ".cargo"
+$cargoHomeValue = [Environment]::GetEnvironmentVariable("CARGO_HOME")
+$cargoHome = if ([string]::IsNullOrEmpty($cargoHomeValue)) {
+  Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) ".cargo"
+}
+elseif ([IO.Path]::IsPathRooted($cargoHomeValue)) {
+  [IO.Path]::GetFullPath($cargoHomeValue)
+}
+else {
+  [IO.Path]::GetFullPath((Join-Path $repoRoot $cargoHomeValue))
+}
 $externalCargoConfigs.Add((Join-Path $cargoHome "config"))
 $externalCargoConfigs.Add((Join-Path $cargoHome "config.toml"))
 
