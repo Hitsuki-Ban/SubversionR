@@ -14,6 +14,7 @@ $smokeHttpdDavHttpsScript = Join-Path $repoRoot "scripts\native\smoke-httpd-dav-
 $smokeMaliciousDavXmlScript = Join-Path $repoRoot "scripts\native\smoke-malicious-dav-xml.ps1"
 $smokeMaliciousSvnServerResponseScript = Join-Path $repoRoot "scripts\native\smoke-malicious-svn-server-response.ps1"
 $ciWorkflow = Join-Path $repoRoot ".github\workflows\ci.yml"
+$fastPrWorkflow = Join-Path $repoRoot ".github\workflows\pr-fast.yml"
 $packageJsonPath = Join-Path $repoRoot "package.json"
 
 function Assert-True([bool]$Condition, [string]$Message) {
@@ -111,13 +112,35 @@ try {
 
   $bridgeCMakeText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "native\svn-bridge\CMakeLists.txt")
   $cargoConfigText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot ".cargo\config.toml")
+  $rustToolchainText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "rust-toolchain.toml")
   $buildDaemonText = Get-Content -Raw -LiteralPath $buildDaemonScript
   $buildBridgeText = Get-Content -Raw -LiteralPath $buildBridgeScript
   Assert-Equal "[target.x86_64-pc-windows-msvc]`nrustflags = [`"-C`", `"link-arg=/Brepro`"]`n" ($cargoConfigText.Replace("`r`n", "`n")) "Windows MSVC Rust configuration should have one exact reproducible linker policy."
-  Assert-True ($buildDaemonText.Contains('if (-not [string]::IsNullOrEmpty($env:RUSTFLAGS))')) "Release daemon build should reject ambient RUSTFLAGS."
-  Assert-True ($buildDaemonText.Contains('if (-not [string]::IsNullOrEmpty($env:CARGO_ENCODED_RUSTFLAGS))')) "Release daemon build should reject ambient encoded Rust flags."
+  Assert-True ($rustToolchainText.Contains('channel = "1.96.0"')) "The repository should pin the Rust release used for reproducible daemon builds."
+  foreach ($variableName in @(
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_BUILD_RUSTFLAGS",
+    "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
+    "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER",
+    "RUSTC",
+    "CARGO_BUILD_RUSTC",
+    "RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_TARGET_DIR",
+    "CARGO_BUILD_TARGET_DIR",
+    "CARGO_BUILD_BUILD_DIR",
+    "CARGO_BUILD_TARGET",
+    "RUSTUP_TOOLCHAIN"
+  )) {
+    Assert-True ($buildDaemonText.Contains('"' + $variableName + '"')) "Release daemon build should reject ambient $variableName."
+  }
   Assert-True ($buildDaemonText.Contains('host: x86_64-pc-windows-msvc')) "Release daemon build should require the exact Windows MSVC Rust host."
-  Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release')) "Release daemon build should invoke the exact Cargo package and profile."
+  Assert-True ($buildDaemonText.Contains('release: 1.96.0')) "Release daemon build should require the repository-pinned Rust release."
+  Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release --target-dir $targetRoot')) "Release daemon build should invoke the exact Cargo package, profile, and repository output directory."
+  Assert-True ($buildDaemonText.Contains('Remove-Item -LiteralPath $daemonPath, $daemonPdbPath')) "Release daemon build should remove fixed-path outputs before invoking Cargo."
   Assert-True ($buildDaemonText.Contains('Assert-DeterministicPeFile -Path $daemonPath')) "Release daemon build should fail fast when deterministic PE metadata is absent."
   Assert-True ($bridgeCMakeText.Contains('target_link_options(subversionr_svn_bridge PRIVATE "$<$<CONFIG:Release>:/Brepro>")')) "Release bridge linking should require MSVC reproducible output."
   Assert-True ($buildBridgeText.Contains('Assert-DeterministicPeFile -Path $bridgePath')) "Release bridge build should fail fast when deterministic PE metadata is absent."
@@ -131,6 +154,29 @@ try {
   }
   finally {
     $env:RUSTFLAGS = $savedRustFlags
+  }
+
+  $savedCargoTargetDir = $env:CARGO_TARGET_DIR
+  try {
+    $env:CARGO_TARGET_DIR = Join-Path $tempRoot "redirected-cargo-target"
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $buildDaemonScript
+    } "CARGO_TARGET_DIR must be unset" "Release daemon build should reject an output-directory override."
+  }
+  finally {
+    $env:CARGO_TARGET_DIR = $savedCargoTargetDir
+  }
+
+  $targetRustFlagsName = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS"
+  $savedTargetRustFlags = [Environment]::GetEnvironmentVariable($targetRustFlagsName)
+  try {
+    [Environment]::SetEnvironmentVariable($targetRustFlagsName, "-C link-arg=/DEBUG")
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $buildDaemonScript
+    } "$targetRustFlagsName must be unset" "Release daemon build should reject a target-specific linker-policy override."
+  }
+  finally {
+    [Environment]::SetEnvironmentVariable($targetRustFlagsName, $savedTargetRustFlags)
   }
 
   $lockPath = Join-Path $tempRoot "sources.lock.json"
@@ -557,8 +603,11 @@ try {
 
   $buildSubversionText = Get-Content -Raw -LiteralPath $buildSubversionScript
   $ciWorkflowText = Get-Content -Raw -LiteralPath $ciWorkflow
+  $fastPrWorkflowText = Get-Content -Raw -LiteralPath $fastPrWorkflow
   Assert-True ($ciWorkflowText.Contains("pnpm native:build-daemon:release")) "CI should use the deterministic release daemon build entrypoint."
   Assert-True (-not $ciWorkflowText.Contains("cargo build -p subversionr-daemon --release")) "CI must not bypass deterministic daemon validation with a raw Cargo release build."
+  Assert-True ($ciWorkflowText.Contains("toolchain: 1.96.0")) "Heavy CI should install the repository-pinned Rust release."
+  Assert-True ($fastPrWorkflowText.Contains("toolchain: 1.96.0")) "PR Fast should install the repository-pinned Rust release."
   Assert-True ($buildSubversionText.Contains('[string]$SerfRoot')) "M6s Subversion build entrypoint should require an explicit Serf stage root."
   Assert-True ($buildSubversionText.Contains('[string]$OpenSslRoot')) "M6s Subversion build entrypoint should require an explicit OpenSSL stage root."
   Assert-True ($buildSubversionText.Contains('Assert-SerfStageForSubversion -StageRoot $serfRootResolved')) "M6s Subversion build should fail fast on invalid Serf staging."

@@ -63,6 +63,8 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $nasmBin
           & (Join-Path $nasmBin "nasm.exe") -v
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
       - name: Check native prerequisite entrypoints
         shell: pwsh
         run: |
