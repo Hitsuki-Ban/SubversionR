@@ -28,12 +28,42 @@ $repositoryOwnedEnvironment = @(
   "CARGO_BUILD_TARGET_DIR",
   "CARGO_BUILD_BUILD_DIR",
   "CARGO_BUILD_TARGET",
+  "CARGO_HOME",
   "RUSTUP_TOOLCHAIN"
 )
 foreach ($variableName in $repositoryOwnedEnvironment) {
   if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($variableName))) {
     throw "$variableName must be unset; the release daemon toolchain and output policy are repository-owned."
   }
+}
+
+$repositoryCargoConfig = Join-Path $repoRoot ".cargo\config.toml"
+if (-not (Test-Path -LiteralPath $repositoryCargoConfig -PathType Leaf)) {
+  throw "Repository Cargo configuration is missing: $repositoryCargoConfig"
+}
+
+$externalCargoConfigs = [Collections.Generic.List[string]]::new()
+$legacyRepositoryCargoConfig = Join-Path $repoRoot ".cargo\config"
+$externalCargoConfigs.Add($legacyRepositoryCargoConfig)
+
+$cargoHome = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) ".cargo"
+$externalCargoConfigs.Add((Join-Path $cargoHome "config"))
+$externalCargoConfigs.Add((Join-Path $cargoHome "config.toml"))
+
+$parentDirectory = [IO.Directory]::GetParent($repoRoot)
+while ($null -ne $parentDirectory) {
+  $externalCargoConfigs.Add((Join-Path $parentDirectory.FullName ".cargo\config"))
+  $externalCargoConfigs.Add((Join-Path $parentDirectory.FullName ".cargo\config.toml"))
+  $parentDirectory = $parentDirectory.Parent
+}
+
+$discoveredExternalCargoConfigs = @(
+  $externalCargoConfigs |
+    Select-Object -Unique |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+)
+if ($discoveredExternalCargoConfigs.Count -ne 0) {
+  throw "Release daemon builds reject external Cargo configuration: $($discoveredExternalCargoConfigs -join ', ')"
 }
 
 $cargo = Get-Command cargo -CommandType Application -ErrorAction Stop
@@ -54,7 +84,14 @@ if (
 $targetRoot = Join-Path $repoRoot "target"
 $daemonPath = Join-Path $targetRoot "release\subversionr-daemon.exe"
 $daemonPdbPath = Join-Path $targetRoot "release\subversionr-daemon.pdb"
-Remove-Item -LiteralPath $daemonPath, $daemonPdbPath -Force -ErrorAction SilentlyContinue
+foreach ($staleOutput in @($daemonPath, $daemonPdbPath)) {
+  if (Test-Path -LiteralPath $staleOutput) {
+    Remove-Item -LiteralPath $staleOutput -Force
+  }
+  if (Test-Path -LiteralPath $staleOutput) {
+    throw "Failed to remove stale release daemon output: $staleOutput"
+  }
+}
 
 Push-Location $repoRoot
 try {

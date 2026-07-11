@@ -133,6 +133,7 @@ try {
     "CARGO_BUILD_TARGET_DIR",
     "CARGO_BUILD_BUILD_DIR",
     "CARGO_BUILD_TARGET",
+    "CARGO_HOME",
     "RUSTUP_TOOLCHAIN"
   )) {
     Assert-True ($buildDaemonText.Contains('"' + $variableName + '"')) "Release daemon build should reject ambient $variableName."
@@ -140,7 +141,11 @@ try {
   Assert-True ($buildDaemonText.Contains('host: x86_64-pc-windows-msvc')) "Release daemon build should require the exact Windows MSVC Rust host."
   Assert-True ($buildDaemonText.Contains('release: 1.96.0')) "Release daemon build should require the repository-pinned Rust release."
   Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release --target-dir $targetRoot')) "Release daemon build should invoke the exact Cargo package, profile, and repository output directory."
-  Assert-True ($buildDaemonText.Contains('Remove-Item -LiteralPath $daemonPath, $daemonPdbPath')) "Release daemon build should remove fixed-path outputs before invoking Cargo."
+  Assert-True ($buildDaemonText.Contains('$legacyRepositoryCargoConfig')) "Release daemon build should reject a legacy repository Cargo config that would override config.toml."
+  Assert-True ($buildDaemonText.Contains('[Environment+SpecialFolder]::UserProfile')) "Release daemon build should inspect the default Cargo home for external configuration."
+  Assert-True ($buildDaemonText.Contains('[IO.Directory]::GetParent($repoRoot)')) "Release daemon build should inspect parent directories for merged Cargo configuration."
+  Assert-True ($buildDaemonText.Contains('Remove-Item -LiteralPath $staleOutput -Force')) "Release daemon build should fail on fixed-path output deletion errors."
+  Assert-True (-not $buildDaemonText.Contains('Remove-Item -LiteralPath $daemonPath, $daemonPdbPath -Force -ErrorAction SilentlyContinue')) "Release daemon build must not suppress fixed-path output deletion errors."
   Assert-True ($buildDaemonText.Contains('Assert-DeterministicPeFile -Path $daemonPath')) "Release daemon build should fail fast when deterministic PE metadata is absent."
   Assert-True ($bridgeCMakeText.Contains('target_link_options(subversionr_svn_bridge PRIVATE "$<$<CONFIG:Release>:/Brepro>")')) "Release bridge linking should require MSVC reproducible output."
   Assert-True ($buildBridgeText.Contains('Assert-DeterministicPeFile -Path $bridgePath')) "Release bridge build should fail fast when deterministic PE metadata is absent."
@@ -177,6 +182,32 @@ try {
   }
   finally {
     [Environment]::SetEnvironmentVariable($targetRustFlagsName, $savedTargetRustFlags)
+  }
+
+  $releaseDirectory = Join-Path $repoRoot "target\release"
+  $releaseDaemonPath = Join-Path $releaseDirectory "subversionr-daemon.exe"
+  $savedReleaseDaemonBytes = if (Test-Path -LiteralPath $releaseDaemonPath -PathType Leaf) {
+    [IO.File]::ReadAllBytes($releaseDaemonPath)
+  }
+  else {
+    $null
+  }
+  New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
+  New-TestPeFile -Path $releaseDaemonPath -DebugType 16
+  $lockedReleaseDaemon = [IO.File]::Open($releaseDaemonPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  try {
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $buildDaemonScript
+    } "subversionr-daemon.exe" "Release daemon build should fail before Cargo when the stale fixed-path output cannot be deleted."
+  }
+  finally {
+    $lockedReleaseDaemon.Dispose()
+    if ($null -ne $savedReleaseDaemonBytes) {
+      [IO.File]::WriteAllBytes($releaseDaemonPath, $savedReleaseDaemonBytes)
+    }
+    else {
+      Remove-Item -LiteralPath $releaseDaemonPath -Force -ErrorAction SilentlyContinue
+    }
   }
 
   $lockPath = Join-Path $tempRoot "sources.lock.json"
