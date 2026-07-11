@@ -104,6 +104,7 @@ $env:SUBVERSIONR_VSDEVCMD = "C:\Program Files (x86)\Microsoft Visual Studio\2022
 pnpm native:verify-sources
 pnpm native:build-deps:all
 pnpm native:build-subversion:staged
+pnpm native:build-daemon:release
 pnpm native:build-bridge:staged
 pnpm native:smoke-bridge:staged
 ```

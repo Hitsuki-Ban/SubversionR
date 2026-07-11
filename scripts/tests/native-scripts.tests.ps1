@@ -7,6 +7,7 @@ $buildDependenciesScript = Join-Path $repoRoot "scripts\native\build-dependencie
 $buildHttpdScript = Join-Path $repoRoot "scripts\native\build-httpd.ps1"
 $buildSubversionScript = Join-Path $repoRoot "scripts\native\build-subversion.ps1"
 $buildDavModulesScript = Join-Path $repoRoot "scripts\native\build-subversion-dav-modules.ps1"
+$buildDaemonScript = Join-Path $repoRoot "scripts\native\build-daemon.ps1"
 $buildBridgeScript = Join-Path $repoRoot "scripts\native\build-bridge.ps1"
 $smokeBridgeScript = Join-Path $repoRoot "scripts\native\smoke-bridge.ps1"
 $smokeHttpdDavHttpsScript = Join-Path $repoRoot "scripts\native\smoke-httpd-dav-https.ps1"
@@ -109,9 +110,28 @@ try {
   } "not a valid PE file" "Deterministic PE validation should reject malformed input."
 
   $bridgeCMakeText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "native\svn-bridge\CMakeLists.txt")
+  $cargoConfigText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot ".cargo\config.toml")
+  $buildDaemonText = Get-Content -Raw -LiteralPath $buildDaemonScript
   $buildBridgeText = Get-Content -Raw -LiteralPath $buildBridgeScript
+  Assert-Equal "[target.x86_64-pc-windows-msvc]`nrustflags = [`"-C`", `"link-arg=/Brepro`"]`n" ($cargoConfigText.Replace("`r`n", "`n")) "Windows MSVC Rust configuration should have one exact reproducible linker policy."
+  Assert-True ($buildDaemonText.Contains('if (-not [string]::IsNullOrEmpty($env:RUSTFLAGS))')) "Release daemon build should reject ambient RUSTFLAGS."
+  Assert-True ($buildDaemonText.Contains('if (-not [string]::IsNullOrEmpty($env:CARGO_ENCODED_RUSTFLAGS))')) "Release daemon build should reject ambient encoded Rust flags."
+  Assert-True ($buildDaemonText.Contains('host: x86_64-pc-windows-msvc')) "Release daemon build should require the exact Windows MSVC Rust host."
+  Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release')) "Release daemon build should invoke the exact Cargo package and profile."
+  Assert-True ($buildDaemonText.Contains('Assert-DeterministicPeFile -Path $daemonPath')) "Release daemon build should fail fast when deterministic PE metadata is absent."
   Assert-True ($bridgeCMakeText.Contains('target_link_options(subversionr_svn_bridge PRIVATE "$<$<CONFIG:Release>:/Brepro>")')) "Release bridge linking should require MSVC reproducible output."
   Assert-True ($buildBridgeText.Contains('Assert-DeterministicPeFile -Path $bridgePath')) "Release bridge build should fail fast when deterministic PE metadata is absent."
+
+  $savedRustFlags = $env:RUSTFLAGS
+  try {
+    $env:RUSTFLAGS = "-C opt-level=0"
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $buildDaemonScript
+    } "RUSTFLAGS must be unset" "Release daemon build should reject an ambient linker-policy override."
+  }
+  finally {
+    $env:RUSTFLAGS = $savedRustFlags
+  }
 
   $lockPath = Join-Path $tempRoot "sources.lock.json"
   @'
@@ -310,6 +330,7 @@ try {
   Assert-True ($buildHttpdText.Contains("Assert-ApacheHttpdStageForDavFixture")) "M6x HTTPD script should validate the installed stage after copying support runtimes."
 
   $packageJsonText = Get-Content -Raw -LiteralPath $packageJsonPath
+  Assert-True ($packageJsonText.Contains('"native:build-daemon:release": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/native/build-daemon.ps1"')) "Package scripts should expose the deterministic release daemon build entrypoint."
   Assert-True ($packageJsonText.Contains('"native:build-httpd:staged"')) "M6x package scripts should expose the staged Apache HTTP Server build gate."
   Assert-True ($packageJsonText.Contains('"native:build-subversion-dav-modules:staged"')) "M6y package scripts should expose the staged Subversion DAV module build gate."
   Assert-True ($packageJsonText.Contains('"native:smoke-httpd-dav-https:staged"')) "M6z package scripts should expose the staged HTTPS DAV fixture smoke gate."
@@ -536,6 +557,8 @@ try {
 
   $buildSubversionText = Get-Content -Raw -LiteralPath $buildSubversionScript
   $ciWorkflowText = Get-Content -Raw -LiteralPath $ciWorkflow
+  Assert-True ($ciWorkflowText.Contains("pnpm native:build-daemon:release")) "CI should use the deterministic release daemon build entrypoint."
+  Assert-True (-not $ciWorkflowText.Contains("cargo build -p subversionr-daemon --release")) "CI must not bypass deterministic daemon validation with a raw Cargo release build."
   Assert-True ($buildSubversionText.Contains('[string]$SerfRoot')) "M6s Subversion build entrypoint should require an explicit Serf stage root."
   Assert-True ($buildSubversionText.Contains('[string]$OpenSslRoot')) "M6s Subversion build entrypoint should require an explicit OpenSSL stage root."
   Assert-True ($buildSubversionText.Contains('Assert-SerfStageForSubversion -StageRoot $serfRootResolved')) "M6s Subversion build should fail fast on invalid Serf staging."

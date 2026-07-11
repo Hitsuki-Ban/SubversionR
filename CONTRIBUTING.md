@@ -33,6 +33,7 @@ pnpm release:verify-readiness
 pnpm native:verify-sources
 pnpm native:build-deps:all
 pnpm native:build-subversion:staged
+pnpm native:build-daemon:release
 pnpm native:build-bridge:staged
 pnpm native:smoke-bridge:staged
 ```
