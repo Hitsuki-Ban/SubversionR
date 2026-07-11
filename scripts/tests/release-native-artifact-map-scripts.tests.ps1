@@ -115,7 +115,7 @@ function New-NativeArtifactMapFixture([string]$Root) {
       configuration = "Release"
       extension = [pscustomobject]@{
         id = "subversionr"
-        displayName = "SubversionR"
+        displayName = "SVN-R"
         version = "0.1.0"
       }
       resourceRoot = "resources/backend/win32-x64"
@@ -137,7 +137,7 @@ function New-NativeArtifactMapFixture([string]$Root) {
       target = "win32-x64"
       extension = [pscustomobject]@{
         id = "hitsuki-ban.subversionr"
-        displayName = "SubversionR"
+        displayName = "SVN-R"
         version = "0.1.0"
       }
       inputs = [pscustomobject]@{

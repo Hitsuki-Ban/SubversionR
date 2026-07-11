@@ -40,7 +40,7 @@ function New-TestVsix([string]$Path, [string]$Version, [string]$TargetPlatform =
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
   <Metadata>
     <Identity Language="en-US" Id="hitsuki-ban.subversionr" Version="$Version" Publisher="hitsuki-ban" TargetPlatform="$TargetPlatform" />
-    <DisplayName>SubversionR</DisplayName>
+    <DisplayName>SVN-R</DisplayName>
     <Description xml:space="preserve">SubversionR installed Source Control UI E2E fixture</Description>
   </Metadata>
 </PackageManifest>
@@ -49,7 +49,7 @@ function New-TestVsix([string]$Path, [string]$Version, [string]$TargetPlatform =
 {
   "name": "subversionr",
   "publisher": "hitsuki-ban",
-  "displayName": "SubversionR",
+  "displayName": "SVN-R",
   "version": "$Version",
   "engines": { "vscode": "^1.101.0" },
   "main": "./dist/extension.js",
@@ -409,7 +409,7 @@ $openReport = [pscustomobject]@{
   }
   rendererCaptureExpectations = [pscustomobject]@{
     viewCommand = "workbench.view.scm"
-    requiredDomTokens = @("SubversionR", "Changes", "Unversioned", "src", "tracked.txt", "scratch.txt")
+    requiredDomTokens = @("SVN-R", "Changes", "Unversioned", "src", "tracked.txt", "scratch.txt")
     requiredAccessibilityTokens = @("SubversionR", "Changes", "Unversioned", "src", "tracked.txt", "scratch.txt")
     requiredScreenshot = $true
   }
@@ -544,8 +544,8 @@ $staleFreshnessRendererExpectations = [pscustomobject]@{
 } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $staleFreshnessRendererReadyPath -Encoding utf8
 Wait-FakeRendererDone -Path $staleFreshnessRendererDonePath -Description "stale freshness"
 $fullReconcileCancellationExpectations = [pscustomobject]@{
-  requiredDomTokens = @("SubversionR", "Reconciling SVN working copy status", "Cancel")
-  requiredAccessibilityTokens = @("SubversionR", "Reconciling SVN working copy status", "Cancel")
+  requiredDomTokens = @("SVN-R", "Reconciling SVN working copy status", "Cancel")
+  requiredAccessibilityTokens = @("SVN-R", "Reconciling SVN working copy status", "Cancel")
   requiredScreenshot = $true
   clickButtonText = "Cancel"
 }

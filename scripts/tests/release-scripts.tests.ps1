@@ -2469,7 +2469,7 @@ try {
   @'
 {
   "name": "subversionr",
-  "displayName": "SubversionR",
+  "displayName": "SVN-R",
   "version": "0.2.0",
   "publisher": "hitsuki-ban",
   "main": "./dist/extension.js",
@@ -2565,7 +2565,7 @@ try {
   Assert-Equal "x64" $manifest.architecture "Package manifest should record the architecture."
   Assert-Equal "Release" $manifest.configuration "Package manifest should record the native configuration."
   Assert-Equal "subversionr" $manifest.extension.id "Package manifest should record the extension id."
-  Assert-Equal "SubversionR" $manifest.extension.displayName "Package manifest should record the display name."
+  Assert-Equal "SVN-R" $manifest.extension.displayName "Package manifest should record the Marketplace display name."
   Assert-True (@($manifest.artifacts | Where-Object { $_.role -eq "sidecar" -and $_.path -eq "resources/backend/win32-x64/subversionr-daemon.exe" }).Count -eq 1) "Manifest should include the sidecar artifact with a relative path."
   Assert-True (@($manifest.artifacts | Where-Object { $_.role -eq "bridge" -and $_.path -eq "resources/backend/win32-x64/subversionr_svn_bridge.dll" }).Count -eq 1) "Manifest should include the bridge artifact with a relative path."
   foreach ($dependencyName in @($requiredNativeDependencyNames + $opensslDependencyNames)) {

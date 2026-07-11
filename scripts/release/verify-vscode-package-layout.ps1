@@ -223,7 +223,7 @@ Assert-Directory $resourceRoot "Backend resource root" | Out-Null
 
 $packageJson = Get-Content -Raw -LiteralPath (Assert-File (Join-Path $packageRootResolved "package.json") "package.json") | ConvertFrom-Json
 Assert-Equal "subversionr" $packageJson.name "Staged package id should match SubversionR extension id."
-Assert-Equal "SubversionR" $packageJson.displayName "Staged package displayName should match SubversionR."
+Assert-Equal "SVN-R" $packageJson.displayName "Staged package displayName should match the Marketplace listing."
 Assert-True ($packageJson.keywords -contains "svn") "Staged package Marketplace keywords should include svn."
 Assert-True ($packageJson.keywords -contains "subversion") "Staged package Marketplace keywords should include subversion."
 Assert-True ($packageJson.keywords -contains "source-control") "Staged package Marketplace keywords should include source-control."
@@ -250,7 +250,7 @@ Assert-Equal "x64" $manifest.architecture "Manifest architecture should match wi
 Assert-Equal "Release" $manifest.configuration "Manifest configuration should be Release."
 Assert-Equal "resources/backend/$Target" $manifest.resourceRoot "Manifest resourceRoot should match the resolver layout."
 Assert-Equal "subversionr" $manifest.extension.id "Manifest extension id should be subversionr."
-Assert-Equal "SubversionR" $manifest.extension.displayName "Manifest extension displayName should be SubversionR."
+Assert-Equal "SVN-R" $manifest.extension.displayName "Manifest extension displayName should match the Marketplace listing."
 
 Assert-NoSvnCliToolsInPackage $packageRootResolved
 

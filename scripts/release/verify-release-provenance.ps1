@@ -156,7 +156,7 @@ Assert-Equal $Target ([string]$report.target) "Provenance target should match th
 Assert-Equal "False" ([string]$report.publicReadinessClaim) "publicReadinessClaim must remain false."
 Assert-Equal "True" ([string]$report.localPreflightOnly) "localPreflightOnly must remain true."
 Assert-Equal "hitsuki-ban.subversionr" ([string]$report.extension.id) "Extension identity must remain hitsuki-ban.subversionr."
-Assert-Equal "SubversionR" ([string]$report.extension.displayName) "Extension display name should remain SubversionR."
+Assert-Equal "SVN-R" ([string]$report.extension.displayName) "Extension display name should match the Marketplace listing."
 Assert-RequiredBooleanTrue $report.extension "preRelease" "Extension"
 Assert-Equal "False" ([string]$report.repository.remoteUrlRecorded) "Repository remote URL must not be recorded."
 Assert-Equal "unsigned" ([string]$report.signing.status) "Signing status must remain unsigned in this gate."

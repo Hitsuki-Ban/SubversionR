@@ -408,7 +408,11 @@ foreach ($source in @($lock.sources)) {
 }
 
 $extensionPackage = Get-Content -Raw -LiteralPath $extensionPackageResolved | ConvertFrom-Json
-$extensionName = Get-RequiredProperty $extensionPackage "displayName" "Extension package"
+$extensionDisplayName = Get-RequiredProperty $extensionPackage "displayName" "Extension package"
+if ($extensionDisplayName -cne "SVN-R") {
+  throw "Extension Marketplace displayName must be SVN-R."
+}
+$extensionName = "SubversionR"
 $extensionVersion = Get-RequiredProperty $extensionPackage "version" "Extension package"
 $extensionId = Get-RequiredProperty $extensionPackage "name" "Extension package"
 $extensionLicense = Get-RequiredProperty $extensionPackage "license" "Extension package"

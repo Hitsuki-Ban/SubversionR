@@ -1809,7 +1809,7 @@ async function captureFreshnessRendererScenario(report, scenario, readyPath, don
 
 function fullReconcileCancellationRendererCaptureExpectations() {
   const requiredTokens = [
-    "SubversionR",
+    "SVN-R",
     "Reconciling SVN working copy status",
     "Cancel"
   ];

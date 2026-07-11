@@ -253,8 +253,8 @@ $extensionPackageJson = Get-Content -Raw -LiteralPath (Join-Path $extensionRootR
 if ($extensionPackageJson.name -ne "subversionr") {
   throw "Extension package id must be subversionr."
 }
-if ($extensionPackageJson.displayName -ne "SubversionR") {
-  throw "Extension displayName must be SubversionR."
+if ($extensionPackageJson.displayName -ne "SVN-R") {
+  throw "Extension Marketplace displayName must be SVN-R."
 }
 
 $packageRoot = Join-Path $outputRootResolved "subversionr-$Target"
