@@ -1,6 +1,6 @@
 # Marketplace 0.2.1 Pre-release Owner Exception
 
-Decision source: public issue [#20](https://github.com/Hitsuki-Ban/SubversionR/issues/20), recorded on 2026-07-11.
+Decision sources: public issues [#20](https://github.com/Hitsuki-Ban/SubversionR/issues/20) and [#22](https://github.com/Hitsuki-Ban/SubversionR/issues/22), recorded on 2026-07-11.
 
 ## Scope
 
@@ -10,8 +10,8 @@ The owner authorizes one automated Visual Studio Marketplace pre-release publica
 - target: `win32-x64`;
 - release tag: `v0.2.1-beta.1`;
 - asset name: `subversionr-win32-x64-0.2.1.vsix`;
-- asset size: `8251718` bytes;
-- asset SHA256: `f4d800baf7db164d3816790853608076395aa542306b3ae8bbba100b8677a753`.
+- asset size: `8251772` bytes;
+- asset SHA256: `723398d708da1ae7212b7b1447955c11e2fc4f071cca4862d1ba25f99fec69ae`.
 
 The operation is authorized only after the source-controlled candidate contract matches those bytes, the GitHub pre-release exists, and `gh attestation verify` succeeds for the public `main` workflow SHA, signer workflow, source ref and digest, predicate type, and hosted-runner policy. The packaged VSIX must contain exactly one `Microsoft.VisualStudio.Code.PreRelease` property with `Value="true"`. Verification must finish before Azure login; publication then uses the protected `marketplace` environment and direct `vsce publish --packagePath ... --pre-release --azure-credential` with no credential fallback or rebuild.
 

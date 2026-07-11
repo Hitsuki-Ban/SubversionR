@@ -453,10 +453,11 @@ function Invoke-RequirementEvidenceRuleChecks() {
   $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.1.md"
   Assert-Terms $marketplaceOwnerException @(
     "# Marketplace 0.2.1 Pre-release Owner Exception",
-    "public issue [#20]",
+    "public issues [#20]",
+    "[#22]",
     'release tag: `v0.2.1-beta.1`',
     'asset name: `subversionr-win32-x64-0.2.1.vsix`',
-    "f4d800baf7db164d3816790853608076395aa542306b3ae8bbba100b8677a753",
+    "723398d708da1ae7212b7b1447955c11e2fc4f071cca4862d1ba25f99fec69ae",
     '`SEC-015`, `MIG-010`, and `MIG-012`',
     "It cannot transfer to different bytes, another tag, or a later version",
     "does not claim public release readiness"

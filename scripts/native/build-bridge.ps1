@@ -46,6 +46,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $bridgeOutputDirectory = Join-Path $buildDir $Configuration
+$bridgePath = Join-Path $bridgeOutputDirectory "subversionr_svn_bridge.dll"
+if ($Configuration -eq "Release") {
+  Assert-DeterministicPeFile -Path $bridgePath | Out-Null
+}
 $bridgeRuntimeDirectory = Copy-BridgeRuntimeDependencies `
   -SubversionStageRoot $svnRootResolved.Path `
   -OutputDirectory $bridgeOutputDirectory `

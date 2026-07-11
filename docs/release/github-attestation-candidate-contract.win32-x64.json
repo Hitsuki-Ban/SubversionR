@@ -10,8 +10,8 @@
   },
   "subject": {
     "name": "subversionr-win32-x64-0.2.1.vsix",
-    "size": 8251718,
-    "sha256": "f4d800baf7db164d3816790853608076395aa542306b3ae8bbba100b8677a753",
+    "size": 8251772,
+    "sha256": "723398d708da1ae7212b7b1447955c11e2fc4f071cca4862d1ba25f99fec69ae",
     "preReleaseProperty": true
   },
   "attestation": {

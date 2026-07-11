@@ -394,10 +394,11 @@ Issue [#20](https://github.com/Hitsuki-Ban/SubversionR/issues/20) replaces the b
 
 - root and extension versions are `0.2.1`, and `vsce package --pre-release` produces an exact `subversionr-win32-x64-0.2.1.vsix` whose manifest contains one `Microsoft.VisualStudio.Code.PreRelease=true` property;
 - VSIX ZIP timestamps and entry ordering are normalized so repeated packaging of identical inputs produces identical bytes;
-- `docs/release/github-attestation-candidate-contract.win32-x64.json` binds `v0.2.1-beta.1`, size `8251718`, SHA256 `f4d800baf7db164d3816790853608076395aa542306b3ae8bbba100b8677a753`, and status `pending-release-attestation`;
+- issue [#22](https://github.com/Hitsuki-Ban/SubversionR/issues/22) makes the MSVC Release bridge deterministic with `/Brepro` and rejects bridge output without `IMAGE_DEBUG_TYPE_REPRO` before packaging;
+- `docs/release/github-attestation-candidate-contract.win32-x64.json` binds `v0.2.1-beta.1`, size `8251772`, SHA256 `723398d708da1ae7212b7b1447955c11e2fc4f071cca4862d1ba25f99fec69ae`, and status `pending-release-attestation`;
 - provenance, publication gaps, and Beta-G bind that current candidate contract while retaining the `v0.2.0-beta.1` release and attestation only as historical public-cutover evidence;
 - the attestation workflow creates and verifies the current live attestation after the release exists, and the publish workflow independently verifies that live attestation against its own public `main` workflow SHA before Azure login; and
-- `docs/release/marketplace-pre-release-owner-exception-0.2.1.md` records the exact #20 owner authorization. `publicReadinessClaim` remains false throughout the candidate, attestation, and publication evidence chain.
+- `docs/release/marketplace-pre-release-owner-exception-0.2.1.md` records the exact #20/#22 owner authorization. `publicReadinessClaim` remains false throughout the candidate, attestation, and publication evidence chain.
 
 ## M7l1 Implemented Slice
 

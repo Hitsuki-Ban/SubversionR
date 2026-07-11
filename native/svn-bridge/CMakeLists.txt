@@ -29,3 +29,6 @@ target_link_libraries(
     "${APR_UTIL_LIBRARY}"
 )
 target_compile_definitions(subversionr_svn_bridge PRIVATE SUBVERSIONR_SVN_BRIDGE_EXPORTS)
+if(MSVC)
+  target_link_options(subversionr_svn_bridge PRIVATE "$<$<CONFIG:Release>:/Brepro>")
+endif()
