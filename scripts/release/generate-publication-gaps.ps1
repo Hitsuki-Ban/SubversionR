@@ -384,6 +384,12 @@ Assert-Equal $extensionVersion ([string]$provenance.extension.version) "Provenan
 Assert-BooleanFalse $provenance.repository "remoteUrlRecorded" "Provenance repository"
 Assert-Equal "not-published" ([string]$provenance.marketplace.status) "Provenance Marketplace status must remain not-published."
 Assert-Equal "verified" ([string]$provenance.attestation.status) "Provenance attestation status must record live verification."
+Assert-Equal "historical-public-cutover-release" ([string]$provenance.attestation.scope) "Verified provenance attestation must remain historical."
+$provenanceCandidateAttestation = Get-RequiredProperty $provenance "candidateAttestation" "Provenance"
+Assert-Equal "pending-release-attestation" ([string](Get-RequiredProperty $provenanceCandidateAttestation "status" "Provenance candidate attestation")) "Current candidate attestation must remain pending before release."
+Assert-Equal "current-candidate" ([string](Get-RequiredProperty $provenanceCandidateAttestation "scope" "Provenance candidate attestation")) "Candidate attestation scope must identify the current candidate."
+Assert-BooleanTrue $provenanceCandidateAttestation "preReleaseProperty" "Provenance candidate attestation"
+Assert-BooleanFalse $provenanceCandidateAttestation "liveEvidenceRecorded" "Provenance candidate attestation"
 $provenanceAttestation = Get-RequiredProperty $provenance.attestation "readiness" "Provenance attestation"
 Assert-Equal "live-attestation-verified" ([string](Get-RequiredProperty $provenanceAttestation "readinessStatus" "Provenance attestation evidence")) "Provenance attestation readiness must record live verification."
 Assert-Equal "actions/attest@v4" ([string](Get-RequiredProperty $provenanceAttestation "action" "Provenance attestation evidence")) "Provenance attestation action must match issue #5."
@@ -405,6 +411,7 @@ Assert-Equal $Target ([string]$vsixEvidence.target) "VSIX evidence target must m
 Assert-Equal "False" ([string]$vsixEvidence.publicReadinessClaim) "VSIX evidence publicReadinessClaim must remain false."
 Assert-Equal $extensionId ([string]$vsixEvidence.extension.id) "VSIX evidence extension identity must match the extension package."
 Assert-Equal $extensionVersion ([string]$vsixEvidence.extension.version) "VSIX evidence extension version must match the extension package."
+Assert-BooleanTrue $vsixEvidence.extension "preRelease" "VSIX evidence extension"
 
 $vsixPath = Assert-GeneratedPath -Path ([string]$provenance.artifacts.vsix.path) -Name "VSIX artifact" -AllowedRoots @(
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\vsix")),
@@ -416,9 +423,9 @@ if (-not (Test-Path -LiteralPath $vsixPath -PathType Leaf)) {
 $actualVsixSha256 = Get-Sha256 $vsixPath
 Assert-Equal ([string]$provenance.artifacts.vsix.sha256) $actualVsixSha256 "VSIX SHA256 must match provenance evidence."
 Assert-Equal ([string]$vsixEvidence.vsix.sha256) $actualVsixSha256 "VSIX SHA256 must match VSIX package evidence."
-Assert-Equal $actualVsixSha256 ([string]$provenanceAttestation.subjectSha256) "Live attestation subject SHA256 must match current VSIX bytes."
-Assert-Equal (Split-Path -Leaf $vsixPath) ([string]$provenanceAttestation.subjectName) "Live attestation subject name must match current VSIX."
-Assert-Equal ([int64](Get-Item -LiteralPath $vsixPath).Length) ([int64]$provenanceAttestation.artifactSize) "Live attestation subject size must match current VSIX bytes."
+Assert-Equal $actualVsixSha256 ([string]$provenanceCandidateAttestation.subjectSha256) "Candidate attestation subject SHA256 must match current VSIX bytes."
+Assert-Equal (Split-Path -Leaf $vsixPath) ([string]$provenanceCandidateAttestation.subjectName) "Candidate attestation subject name must match current VSIX."
+Assert-Equal ([int64](Get-Item -LiteralPath $vsixPath).Length) ([int64]$provenanceCandidateAttestation.subjectSize) "Candidate attestation subject size must match current VSIX bytes."
 $attestationRunUrl = [string](Get-RequiredProperty $provenanceAttestation "runUrl" "Provenance attestation evidence")
 Assert-True ($attestationRunUrl -match '^https://github\.com/Hitsuki-Ban/SubversionR/actions/runs/[0-9]+$') "Live attestation run URL must identify a public repository Actions run."
 $attestationUrl = [string](Get-RequiredProperty $provenanceAttestation "attestationUrl" "Provenance attestation evidence")
@@ -569,8 +576,9 @@ foreach ($assetName in @(
   Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/releases/download/v0.2.0-beta.1/$assetName" ([string]$asset.url) "Public cutover release asset '$assetName' URL must match."
 }
 $releasedVsix = Get-RequiredReleaseAsset -Assets $releaseAssets -Name "subversionr-win32-x64-0.2.0.vsix"
-Assert-Equal $actualVsixSha256 ([string]$releasedVsix.sha256) "Released VSIX SHA256 must match current VSIX bytes."
-Assert-Equal ([int64](Get-Item -LiteralPath $vsixPath).Length) ([int64]$releasedVsix.size) "Released VSIX size must match current VSIX bytes."
+Assert-Equal ([string]$releasedVsix.sha256) ([string]$provenanceAttestation.subjectSha256) "Historical released VSIX SHA256 must match historical provenance attestation evidence."
+Assert-Equal ([string]$releasedVsix.name) ([string]$provenanceAttestation.subjectName) "Historical released VSIX name must match historical provenance attestation evidence."
+Assert-Equal ([int64]$releasedVsix.size) ([int64]$provenanceAttestation.artifactSize) "Historical released VSIX size must match historical provenance attestation evidence."
 
 $betaCandidateEvidence = Get-RequiredProperty $publicCutoverEvidence "betaCandidateEvidence" "Public cutover evidence"
 Assert-OnlyProperties $betaCandidateEvidence @("status", "publishedBundleAssetName", "publishedBundleSha256", "expectedVsixName", "expectedVsixSha256", "containedVsixName", "containedVsixSha256", "declaredPayloadCount", "missingPayloadCount", "mismatchedPayloadCount", "consistencyVerified", "regenerationCompleted") "Beta candidate evidence"
@@ -589,7 +597,7 @@ Assert-BooleanTrue $betaCandidateEvidence "consistencyVerified" "Beta candidate 
 Assert-BooleanTrue $betaCandidateEvidence "regenerationCompleted" "Beta candidate evidence"
 
 $blockers = @(
-  "The attested 0.2.0 release VSIX is not eligible for Marketplace pre-release publication because its manifest lacks the pre-release property.",
+  "The current 0.2.1 candidate release and live GitHub attestation have not been published.",
   "Marketplace publication is not run by this local gap report.",
   "Marketplace public install evidence is not generated by this local gap report.",
   "VSIX signing remains absent in the upstream provenance preflight.",
@@ -602,11 +610,11 @@ $nonClaims = @(
   "This gate records public repository metadata and cutover state from hash-bound evidence without recording a private remote, credentialed URL, or Marketplace publication URL.",
   "This gate records owner-attested Marketplace Contributor authorization without recording identity or credential values.",
   "This gate records the source-controlled Microsoft Entra ID workflow, hash-bound successful bootstrap run, and separate owner-attested publisher authorization without recording owner-managed variable or identity values.",
-  "This gate records that the exact attested 0.2.0 VSIX cannot be published as a Marketplace pre-release without changing its bytes.",
+  "This gate records an exact pre-release-eligible 0.2.1 candidate contract, but does not claim its release or live attestation exists.",
   "This gate does not publish to Visual Studio Marketplace.",
   "This gate does not install from Visual Studio Marketplace or prove public acquisition.",
   "This gate records owner-managed branch protection and private workflow disablement from hash-bound evidence; it does not perform repository-owner API mutations.",
-  "This gate records live GitHub artifact attestation publication and verification but does not prove VSIX signing, previous-stable rollback, final SBOM/NOTICE review, or CVE review."
+  "This gate preserves the historical 0.2.0 GitHub artifact attestation without applying it to the current 0.2.1 candidate or proving VSIX signing, previous-stable rollback, final SBOM/NOTICE review, or CVE review."
 )
 
 $report = [pscustomobject]@{
@@ -639,6 +647,19 @@ $report = [pscustomobject]@{
       size = (Get-Item -LiteralPath $vsixPath).Length
       sha256 = $actualVsixSha256
     }
+  }
+  currentCandidate = [pscustomobject]@{
+    status = [string]$provenanceCandidateAttestation.status
+    scope = [string]$provenanceCandidateAttestation.scope
+    releaseTag = [string]$provenanceCandidateAttestation.releaseTag
+    releaseUrl = [string]$provenanceCandidateAttestation.releaseUrl
+    subjectName = [string]$provenanceCandidateAttestation.subjectName
+    subjectSha256 = [string]$provenanceCandidateAttestation.subjectSha256
+    subjectSize = [int64]$provenanceCandidateAttestation.subjectSize
+    preReleaseProperty = [bool]$provenanceCandidateAttestation.preReleaseProperty
+    liveEvidenceRecorded = [bool]$provenanceCandidateAttestation.liveEvidenceRecorded
+    contractPath = [string]$provenanceCandidateAttestation.contractPath
+    contractSha256 = [string]$provenanceCandidateAttestation.contractSha256
   }
   evidence = [pscustomobject]@{
     extensionPackage = New-HashRecord $extensionPackageResolved

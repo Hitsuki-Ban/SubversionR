@@ -6,7 +6,7 @@ The current public target is a Windows `win32-x64` Beta package distributed as a
 
 ## Install From Releases
 
-1. Download the `subversionr-win32-x64-0.2.0.vsix` asset from the latest GitHub pre-release.
+1. Download the `subversionr-win32-x64-0.2.1.vsix` asset from the latest GitHub pre-release.
 2. In VS Code, run **Extensions: Install from VSIX...** and select the downloaded file.
 3. Open a local SVN working copy or run **SubversionR: Checkout Repository**.
 

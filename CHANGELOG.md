@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Includes all product content introduced in 0.2.0.
+- Packages the dedicated Marketplace listing README from `packages/vscode-extension/README.md`.
+- Marks the VSIX as a VS Code pre-release package at creation time.
+- Normalizes VSIX ZIP timestamps and entry ordering so identical inputs produce identical package bytes.
+- Keeps the `hitsuki-ban.subversionr` extension identity and `subversionr.*` command identities unchanged.
+
 ## 0.2.0
 
 - Publishes under the public `hitsuki-ban.subversionr` extension identity. This is a new extension id, so 0.1.0 test installs are replaced by installing the new VSIX rather than upgraded in place.

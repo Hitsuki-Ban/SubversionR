@@ -224,6 +224,14 @@ function Get-VsixTargetPlatform([string]$ZipPath) {
   [string]$identityNodes[0].TargetPlatform
 }
 
+function Assert-VsixPreReleaseProperty([string]$ZipPath) {
+  $manifestText = Get-ZipEntryText -ZipPath $ZipPath -EntryName "extension.vsixmanifest"
+  $manifest = [xml]$manifestText
+  $properties = @($manifest.SelectNodes("//*[local-name()='PackageManifest']/*[local-name()='Metadata']/*[local-name()='Properties']/*[local-name()='Property' and @Id='Microsoft.VisualStudio.Code.PreRelease']"))
+  Assert-Equal 1 $properties.Count "VSIX manifest must contain exactly one Microsoft.VisualStudio.Code.PreRelease property."
+  Assert-Equal "true" ([string]$properties[0].Value) "VSIX manifest Microsoft.VisualStudio.Code.PreRelease Value must be exactly true."
+}
+
 function Test-HasProperty([object]$Object, [string]$Name) {
   $null -ne $Object -and $null -ne $Object.PSObject.Properties[$Name]
 }
@@ -309,7 +317,7 @@ function New-BetaArtifactBundleFileRecord([string]$Path, [string]$Role) {
 
 function Get-ExpectedUploadPaths([string]$Target) {
   @(
-    "target/vsix/subversionr-win32-x64-0.2.0.vsix",
+    "target/vsix/subversionr-win32-x64-0.2.1.vsix",
     "target/release-evidence/subversionr-source-sbom.cdx.json",
     "target/release-evidence/subversionr-vsix-package-$Target.json",
     "target/release-evidence/subversionr-vsix-cli-install-$Target.json",
@@ -1180,6 +1188,7 @@ $vsixSha256 = Get-Sha256 $vsixResolved
 $vsixEntrypointSha256 = Get-ZipEntrySha256 -ZipPath $vsixResolved -EntryName "extension/dist/extension.js"
 $vsixPackageJson = Get-VsixPackageJson $vsixResolved
 $vsixManifestTargetPlatform = Get-VsixTargetPlatform $vsixResolved
+Assert-VsixPreReleaseProperty $vsixResolved
 $extensionId = "$([string](Get-RequiredProperty $vsixPackageJson "publisher" "VSIX package.json")).$([string](Get-RequiredProperty $vsixPackageJson "name" "VSIX package.json"))"
 $extensionVersion = [string](Get-RequiredProperty $vsixPackageJson "version" "VSIX package.json")
 Assert-Equal $Target $vsixManifestTargetPlatform "VSIX manifest TargetPlatform must match the Beta candidate target."
@@ -1205,6 +1214,7 @@ Assert-Equal $vsixEntrypointSha256 (Get-RequiredString $vsixPackageJson.vsix "ex
 Assert-Equal $vsixEntrypointSha256 (Get-RequiredString $vsixPackageJson.inputs "extensionEntrypointSha256" "vsixPackage.inputs") "vsixPackage input entrypoint SHA256 must match current VSIX."
 Assert-Equal $extensionId (Get-RequiredString $vsixPackageJson.extension "id" "vsixPackage.extension") "vsixPackage extension id must match current VSIX package.json."
 Assert-Equal $extensionVersion (Get-RequiredString $vsixPackageJson.extension "version" "vsixPackage.extension") "vsixPackage extension version must match current VSIX package.json."
+Assert-RequiredBooleanTrue $vsixPackageJson.extension "preRelease" "vsixPackage.extension"
 $vsixPackageRootPath = Assert-Directory (Resolve-RepoPath (Get-RequiredString $vsixPackageJson.inputs "packageRoot" "vsixPackage.inputs")) "vsixPackage input packageRoot"
 $vsixPackageBackendManifestPath = Assert-File (Join-Path $vsixPackageRootPath "resources\backend\$Target\subversionr-backend-package-manifest.json") "vsixPackage input backend manifest"
 $vsixPackageBackendManifestSha256 = Get-Sha256 $vsixPackageBackendManifestPath
@@ -1322,11 +1332,25 @@ Assert-VsixArtifactBinding $provenanceVsix "marketplaceProvenance" $true
 Assert-Equal $vsixPackage.sha256 (Get-RequiredString $provenanceVsix "evidenceSha256" "marketplaceProvenance.artifacts.vsix") "marketplaceProvenance VSIX evidence SHA256 must match current VSIX package evidence."
 Assert-SamePath $vsixEvidenceResolved (Get-RequiredString $provenanceVsix "evidencePath" "marketplaceProvenance.artifacts.vsix") "marketplaceProvenance VSIX evidence path must match VsixEvidencePath."
 $provenanceEvidence = Get-RequiredProperty $marketplaceProvenance.json "evidence" "marketplaceProvenance"
+$script:hashBindings += Assert-HashRecordCurrent (Get-RequiredProperty $provenanceEvidence "candidateAttestationContract" "marketplaceProvenance.evidence") "marketplaceProvenance candidateAttestationContract" $null $null
 $script:hashBindings += Assert-HashRecordCurrent (Get-RequiredProperty $provenanceEvidence "liveAttestation" "marketplaceProvenance.evidence") "marketplaceProvenance liveAttestation" $null $null
 $script:hashBindings += Assert-HashRecordCurrent (Get-RequiredProperty $provenanceEvidence "attestationBundle" "marketplaceProvenance.evidence") "marketplaceProvenance attestationBundle" $null $null
 $script:hashBindings += Assert-HashRecordCurrent (Get-RequiredProperty $provenanceEvidence "attestationVerification" "marketplaceProvenance.evidence") "marketplaceProvenance attestationVerification" $null $null
 $provenanceAttestation = Get-RequiredProperty $marketplaceProvenance.json "attestation" "marketplaceProvenance"
 Assert-Equal "verified" (Get-RequiredString $provenanceAttestation "status" "marketplaceProvenance.attestation") "marketplaceProvenance attestation status must record live verification."
+Assert-Equal "historical-public-cutover-release" (Get-RequiredString $provenanceAttestation "scope" "marketplaceProvenance.attestation") "marketplaceProvenance verified attestation must remain scoped to the historical public-cutover release."
+$candidateAttestation = Get-RequiredProperty $marketplaceProvenance.json "candidateAttestation" "marketplaceProvenance"
+Assert-Equal "pending-release-attestation" (Get-RequiredString $candidateAttestation "status" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance current candidate attestation must remain pending before release."
+Assert-Equal "current-candidate" (Get-RequiredString $candidateAttestation "scope" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate attestation scope must identify the current candidate."
+Assert-Equal $vsixSha256 (Get-RequiredString $candidateAttestation "subjectSha256" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate attestation SHA256 must match current VSIX."
+Assert-Equal (Split-Path -Leaf $vsixResolved) (Get-RequiredString $candidateAttestation "subjectName" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate attestation subject name must match current VSIX."
+Assert-Equal ([string]$vsixSize) ([string](Get-RequiredProperty $candidateAttestation "subjectSize" "marketplaceProvenance.candidateAttestation")) "marketplaceProvenance candidate attestation size must match current VSIX."
+Assert-RequiredBooleanTrue $candidateAttestation "preReleaseProperty" "marketplaceProvenance.candidateAttestation"
+Assert-RequiredBooleanFalse $candidateAttestation "liveEvidenceRecorded" "marketplaceProvenance.candidateAttestation"
+Assert-Equal "v0.2.1-beta.1" (Get-RequiredString $candidateAttestation "releaseTag" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate release tag must match."
+$candidateContractEvidence = Get-RequiredProperty $provenanceEvidence "candidateAttestationContract" "marketplaceProvenance.evidence"
+Assert-Equal (Get-RequiredString $candidateContractEvidence "path" "marketplaceProvenance.evidence.candidateAttestationContract") (Get-RequiredString $candidateAttestation "contractPath" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate contract path must match hash-bound evidence."
+Assert-Equal (Get-RequiredString $candidateContractEvidence "sha256" "marketplaceProvenance.evidence.candidateAttestationContract") (Get-RequiredString $candidateAttestation "contractSha256" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate contract SHA256 must match hash-bound evidence."
 $attestationReadiness = Get-RequiredProperty $provenanceAttestation "readiness" "marketplaceProvenance.attestation"
 Assert-Equal "live-attestation-verified" (Get-RequiredString $attestationReadiness "readinessStatus" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation readiness must record live verification."
 Assert-Equal "actions/attest@v4" (Get-RequiredString $attestationReadiness "action" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation action must match the live workflow contract."
@@ -1335,10 +1359,11 @@ Assert-Equal "post-release-asset-digest-verification" (Get-RequiredString $attes
 Assert-RequiredBooleanFalse $attestationReadiness "originalBuildProvenanceClaim" "marketplaceProvenance.attestation.readiness"
 Assert-RequiredBooleanFalse $attestationReadiness "artifactSignatureClaim" "marketplaceProvenance.attestation.readiness"
 Assert-Equal ".github/workflows/attest-release-vsix.yml" (Get-RequiredString $attestationReadiness "workflowPath" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation workflow path must match the live workflow contract."
-Assert-Equal $vsixSha256 (Get-RequiredString $attestationReadiness "subjectSha256" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation subjectSha256 must match current VSIX."
-Assert-Equal (Split-Path -Leaf $vsixResolved) (Get-RequiredString $attestationReadiness "subjectName" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation subjectName must match current VSIX."
-Assert-Equal $vsixRelativePath (Get-RequiredString $attestationReadiness "artifactPath" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation artifactPath must match current VSIX."
-Assert-Equal ([string]$vsixSize) ([string](Get-RequiredProperty $attestationReadiness "artifactSize" "marketplaceProvenance.attestation.readiness")) "marketplaceProvenance attestation artifactSize must match current VSIX."
+$historicalAttestationSubjectName = Get-RequiredString $attestationReadiness "subjectName" "marketplaceProvenance.attestation.readiness"
+$historicalAttestationSubjectSha256 = Get-RequiredString $attestationReadiness "subjectSha256" "marketplaceProvenance.attestation.readiness"
+Assert-Equal "subversionr-win32-x64-0.2.0.vsix" $historicalAttestationSubjectName "marketplaceProvenance historical attestation subject name must remain the public-cutover VSIX."
+Assert-Sha256 $historicalAttestationSubjectSha256 "marketplaceProvenance historical attestation subject SHA256"
+Assert-True ([int64](Get-RequiredProperty $attestationReadiness "artifactSize" "marketplaceProvenance.attestation.readiness") -gt 0) "marketplaceProvenance historical attestation artifact size must be positive."
 Assert-RequiredBooleanTrue $attestationReadiness "repoUrlRecorded" "marketplaceProvenance.attestation.readiness"
 Assert-RequiredBooleanTrue $attestationReadiness "bundleRecorded" "marketplaceProvenance.attestation.readiness"
 Assert-RequiredBooleanTrue $attestationReadiness "attestationUrlRecorded" "marketplaceProvenance.attestation.readiness"
@@ -1352,13 +1377,17 @@ Assert-True ((Get-RequiredString $attestationReadiness "evidenceSha256" "marketp
 Assert-Equal (Get-RequiredString (Get-RequiredProperty $provenanceEvidence "attestationBundle" "marketplaceProvenance.evidence") "path" "marketplaceProvenance.evidence.attestationBundle") (Get-RequiredString $attestationReadiness "bundlePath" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance attestation bundlePath must match the hash-bound bundle evidence."
 Assert-Equal (Get-RequiredString (Get-RequiredProperty $provenanceEvidence "attestationVerification" "marketplaceProvenance.evidence") "path" "marketplaceProvenance.evidence.attestationVerification") (Get-RequiredString $attestationReadiness "verificationResultPath" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance verificationResultPath must match the hash-bound verification evidence."
 Assert-Equal (Get-RequiredString (Get-RequiredProperty $provenanceEvidence "attestationVerification" "marketplaceProvenance.evidence") "sha256" "marketplaceProvenance.evidence.attestationVerification") (Get-RequiredString $attestationReadiness "verificationResultSha256" "marketplaceProvenance.attestation.readiness") "marketplaceProvenance verificationResultSha256 must match the hash-bound verification evidence."
-Add-VerifiedEvidence $marketplaceProvenance "provenance-vsix-hashes-and-live-attestation-current"
+Add-VerifiedEvidence $marketplaceProvenance "current-candidate-vsix-and-pending-contract-plus-historical-live-attestation-hash-bound"
 
 $publicationGaps = Read-EvidenceFile `
   -FileName "subversionr-publication-gaps-$Target.json" `
   -Name "publicationGaps" `
   -ExpectedSchema "subversionr.release.publication-gaps.$Target.v1"
 Assert-VsixArtifactBinding (Get-RequiredProperty (Get-RequiredProperty $publicationGaps.json "artifacts" "publicationGaps") "vsix" "publicationGaps.artifacts") "publicationGaps" $true
+$publicationCandidate = Get-RequiredProperty $publicationGaps.json "currentCandidate" "publicationGaps"
+foreach ($field in @("status", "scope", "releaseTag", "releaseUrl", "subjectName", "subjectSha256", "subjectSize", "preReleaseProperty", "liveEvidenceRecorded", "contractPath", "contractSha256")) {
+  Assert-Equal ([string]$candidateAttestation.$field) ([string]$publicationCandidate.$field) "publicationGaps current candidate $field must match provenance."
+}
 $publicationEvidence = Get-RequiredProperty $publicationGaps.json "evidence" "publicationGaps"
 $script:hashBindings += Assert-HashRecordCurrent `
   -Record (Get-RequiredProperty $publicationEvidence "vsixPackage" "publicationGaps.evidence") `
@@ -1376,7 +1405,7 @@ Assert-Equal $attestationRunUrl (Get-RequiredString $publicationRelease "attesta
 Assert-Equal $attestationUrl (Get-RequiredString $publicationRelease "attestationUrl" "publicationGaps.publicCutover.release") "publicationGaps attestationUrl must match provenance live attestation evidence."
 Assert-Equal (Get-RequiredString $attestationReadiness "evidencePath" "marketplaceProvenance.attestation.readiness") (Get-RequiredString $publicationRelease "attestationEvidencePath" "publicationGaps.publicCutover.release") "publicationGaps attestationEvidencePath must match provenance live attestation evidence."
 Assert-Equal (Get-RequiredString $attestationReadiness "evidenceSha256" "marketplaceProvenance.attestation.readiness") (Get-RequiredString $publicationRelease "attestationEvidenceSha256" "publicationGaps.publicCutover.release") "publicationGaps attestationEvidenceSha256 must match provenance live attestation evidence."
-Add-VerifiedEvidence $publicationGaps "publication-gap-vsix-provenance-hashes-and-live-attestation-current"
+Add-VerifiedEvidence $publicationGaps "current-candidate-vsix-provenance-contract-and-historical-cutover-attestation-separated"
 
 $stateEngineBetaPerformance = Read-EvidenceFile `
   -FileName "subversionr-state-engine-beta-performance-$Target.json" `
@@ -1425,6 +1454,7 @@ $report = [pscustomobject]@{
     size = $vsixSize
     sha256 = $vsixSha256
     extensionEntrypointSha256 = $vsixEntrypointSha256
+    preRelease = $true
   }
   inputs = [pscustomobject]@{
     releaseEvidenceRoot = Get-RepoRelativePath $releaseEvidenceRootResolved
@@ -1443,7 +1473,7 @@ $report = [pscustomobject]@{
     "installed VSIX evidence that records VSIX SHA256 matches the current VSIX bytes",
     "install, upgrade, and rollback fixture evidence records the current extension version and no working-copy mutation",
     "native artifact map, provenance, and publication gaps are bound to the current VSIX package evidence by SHA256",
-    "provenance and publication gaps record the verified live GitHub artifact attestation for the current VSIX subject",
+    "provenance and publication gaps bind the pending current-candidate attestation contract while preserving historical public-cutover attestation evidence separately",
     "installed Source Control UI E2E evidence includes the Beta checkout, update, ignore, lock, changelist, branch, and switch workflow assertions",
     "state-engine Beta performance evidence includes the single-file, event burst, boundary, dirty-generation, restart, and 10k projection scenario assertions",
     "artifact bundle manifest binds the current VSIX, SBOM, NOTICE, release evidence, installed UI artifacts, and CI upload contract",
@@ -1452,6 +1482,7 @@ $report = [pscustomobject]@{
   )
   nonClaims = @(
     "This gate does not prove Marketplace/public install.",
+    "This gate does not claim that the current-candidate release or live GitHub attestation exists.",
     "This gate does not prove VSIX signing.",
     "This gate does not prove previous-stable upgrade or rollback.",
     "This gate does not prove remote/auth/certificate SVN workflows.",

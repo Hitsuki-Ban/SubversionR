@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "schema": "subversionr.release.github-attestation-contract.win32-x64.v1",
+  "status": "pending-release-attestation",
+  "publicReadinessClaim": false,
+  "target": "win32-x64",
+  "release": {
+    "tag": "v0.2.1-beta.1",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.1-beta.1"
+  },
+  "subject": {
+    "name": "subversionr-win32-x64-0.2.1.vsix",
+    "size": 8251718,
+    "sha256": "f4d800baf7db164d3816790853608076395aa542306b3ae8bbba100b8677a753",
+    "preReleaseProperty": true
+  },
+  "attestation": {
+    "provider": "github-artifact-attestations",
+    "action": "actions/attest@v4",
+    "actionDigest": "a1948c3f048ba23858d222213b7c278aabede763",
+    "predicateType": "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+    "predicateSchemaPath": "docs/release/post-release-asset-verification-predicate.v1.schema.json"
+  },
+  "workflow": {
+    "path": ".github/workflows/attest-release-vsix.yml",
+    "runner": "ubuntu-24.04",
+    "trigger": "workflow_dispatch",
+    "requiredPermissions": [
+      "contents: read",
+      "id-token: write",
+      "attestations: write"
+    ]
+  },
+  "verificationPolicy": {
+    "repository": "Hitsuki-Ban/SubversionR",
+    "signerWorkflow": "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml",
+    "predicateType": "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
+    "bundleRequired": true,
+    "sourceRefRequired": true,
+    "sourceDigestRequired": true,
+    "signerDigestRequired": true,
+    "denySelfHostedRunners": true,
+    "format": "json"
+  },
+  "nonClaims": [
+    "This pending contract does not claim that the GitHub release exists.",
+    "This pending contract does not claim that a live GitHub artifact attestation exists for the candidate.",
+    "This pending contract does not claim Marketplace publication, public install, artifact signing, source-to-binary provenance, or public release readiness."
+  ]
+}

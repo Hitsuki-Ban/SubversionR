@@ -41,21 +41,21 @@ $tempRoot = Join-Path $repoRoot "target\tests\release-live-attestation-scripts\$
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
-  $subjectPath = Join-Path $tempRoot "subversionr-win32-x64-0.2.0.vsix"
+  $subjectPath = Join-Path $tempRoot "subversionr-win32-x64-0.2.1.vsix"
   [System.IO.File]::WriteAllBytes($subjectPath, [byte[]](0x53, 0x75, 0x62, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x52))
   $subjectSha256 = Get-Sha256 $subjectPath
-  $contractPath = Join-Path $tempRoot "github-attestation-contract.win32-x64.json"
+  $contractPath = Join-Path $tempRoot "github-attestation-candidate-contract.win32-x64.json"
   $contract = [pscustomobject]@{
     schemaVersion = 1
     schema = "subversionr.release.github-attestation-contract.win32-x64.v1"
     publicReadinessClaim = $false
     target = "win32-x64"
     release = [pscustomobject]@{
-      tag = "v0.2.0-beta.1"
-      url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1"
+      tag = "v0.2.1-beta.1"
+      url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.1-beta.1"
     }
     subject = [pscustomobject]@{
-      name = "subversionr-win32-x64-0.2.0.vsix"
+      name = "subversionr-win32-x64-0.2.1.vsix"
       size = (Get-Item -LiteralPath $subjectPath).Length
       sha256 = $subjectSha256
     }
@@ -90,7 +90,7 @@ try {
     -Target win32-x64 `
     -ContractPath $contractPath `
     -SubjectPath $subjectPath `
-    -ReleaseTag v0.2.0-beta.1
+    -ReleaseTag v0.2.1-beta.1
   if ($LASTEXITCODE -ne 0) {
     throw "verify-release-attestation-subject.ps1 failed with exit code $LASTEXITCODE."
   }
@@ -100,7 +100,7 @@ try {
     -Target win32-x64 `
     -ContractPath $contractPath `
     -SubjectPath $subjectPath `
-    -ReleaseTag v0.2.0-beta.1 `
+    -ReleaseTag v0.2.1-beta.1 `
     -OutputPath $predicatePath
   if ($LASTEXITCODE -ne 0) {
     throw "generate-post-release-asset-verification-predicate.ps1 failed with exit code $LASTEXITCODE."
@@ -143,7 +143,7 @@ try {
         statement = [pscustomobject]@{
           subject = @(
             [pscustomobject]@{
-              name = "subversionr-win32-x64-0.2.0.vsix"
+              name = "subversionr-win32-x64-0.2.1.vsix"
               digest = [pscustomobject]@{ sha256 = $subjectSha256 }
             }
           )
@@ -158,7 +158,7 @@ try {
     -Target win32-x64 `
     -ContractPath $contractPath `
     -SubjectPath $subjectPath `
-    -ReleaseTag v0.2.0-beta.1 `
+    -ReleaseTag v0.2.1-beta.1 `
     -BundlePath $bundlePath `
     -VerificationResultPath $verificationResultPath `
     -RunId 456 `
@@ -201,7 +201,7 @@ try {
       -Target win32-x64 `
       -ContractPath $badContractPath `
       -SubjectPath $subjectPath `
-      -ReleaseTag v0.2.0-beta.1
+      -ReleaseTag v0.2.1-beta.1
   } "SHA256 must match current bytes" "Subject verification should reject SHA256 drift."
 
   $badContractPath = Join-Path $tempRoot "bad-boolean-contract.json"
@@ -213,7 +213,7 @@ try {
       -Target win32-x64 `
       -ContractPath $badContractPath `
       -SubjectPath $subjectPath `
-      -ReleaseTag v0.2.0-beta.1
+      -ReleaseTag v0.2.1-beta.1
   } "must be a JSON boolean" "Subject verification should reject string boolean values."
 
   $badVerificationPath = Join-Path $tempRoot "bad-verification.json"
@@ -225,7 +225,7 @@ try {
       -Target win32-x64 `
       -ContractPath $contractPath `
       -SubjectPath $subjectPath `
-      -ReleaseTag v0.2.0-beta.1 `
+      -ReleaseTag v0.2.1-beta.1 `
       -BundlePath $bundlePath `
       -VerificationResultPath $badVerificationPath `
       -RunId 456 `
@@ -248,7 +248,7 @@ try {
       -Target win32-x64 `
       -ContractPath $contractPath `
       -SubjectPath $subjectPath `
-      -ReleaseTag v0.2.0-beta.1 `
+      -ReleaseTag v0.2.1-beta.1 `
       -BundlePath $bundlePath `
       -VerificationResultPath $overclaimVerificationPath `
       -RunId 456 `
@@ -271,7 +271,7 @@ try {
       -Target win32-x64 `
       -ContractPath $contractPath `
       -SubjectPath $subjectPath `
-      -ReleaseTag v0.2.0-beta.1 `
+      -ReleaseTag v0.2.1-beta.1 `
       -BundlePath $bundlePath `
       -VerificationResultPath $mismatchedBundleVerificationPath `
       -RunId 456 `
@@ -294,7 +294,11 @@ try {
       "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
       "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-      "subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix",
+      "docs/release/github-attestation-candidate-contract.win32-x64.json",
+      'if ($env:GITHUB_REPOSITORY -ne "Hitsuki-Ban/SubversionR")',
+      'if ($env:GITHUB_REF -ne "refs/heads/main")',
+      'if ($env:GITHUB_EVENT_NAME -ne "workflow_dispatch")',
+      "subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.1.vsix",
       "generate-post-release-asset-verification-predicate.ps1",
       "predicate-type: https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1",
       "predicate-path: target/release-attestation/win32-x64/post-release-asset-verification-predicate.json",

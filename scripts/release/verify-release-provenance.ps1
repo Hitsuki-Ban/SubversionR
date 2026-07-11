@@ -157,9 +157,13 @@ Assert-Equal "False" ([string]$report.publicReadinessClaim) "publicReadinessClai
 Assert-Equal "True" ([string]$report.localPreflightOnly) "localPreflightOnly must remain true."
 Assert-Equal "hitsuki-ban.subversionr" ([string]$report.extension.id) "Extension identity must remain hitsuki-ban.subversionr."
 Assert-Equal "SubversionR" ([string]$report.extension.displayName) "Extension display name should remain SubversionR."
+Assert-RequiredBooleanTrue $report.extension "preRelease" "Extension"
 Assert-Equal "False" ([string]$report.repository.remoteUrlRecorded) "Repository remote URL must not be recorded."
 Assert-Equal "unsigned" ([string]$report.signing.status) "Signing status must remain unsigned in this gate."
 Assert-Equal "verified" ([string]$report.attestation.status) "Attestation status must record live verification."
+Assert-Equal "historical-public-cutover-release" ([string]$report.attestation.scope) "Verified attestation must remain scoped to the historical public-cutover release."
+Assert-Equal "pending-release-attestation" ([string]$report.candidateAttestation.status) "Current candidate attestation must remain pending before release."
+Assert-Equal "current-candidate" ([string]$report.candidateAttestation.scope) "Candidate attestation scope must identify the current candidate."
 Assert-Equal "not-published" ([string]$report.marketplace.status) "Marketplace status must remain not-published in this gate."
 Assert-Equal "not-proven" ([string]$report.previousStableRollback.status) "Previous-stable rollback status must remain not-proven in this gate."
 Assert-Equal "False" ([string]$report.marketplaceMetadata.publicationReady) "Marketplace metadata preflight must not claim publication readiness."
@@ -181,8 +185,9 @@ foreach ($traceId in @("SEC-015", "MIG-009", "MIG-012")) {
 }
 foreach ($nonClaim in @(
     "This gate does not prove VSIX signing.",
-    "This gate records live GitHub artifact attestation publication and verification but does not claim artifact signing.",
-    "This post-release attestation does not prove the original VSIX source-to-binary build provenance.",
+    "This gate records the current candidate attestation contract as pending; it does not claim current-candidate live attestation.",
+    "This gate preserves historical GitHub artifact attestation publication and verification without applying it to the current candidate.",
+    "The historical post-release attestation does not prove the current VSIX source-to-binary build provenance.",
     "This gate does not prove Marketplace publication or public install.",
     "This gate does not prove previous-stable upgrade or rollback.",
     "This gate does not prove installed Source Control DOM/accessibility-tree/pixel E2E.",
@@ -210,6 +215,15 @@ Assert-Equal ([string]$report.artifacts.vsix.sha256) (Get-Sha256 $vsixPath) "VSI
 $vsixEvidencePath = Assert-File ([string]$report.artifacts.vsix.evidencePath) "VSIX evidence"
 Assert-Equal ([string]$report.artifacts.vsix.evidenceSha256) (Get-Sha256 $vsixEvidencePath) "VSIX evidence SHA256 must match current bytes."
 
+$candidateAttestation = $report.candidateAttestation
+Assert-Equal ([string]$report.artifacts.vsix.sha256) (Assert-RequiredString $candidateAttestation "subjectSha256" "Candidate attestation") "Candidate attestation SHA256 must match the exact current VSIX."
+Assert-Equal (Split-Path -Leaf $vsixPath) (Assert-RequiredString $candidateAttestation "subjectName" "Candidate attestation") "Candidate attestation subject name must match the current VSIX."
+Assert-Equal ([int64](Get-Item -LiteralPath $vsixPath).Length) ([int64]$candidateAttestation.subjectSize) "Candidate attestation size must match the exact current VSIX."
+Assert-RequiredBooleanTrue $candidateAttestation "preReleaseProperty" "Candidate attestation"
+Assert-RequiredBooleanFalse $candidateAttestation "liveEvidenceRecorded" "Candidate attestation"
+Assert-RequiredBooleanTrue $candidateAttestation "claimAllowed" "Candidate attestation"
+Assert-Equal 1 @($candidateAttestation.blockers).Count "Candidate attestation must retain only the release/live-attestation blocker."
+
 if (-not (Test-HasProperty $report.attestation "readiness")) {
   throw "Live attestation evidence contract must be present."
 }
@@ -228,10 +242,9 @@ Assert-Equal "subversionr.release.post-release-asset-verification-predicate.v1" 
 Assert-Equal "post-release-asset-digest-verification" (Assert-RequiredString $attestationReadiness "predicateClaim" "Attestation readiness") "Attestation readiness signed predicate claim should match."
 Assert-RequiredBooleanFalse $attestationReadiness "originalBuildProvenanceClaim" "Attestation readiness"
 Assert-RequiredBooleanFalse $attestationReadiness "artifactSignatureClaim" "Attestation readiness"
-Assert-Equal $vsixFileName (Assert-RequiredString $attestationReadiness "subjectName" "Attestation readiness") "Attestation readiness subjectName must match the VSIX file name."
-Assert-Equal ([string]$report.artifacts.vsix.sha256) (Assert-RequiredString $attestationReadiness "subjectSha256" "Attestation readiness") "Attestation readiness subjectSha256 must match the exact VSIX SHA256."
-Assert-Equal $vsixRelativePath (Assert-RequiredString $attestationReadiness "artifactPath" "Attestation readiness") "Attestation readiness artifactPath must match the VSIX relative path."
-Assert-Equal $vsixSize ([int64]$attestationReadiness.artifactSize) "Attestation readiness artifactSize must match the exact VSIX size."
+Assert-True ((Assert-RequiredString $attestationReadiness "subjectName" "Attestation readiness").EndsWith(".vsix", [System.StringComparison]::OrdinalIgnoreCase)) "Historical attestation subjectName must identify a VSIX."
+Assert-True ((Assert-RequiredString $attestationReadiness "subjectSha256" "Attestation readiness") -match '^[a-f0-9]{64}$') "Historical attestation subjectSha256 must be recorded."
+Assert-True ([int64]$attestationReadiness.artifactSize -gt 0) "Historical attestation artifactSize must be positive."
 Assert-Equal ".github/workflows/attest-release-vsix.yml" (Assert-RequiredString $attestationReadiness "workflowPath" "Attestation readiness") "Attestation readiness workflowPath should name the live attestation workflow."
 $verificationCommand = Assert-RequiredString $attestationReadiness "verificationCommand" "Attestation readiness"
 Assert-True ($verificationCommand.Contains("--bundle $($attestationReadiness.bundlePath)")) "Attestation verificationCommand should verify the exact source-controlled bundle."
@@ -274,22 +287,27 @@ Assert-HashRecord $report.evidence.pnpmLock "pnpm lock"
 Assert-HashRecord $report.evidence.cargoLock "Cargo lock"
 Assert-HashRecord $report.evidence.sbom "SBOM"
 Assert-HashRecord $report.evidence.notice "NOTICE"
+Assert-HashRecord $report.evidence.candidateAttestationContract "Candidate attestation contract"
 Assert-HashRecord $report.evidence.attestationContract "Attestation contract"
 Assert-HashRecord $report.evidence.liveAttestation "Live attestation evidence"
 Assert-HashRecord $report.evidence.attestationBundle "Attestation bundle"
 Assert-HashRecord $report.evidence.attestationVerification "Attestation verification result"
+Assert-Equal "subversionr.release.github-attestation-contract.win32-x64.v1" (Assert-RequiredString $report.evidence.candidateAttestationContract "schema" "Candidate attestation contract evidence") "Candidate attestation contract schema must be bound."
 Assert-Equal "subversionr.release.github-attestation-contract.win32-x64.v1" (Assert-RequiredString $report.evidence.attestationContract "schema" "Attestation contract evidence") "Attestation contract schema must be bound."
 Assert-Equal "subversionr.release.live-github-attestation.win32-x64.v1" (Assert-RequiredString $report.evidence.liveAttestation "schema" "Live attestation evidence") "Live attestation schema must be bound."
 Assert-Equal ([string]$report.evidence.liveAttestation.path) (Assert-RequiredString $attestationReadiness "evidencePath" "Attestation readiness") "Attestation readiness must bind the live evidence path."
 Assert-Equal ([string]$report.evidence.liveAttestation.sha256) (Assert-RequiredString $attestationReadiness "evidenceSha256" "Attestation readiness") "Attestation readiness must bind the live evidence SHA256."
 
+$candidateAttestationContractPath = [string]$report.evidence.candidateAttestationContract.path
 $attestationContractPath = [string]$report.evidence.attestationContract.path
 $liveAttestationPath = [string]$report.evidence.liveAttestation.path
 if (Test-IsPathWithin -Path $evidenceResolved -Root $releaseEvidenceRoot) {
+  $expectedCandidateAttestationContractPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "docs\release\github-attestation-candidate-contract.win32-x64.json"))
   $expectedAttestationContractPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "docs\release\github-attestation-contract.win32-x64.json"))
   $expectedLiveAttestationPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "docs\release\github-attestation-evidence.win32-x64.json"))
   $expectedAttestationBundlePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "docs\release\github-attestation-bundle.win32-x64.json"))
   $expectedAttestationVerificationPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "docs\release\github-attestation-verification.win32-x64.json"))
+  Assert-Equal $expectedCandidateAttestationContractPath (Get-RepoAbsolutePath $candidateAttestationContractPath) "Production provenance must bind the source-controlled candidate attestation contract."
   Assert-Equal $expectedAttestationContractPath (Get-RepoAbsolutePath $attestationContractPath) "Production provenance must bind the source-controlled attestation contract."
   Assert-Equal $expectedLiveAttestationPath (Get-RepoAbsolutePath $liveAttestationPath) "Production provenance must bind the source-controlled live attestation evidence."
   Assert-Equal $expectedAttestationBundlePath (Get-RepoAbsolutePath ([string]$report.evidence.attestationBundle.path)) "Production provenance must bind the source-controlled attestation bundle."
@@ -297,11 +315,18 @@ if (Test-IsPathWithin -Path $evidenceResolved -Root $releaseEvidenceRoot) {
 }
 else {
   $fixtureRoot = Split-Path -Parent (Split-Path -Parent $evidenceResolved)
+  Assert-True (Test-IsPathWithin -Path (Get-RepoAbsolutePath $candidateAttestationContractPath) -Root $fixtureRoot) "Test provenance must bind its isolated candidate attestation contract fixture."
   Assert-True (Test-IsPathWithin -Path (Get-RepoAbsolutePath $attestationContractPath) -Root $fixtureRoot) "Test provenance must bind its isolated attestation contract fixture."
   Assert-True (Test-IsPathWithin -Path (Get-RepoAbsolutePath $liveAttestationPath) -Root $fixtureRoot) "Test provenance must bind its isolated live attestation fixture."
   Assert-True (Test-IsPathWithin -Path (Get-RepoAbsolutePath ([string]$report.evidence.attestationBundle.path)) -Root $fixtureRoot) "Test provenance must bind its isolated attestation bundle fixture."
   Assert-True (Test-IsPathWithin -Path (Get-RepoAbsolutePath ([string]$report.evidence.attestationVerification.path)) -Root $fixtureRoot) "Test provenance must bind its isolated attestation verification fixture."
 }
+$candidateAttestationContract = Get-Content -Raw -LiteralPath (Assert-File $candidateAttestationContractPath "Candidate attestation contract source") | ConvertFrom-Json
+Assert-Equal "pending-release-attestation" ([string]$candidateAttestationContract.status) "Candidate attestation contract source must remain pending before release."
+Assert-RequiredBooleanFalse $candidateAttestationContract "publicReadinessClaim" "Candidate attestation contract source"
+Assert-RequiredBooleanTrue $candidateAttestationContract.subject "preReleaseProperty" "Candidate attestation contract source subject"
+Assert-Equal ([string]$candidateAttestation.contractSha256) (Get-Sha256 (Assert-File $candidateAttestationContractPath "Candidate attestation contract source")) "Candidate attestation report hash must match its source contract."
+& (Join-Path $PSScriptRoot "verify-release-attestation-subject.ps1") -Target $Target -ContractPath $candidateAttestationContractPath -SubjectPath $vsixPath -ReleaseTag ([string]$candidateAttestationContract.release.tag)
 $liveAttestation = Get-Content -Raw -LiteralPath (Assert-File $liveAttestationPath "Live attestation source") | ConvertFrom-Json
 Assert-Equal "live-attestation-verified" ([string]$liveAttestation.status) "Live attestation source must be verified."
 Assert-RequiredBooleanFalse $liveAttestation "publicReadinessClaim" "Live attestation source"
@@ -338,32 +363,12 @@ Assert-Equal 1 $bundleObjects.Count "Attestation bundle must contain exactly one
 Assert-Equal 1 $recordedVerificationResults.Count "Recorded attestation verification must contain exactly one result."
 Assert-Equal (ConvertTo-CanonicalJson $bundleObjects[0]) (ConvertTo-CanonicalJson $recordedVerificationResults[0].attestation.bundle) "Recorded verification must contain the exact source-controlled bundle."
 
-if ($null -eq (Get-Command gh -ErrorAction SilentlyContinue)) {
-  throw "gh is required to cryptographically verify the source-controlled attestation bundle."
-}
-$liveVerificationOutput = @(
-  & gh attestation verify $vsixPath `
-    -R ([string]$liveAttestation.verification.repository) `
-    --bundle $bundlePath `
-    --signer-workflow ([string]$liveAttestation.verification.signerWorkflow) `
-    --signer-digest ([string]$liveAttestation.workflow.headSha) `
-    --source-ref ([string]$liveAttestation.workflow.sourceRef) `
-    --source-digest ([string]$liveAttestation.workflow.headSha) `
-    --predicate-type ([string]$liveAttestation.verification.predicateType) `
-    --deny-self-hosted-runners `
-    --format json
-)
-if ($LASTEXITCODE -ne 0) {
-  throw "gh attestation verify failed for the source-controlled bundle with exit code $LASTEXITCODE."
-}
-$liveVerificationResults = @(($liveVerificationOutput -join [Environment]::NewLine) | ConvertFrom-Json)
-Assert-Equal 1 $liveVerificationResults.Count "Live bundle verification must return exactly one result."
-$verifiedResult = $liveVerificationResults[0]
-Assert-Equal (ConvertTo-CanonicalJson $bundleObjects[0]) (ConvertTo-CanonicalJson $verifiedResult.attestation.bundle) "Live verification must return the exact source-controlled bundle."
+$verifiedResult = $recordedVerificationResults[0]
+Assert-Equal (ConvertTo-CanonicalJson $bundleObjects[0]) (ConvertTo-CanonicalJson $verifiedResult.attestation.bundle) "Recorded historical verification must contain the exact source-controlled bundle."
 $verifiedStatement = $verifiedResult.verificationResult.statement
 $verifiedSubjects = @($verifiedStatement.subject | Where-Object { [string]$_.name -eq [string]$liveAttestation.subject.name -and [string]$_.digest.sha256 -eq [string]$liveAttestation.subject.sha256 })
-Assert-Equal 1 $verifiedSubjects.Count "Live verification must bind the exact released VSIX subject."
-Assert-Equal ([string]$liveAttestation.verification.predicateType) ([string]$verifiedStatement.predicateType) "Live verification predicate type must match the policy."
+Assert-Equal 1 $verifiedSubjects.Count "Recorded historical verification must bind the exact released VSIX subject."
+Assert-Equal ([string]$liveAttestation.verification.predicateType) ([string]$verifiedStatement.predicateType) "Recorded historical verification predicate type must match the policy."
 $verifiedPredicate = $verifiedStatement.predicate
 Assert-Equal "subversionr.release.post-release-asset-verification-predicate.v1" ([string]$verifiedPredicate.schema) "Live verification signed predicate schema must match."
 Assert-Equal "post-release-asset-digest-verification" ([string]$verifiedPredicate.claim) "Live verification signed predicate claim must match."
