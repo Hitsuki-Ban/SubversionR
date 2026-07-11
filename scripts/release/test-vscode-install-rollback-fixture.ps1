@@ -141,8 +141,8 @@ function Read-PackageContract([string]$PackageRoot, [string]$Name) {
   if ($packageJson.publisher -ne "hitsuki-ban") {
     throw "Extension publisher must be hitsuki-ban."
   }
-  if ($packageJson.displayName -ne "SubversionR") {
-    throw "Extension displayName must be SubversionR."
+  if ($packageJson.displayName -ne "SVN-R") {
+    throw "Extension Marketplace displayName must be SVN-R."
   }
   Assert-SemVer -Version $packageJson.version -Name "$Name package version"
   if ($manifest.extension.version -ne $packageJson.version) {

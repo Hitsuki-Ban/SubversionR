@@ -237,7 +237,7 @@ $extensionName = [string](Get-RequiredProperty $extensionPackage "name" "Extensi
 $extensionPublisher = [string](Get-RequiredProperty $extensionPackage "publisher" "Extension package")
 $extensionId = "$extensionPublisher.$extensionName"
 Assert-Equal "hitsuki-ban.subversionr" $extensionId "Extension package identity must be hitsuki-ban.subversionr."
-Assert-Equal "SubversionR" ([string](Get-RequiredProperty $extensionPackage "displayName" "Extension package")) "Extension display name should remain SubversionR."
+Assert-Equal "SVN-R" ([string](Get-RequiredProperty $extensionPackage "displayName" "Extension package")) "Extension display name should match the Marketplace listing."
 Assert-Equal "MIT" ([string](Get-RequiredProperty $extensionPackage "license" "Extension package")) "Extension package license should remain MIT."
 Assert-Equal "./dist/extension.js" ([string](Get-RequiredProperty $extensionPackage "main" "Extension package")) "Extension package main should point to the compiled entrypoint."
 

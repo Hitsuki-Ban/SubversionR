@@ -1947,11 +1947,10 @@ function isFileNotFoundError(error: unknown): boolean {
 }
 
 function diagnosticsContext(context: vscode.ExtensionContext): DiagnosticsContext {
-  const packageJson = context.extension.packageJSON as { displayName?: unknown; name?: unknown };
   return {
     generatedAt: new Date().toISOString(),
     extension: {
-      name: typeof packageJson.displayName === "string" ? packageJson.displayName : "SubversionR",
+      name: "SubversionR",
       version: extensionVersion(context),
     },
     vscode: {

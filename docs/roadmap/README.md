@@ -6,7 +6,7 @@ SubversionR is developed in the public repository with milestone history, releas
 
 After the Windows Beta local workflow closure, installed VSIX evidence expansion, Beta candidate consistency gate, and security evidence reconciliation, the main implementation focus remains Windows `win32-x64` Beta packaging readiness. New work should prioritize semantic hardening of the Beta candidate verifier, installed VSIX negative/failure-flow breadth for the implemented local workflows, and claim/evidence alignment before adding more publication-only preflight slices or post-Beta SVN features.
 
-The current publication candidate is `0.2.1`: its deterministic VSIX is packaged with the VS Code pre-release property and bound by the pending `v0.2.1-beta.1` attestation contract. Historical `0.2.0` release and attestation evidence remains scoped to the public cutover. The `0.2.1` GitHub release, live attestation, Marketplace publication/public install, signing, previous-stable rollback, and public readiness remain separate gates until their workflows produce exact evidence.
+The current publication candidate is `0.2.2`: its deterministic VSIX is packaged with the VS Code pre-release property and bound by the pending `v0.2.2-beta.1` attestation contract. Historical `0.2.0` public-cutover evidence and the released/live-attested `0.2.1` candidate remain separate from the current contract; the 0.2.1 Marketplace attempt reached the publish call but was rejected because its display name was permanently reserved by a deleted extension. The `0.2.2` GitHub release, live attestation, Marketplace publication/public install, signing, previous-stable rollback, and public readiness remain separate gates until their workflows produce exact evidence.
 
 ## Windows Beta Closure
 

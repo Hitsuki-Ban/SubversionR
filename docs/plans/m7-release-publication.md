@@ -396,10 +396,23 @@ Issue [#20](https://github.com/Hitsuki-Ban/SubversionR/issues/20) replaces the b
 - VSIX ZIP timestamps and entry ordering are normalized so repeated packaging of identical inputs produces identical bytes;
 - issue [#22](https://github.com/Hitsuki-Ban/SubversionR/issues/22) makes the MSVC Release bridge deterministic with `/Brepro` and rejects bridge output without `IMAGE_DEBUG_TYPE_REPRO` before packaging;
 - issue [#24](https://github.com/Hitsuki-Ban/SubversionR/issues/24) applies the same deterministic linker policy to the Windows MSVC Rust daemon, rejects ambient Rust flag overrides, and validates the resulting PE before packaging;
-- `docs/release/github-attestation-candidate-contract.win32-x64.json` binds `v0.2.1-beta.1`, size `8251798`, SHA256 `13dac1f5faadff04e414d413fe4306309889b95bd03c108e42d411bc4b6fc936`, and status `pending-release-attestation`;
+- the released `v0.2.1-beta.1` asset is 8,251,798 bytes with SHA256 `13dac1f5faadff04e414d413fe4306309889b95bd03c108e42d411bc4b6fc936` and has verified live GitHub attestation `34858009`;
 - provenance, publication gaps, and Beta-G bind that current candidate contract while retaining the `v0.2.0-beta.1` release and attestation only as historical public-cutover evidence;
 - the attestation workflow creates and verifies the current live attestation after the release exists, and the publish workflow independently verifies that live attestation against its own public `main` workflow SHA before Azure login; and
 - `docs/release/marketplace-pre-release-owner-exception-0.2.1.md` records the exact #20/#22/#24 owner authorization. `publicReadinessClaim` remains false throughout the candidate, attestation, and publication evidence chain.
+
+The 0.2.1 Marketplace workflow reached the exact `vsce publish` call after its release, pre-release property, live attestation, Entra variables, and federated login were verified. Marketplace rejected the display name `SubversionR` because a deleted pre-governance extension permanently reserved it, so no 0.2.1 Marketplace publication evidence was recorded.
+
+## 0.2.2 Marketplace Display Name Alignment
+
+Issue [#26](https://github.com/Hitsuki-Ban/SubversionR/issues/26) preserves the product name while aligning the package metadata with the existing live listing:
+
+- root and extension versions are `0.2.2`, and the exact Marketplace package `displayName` is `SVN-R`;
+- SubversionR remains the product and brand name in README, diagnostics, SBOM, NOTICE, and Source Control UI surfaces;
+- the extension id remains `hitsuki-ban.subversionr`, with no command, protocol, or compatibility aliases;
+- `docs/release/github-attestation-candidate-contract.win32-x64.json` binds the pending `v0.2.2-beta.1` subject at 8,251,930 bytes with SHA256 `47d6d9718614bb2e81706af2096e7387fadeeec34db7d6867c3233c8206dc378`;
+- `docs/release/marketplace-pre-release-owner-exception-0.2.2.md` scopes the one automated publication authorization to the exact 0.2.2 bytes; and
+- release, live attestation, Marketplace publication/public install, signing, previous-stable rollback, and public readiness remain separate gates.
 
 ## M7l1 Implemented Slice
 

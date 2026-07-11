@@ -104,7 +104,7 @@ function Write-PackageManifest([string]$PackageRoot, [string]$Target, [string]$V
     configuration = "Release"
     extension = [pscustomobject]@{
       id = "subversionr"
-      displayName = "SubversionR"
+      displayName = "SVN-R"
       version = $Version
     }
     resourceRoot = "resources/backend/$Target"
@@ -132,7 +132,7 @@ function New-StagedPackageFixture([string]$PackageRoot, [string]$Version) {
   @"
 {
   "name": "subversionr",
-  "displayName": "SubversionR",
+  "displayName": "SVN-R",
   "version": "$Version",
   "publisher": "hitsuki-ban",
   "private": true,

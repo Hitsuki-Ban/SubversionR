@@ -448,17 +448,16 @@ function Invoke-RequirementEvidenceRuleChecks() {
     Assert-RequirementEvidenceStatus $requirementsEvidence $id "blocked"
   }
   foreach ($id in @("SEC-015", "MIG-010", "MIG-012")) {
-    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.1.md"
+    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.2.md"
   }
-  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.1.md"
+  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.2.md"
   Assert-Terms $marketplaceOwnerException @(
-    "# Marketplace 0.2.1 Pre-release Owner Exception",
-    "public issues [#20]",
-    "[#22]",
-    "[#24]",
-    'release tag: `v0.2.1-beta.1`',
-    'asset name: `subversionr-win32-x64-0.2.1.vsix`',
-    "13dac1f5faadff04e414d413fe4306309889b95bd03c108e42d411bc4b6fc936",
+    "# Marketplace 0.2.2 Pre-release Owner Exception",
+    "public issues [#14]",
+    "[#26]",
+    'release tag: `v0.2.2-beta.1`',
+    'asset name: `subversionr-win32-x64-0.2.2.vsix`',
+    "47d6d9718614bb2e81706af2096e7387fadeeec34db7d6867c3233c8206dc378",
     '`SEC-015`, `MIG-010`, and `MIG-012`',
     "It cannot transfer to different bytes, another tag, or a later version",
     "does not claim public release readiness"
@@ -6678,7 +6677,7 @@ Assert-Terms $releaseGates @(
   "explicit CI upload allowlist",
   "subversionr-win32-x64-beta-candidate",
   "actions/upload-artifact@v7",
-  'does not claim the `0.2.1` release or live attestation exists',
+  'does not claim the `0.2.2` release or live attestation exists',
   "coverage-guided fuzzing"
 ) "Beta-G candidate evidence release gate documentation"
 Assert-Terms $m7Plan @(
@@ -7058,7 +7057,7 @@ Assert-Terms $m7Plan @(
   "pnpm release:verify-publication-gaps:win32-x64",
   "pnpm release:test-marketplace-publication-scripts",
   "subversionr.release.marketplace-publication.win32-x64.v1",
-  "docs/release/marketplace-pre-release-owner-exception-0.2.1.md",
+  "docs/release/marketplace-pre-release-owner-exception-0.2.2.md",
   "docs/release/github-attestation-candidate-contract.win32-x64.json",
   "docs/release/marketplace-identity-bootstrap-evidence.json",
   "docs/release/marketplace-publisher-authorization-evidence.json",

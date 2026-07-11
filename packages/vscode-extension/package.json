@@ -1,8 +1,8 @@
 {
   "name": "subversionr",
-  "displayName": "SubversionR",
+  "displayName": "SVN-R",
   "description": "%extension.description%",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "hitsuki-ban",
   "repository": {
     "type": "git",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- Includes all product content introduced in 0.2.1.
+- Aligns the Marketplace display name with the existing `hitsuki-ban.subversionr` listing as `SVN-R` while retaining SubversionR as the product and brand name.
+- Avoids the permanently reserved `SubversionR` Marketplace name left by a deleted pre-governance extension.
+- Keeps the extension identity, command identities, pre-release packaging, and public claim boundary unchanged.
+
 ## 0.2.1
 
 - Includes all product content introduced in 0.2.0.
