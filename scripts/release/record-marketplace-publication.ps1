@@ -47,7 +47,9 @@ param(
   [string]$EventName,
 
   [Parameter(Mandatory = $true)]
-  [string]$OutputPath
+  [string]$OutputPath,
+
+  [switch]$ValidateOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -154,38 +156,40 @@ $outputResolved = Assert-OutputPath $OutputPath
 
 $contract = Get-Content -Raw -LiteralPath $contractResolved | ConvertFrom-Json
 $verificationResults = @(Get-Content -Raw -LiteralPath $verificationResolved | ConvertFrom-Json)
-if ($verificationResults.Count -ne 1) {
-  throw "AttestationVerificationResultPath must contain exactly one verified attestation."
+if ($verificationResults.Count -lt 1) {
+  throw "AttestationVerificationResultPath must contain at least one verified attestation."
 }
-$verifiedDetails = Get-RequiredProperty $verificationResults[0] "verificationResult" "Attestation verification result"
-$verifiedTimestamps = @(Get-RequiredProperty $verifiedDetails "verifiedTimestamps" "Attestation verification result details")
-if ($verifiedTimestamps.Count -lt 1) {
-  throw "Attestation verification result must contain at least one verified timestamp."
-}
-
-$statement = Get-RequiredProperty $verifiedDetails "statement" "Attestation verification result details"
-$verifiedSubjects = @(Get-RequiredProperty $statement "subject" "Attestation verification statement")
-if ($verifiedSubjects.Count -ne 1) {
-  throw "Attestation verification result must contain exactly one subject."
-}
-$verifiedSubject = $verifiedSubjects[0]
-Assert-Equal ([string]$contract.subject.name) ([string](Get-RequiredProperty $verifiedSubject "name" "Attestation verification subject")) "Attestation verification subject name must match."
-$verifiedDigest = Get-RequiredProperty $verifiedSubject "digest" "Attestation verification subject"
-Assert-Equal ([string]$contract.subject.sha256) ([string](Get-RequiredProperty $verifiedDigest "sha256" "Attestation verification subject digest")) "Attestation verification subject SHA256 must match."
-Assert-Equal ([string]$contract.verificationPolicy.predicateType) ([string](Get-RequiredProperty $statement "predicateType" "Attestation verification statement")) "Attestation verification predicate type must match."
-
-$certificate = Get-RequiredProperty (Get-RequiredProperty $verifiedDetails "signature" "Attestation verification result details") "certificate" "Attestation verification signature"
 $expectedSignerIdentity = "https://github.com/$($contract.verificationPolicy.signerWorkflow)@refs/heads/main"
-Assert-Equal $expectedSignerIdentity ([string](Get-RequiredProperty $certificate "subjectAlternativeName" "Attestation verification certificate")) "Attestation verification signer identity must match."
-Assert-Equal ([string]$contract.verificationPolicy.repository) ([string](Get-RequiredProperty $certificate "githubWorkflowRepository" "Attestation verification certificate")) "Attestation verification repository must match."
-Assert-Equal "workflow_dispatch" ([string](Get-RequiredProperty $certificate "githubWorkflowTrigger" "Attestation verification certificate")) "Attestation verification trigger must match."
-Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $certificate "githubWorkflowRef" "Attestation verification certificate")) "Attestation verification signer ref must be public main."
-Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "githubWorkflowSHA" "Attestation verification certificate")) "Attestation verification signer SHA must match the publication commit."
-Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "buildSignerDigest" "Attestation verification certificate")) "Attestation verification signer digest must match the publication commit."
-Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $certificate "sourceRepositoryRef" "Attestation verification certificate")) "Attestation verification source ref must be public main."
-Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "sourceRepositoryDigest" "Attestation verification certificate")) "Attestation verification source digest must match the publication commit."
-Assert-Equal "github-hosted" ([string](Get-RequiredProperty $certificate "runnerEnvironment" "Attestation verification certificate")) "Attestation verification runner must be GitHub-hosted."
-Assert-Equal "public" ([string](Get-RequiredProperty $certificate "sourceRepositoryVisibilityAtSigning" "Attestation verification certificate")) "Attestation verification source visibility must be public."
+foreach ($verificationResult in $verificationResults) {
+  $verifiedDetails = Get-RequiredProperty $verificationResult "verificationResult" "Attestation verification result"
+  $verifiedTimestamps = @(Get-RequiredProperty $verifiedDetails "verifiedTimestamps" "Attestation verification result details")
+  if ($verifiedTimestamps.Count -lt 1) {
+    throw "Attestation verification result must contain at least one verified timestamp."
+  }
+
+  $statement = Get-RequiredProperty $verifiedDetails "statement" "Attestation verification result details"
+  $verifiedSubjects = @(Get-RequiredProperty $statement "subject" "Attestation verification statement")
+  if ($verifiedSubjects.Count -ne 1) {
+    throw "Attestation verification result must contain exactly one subject."
+  }
+  $verifiedSubject = $verifiedSubjects[0]
+  Assert-Equal ([string]$contract.subject.name) ([string](Get-RequiredProperty $verifiedSubject "name" "Attestation verification subject")) "Attestation verification subject name must match."
+  $verifiedDigest = Get-RequiredProperty $verifiedSubject "digest" "Attestation verification subject"
+  Assert-Equal ([string]$contract.subject.sha256) ([string](Get-RequiredProperty $verifiedDigest "sha256" "Attestation verification subject digest")) "Attestation verification subject SHA256 must match."
+  Assert-Equal ([string]$contract.verificationPolicy.predicateType) ([string](Get-RequiredProperty $statement "predicateType" "Attestation verification statement")) "Attestation verification predicate type must match."
+
+  $certificate = Get-RequiredProperty (Get-RequiredProperty $verifiedDetails "signature" "Attestation verification result details") "certificate" "Attestation verification signature"
+  Assert-Equal $expectedSignerIdentity ([string](Get-RequiredProperty $certificate "subjectAlternativeName" "Attestation verification certificate")) "Attestation verification signer identity must match."
+  Assert-Equal ([string]$contract.verificationPolicy.repository) ([string](Get-RequiredProperty $certificate "githubWorkflowRepository" "Attestation verification certificate")) "Attestation verification repository must match."
+  Assert-Equal "workflow_dispatch" ([string](Get-RequiredProperty $certificate "githubWorkflowTrigger" "Attestation verification certificate")) "Attestation verification trigger must match."
+  Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $certificate "githubWorkflowRef" "Attestation verification certificate")) "Attestation verification signer ref must be public main."
+  Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "githubWorkflowSHA" "Attestation verification certificate")) "Attestation verification signer SHA must match the publication commit."
+  Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "buildSignerDigest" "Attestation verification certificate")) "Attestation verification signer digest must match the publication commit."
+  Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $certificate "sourceRepositoryRef" "Attestation verification certificate")) "Attestation verification source ref must be public main."
+  Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "sourceRepositoryDigest" "Attestation verification certificate")) "Attestation verification source digest must match the publication commit."
+  Assert-Equal "github-hosted" ([string](Get-RequiredProperty $certificate "runnerEnvironment" "Attestation verification certificate")) "Attestation verification runner must be GitHub-hosted."
+  Assert-Equal "public" ([string](Get-RequiredProperty $certificate "sourceRepositoryVisibilityAtSigning" "Attestation verification certificate")) "Attestation verification source visibility must be public."
+}
 
 $archive = [System.IO.Compression.ZipFile]::OpenRead($vsixResolved)
 try {
@@ -261,6 +265,7 @@ $evidence = [pscustomobject]@{
     contractSha256 = Get-Sha256 $contractResolved
     verificationResultPath = $verificationRelativePath
     verificationResultSha256 = Get-Sha256 $verificationResolved
+    verificationResultCount = $verificationResults.Count
     repository = [string]$contract.verificationPolicy.repository
     signerWorkflow = [string]$contract.verificationPolicy.signerWorkflow
     predicateType = [string]$contract.verificationPolicy.predicateType
@@ -300,6 +305,10 @@ $evidence = [pscustomobject]@{
 $serialized = $evidence | ConvertTo-Json -Depth 20
 if ($serialized -match '(?i)(client.?id|tenant.?id|client.?secret|access.?token|refresh.?token|authorization\s*header|azure.?credential\s*[:=]|VSCE_PAT)') {
   throw "Marketplace publication evidence must not contain identity or credential values."
+}
+if ($ValidateOnly) {
+  Write-Host "Validated SubversionR Marketplace prerelease publication inputs for $Target without writing evidence."
+  return
 }
 $outputParent = Split-Path -Parent $outputResolved
 New-Item -ItemType Directory -Force -Path $outputParent | Out-Null

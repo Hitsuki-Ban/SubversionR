@@ -165,6 +165,29 @@ jobs:
           $verification | Set-Content -LiteralPath $env:ATTESTATION_VERIFICATION_RESULT_PATH -Encoding utf8
           Get-Content -Raw -LiteralPath $env:ATTESTATION_VERIFICATION_RESULT_PATH | ConvertFrom-Json | Out-Null
 
+      - name: Preflight Marketplace publication evidence recording
+        shell: pwsh
+        run: >
+          pwsh -NoProfile -ExecutionPolicy Bypass
+          -File scripts/release/record-marketplace-publication.ps1
+          -Target win32-x64
+          -ContractPath $env:ATTESTATION_CONTRACT_PATH
+          -AttestationVerificationResultPath $env:ATTESTATION_VERIFICATION_RESULT_PATH
+          -VsixPath $env:SUBJECT_PATH
+          -ReleaseTag $env:RELEASE_TAG
+          -ExtensionId hitsuki-ban.subversionr
+          -ExtensionVersion $env:EXTENSION_VERSION
+          -Repository $env:GITHUB_REPOSITORY
+          -WorkflowPath .github/workflows/publish-marketplace.yml
+          -RunId $env:GITHUB_RUN_ID
+          -RunAttempt $env:GITHUB_RUN_ATTEMPT
+          -RunUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          -HeadSha $env:GITHUB_SHA
+          -SourceRef $env:GITHUB_REF
+          -EventName $env:GITHUB_EVENT_NAME
+          -OutputPath target/release-evidence/subversionr-marketplace-publication-win32-x64.json
+          -ValidateOnly
+
       - name: Validate required Entra variables
         shell: pwsh
         run: |

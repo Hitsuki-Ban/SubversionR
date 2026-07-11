@@ -12,6 +12,10 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  group: release-vsix-attestation-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
 jobs:
   attest:
     runs-on: ubuntu-24.04

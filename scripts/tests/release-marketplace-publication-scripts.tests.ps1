@@ -148,7 +148,7 @@ function New-Fixture([string]$Root, [bool]$PreRelease) {
   }
 }
 
-function Invoke-Recorder([object]$Fixture, [string]$OutputPath = $Fixture.outputPath, [string]$VsixPath = $Fixture.vsixPath, [string]$VerificationPath = $Fixture.verificationPath) {
+function Invoke-Recorder([object]$Fixture, [string]$OutputPath = $Fixture.outputPath, [string]$VsixPath = $Fixture.vsixPath, [string]$VerificationPath = $Fixture.verificationPath, [switch]$ValidateOnly) {
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $recorder `
     -Target win32-x64 `
     -ContractPath $Fixture.contractPath `
@@ -165,7 +165,8 @@ function Invoke-Recorder([object]$Fixture, [string]$OutputPath = $Fixture.output
     -HeadSha $publicationHeadSha `
     -SourceRef refs/heads/main `
     -EventName workflow_dispatch `
-    -OutputPath $OutputPath
+    -OutputPath $OutputPath `
+    -ValidateOnly:$ValidateOnly
 }
 
 $tempRoot = Join-Path $repoRoot "target\tests\release-marketplace-publication-scripts\$([Guid]::NewGuid().ToString('N'))"
@@ -188,6 +189,7 @@ try {
   Assert-Equal $fixture.subjectSha $evidence.vsix.sha256 "Publication evidence should bind the exact VSIX hash."
   Assert-Equal "True" ([string]$evidence.vsix.marketplacePreReleaseProperty) "Publication evidence should record the packaged prerelease property."
   Assert-Equal "True" ([string]$evidence.attestation.verified) "Publication evidence should record runtime attestation verification."
+  Assert-Equal 1 $evidence.attestation.verificationResultCount "Publication evidence should record every matching verified attestation."
   Assert-Equal $publicationHeadSha $evidence.attestation.sourceSha "Publication evidence should bind verification to the current commit."
   Assert-Equal "refs/heads/main" $evidence.attestation.sourceRef "Publication evidence should bind verification to public main."
   Assert-Equal "True" ([string]$evidence.attestation.denySelfHostedRunners) "Publication evidence should record the runner policy."
@@ -202,6 +204,28 @@ try {
   foreach ($forbidden in @("VSCE_PAT", "clientId", "tenantId", "clientSecret", "accessToken", "refreshToken", "AZURE_CLIENT_ID", "AZURE_TENANT_ID")) {
     Assert-True (-not $serializedEvidence.Contains($forbidden, [System.StringComparison]::OrdinalIgnoreCase)) "Publication evidence must not contain identity or credential field '$forbidden'."
   }
+
+  $preflightOutputPath = Join-Path $fixture.root "preflight-must-not-exist.json"
+  Invoke-Recorder -Fixture $fixture -OutputPath $preflightOutputPath -ValidateOnly
+  if ($LASTEXITCODE -ne 0) { throw "record-marketplace-publication.ps1 preflight failed with exit code $LASTEXITCODE." }
+  Assert-True (-not (Test-Path -LiteralPath $preflightOutputPath)) "Validation-only preflight must not write publication evidence."
+
+  $duplicateVerificationPath = Join-Path $fixture.root "duplicate-valid-verification.json"
+  $duplicateVerification = Get-Content -Raw -LiteralPath $fixture.verificationPath | ConvertFrom-Json
+  Write-JsonFile $duplicateVerificationPath @($duplicateVerification, $duplicateVerification)
+  $duplicateOutputPath = Join-Path $fixture.root "duplicate-valid-output.json"
+  Invoke-Recorder -Fixture $fixture -VerificationPath $duplicateVerificationPath -OutputPath $duplicateOutputPath
+  if ($LASTEXITCODE -ne 0) { throw "Recorder should accept multiple attestations that all satisfy the exact policy." }
+  $duplicateEvidence = Get-Content -Raw -LiteralPath $duplicateOutputPath | ConvertFrom-Json
+  Assert-Equal 2 $duplicateEvidence.attestation.verificationResultCount "Publication evidence should bind the complete verified-attestation result count."
+
+  $mixedVerificationPath = Join-Path $fixture.root "mixed-verification.json"
+  $invalidVerification = Get-Content -Raw -LiteralPath $fixture.verificationPath | ConvertFrom-Json
+  $invalidVerification.verificationResult.signature.certificate.githubWorkflowSHA = "0" * 40
+  Write-JsonFile $mixedVerificationPath @($duplicateVerification, $invalidVerification)
+  Assert-NativeCommandFailsContaining {
+    Invoke-Recorder -Fixture $fixture -VerificationPath $mixedVerificationPath -OutputPath (Join-Path $fixture.root "mixed-output.json")
+  } "signer SHA must match the publication commit" "Recorder should reject the complete set when any matching result violates policy."
 
   $tamperedVsixPath = Join-Path $fixture.root "tampered\subversionr-win32-x64-0.2.1.vsix"
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $tamperedVsixPath) | Out-Null
@@ -263,6 +287,8 @@ try {
       "--predicate-type `$env:ATTESTATION_PREDICATE_TYPE",
       "--deny-self-hosted-runners --format json",
       "ATTESTATION_VERIFICATION_RESULT_PATH",
+      "Preflight Marketplace publication evidence recording",
+      "-ValidateOnly",
       "node-version: 24.16.0",
       "version: 11.5.2",
       "pnpm install --frozen-lockfile",
@@ -277,6 +303,7 @@ try {
     "Verify exact candidate VSIX bytes",
     "Require packaged Marketplace prerelease property",
     "Verify live GitHub attestation for candidate VSIX",
+    "Preflight Marketplace publication evidence recording",
     "Validate required Entra variables",
     "Azure login with federated Marketplace identity",
     "Publish exact VSIX as Marketplace prerelease",

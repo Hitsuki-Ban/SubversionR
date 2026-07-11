@@ -6440,6 +6440,8 @@ Assert-Terms $attestationWorkflow @(
   "contents: read",
   "id-token: write",
   "attestations: write",
+  'group: release-vsix-attestation-${{ inputs.release_tag }}',
+  "cancel-in-progress: false",
   "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
   "gh release download",
   "scripts/release/verify-release-attestation-subject.ps1",
