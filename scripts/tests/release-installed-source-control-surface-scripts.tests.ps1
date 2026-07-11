@@ -135,15 +135,34 @@ if ($null -eq $installedPackage) {
   id = "hitsuki-ban.subversionr"
   version = "0.2.0"
   beforeActive = $false
+  afterOrganicActivation = $true
   afterActive = $true
+  organicActivationWaitMs = 125
   extensionPath = $installedPackage.FullName
   source = "installed-vsix"
   invokedCommands = @(
+    "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+    "subversionr.diagnostics.installedSourceControlUiE2eCloseReport",
     "subversionr.diagnostics.installedSourceControlSurfaceReport",
     "subversionr.diagnostics.installedSourceControlSurfaceReport",
     "subversionr.diagnostics.versionReport"
   )
+  commandsBeforeOrganicActivation = @()
+  firstCommandAfterOrganicActivation = "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport"
   hasInstalledSourceControlSurfaceReportCommand = $true
+  organicSourceControlSurfaceReport = [pscustomobject]@{
+    kind = "subversionr.installedSourceControlUiE2eCurrentSurfaceReport"
+    repository = [pscustomobject]@{
+      identity = [pscustomobject]@{
+        workingCopyRoot = $workingCopyRoot
+        workspaceScopeRoot = $subdirectoryOpenPath
+      }
+    }
+  }
+  organicSourceControlCloseReport = [pscustomobject]@{
+    kind = "subversionr.installedSourceControlUiE2eCloseReport"
+    repositoryClosed = $true
+  }
   sourceControlSurfaceReport = [pscustomobject]@{
     kind = "subversionr.installedSourceControlSurfaceReport"
     generatedAt = "2026-06-25T00:00:00Z"
@@ -391,6 +410,12 @@ $tempRoot = Join-Path $repoRoot "target\tests\release-installed-source-control-s
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
+  $workflowScriptText = Get-Content -Raw -LiteralPath $workflowScript
+  Assert-True ($workflowScriptText.Contains('waitForOrganicActivation(extension, 60000)')) "Installed Source Control surface gate should wait for organic activation without a SubversionR command."
+  Assert-True ($workflowScriptText.Contains('subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport')) "Installed Source Control surface gate should inspect the current provider after organic activation."
+  Assert-True ($workflowScriptText.Contains('commandsBeforeOrganicActivation: []')) "Installed Source Control surface gate should record zero commands before organic activation."
+  Assert-True ($workflowScriptText.Contains('organicSourceControlCloseReport')) "Installed Source Control surface gate should close the organically opened provider before explicit open tests."
+
   Assert-True (Test-Path -LiteralPath $workflowScript -PathType Leaf) "test-vscode-installed-source-control-surface.ps1 should exist."
 
   $rootPackage = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
@@ -427,8 +452,11 @@ try {
   Assert-Equal "complete" $report.extension.harnessPhase "Installed Source Control surface evidence should record a completed harness phase."
   Assert-Equal "0.2.0" $report.extension.version "Installed Source Control surface evidence should record the extension version."
   Assert-Equal "installed-vsix" $report.extension.source "Installed Source Control surface evidence should prove the installed VSIX source."
-  Assert-Equal "False" ([string]$report.extension.beforeActive) "Installed Source Control surface evidence should prove SubversionR was inactive before explicit activation."
-  Assert-Equal "True" ([string]$report.extension.afterActive) "Installed Source Control surface evidence should prove activation."
+  Assert-Equal "True" ([string]$report.extension.afterOrganicActivation) "Installed Source Control surface evidence should prove organic activation."
+  Assert-Equal "True" ([string]$report.extension.afterActive) "Installed Source Control surface evidence should prove the extension stayed active."
+  Assert-Equal "0" ([string]@($report.extension.commandsBeforeOrganicActivation).Count) "Installed Source Control surface evidence should execute no SubversionR command before organic activation."
+  Assert-Equal "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport" $report.extension.firstCommandAfterOrganicActivation "Installed Source Control surface evidence should inspect the current surface only after organic activation."
+  Assert-Equal "subversionr.installedSourceControlUiE2eCurrentSurfaceReport" $report.organicSourceControlSurfaceReport.kind "Installed Source Control surface evidence should include the organically opened surface."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlSurfaceReportCommand) "Installed Source Control surface evidence should prove hidden command registration."
   Assert-Equal "win32-x64" $report.vsix.targetPlatform "Installed Source Control surface evidence should bind to the VSIX manifest target platform."
   Assert-Equal "1.14.5" $report.fixtureTools.svn.version "Installed Source Control surface evidence should record source-built svn 1.14.5."

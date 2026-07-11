@@ -344,6 +344,38 @@ function withTimeout(promise, label, timeoutMs) {
   ]);
 }
 
+async function waitForOrganicActivation(extension, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (!extension.isActive && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (!extension.isActive) {
+    throw new Error("SubversionR did not activate organically after opening the SVN working copy.");
+  }
+  return extension;
+}
+
+async function waitForOrganicSourceControlSurface(workingCopyRoot, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const report = await vscode.commands.executeCommand(
+        "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+        { path: workingCopyRoot }
+      );
+      if (report && report.kind === "subversionr.installedSourceControlUiE2eCurrentSurfaceReport") {
+        return report;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  const detail = lastError && lastError.message ? ` Last error: ${lastError.message}` : "";
+  throw new Error(`SubversionR did not publish an organic Source Control surface.${detail}`);
+}
+
 function findResource(report, groupId, resourcePath, contextValue) {
   const normalized = resourcePath.replace(/\\/g, "/");
   const group = report.sourceControl.groups.find(candidate => candidate.id === groupId);
@@ -366,8 +398,12 @@ async function run() {
 
   let phase = "started";
   let extension;
+  let extensionAfterOrganicActivation;
   let extensionAfterCommand;
   let beforeActive;
+  let organicActivationWaitMs;
+  let organicSourceControlSurfaceReport;
+  let organicSourceControlCloseReport;
   let sourceControlSurfaceReport;
   let sourceControlSubdirectoryOpenReport;
   let versionReport;
@@ -379,6 +415,9 @@ async function run() {
       ok: false,
       phase,
       workingCopyRoot,
+      organicActivationWaitMs,
+      organicSourceControlSurfaceReport,
+      organicSourceControlCloseReport,
       sourceControlSurfaceReport,
       sourceControlSubdirectoryOpenReport,
       versionReport,
@@ -393,6 +432,25 @@ async function run() {
       throw new Error("Installed SubversionR extension was not visible to Extension Host.");
     }
     beforeActive = extension.isActive;
+    phase = "waitingForOrganicActivation";
+    const organicActivationStartedAt = Date.now();
+    extensionAfterOrganicActivation = await waitForOrganicActivation(extension, 60000);
+    organicActivationWaitMs = Date.now() - organicActivationStartedAt;
+    phase = "waitingForOrganicSourceControlSurface";
+    organicSourceControlSurfaceReport = await waitForOrganicSourceControlSurface(workingCopyRoot, 60000);
+    phase = "closingOrganicSourceControlSurface";
+    organicSourceControlCloseReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCloseReport", {
+        repositoryId: organicSourceControlSurfaceReport.repository.repositoryId,
+        epoch: organicSourceControlSurfaceReport.repository.epoch
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eCloseReport",
+      30000
+    );
+    if (!organicSourceControlCloseReport || organicSourceControlCloseReport.repositoryClosed !== true) {
+      throw new Error("SubversionR did not close the organically opened repository before explicit surface tests.");
+    }
+    writeResult(partialResult());
     phase = "executingInstalledSourceControlSurfaceReport";
     sourceControlSurfaceReport = await withTimeout(
       vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlSurfaceReport", { path: workingCopyRoot }),
@@ -414,8 +472,17 @@ async function run() {
     if (normalizedExtensionPath.includes("prototype-harness") || normalizedExtensionPath.includes("installed-source-control-surface-harness")) {
       throw new Error(`SubversionR must not be loaded from the harness path: ${extension.extensionPath}`);
     }
-    if (beforeActive !== false) {
-      throw new Error("SubversionR should not activate before the harness explicitly activates it.");
+    if (!extensionAfterOrganicActivation.isActive) {
+      throw new Error("SubversionR did not remain active after organic working-copy activation.");
+    }
+    if (path.resolve(organicSourceControlSurfaceReport.repository.identity.workingCopyRoot).toLowerCase() !== path.resolve(workingCopyRoot).toLowerCase()) {
+      throw new Error("Organic Source Control surface workingCopyRoot did not match the fixture working copy.");
+    }
+    if (!findResource(organicSourceControlSurfaceReport, "changes", "src/tracked.txt", "subversionr.changedFile.baseDiffable")) {
+      throw new Error("Organic Source Control surface did not include modified src/tracked.txt.");
+    }
+    if (!findResource(organicSourceControlSurfaceReport, "unversioned", "scratch.txt", "subversionr.unversioned")) {
+      throw new Error("Organic Source Control surface did not include unversioned scratch.txt.");
     }
     if (!commands.includes("subversionr.diagnostics.installedSourceControlSurfaceReport")) {
       throw new Error("Installed SubversionR command subversionr.diagnostics.installedSourceControlSurfaceReport was not registered after activation.");
@@ -553,15 +620,23 @@ async function run() {
       id: extension.id,
       version: extension.packageJSON.version,
       beforeActive,
+      afterOrganicActivation: extensionAfterOrganicActivation.isActive,
       afterActive: extensionAfterCommand.isActive,
+      organicActivationWaitMs,
       extensionPath: extension.extensionPath,
       source: "installed-vsix",
       invokedCommands: [
+        "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+        "subversionr.diagnostics.installedSourceControlUiE2eCloseReport",
         "subversionr.diagnostics.installedSourceControlSurfaceReport",
         "subversionr.diagnostics.installedSourceControlSurfaceReport",
         "subversionr.diagnostics.versionReport"
       ],
+      commandsBeforeOrganicActivation: [],
+      firstCommandAfterOrganicActivation: "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
       hasInstalledSourceControlSurfaceReportCommand: true,
+      organicSourceControlSurfaceReport,
+      organicSourceControlCloseReport,
       sourceControlSurfaceReport,
       sourceControlSubdirectoryOpenReport,
       versionReport
@@ -625,8 +700,23 @@ function Assert-HarnessResult(
   if ($Result.source -ne "installed-vsix") {
     throw "Installed Source Control surface result source must be installed-vsix."
   }
-  if ($Result.beforeActive -ne $false -or $Result.afterActive -ne $true) {
-    throw "Installed Source Control surface result must prove explicit activation from inactive to active."
+  if ($Result.afterOrganicActivation -ne $true -or $Result.afterActive -ne $true) {
+    throw "Installed Source Control surface result must prove organic activation before diagnostic command execution."
+  }
+  if (@($Result.commandsBeforeOrganicActivation).Count -ne 0) {
+    throw "Installed Source Control surface result must not execute SubversionR commands before organic activation."
+  }
+  if ($Result.firstCommandAfterOrganicActivation -ne "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport") {
+    throw "Installed Source Control surface result must inspect the current surface only after organic activation."
+  }
+  if ($Result.organicSourceControlSurfaceReport.kind -ne "subversionr.installedSourceControlUiE2eCurrentSurfaceReport") {
+    throw "Installed Source Control surface result must include the organically opened Source Control surface."
+  }
+  if (-not (Test-IsSamePath -Left ([string]$Result.organicSourceControlSurfaceReport.repository.identity.workingCopyRoot) -Right $WorkingCopyRoot)) {
+    throw "Organic Source Control surface workingCopyRoot must match the fixture working copy."
+  }
+  if ($Result.organicSourceControlCloseReport.kind -ne "subversionr.installedSourceControlUiE2eCloseReport" -or $Result.organicSourceControlCloseReport.repositoryClosed -ne $true) {
+    throw "Installed Source Control surface result must close the organically opened repository before explicit surface tests."
   }
   if ($Result.hasInstalledSourceControlSurfaceReportCommand -ne $true) {
     throw "Installed Source Control surface result must prove hidden diagnostic command registration."
@@ -768,6 +858,7 @@ if ([string]::IsNullOrWhiteSpace($extensionVersion)) {
 $codeCliVersion = Get-CodeCliVersion $codeCliResolved
 $codeCliSha256 = (Get-FileHash -LiteralPath $codeCliResolved -Algorithm SHA256).Hash.ToLowerInvariant()
 $fixture = New-SourceControlSurfaceFixture -Root (Join-Path $fixtureRootResolved "svn-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
+$workspaceOpenPath = Join-Path $fixture.workingCopyRoot "src"
 $userDataRoot = Join-Path $fixtureRootResolved "user-data"
 $extensionsRoot = Join-Path $fixtureRootResolved "extensions"
 $harnessRoot = Join-Path $fixtureRootResolved "installed-source-control-surface-harness"
@@ -812,7 +903,7 @@ try {
     "--log",
     "trace",
     "--wait",
-    $fixture.workingCopyRoot
+    $workspaceOpenPath
   ) -TimeoutSeconds $ExtensionHostTimeoutSeconds -Description "VS Code installed Extension Host Source Control surface smoke"
 }
 finally {
@@ -855,10 +946,16 @@ $report = [pscustomobject]@{
     installedPackageRoot = Get-RepoRelativePath $installedPackageRoot
     extensionHostPath = Get-RepoRelativePath ([string]$harnessResult.extensionPath)
     beforeActive = [bool]$harnessResult.beforeActive
+    afterOrganicActivation = [bool]$harnessResult.afterOrganicActivation
     afterActive = [bool]$harnessResult.afterActive
+    organicActivationWaitMs = [int]$harnessResult.organicActivationWaitMs
     invokedCommands = $harnessResult.invokedCommands
+    commandsBeforeOrganicActivation = $harnessResult.commandsBeforeOrganicActivation
+    firstCommandAfterOrganicActivation = [string]$harnessResult.firstCommandAfterOrganicActivation
     hasInstalledSourceControlSurfaceReportCommand = [bool]$harnessResult.hasInstalledSourceControlSurfaceReportCommand
   }
+  organicSourceControlSurfaceReport = $harnessResult.organicSourceControlSurfaceReport
+  organicSourceControlCloseReport = $harnessResult.organicSourceControlCloseReport
   sourceControlSurfaceReport = $harnessResult.sourceControlSurfaceReport
   sourceControlSubdirectoryOpenReport = $harnessResult.sourceControlSubdirectoryOpenReport
   versionReport = $harnessResult.versionReport
@@ -891,6 +988,7 @@ $report = [pscustomobject]@{
     repository = Get-RepoRelativePath $fixture.repoPath
     import = Get-RepoRelativePath $fixture.importRoot
     workingCopy = Get-RepoRelativePath $fixture.workingCopyRoot
+    workspaceOpen = Get-RepoRelativePath $workspaceOpenPath
     svnCliConfig = Get-RepoRelativePath $fixture.svnCliConfigRoot
     svnRuntimeAppData = Get-RepoRelativePath $fixture.svnRuntimeAppDataRoot
     svnRuntimeConfig = Get-RepoRelativePath $fixture.svnRuntimeConfigRoot
@@ -926,7 +1024,8 @@ $report = [pscustomobject]@{
     "Fixture repository and working copy were created with source-built Apache Subversion 1.14.5 CLI tools",
     "Installed VSIX and sidecar ran with fixture-local APPDATA/Subversion config isolation",
     "SubversionR was loaded from the installed VSIX package root, not from the harness extension",
-    "SubversionR was inactive before explicit installed Source Control surface command execution",
+    "SubversionR activated organically after the installed SVN working copy opened without executing a SubversionR command",
+    "SubversionR automatically opened the fixture repository and published its Source Control surface before diagnostic inspection",
     "SubversionR opened the real fixture working copy through its Rust sidecar and libsvn bridge",
     "SubversionR opened the fixture src subdirectory and resolved the provider to the parent working copy root",
     "SubversionR produced SCM projection resources for a modified tracked file and an unversioned file",
