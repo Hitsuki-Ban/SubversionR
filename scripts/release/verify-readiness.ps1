@@ -2776,18 +2776,23 @@ Assert-Terms $extensionManifestTests @(
   "activationEvents",
   'not.toContain("*")',
   'not.toContain("onStartupFinished")',
-  "workspaceContains:**/.svn"
+  "workspaceContains:.svn/wc.db",
+  "workspaceContains:../../../../.svn/wc.db"
 ) "UX-001 manifest on-demand activation evidence"
 Assert-Terms $installedSourceControlSurfaceScript @(
   "beforeActive",
+  "afterOrganicActivation",
   "afterActive",
-  "SubversionR was inactive before explicit installed Source Control surface command execution",
+  "commandsBeforeOrganicActivation",
+  "SubversionR activated organically after the installed SVN working copy opened without executing a SubversionR command",
   "UX-001"
 ) "UX-001 installed Source Control surface activation evidence"
 Assert-Terms $installedSourceControlSurfaceScriptTests @(
   "beforeActive",
+  "afterOrganicActivation",
   "afterActive",
-  "inactive before explicit activation",
+  "commandsBeforeOrganicActivation",
+  "should prove organic activation",
   "UX-001"
 ) "UX-001 installed Source Control surface activation script-test evidence"
 Assert-Terms $installedSourceControlUiE2eScript @(

@@ -412,9 +412,6 @@ async function run() {
     if (normalizedExtensionPath.includes("prototype-harness") || normalizedExtensionPath.includes("installed-core-workflow-harness")) {
       throw new Error(`SubversionR must not be loaded from the harness path: ${extension.extensionPath}`);
     }
-    if (beforeActive !== false) {
-      throw new Error("SubversionR should not activate before the harness explicitly activates it.");
-    }
     if (!commands.includes("subversionr.diagnostics.installedCoreWorkflowReport")) {
       throw new Error("Installed SubversionR command subversionr.diagnostics.installedCoreWorkflowReport was not registered after activation.");
     }
@@ -555,8 +552,8 @@ function Assert-HarnessResult(
   if ($Result.source -ne "installed-vsix") {
     throw "Installed core workflow result source must be installed-vsix."
   }
-  if ($Result.beforeActive -ne $false -or $Result.afterActive -ne $true) {
-    throw "Installed core workflow result must prove explicit activation from inactive to active."
+  if ($Result.afterActive -ne $true) {
+    throw "Installed core workflow result must prove SubversionR is active before workflow validation."
   }
   if ($Result.hasInstalledCoreWorkflowReportCommand -ne $true) {
     throw "Installed core workflow result must prove hidden diagnostic command registration."
@@ -817,7 +814,7 @@ $report = [pscustomobject]@{
     "Fixture repository and working copy were created with source-built Apache Subversion 1.14.5 CLI tools",
     "Installed VSIX and sidecar ran with fixture-local APPDATA/Subversion config isolation",
     "SubversionR was loaded from the installed VSIX package root, not from the harness extension",
-    "SubversionR was inactive before explicit installed core workflow command execution",
+    "SubversionR was active before installed core workflow validation",
     "SubversionR opened the real fixture working copy through its Rust sidecar and libsvn bridge",
     "SubversionR produced SCM projection resources for a modified tracked file and an unversioned file",
     "SubversionR produced exactly the expected non-empty SCM projection groups for this local-only cold-start fixture",

@@ -208,7 +208,7 @@ M3k does not implement operation progress, cancellation, native watcher suppress
 
 The twelfth M3 slice binds trusted-workspace automatic repository discovery to VS Code activation and workspace lifecycle events:
 
-- The extension manifest now activates on `workspaceContains:**/.svn`, not on `*`, `onStartupFinished`, or `.svn/wc.db` internals.
+- The extension manifest activates on exact `.svn/wc.db` file sentinels at the workspace root or up to the existing four-level parent-discovery bound, not on `*`, `onStartupFinished`, or a glob search through hidden `.svn` directories.
 - `RepositoryLifecycleService` gates automatic discovery on VS Code Workspace Trust before starting backend-backed repository discovery.
 - Automatic discovery runs for extension activation, newly trusted workspaces, and workspace folder changes.
 - The automatic path uses the same discovery request policy as `subversionr.openRepository`: workspace roots, `discoverNested = false`, `discoveryDepth = 4`, no discovery ignore entries, current open sessions as `ignoredRoots`, and lazy externals mode.

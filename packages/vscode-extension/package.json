@@ -47,7 +47,11 @@
   },
   "icon": "resources/marketplace/icon.png",
   "activationEvents": [
-    "workspaceContains:**/.svn",
+    "workspaceContains:.svn/wc.db",
+    "workspaceContains:../.svn/wc.db",
+    "workspaceContains:../../.svn/wc.db",
+    "workspaceContains:../../../.svn/wc.db",
+    "workspaceContains:../../../../.svn/wc.db",
     "onCommand:subversionr.initialize",
     "onCommand:subversionr.diagnostics.collect",
     "onCommand:subversionr.diagnostics.versionReport",

@@ -48,12 +48,16 @@ describe("extension manifest", () => {
     expect(oldNamespaceCommands).toEqual([]);
   });
 
-  it("activates on the SVN workspace sentinel without broad startup or wc.db probing", () => {
+  it("activates on the SVN working-copy database without broad startup", () => {
     const manifest = readJson("package.json");
 
     expect(manifest.l10n).toBe("./l10n");
     expect(manifest.activationEvents).toEqual([
-      "workspaceContains:**/.svn",
+      "workspaceContains:.svn/wc.db",
+      "workspaceContains:../.svn/wc.db",
+      "workspaceContains:../../.svn/wc.db",
+      "workspaceContains:../../../.svn/wc.db",
+      "workspaceContains:../../../../.svn/wc.db",
       "onCommand:subversionr.initialize",
       "onCommand:subversionr.diagnostics.collect",
       "onCommand:subversionr.diagnostics.versionReport",
@@ -159,6 +163,7 @@ describe("extension manifest", () => {
     ]);
     expect(manifest.activationEvents).not.toContain("*");
     expect(manifest.activationEvents).not.toContain("onStartupFinished");
+    expect(manifest.activationEvents).not.toContain("workspaceContains:**/.svn");
     expect(manifest.activationEvents).not.toContain("workspaceContains:**/.svn/wc.db");
     expect(manifest.activationEvents).not.toContain("onCommand:subversionr.diagnostics.installedRedactionReport");
   });
