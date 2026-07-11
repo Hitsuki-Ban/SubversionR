@@ -151,12 +151,20 @@ struct RawStatusEntry {
     node_status: *const c_char,
     text_status: *const c_char,
     property_status: *const c_char,
+    repos_node_status: *const c_char,
+    repos_text_status: *const c_char,
+    repos_property_status: *const c_char,
+    repos_kind: *const c_char,
+    repos_changed_revision: i64,
+    repos_changed_author: *const c_char,
+    repos_changed_date: *const c_char,
     revision: i64,
     changed_revision: i64,
     changed_author: *const c_char,
     changed_date: *const c_char,
     changelist: *const c_char,
     lock: *const RawLockInfo,
+    repos_lock: *const RawLockInfo,
     needs_lock: c_int,
     depth: *const c_char,
     conflicted: c_int,
@@ -274,6 +282,13 @@ type StatusSnapshotFn = unsafe extern "C" fn(
     *mut c_void,
     *const c_char,
     *const c_char,
+    *const RawCancelCallbacks,
+    *mut RawStatusSnapshot,
+) -> c_int;
+type StatusRemoteScanFn = unsafe extern "C" fn(
+    *mut c_void,
+    *const c_char,
+    *const RawAuthCallbacks,
     *const RawCancelCallbacks,
     *mut RawStatusSnapshot,
 ) -> c_int;
@@ -542,6 +557,7 @@ struct NativeSymbols {
     open_working_copy_with_auth: OpenWorkingCopyWithAuth,
     probe_remote_url_with_auth: ProbeRemoteUrlWithAuth,
     status_snapshot: StatusSnapshotFn,
+    status_remote_scan: StatusRemoteScanFn,
     content_get: ContentGetFn,
     properties_list: PropertiesListFn,
     history_log: HistoryLogFn,
@@ -582,6 +598,9 @@ impl NativeSymbols {
                 library.get(b"subversionr_bridge_probe_remote_url_with_auth\0")
             }?,
             status_snapshot: *unsafe { library.get(b"subversionr_bridge_status_scan\0") }?,
+            status_remote_scan: *unsafe {
+                library.get(b"subversionr_bridge_status_remote_scan_with_auth\0")
+            }?,
             content_get: *unsafe { library.get(b"subversionr_bridge_content_get_with_auth\0") }?,
             properties_list: *unsafe { library.get(b"subversionr_bridge_properties_list\0") }?,
             history_log: *unsafe { library.get(b"subversionr_bridge_history_log_with_auth\0") }?,
@@ -1000,6 +1019,95 @@ impl BridgeApi for NativeBridge {
             summary,
             timestamp: current_timestamp(),
             source: "libsvn-local".to_string(),
+        })
+    }
+
+    fn status_remote_check_with_cancellation(
+        &self,
+        identity: &RepositoryIdentity,
+        generation: u64,
+        auth: &mut dyn AuthRequestBroker,
+        cancellation: &dyn BridgeCancellationToken,
+    ) -> Result<StatusSnapshot, BridgeFailure> {
+        let scan_path = scan_path(&identity.working_copy_root, ".");
+        let path_c = CString::new(scan_path.as_str()).map_err(|_| BridgeFailure::invalid_path())?;
+        let mut raw_snapshot = RawStatusSnapshot {
+            entries: ptr::null(),
+            entry_count: 0,
+        };
+        let mut auth_baton = NativeAuthBaton::new(
+            auth,
+            Some(repository_id(identity)),
+            Some(identity.working_copy_root.clone()),
+        );
+        let auth_callbacks = RawAuthCallbacks {
+            abi_version: RAW_AUTH_ABI_VERSION,
+            baton: (&mut auth_baton as *mut NativeAuthBaton<'_>).cast::<c_void>(),
+            credential_callback: Some(native_credential_callback),
+            credential_response_dispose: Some(native_credential_response_dispose),
+            certificate_callback: Some(native_certificate_callback),
+        };
+        let mut cancel_baton = NativeCancelBaton {
+            token: cancellation,
+        };
+        let cancel_callbacks = RawCancelCallbacks {
+            abi_version: RAW_CANCEL_ABI_VERSION,
+            baton: (&mut cancel_baton as *mut NativeCancelBaton<'_>).cast::<c_void>(),
+            cancel_callback: Some(native_cancel_callback),
+        };
+
+        let status = unsafe {
+            (self.symbols.status_remote_scan)(
+                self.runtime.as_ptr(),
+                path_c.as_ptr(),
+                &auth_callbacks,
+                &cancel_callbacks,
+                &mut raw_snapshot,
+            )
+        };
+        if status != 0 {
+            if let Some(failure) = auth_baton.take_failure() {
+                return Err(failure);
+            }
+            return Err(remote_status_failure(status, &scan_path));
+        }
+        if raw_snapshot.entry_count > 0 && raw_snapshot.entries.is_null() {
+            return Err(native_invalid_response(&scan_path, "remoteStatus.entries"));
+        }
+
+        let raw_entries = if raw_snapshot.entry_count == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(raw_snapshot.entries, raw_snapshot.entry_count) }
+        };
+        let mut remote_entries = Vec::with_capacity(raw_entries.len());
+        for raw_entry in raw_entries {
+            let entry = raw_remote_status_entry_to_protocol(raw_entry, identity, generation)?;
+            if is_actionable_remote_entry(&entry) {
+                remote_entries.push(entry);
+            }
+        }
+        let remote_changes = remote_entries
+            .len()
+            .try_into()
+            .map_err(|_| native_invalid_response(&scan_path, "remoteStatus.entries"))?;
+
+        Ok(StatusSnapshot {
+            repository_id: repository_id(identity),
+            epoch: 0,
+            generation,
+            completeness: "complete".to_string(),
+            identity: identity.clone(),
+            local_entries: Vec::new(),
+            remote_entries,
+            summary: StatusSummary {
+                local_changes: 0,
+                remote_changes,
+                conflicts: 0,
+                unversioned: 0,
+            },
+            timestamp: current_timestamp(),
+            source: "libsvn-remote".to_string(),
         })
     }
 
@@ -3618,6 +3726,49 @@ fn status_snapshot_failure(status: c_int, path: &str) -> BridgeFailure {
     )
 }
 
+fn remote_status_failure(status: c_int, path: &str) -> BridgeFailure {
+    let (code, category, message_key) = match status {
+        1 => (
+            "SVN_BRIDGE_INVALID_ARGUMENT",
+            "native",
+            "error.native.bridgeInvalidArgument",
+        ),
+        2 => (
+            "SVN_REMOTE_STATUS_FAILED",
+            "network",
+            "error.native.remoteStatusFailed",
+        ),
+        RAW_STATUS_CALLBACK_FAILED => (
+            "SVN_REMOTE_STATUS_CANCEL_CALLBACK_FAILED",
+            "native",
+            "error.native.remoteStatusCancelCallbackFailed",
+        ),
+        RAW_STATUS_CANCELLED => (
+            "SVN_REMOTE_STATUS_CANCELLED",
+            "cancelled",
+            "error.native.remoteStatusCancelled",
+        ),
+        12 => (
+            "SVN_REMOTE_STATUS_AUTH_FAILED",
+            "auth",
+            "error.native.remoteStatusAuthFailed",
+        ),
+        _ => (
+            "SVN_BRIDGE_UNHANDLED_STATUS",
+            "native",
+            "error.native.bridgeUnhandledStatus",
+        ),
+    };
+
+    BridgeFailure::new(
+        code,
+        category,
+        message_key,
+        json!({ "path": path, "status": status }),
+        false,
+    )
+}
+
 fn content_get_failure(status: c_int, path: &str) -> BridgeFailure {
     let (code, message_key) = match status {
         1 => (
@@ -4762,6 +4913,50 @@ fn raw_status_entry_to_protocol(
     })
 }
 
+fn raw_remote_status_entry_to_protocol(
+    raw_entry: &RawStatusEntry,
+    identity: &RepositoryIdentity,
+    generation: u64,
+) -> Result<StatusEntry, BridgeFailure> {
+    let mut entry = raw_status_entry_to_protocol(raw_entry, identity, generation)?;
+    let repos_node_status =
+        unsafe { c_string_to_owned(raw_entry.repos_node_status, "remoteStatus.nodeStatus") }
+            .map_err(|failure| native_field_failure(&identity.working_copy_root, failure))?;
+    let repos_text_status =
+        unsafe { c_string_to_owned(raw_entry.repos_text_status, "remoteStatus.textStatus") }
+            .map_err(|failure| native_field_failure(&identity.working_copy_root, failure))?;
+    let repos_property_status = unsafe {
+        c_string_to_owned(
+            raw_entry.repos_property_status,
+            "remoteStatus.propertyStatus",
+        )
+    }
+    .map_err(|failure| native_field_failure(&identity.working_copy_root, failure))?;
+    let repos_kind = unsafe { c_string_to_owned(raw_entry.repos_kind, "remoteStatus.kind") }
+        .map_err(|failure| native_field_failure(&identity.working_copy_root, failure))?;
+    let repos_changed_author = unsafe {
+        optional_c_string_to_owned(raw_entry.repos_changed_author, "remoteStatus.changedAuthor")
+    }
+    .map_err(|failure| native_field_failure(&identity.working_copy_root, failure))?;
+    let repos_changed_date = unsafe {
+        optional_c_string_to_owned(raw_entry.repos_changed_date, "remoteStatus.changedDate")
+    }
+    .map_err(|failure| native_field_failure(&identity.working_copy_root, failure))?;
+    let repos_lock = raw_lock_info_to_protocol(raw_entry.repos_lock, &identity.working_copy_root)?;
+
+    entry.remote_status = repos_node_status;
+    if !matches!(repos_kind.as_str(), "none" | "unknown") {
+        entry.kind = repos_kind;
+    }
+    entry.text_status = repos_text_status;
+    entry.property_status = repos_property_status;
+    entry.changed_revision = raw_entry.repos_changed_revision;
+    entry.changed_author = repos_changed_author;
+    entry.changed_date = repos_changed_date;
+    entry.lock = repos_lock;
+    Ok(entry)
+}
+
 fn status_copy_from_protocol(
     copied: c_int,
     copy_from_path: Option<String>,
@@ -5101,6 +5296,19 @@ fn is_actionable_local_status(status: &str) -> bool {
     !matches!(status, "none" | "normal")
 }
 
+fn is_actionable_remote_status(status: &str) -> bool {
+    !matches!(status, "none" | "normal" | "notChecked")
+}
+
+fn is_actionable_remote_entry(entry: &StatusEntry) -> bool {
+    if !is_actionable_remote_status(&entry.remote_status) {
+        return false;
+    }
+    entry.kind != "dir"
+        || entry.remote_status != "modified"
+        || is_actionable_remote_status(&entry.property_status)
+}
+
 fn repository_id(identity: &RepositoryIdentity) -> String {
     format!(
         "{}:{}",
@@ -5203,12 +5411,20 @@ mod tests {
             node_status: status.as_ptr(),
             text_status: status.as_ptr(),
             property_status: property_status.as_ptr(),
+            repos_node_status: property_status.as_ptr(),
+            repos_text_status: property_status.as_ptr(),
+            repos_property_status: property_status.as_ptr(),
+            repos_kind: kind.as_ptr(),
+            repos_changed_revision: -1,
+            repos_changed_author: ptr::null(),
+            repos_changed_date: ptr::null(),
             revision: 99,
             changed_revision: 42,
             changed_author: ptr::null(),
             changed_date: ptr::null(),
             changelist: ptr::null(),
             lock: ptr::null(),
+            repos_lock: ptr::null(),
             needs_lock: 0,
             depth: depth.as_ptr(),
             conflicted: 0,

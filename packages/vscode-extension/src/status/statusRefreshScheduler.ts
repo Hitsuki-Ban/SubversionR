@@ -142,6 +142,30 @@ export class StatusRefreshScheduler {
     this.repositories.delete(repositoryId);
   }
 
+  public async runExclusive<T>(repositoryId: string, operation: () => Promise<T>): Promise<T> {
+    const state = this.repositories.get(repositoryId);
+    if (!state) {
+      throw new Error(`Repository is not registered: ${repositoryId}`);
+    }
+    while (state.flushing) {
+      await state.flushing.catch(() => undefined);
+    }
+
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    state.flushing = barrier;
+    try {
+      return await operation();
+    } finally {
+      if (state.flushing === barrier) {
+        state.flushing = undefined;
+      }
+      release();
+    }
+  }
+
   public recordFileEvent(repositoryId: string, event: DirtyFileEvent): boolean {
     const state = this.repositories.get(repositoryId);
     if (!state) {

@@ -716,6 +716,26 @@ try {
     $bridgeSource -match "svn_client_status6\([\s\S]*scan_depth,\s*get_all,\s*check_out_of_date,\s*check_working_copy,\s*no_ignore,\s*ignore_externals,\s*depth_as_sticky,"
   ) "Bridge status scan should call svn_client_status6 with default ignored entries suppressed and externals ignored."
   Assert-True (
+    $bridgeHeader.Contains("subversionr_bridge_status_remote_scan_with_auth") -and
+    $bridgeSource.Contains("subversionr_bridge_status_remote_scan_with_auth") -and
+    $nativeRust.Contains("subversionr_bridge_status_remote_scan_with_auth")
+  ) "Remote status C ABI and native loader must require one auth-aware remote scan symbol."
+  Assert-True (
+    $bridgeHeader.Contains("repos_node_status") -and
+    $bridgeHeader.Contains("repos_text_status") -and
+    $bridgeHeader.Contains("repos_property_status") -and
+    $bridgeSource.Contains("status->repos_node_status") -and
+    $bridgeSource.Contains("status->ood_changed_rev")
+  ) "Remote status ABI must copy libsvn repository status and out-of-date metadata."
+  Assert-True (
+    $bridgeSource -match "subversionr_bridge_status_remote_scan_with_auth\([\s\S]*svn_depth_unknown,\s*FALSE,\s*TRUE,\s*FALSE,"
+  ) "Explicit remote status must use ambient depth, interesting entries, repository out-of-date checking, and no duplicate working-copy scan."
+  Assert-True (
+    $bridgeSource.Contains("bridge_error_is_auth_failure") -and
+    $bridgeSource.Contains("SVN_ERR_RA_NOT_AUTHORIZED") -and
+    $bridgeSource.Contains("SVN_ERR_AUTHN_FAILED")
+  ) "Explicit remote status must preserve libsvn authentication failures as a stable auth result."
+  Assert-True (
     $nativeRust.Contains("subversionr_bridge_content_get_with_auth")
   ) "Native loader must require the auth-aware content symbol to fail fast on old bridge DLLs."
   Assert-True (

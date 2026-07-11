@@ -127,12 +127,20 @@ typedef struct subversionr_bridge_status_entry {
   const char *node_status;
   const char *text_status;
   const char *property_status;
+  const char *repos_node_status;
+  const char *repos_text_status;
+  const char *repos_property_status;
+  const char *repos_kind;
+  long long repos_changed_revision;
+  const char *repos_changed_author;
+  const char *repos_changed_date;
   long long revision;
   long long changed_revision;
   const char *changed_author;
   const char *changed_date;
   const char *changelist;
   const subversionr_bridge_lock_info *lock;
+  const subversionr_bridge_lock_info *repos_lock;
   int needs_lock;
   const char *depth;
   int conflicted;
@@ -256,6 +264,14 @@ SUBVERSIONR_BRIDGE_API int subversionr_bridge_status_scan(
   subversionr_bridge_runtime *runtime,
   const char *path,
   const char *depth,
+  const subversionr_bridge_cancel_callbacks *cancel_callbacks,
+  subversionr_bridge_status_scan_info *snapshot
+);
+
+SUBVERSIONR_BRIDGE_API int subversionr_bridge_status_remote_scan_with_auth(
+  subversionr_bridge_runtime *runtime,
+  const char *path,
+  const subversionr_bridge_auth_callbacks *auth_callbacks,
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_status_scan_info *snapshot
 );

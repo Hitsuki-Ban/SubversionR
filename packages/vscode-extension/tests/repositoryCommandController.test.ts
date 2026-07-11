@@ -9,11 +9,22 @@ import type {
   RepositoryDiscoveryResponse,
   RepositoryDiscoveryService,
 } from "../src/repository/repositoryDiscoveryService";
-import type { RepositorySession, RepositorySessionService } from "../src/repository/repositorySessionService";
+import type {
+  RepositorySession,
+  RepositorySessionService,
+} from "../src/repository/repositorySessionService";
 import type { RepositoryRefreshService } from "../src/status/repositoryRefreshService";
+import type { RemoteStatusCheckService } from "../src/status/remoteStatusCheckService";
 import type { PathCasePolicy } from "../src/status/types";
-import type { OperationClient, OperationRunResponse } from "../src/operations/operationRunRpcClient";
-import type { PropertiesClient, PropertiesListResponse, PropertyEntry } from "../src/properties/propertiesListRpcClient";
+import type {
+  OperationClient,
+  OperationRunResponse,
+} from "../src/operations/operationRunRpcClient";
+import type {
+  PropertiesClient,
+  PropertiesListResponse,
+  PropertyEntry,
+} from "../src/properties/propertiesListRpcClient";
 import type {
   RepositoryCheckoutClient,
   RepositoryCheckoutResponse,
@@ -566,18 +577,25 @@ describe("RepositoryCommandController", () => {
     );
   });
 
-  it("checks remote changes through an explicit manual remote status refresh target", async () => {
+  it("checks remote changes through the explicit remote service and reports the incoming total", async () => {
     const session = repositorySession();
     const sessionService = fakeSessionService({ sessions: [session] });
     const refreshService = fakeRefreshService();
+    const remoteStatusCheckService = fakeRemoteStatusCheckService(2);
     const progressCancellation = new AbortController();
     const ui = fakeCommandUi({
       workspaceRoots: ["C:\\workspace"],
       operationProgressSignal: progressCancellation.signal,
     });
-    const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
-      refreshService,
-    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      sessionService,
+      ui,
+      {
+        refreshService,
+        remoteStatusCheckService,
+      },
+    );
 
     await controller.checkRemoteChanges();
 
@@ -585,16 +603,54 @@ describe("RepositoryCommandController", () => {
       "Checking SVN remote changes",
       expect.any(Function),
     );
-    expect(refreshService.refreshTargets).toHaveBeenCalledWith(
-      {
-        repositoryId: "repo-uuid:C:/workspace",
-        epoch: 7,
-        targets: [{ path: ".", depth: "infinity", reason: "manualRemoteCheck" }],
-      },
+    expect(remoteStatusCheckService.checkRemoteChanges).toHaveBeenCalledWith(
+      { repositoryId: "repo-uuid:C:/workspace", epoch: 7 },
       { signal: progressCancellation.signal },
     );
     expect(ui.showInformationMessage).toHaveBeenCalledWith(
-      "SubversionR checked SVN remote changes: C:\\workspace",
+      "SubversionR incoming SVN changes: 2 (C:\\workspace)",
+    );
+  });
+
+  it("reports explicitly when a completed remote check has no incoming changes", async () => {
+    const session = repositorySession();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      { remoteStatusCheckService: fakeRemoteStatusCheckService(0) },
+    );
+
+    await controller.checkRemoteChanges();
+
+    expect(ui.showInformationMessage).toHaveBeenCalledWith(
+      "No incoming SVN changes: C:\\workspace",
+    );
+  });
+
+  it("reports a remote check failure without displaying a success notification", async () => {
+    const session = repositorySession();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const remoteStatusCheckService = {
+      checkRemoteChanges: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error("remote failed"), { code: "SVN_REMOTE_STATUS_FAILED" }),
+        ),
+    };
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      { remoteStatusCheckService },
+    );
+
+    await controller.checkRemoteChanges();
+
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "SubversionR repository command failed: SVN_REMOTE_STATUS_FAILED",
     );
   });
 
@@ -9783,14 +9839,24 @@ describe("RepositoryCommandController", () => {
 });
 
 function commandController(
-  discoveryService: Pick<RepositoryDiscoveryService, "discoverRepositories" | "openDiscoveredRepository">,
+  discoveryService: Pick<
+    RepositoryDiscoveryService,
+    "discoverRepositories" | "openDiscoveredRepository"
+  >,
   sessionService: Pick<
     RepositorySessionService,
-    "closeRepository" | "listOpenSessions" | "openWorkingCopy" | "refreshSessionIdentityFromSnapshot"
+    | "closeRepository"
+    | "listOpenSessions"
+    | "openWorkingCopy"
+    | "refreshSessionIdentityFromSnapshot"
   >,
   ui: FakeCommandUi,
   deps: {
-    refreshService?: Pick<RepositoryRefreshService, "refreshRepository" | "fullReconcileRepository" | "refreshResource" | "refreshTargets">;
+    refreshService?: Pick<
+      RepositoryRefreshService,
+      "refreshRepository" | "fullReconcileRepository" | "refreshResource" | "refreshTargets"
+    >;
+    remoteStatusCheckService?: Pick<RemoteStatusCheckService, "checkRemoteChanges">;
     operationClient?: Pick<
       OperationClient,
       | "add"
@@ -9830,6 +9896,7 @@ function commandController(
     discoveryService,
     sessionService,
     refreshService: deps.refreshService ?? fakeRefreshService(),
+    remoteStatusCheckService: deps.remoteStatusCheckService ?? fakeRemoteStatusCheckService(0),
     operationClient: deps.operationClient ?? fakeOperationClient(operationResponse()),
     checkoutClient: deps.checkoutClient ?? fakeCheckoutClient(),
     propertiesClient: deps.propertiesClient ?? fakePropertiesClient(propertiesResponse()),
@@ -10207,6 +10274,31 @@ function fakeRefreshService(): Pick<
         }, options?: { signal?: AbortSignal }) => Promise<void>
       >()
       .mockResolvedValue(undefined),
+  };
+}
+
+function fakeRemoteStatusCheckService(remoteChanges: number): Pick<
+  RemoteStatusCheckService,
+  "checkRemoteChanges"
+> & {
+  checkRemoteChanges: ReturnType<
+    typeof vi.fn<
+      (
+        request: { repositoryId: string; epoch: number },
+        options?: { signal?: AbortSignal },
+      ) => Promise<number>
+    >
+  >;
+} {
+  return {
+    checkRemoteChanges: vi
+      .fn<
+        (
+          request: { repositoryId: string; epoch: number },
+          options?: { signal?: AbortSignal },
+        ) => Promise<number>
+      >()
+      .mockResolvedValue(remoteChanges),
   };
 }
 

@@ -6443,6 +6443,7 @@ $lifecycleMoveReport = [pscustomobject]@{
         repositoryOpen = $true
         statusSnapshot = $true
         statusRefresh = $true
+        statusRemoteCheck = $true
         realLibsvnBridge = $true
       }
     }

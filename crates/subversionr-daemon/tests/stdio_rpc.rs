@@ -1378,6 +1378,57 @@ impl BridgeApi for UpdateCredentialChallengeBridge {
 }
 
 #[derive(Debug)]
+struct RemoteStatusCredentialChallengeBridge;
+
+impl BridgeApi for RemoteStatusCredentialChallengeBridge {
+    fn info(&self) -> BridgeInfo {
+        FakeBridge.info()
+    }
+
+    delegate_fake_bridge!();
+
+    fn status_remote_check_with_cancellation(
+        &self,
+        identity: &RepositoryIdentity,
+        generation: u64,
+        auth: &mut dyn AuthRequestBroker,
+        _cancellation: &dyn BridgeCancellationToken,
+    ) -> Result<StatusSnapshot, BridgeFailure> {
+        let repository_id = format!(
+            "{}:{}",
+            identity.repository_uuid, identity.working_copy_root
+        );
+        let response = auth.request_credential(CredentialRequest {
+            request_id: "remote-status-cred-1".to_string(),
+            realm: "svn://example/status".to_string(),
+            kind: "usernamePassword".to_string(),
+            username: Some("alice".to_string()),
+            interactive: true,
+            persistence_allowed: true,
+            origin: "foreground".to_string(),
+            timeout_ms: 30000,
+            repository_id: Some(repository_id.clone()),
+            working_copy_root: Some(identity.working_copy_root.clone()),
+        })?;
+        assert!(matches!(response, CredentialResponse::Provide { .. }));
+
+        let mut snapshot = FakeBridge.status_snapshot(identity, generation)?;
+        let mut entry = snapshot.local_entries.remove(0);
+        entry.remote_status = "modified".to_string();
+        snapshot.local_entries.clear();
+        snapshot.remote_entries = vec![entry];
+        snapshot.summary = StatusSummary {
+            local_changes: 0,
+            remote_changes: 1,
+            conflicts: 0,
+            unversioned: 0,
+        };
+        snapshot.source = "libsvn-remote".to_string();
+        Ok(snapshot)
+    }
+}
+
+#[derive(Debug)]
 struct UpdateFailureBridge;
 
 impl BridgeApi for UpdateFailureBridge {
@@ -2105,6 +2156,71 @@ fn stdio_loop_routes_update_operation_through_credential_broker() {
             .is_some_and(|timestamp| !timestamp.is_empty())
     );
     assert_eq!(frames[4]["id"], 3);
+    assert_eq!(frames[4]["result"]["accepted"], true);
+}
+
+#[test]
+fn stdio_loop_routes_remote_status_through_credential_broker() {
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":2,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"remote-status-cred-1","result":{"requestId":"remote-status-cred-1","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
+    ]
+    .concat();
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio(
+        io::Cursor::new(input),
+        &mut output,
+        &RemoteStatusCredentialChallengeBridge,
+    )
+    .expect("stdio loop should bridge remote-status credential challenges");
+
+    let frames = decode_frames(&output).expect("frames should be content-length encoded");
+    assert_eq!(frames.len(), 4);
+    assert_eq!(frames[1]["id"], "remote-status-cred-1");
+    assert_eq!(frames[1]["method"], "credentials/request");
+    assert_eq!(frames[1]["params"]["repositoryId"], "repo-uuid:C:/wc");
+    assert_eq!(frames[1]["params"]["workingCopyRoot"], "C:/wc");
+    assert_eq!(frames[2]["id"], 2);
+    assert_eq!(frames[2]["result"]["source"], "libsvn-remote");
+    assert_eq!(
+        frames[2]["result"]["remoteUpsert"][0]["remoteStatus"],
+        "modified"
+    );
+    assert_eq!(frames[3]["result"]["accepted"], true);
+}
+
+#[test]
+fn stdio_loop_remote_status_auth_cancel_preserves_generation() {
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":2,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"remote-status-cred-1","result":{"requestId":"remote-status-cred-1","action":"cancel","error":{"code":"SUBVERSIONR_CREDENTIAL_CANCELLED","category":"auth","messageKey":"error.auth.credentialCancelled","args":{},"retryable":false}}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":3,"method":"status/refresh","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"targets":[{"path":"tracked.txt","depth":"empty","reason":"fileChanged"}]}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
+    ]
+    .concat();
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio(
+        io::Cursor::new(input),
+        &mut output,
+        &RemoteStatusCredentialChallengeBridge,
+    )
+    .expect("stdio loop should preserve remote status state after auth cancellation");
+
+    let frames = decode_frames(&output).expect("frames should be content-length encoded");
+    assert_eq!(frames.len(), 5);
+    assert_eq!(frames[2]["id"], 2);
+    assert_eq!(
+        frames[2]["error"]["code"],
+        "SUBVERSIONR_CREDENTIAL_CANCELLED"
+    );
+    assert_eq!(frames[3]["id"], 3);
+    assert_eq!(frames[3]["result"]["generation"], 1);
+    assert_eq!(frames[3]["result"]["remoteUpsert"], serde_json::json!([]));
     assert_eq!(frames[4]["result"]["accepted"], true);
 }
 

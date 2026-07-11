@@ -58,6 +58,7 @@ typedef struct bridge_status_receiver_baton {
   apr_pool_t *result_pool;
   svn_client_ctx_t *ctx;
   bridge_cancel_baton *cancel_baton;
+  int check_working_copy;
 } bridge_status_receiver_baton;
 
 typedef struct bridge_log_receiver_baton {
@@ -100,6 +101,7 @@ typedef struct bridge_commit_callback_baton {
 
 typedef struct bridge_auth_prompt_baton {
   subversionr_bridge_auth_callbacks callbacks;
+  apr_pool_t *pool;
   const char *working_copy_root;
   const char *default_username;
   int default_username_required;
@@ -390,6 +392,9 @@ static int bridge_status_should_emit(const svn_client_status_t *status, int need
     bridge_status_kind_is_actionable(status->node_status) ||
     bridge_status_kind_is_actionable(status->text_status) ||
     bridge_status_kind_is_actionable(status->prop_status) ||
+    bridge_status_kind_is_actionable(status->repos_node_status) ||
+    bridge_status_kind_is_actionable(status->repos_text_status) ||
+    bridge_status_kind_is_actionable(status->repos_prop_status) ||
     status->conflicted ||
     status->switched ||
     status->lock != NULL ||
@@ -543,7 +548,7 @@ static svn_error_t *bridge_status_receiver(
     SVN_ERR(svn_io_check_path(entry_path, &kind, scratch_pool));
   }
   int needs_lock = 0;
-  if (bridge_status_can_probe_needs_lock(status, kind)) {
+  if (receiver_baton->check_working_copy && bridge_status_can_probe_needs_lock(status, kind)) {
     SVN_ERR(bridge_status_has_needs_lock(
       receiver_baton->ctx,
       entry_path,
@@ -567,6 +572,17 @@ static svn_error_t *bridge_status_receiver(
   entry->node_status = bridge_status_kind_to_word(status->node_status);
   entry->text_status = bridge_status_kind_to_word(status->text_status);
   entry->property_status = bridge_status_kind_to_word(status->prop_status);
+  entry->repos_node_status = bridge_status_kind_to_word(status->repos_node_status);
+  entry->repos_text_status = bridge_status_kind_to_word(status->repos_text_status);
+  entry->repos_property_status = bridge_status_kind_to_word(status->repos_prop_status);
+  entry->repos_kind = svn_node_kind_to_word(status->ood_kind);
+  entry->repos_changed_revision = bridge_revision_to_i64(status->ood_changed_rev);
+  entry->repos_changed_author = status->ood_changed_author != NULL
+    ? apr_pstrdup(result_pool, status->ood_changed_author)
+    : NULL;
+  entry->repos_changed_date = status->ood_changed_date != 0
+    ? svn_time_to_cstring(status->ood_changed_date, result_pool)
+    : NULL;
   entry->revision = bridge_revision_to_i64(status->revision);
   entry->changed_revision = bridge_revision_to_i64(status->changed_rev);
   entry->changed_author = status->changed_author != NULL
@@ -578,9 +594,8 @@ static svn_error_t *bridge_status_receiver(
   entry->changelist = status->changelist != NULL
     ? apr_pstrdup(result_pool, status->changelist)
     : NULL;
-  entry->lock = status->lock != NULL
-    ? bridge_lock_info_dup(status->lock, 0, result_pool)
-    : bridge_lock_info_dup(status->repos_lock, 1, result_pool);
+  entry->lock = bridge_lock_info_dup(status->lock, 0, result_pool);
+  entry->repos_lock = bridge_lock_info_dup(status->repos_lock, 1, result_pool);
   entry->needs_lock = needs_lock;
   entry->depth = svn_depth_to_word(status->depth);
   entry->conflicted = status->conflicted ? 1 : 0;
@@ -1076,6 +1091,7 @@ static svn_error_t *bridge_auth_simple_prompt(
   created->password = bridge_copy_secret(pool, response.secret);
   created->may_save = (may_save && response.may_save) ? TRUE : FALSE;
   *cred = created;
+  prompt_baton->default_username = apr_pstrdup(prompt_baton->pool, response.username);
   bridge_dispose_credential_response(&prompt_baton->callbacks, &response);
   return SVN_NO_ERROR;
 }
@@ -1100,10 +1116,7 @@ static svn_error_t *bridge_auth_username_prompt(
     prompt_baton->default_username == NULL ||
     prompt_baton->default_username[0] == '\0'
   ) {
-    if (prompt_baton->default_username_required) {
-      return bridge_auth_default_username_error();
-    }
-    prompt_baton->default_username = "";
+    return bridge_auth_default_username_error();
   }
 
   svn_auth_cred_username_t *created = apr_pcalloc(pool, sizeof(*created));
@@ -1172,13 +1185,12 @@ static svn_error_t *bridge_create_auth_baton(
   }
 
   prompt_baton->default_username_required = require_default_username;
-  prompt_baton->default_username = NULL;
-  if (require_default_username) {
-    const char *default_username = svn_user_get_name(pool);
-    if (default_username == NULL || default_username[0] == '\0') {
-      return bridge_auth_default_username_error();
-    }
-    prompt_baton->default_username = default_username;
+  prompt_baton->pool = pool;
+  const char *default_username = svn_user_get_name(pool);
+  prompt_baton->default_username =
+    (default_username != NULL && default_username[0] != '\0') ? default_username : NULL;
+  if (require_default_username && prompt_baton->default_username == NULL) {
+    return bridge_auth_default_username_error();
   }
 
   svn_auth_provider_object_t *provider = NULL;
@@ -1558,17 +1570,42 @@ static int bridge_error_status_with_cancellation(
   return 2;
 }
 
-int subversionr_bridge_status_scan(
+static int bridge_error_is_auth_failure(const svn_error_t *err) {
+  for (const svn_error_t *current = err; current != NULL; current = current->child) {
+    switch (current->apr_err) {
+      case SVN_ERR_RA_NOT_AUTHORIZED:
+      case SVN_ERR_AUTHN_CREDS_UNAVAILABLE:
+      case SVN_ERR_AUTHN_NO_PROVIDER:
+      case SVN_ERR_AUTHN_PROVIDERS_EXHAUSTED:
+      case SVN_ERR_AUTHN_CREDS_NOT_SAVED:
+      case SVN_ERR_AUTHN_FAILED:
+      case SVN_ERR_AUTHZ_ROOT_UNREADABLE:
+      case SVN_ERR_AUTHZ_UNREADABLE:
+      case SVN_ERR_AUTHZ_PARTIALLY_READABLE:
+      case SVN_ERR_AUTHZ_INVALID_CONFIG:
+      case SVN_ERR_AUTHZ_UNWRITABLE:
+        return 1;
+      default:
+        break;
+    }
+  }
+  return 0;
+}
+
+static int bridge_status_scan_impl(
   subversionr_bridge_runtime *runtime,
   const char *path,
-  const char *depth,
+  svn_depth_t scan_depth,
+  svn_boolean_t get_all,
+  svn_boolean_t check_out_of_date,
+  svn_boolean_t check_working_copy,
+  int classify_auth_failures,
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_status_scan_info *snapshot
 ) {
   if (
     runtime == NULL ||
     path == NULL ||
-    depth == NULL ||
     cancel_callbacks == NULL ||
     snapshot == NULL
   ) {
@@ -1577,13 +1614,6 @@ int subversionr_bridge_status_scan(
   if (!bridge_cancel_callbacks_valid(cancel_callbacks)) {
     return BRIDGE_STATUS_CANCEL_CALLBACK_FAILED;
   }
-  svn_depth_t scan_depth = svn_depth_unknown;
-  if (!bridge_depth_from_word(depth, &scan_depth)) {
-    return 5;
-  }
-
-  apr_pool_clear(runtime->result_pool);
-
   const char *local_abspath = NULL;
   svn_error_t *err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (err != NULL) {
@@ -1597,6 +1627,7 @@ int subversionr_bridge_status_scan(
   receiver_baton.entries = entries;
   receiver_baton.result_pool = runtime->result_pool;
   receiver_baton.ctx = runtime->ctx;
+  receiver_baton.check_working_copy = check_working_copy ? 1 : 0;
 
   svn_opt_revision_t revision = { 0 };
   revision.kind = svn_opt_revision_unspecified;
@@ -1607,9 +1638,6 @@ int subversionr_bridge_status_scan(
   void *previous_cancel_baton = runtime->ctx->cancel_baton;
   runtime->ctx->cancel_func = bridge_cancel_check;
   runtime->ctx->cancel_baton = &cancel_baton;
-  const svn_boolean_t get_all = TRUE;
-  const svn_boolean_t check_out_of_date = FALSE;
-  const svn_boolean_t check_working_copy = TRUE;
   const svn_boolean_t no_ignore = FALSE;
   const svn_boolean_t ignore_externals = TRUE;
   const svn_boolean_t depth_as_sticky = FALSE;
@@ -1641,6 +1669,10 @@ int subversionr_bridge_status_scan(
   runtime->ctx->cancel_func = previous_cancel_func;
   runtime->ctx->cancel_baton = previous_cancel_baton;
   if (err != NULL) {
+    if (classify_auth_failures && bridge_error_is_auth_failure(err)) {
+      svn_error_clear(err);
+      return 12;
+    }
     return bridge_error_status_with_cancellation(
       err,
       &cancel_baton,
@@ -1652,6 +1684,98 @@ int subversionr_bridge_status_scan(
   snapshot->entries = (const subversionr_bridge_status_entry *)entries->elts;
   snapshot->entry_count = (size_t)entries->nelts;
   return 0;
+}
+
+int subversionr_bridge_status_scan(
+  subversionr_bridge_runtime *runtime,
+  const char *path,
+  const char *depth,
+  const subversionr_bridge_cancel_callbacks *cancel_callbacks,
+  subversionr_bridge_status_scan_info *snapshot
+) {
+  if (runtime == NULL) {
+    return 1;
+  }
+  svn_depth_t scan_depth = svn_depth_unknown;
+  if (!bridge_depth_from_word(depth, &scan_depth)) {
+    return 5;
+  }
+  apr_pool_clear(runtime->result_pool);
+  return bridge_status_scan_impl(
+    runtime,
+    path,
+    scan_depth,
+    TRUE,
+    FALSE,
+    TRUE,
+    0,
+    cancel_callbacks,
+    snapshot
+  );
+}
+
+int subversionr_bridge_status_remote_scan_with_auth(
+  subversionr_bridge_runtime *runtime,
+  const char *path,
+  const subversionr_bridge_auth_callbacks *auth_callbacks,
+  const subversionr_bridge_cancel_callbacks *cancel_callbacks,
+  subversionr_bridge_status_scan_info *snapshot
+) {
+  if (
+    runtime == NULL ||
+    path == NULL ||
+    snapshot == NULL ||
+    !bridge_auth_callbacks_valid(auth_callbacks)
+  ) {
+    return 1;
+  }
+
+  apr_pool_clear(runtime->result_pool);
+  apr_pool_t *auth_pool = NULL;
+  if (apr_pool_create(&auth_pool, runtime->pool) != APR_SUCCESS) {
+    return 12;
+  }
+
+  bridge_auth_prompt_baton *prompt_baton =
+    apr_pcalloc(auth_pool, sizeof(*prompt_baton));
+  prompt_baton->callbacks = *auth_callbacks;
+  prompt_baton->working_copy_root = apr_pstrdup(auth_pool, path);
+  prompt_baton->callback_failed = 0;
+
+  svn_auth_baton_t *auth_baton = NULL;
+  svn_error_t *err = bridge_create_auth_baton(
+    &auth_baton,
+    prompt_baton,
+    0,
+    auth_pool
+  );
+  if (err != NULL) {
+    svn_error_clear(err);
+    apr_pool_destroy(auth_pool);
+    return 12;
+  }
+
+  svn_auth_baton_t *previous_auth_baton = runtime->ctx->auth_baton;
+  runtime->ctx->auth_baton = auth_baton;
+  int status = bridge_status_scan_impl(
+    runtime,
+    path,
+    svn_depth_unknown,
+    FALSE,
+    TRUE,
+    FALSE,
+    1,
+    cancel_callbacks,
+    snapshot
+  );
+  runtime->ctx->auth_baton = previous_auth_baton;
+
+  int callback_failed = prompt_baton->callback_failed;
+  apr_pool_destroy(auth_pool);
+  if (status != 0 && callback_failed) {
+    return 10;
+  }
+  return status;
 }
 
 static int bridge_content_revision(

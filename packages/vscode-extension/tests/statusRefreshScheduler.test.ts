@@ -13,6 +13,48 @@ const scope: RepositoryWatchScope = {
 };
 
 describe("StatusRefreshScheduler", () => {
+  it("serializes an explicit remote operation with local dirty-path refresh", async () => {
+    const calls: string[] = [];
+    let releaseRemote!: () => void;
+    const remoteGate = new Promise<void>((resolve) => {
+      releaseRemote = resolve;
+    });
+    const client: StatusRefreshClient = {
+      refreshStatus: vi.fn(async (request) => {
+        calls.push("local-refresh");
+        return deltaResponseFromRequest(request);
+      }),
+    };
+    const scheduler = new StatusRefreshScheduler(
+      client,
+      fakeStatusSnapshotStore(),
+      fakeSourceControlProjectionService(),
+      { debounceMs: 10_000 },
+    );
+    scheduler.registerRepository(scope);
+
+    const remote = scheduler.runExclusive(scope.repositoryId, async () => {
+      calls.push("remote-start");
+      await remoteGate;
+      calls.push("remote-end");
+    });
+    await Promise.resolve();
+    scheduler.recordFileEvent(scope.repositoryId, {
+      path: "C:/wc/src/main.c",
+      kind: "change",
+      timestamp: 100,
+    });
+    const local = scheduler.flushRepository(scope.repositoryId);
+    await Promise.resolve();
+
+    expect(client.refreshStatus).not.toHaveBeenCalled();
+    releaseRemote();
+    await remote;
+    await local;
+
+    expect(calls).toEqual(["remote-start", "remote-end", "local-refresh"]);
+  });
+
   it("flushes dirty paths through status/refresh, applies the delta, and clears them after success", async () => {
     const requests: StatusRefreshRequest[] = [];
     const delta = deltaResponse();

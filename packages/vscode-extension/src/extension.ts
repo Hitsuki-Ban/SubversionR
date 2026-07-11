@@ -132,9 +132,11 @@ import { SourceControlProjectionService } from "./scm/sourceControlProjectionSer
 import { SourceControlResourceStore } from "./scm/sourceControlResourceStore";
 import { VscodeSourceControlPresenter } from "./scm/vscodeSourceControlPresenter";
 import { BackendStatusRefreshClient } from "./status/backendStatusRefreshClient";
+import { BackendStatusRemoteCheckClient } from "./status/backendStatusRemoteCheckClient";
 import { BackendStatusSnapshotClient } from "./status/backendStatusSnapshotClient";
 import { DirtyPathPipeline } from "./status/dirtyPathPipeline";
 import { RepositoryRefreshService } from "./status/repositoryRefreshService";
+import { RemoteStatusCheckService } from "./status/remoteStatusCheckService";
 import { RepositoryWatcherService } from "./status/repositoryWatcherService";
 import { StatusRefreshCoverageStore } from "./status/statusRefreshCoverageStore";
 import { createStatusNotificationHandler } from "./status/statusStaleNotificationHandler";
@@ -608,6 +610,12 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionService,
     refreshService: new RepositoryRefreshService({
       dirtyPathPipeline,
+    }),
+    remoteStatusCheckService: new RemoteStatusCheckService({
+      client: new BackendStatusRemoteCheckClient(service),
+      statusSnapshotStore,
+      sourceControlProjection,
+      refreshPipeline: dirtyPathPipeline,
     }),
     operationClient: new BackendOperationClient(service),
     checkoutClient: new BackendRepositoryCheckoutClient(service),

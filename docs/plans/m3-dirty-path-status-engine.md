@@ -648,6 +648,20 @@ The forty-sixth M3 slice closes the installed/load generation-supersede evidence
 
 M3at does not claim native watcher event production, OS-level watcher timing, remote-status supersede behavior, or a separate installed late-success race harness beyond the scheduler/store unit evidence and the installed dirty-generation load workflow.
 
+## M3au Implemented Slice
+
+The forty-seventh M3 slice adds truthful, user-initiated remote status without changing the offline local scheduler:
+
+- Protocol v1.28 requires `statusRemoteCheck` and adds the strict `status/checkRemote` request with only `repositoryId` and `epoch`; the response reuses the existing generation-bearing `StatusDelta` remote dimension.
+- `status/refresh`, watcher events, scheduled reconciliation, and repository open remain local-only and never infer remote intent from a target reason.
+- The native bridge uses a dedicated auth- and cancellation-aware entry point. It calls `svn_client_status6` to compare against repository HEAD with `check_out_of_date = TRUE`, `check_working_copy = FALSE`, `get_all = FALSE`, ambient working-copy depth, and externals ignored.
+- The bridge copies `repos_*` status, out-of-date metadata, node kind, and remote lock data before callback scratch pools are cleared. Remote additions that do not yet exist in the working copy remain eligible.
+- A completed check atomically replaces the repository session's remote map, so paths absent from the authoritative result become `remoteRemove`. Failure or cancellation does not advance the generation or publish a partial result.
+- TypeScript serializes the explicit remote check with the repository's local refresh scheduler, applies the remote delta to canonical status before Source Control projection, preserves a path in both Changes and Incoming when both dimensions are modified, and reports the final Incoming total rather than the delta count.
+- The installed VSIX Source Control surface gate creates a second local-file working copy, commits a remote edit plus remote addition, binds the expected paths to `svn status --show-updates --xml`, executes the real command, and requires both paths in Incoming while the dual-state path remains in Changes.
+
+M3au does not add default remote polling, scan outside sparse working-copy ambient depth, mix external working copies into a parent check, claim arbitrary server transports, or make the production extension depend on the `svn` CLI.
+
 ## Deferred M3 Work
 
 - SCM view reveal repository picker and empty-state UX.
