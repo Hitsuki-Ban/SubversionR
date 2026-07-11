@@ -69,18 +69,21 @@ function New-FakeVsix([string]$Root, [string]$EntrypointContent) {
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $entrypointPath) | Out-Null
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $backendArtifactPath) | Out-Null
   Set-Content -LiteralPath $entrypointPath -Encoding utf8 -NoNewline -Value $EntrypointContent
-  Set-Content -LiteralPath $packageJsonPath -Encoding utf8 -NoNewline -Value '{"name":"subversionr","publisher":"hitsuki-ban","version":"0.2.0","displayName":"SubversionR"}'
+  Set-Content -LiteralPath $packageJsonPath -Encoding utf8 -NoNewline -Value '{"name":"subversionr","publisher":"hitsuki-ban","version":"0.2.1","displayName":"SubversionR"}'
   Set-Content -LiteralPath $manifestPath -Encoding utf8 -NoNewline -Value @'
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
   <Metadata>
-    <Identity Id="subversionr" Version="0.2.0" Language="en-US" Publisher="hitsuki-ban" TargetPlatform="win32-x64" />
+    <Identity Id="subversionr" Version="0.2.1" Language="en-US" Publisher="hitsuki-ban" TargetPlatform="win32-x64" />
+    <Properties>
+      <Property Id="Microsoft.VisualStudio.Code.PreRelease" Value="true" />
+    </Properties>
   </Metadata>
 </PackageManifest>
 '@
   Set-Content -LiteralPath $backendArtifactPath -Encoding utf8 -NoNewline -Value "fake sidecar"
 
-  $vsixPath = Join-Path $Root "vsix\subversionr-win32-x64-0.2.0.vsix"
+  $vsixPath = Join-Path $Root "vsix\subversionr-win32-x64-0.2.1.vsix"
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $vsixPath) | Out-Null
   Remove-Item -LiteralPath $vsixPath -Force -ErrorAction SilentlyContinue
   [System.IO.Compression.ZipFile]::CreateFromDirectory($stagingRoot, $vsixPath)
@@ -106,7 +109,7 @@ function New-EvidencePath([string]$EvidenceRoot, [string]$Name) {
 
 function Get-BetaArtifactBundleUploadPaths {
   @(
-    "target/vsix/subversionr-win32-x64-0.2.0.vsix",
+    "target/vsix/subversionr-win32-x64-0.2.1.vsix",
     "target/release-evidence/subversionr-source-sbom.cdx.json",
     "target/release-evidence/subversionr-vsix-package-win32-x64.json",
     "target/release-evidence/subversionr-vsix-cli-install-win32-x64.json",
@@ -154,10 +157,10 @@ function Write-InstalledEvidence([string]$EvidenceRoot, [string]$Name, [string]$
     target = "win32-x64"
     extension = [pscustomobject]@{
       id = "hitsuki-ban.subversionr"
-      version = "0.2.0"
+      version = "0.2.1"
       source = "installed-vsix"
     }
-    installedExtensions = @("hitsuki-ban.subversionr@0.2.0")
+    installedExtensions = @("hitsuki-ban.subversionr@0.2.1")
     vsix = [pscustomobject]@{
       path = $Vsix.path
       relativePath = $Vsix.relativePath
@@ -231,7 +234,7 @@ function Write-InstalledSourceControlUiE2eEvidence([string]$EvidenceRoot, [objec
     )
     extension = [pscustomobject]@{
       id = "hitsuki-ban.subversionr"
-      version = "0.2.0"
+      version = "0.2.1"
       source = "installed-vsix"
       hasCheckoutRepositoryCommand = $true
       hasUpdateToRevisionCommand = $true
@@ -245,7 +248,7 @@ function Write-InstalledSourceControlUiE2eEvidence([string]$EvidenceRoot, [objec
       hasBranchCreateRepositoryCommand = $true
       hasSwitchRepositoryCommand = $true
     }
-    installedExtensions = @("hitsuki-ban.subversionr@0.2.0")
+    installedExtensions = @("hitsuki-ban.subversionr@0.2.1")
     vsix = [pscustomobject]@{
       path = $Vsix.path
       relativePath = $Vsix.relativePath
@@ -397,7 +400,8 @@ function New-BetaCandidateFixture([string]$Root) {
     extension = [pscustomobject]@{
       id = "hitsuki-ban.subversionr"
       displayName = "SubversionR"
-      version = "0.2.0"
+      version = "0.2.1"
+      preRelease = $true
     }
     inputs = [pscustomobject]@{
       packageRoot = Convert-ToRepoRelativePath $packageRoot
@@ -419,9 +423,9 @@ function New-BetaCandidateFixture([string]$Root) {
     target = "win32-x64"
     extension = [pscustomobject]@{
       id = "hitsuki-ban.subversionr"
-      version = "0.2.0"
+      version = "0.2.1"
     }
-    installedExtensions = @("hitsuki-ban.subversionr@0.2.0")
+    installedExtensions = @("hitsuki-ban.subversionr@0.2.1")
     vsix = [pscustomobject]@{
       path = $vsix.path
       relativePath = $vsix.relativePath
@@ -448,7 +452,7 @@ function New-BetaCandidateFixture([string]$Root) {
     target = "win32-x64"
     extension = [pscustomobject]@{
       id = "hitsuki-ban.subversionr"
-      currentVersion = "0.2.0"
+      currentVersion = "0.2.1"
       previousVersion = "0.0.0-m7f.fixture"
     }
     packages = [pscustomobject]@{
@@ -497,6 +501,16 @@ function New-BetaCandidateFixture([string]$Root) {
   $liveAttestationPath = Join-Path $inputRoot "github-attestation-evidence.win32-x64.json"
   $attestationBundlePath = Join-Path $inputRoot "github-attestation-bundle.win32-x64.json"
   $attestationVerificationPath = Join-Path $inputRoot "github-attestation-verification.win32-x64.json"
+  $candidateAttestationContractPath = Join-Path $inputRoot "github-attestation-candidate-contract.win32-x64.json"
+  Write-Json $candidateAttestationContractPath ([pscustomobject]@{
+    schemaVersion = 1
+    schema = "subversionr.release.github-attestation-contract.win32-x64.v1"
+    status = "pending-release-attestation"
+    publicReadinessClaim = $false
+    target = "win32-x64"
+    release = [pscustomobject]@{ tag = "v0.2.1-beta.1"; url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.1-beta.1" }
+    subject = [pscustomobject]@{ name = (Split-Path -Leaf $vsix.path); size = $vsix.size; sha256 = $vsix.sha256; preReleaseProperty = $true }
+  })
   Write-Json $liveAttestationPath ([pscustomobject]@{
     schema = "subversionr.release.live-github-attestation.win32-x64.v1"
     status = "live-attestation-verified"
@@ -536,12 +550,18 @@ function New-BetaCandidateFixture([string]$Root) {
         sha256 = Get-Sha256 $vsixEvidencePath
         schema = "subversionr.release.vsix-package.win32-x64.v1"
       }
+      candidateAttestationContract = [pscustomobject]@{
+        path = Convert-ToRepoRelativePath $candidateAttestationContractPath
+        sha256 = Get-Sha256 $candidateAttestationContractPath
+        schema = "subversionr.release.github-attestation-contract.win32-x64.v1"
+      }
       liveAttestation = New-HashRecord $liveAttestationPath
       attestationBundle = New-HashRecord $attestationBundlePath
       attestationVerification = New-HashRecord $attestationVerificationPath
     }
     attestation = [pscustomobject]@{
       status = "verified"
+      scope = "historical-public-cutover-release"
       readiness = [pscustomobject]@{
         readinessStatus = "live-attestation-verified"
         action = "actions/attest@v4"
@@ -550,10 +570,10 @@ function New-BetaCandidateFixture([string]$Root) {
         originalBuildProvenanceClaim = $false
         artifactSignatureClaim = $false
         workflowPath = ".github/workflows/attest-release-vsix.yml"
-        subjectName = Split-Path -Leaf $vsix.path
-        subjectSha256 = $vsix.sha256
-        artifactPath = $vsix.relativePath
-        artifactSize = $vsix.size
+        subjectName = "subversionr-win32-x64-0.2.0.vsix"
+        subjectSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        artifactPath = "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix"
+        artifactSize = 12
         repoUrlRecorded = $true
         bundleRecorded = $true
         attestationUrlRecorded = $true
@@ -571,6 +591,19 @@ function New-BetaCandidateFixture([string]$Root) {
         evidenceSha256 = Get-Sha256 $liveAttestationPath
       }
     }
+    candidateAttestation = [pscustomobject]@{
+      status = "pending-release-attestation"
+      scope = "current-candidate"
+      contractPath = Convert-ToRepoRelativePath $candidateAttestationContractPath
+      contractSha256 = Get-Sha256 $candidateAttestationContractPath
+      releaseTag = "v0.2.1-beta.1"
+      releaseUrl = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.1-beta.1"
+      subjectName = Split-Path -Leaf $vsix.path
+      subjectSha256 = $vsix.sha256
+      subjectSize = $vsix.size
+      preReleaseProperty = $true
+      liveEvidenceRecorded = $false
+    }
   })
 
   Write-Json (New-EvidencePath $evidenceRoot "publication-gaps") ([pscustomobject]@{
@@ -578,6 +611,19 @@ function New-BetaCandidateFixture([string]$Root) {
     schema = "subversionr.release.publication-gaps.win32-x64.v1"
     publicReadinessClaim = $false
     target = "win32-x64"
+    currentCandidate = [pscustomobject]@{
+      status = "pending-release-attestation"
+      scope = "current-candidate"
+      contractPath = Convert-ToRepoRelativePath $candidateAttestationContractPath
+      contractSha256 = Get-Sha256 $candidateAttestationContractPath
+      releaseTag = "v0.2.1-beta.1"
+      releaseUrl = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.1-beta.1"
+      subjectName = Split-Path -Leaf $vsix.path
+      subjectSha256 = $vsix.sha256
+      subjectSize = $vsix.size
+      preReleaseProperty = $true
+      liveEvidenceRecorded = $false
+    }
     publicCutover = [pscustomobject]@{
       release = [pscustomobject]@{
         artifactAttestationPublished = $true
@@ -663,7 +709,7 @@ function New-BetaCandidateFixture([string]$Root) {
     metadata = [pscustomobject]@{
       component = [pscustomobject]@{
         name = "SubversionR"
-        version = "0.2.0"
+        version = "0.2.1"
       }
     }
     components = @()
@@ -761,6 +807,7 @@ try {
   Assert-Equal "False" ([string]$report.publicReadinessClaim) "Beta candidate consistency report must not claim public readiness."
   Assert-Equal "win32-x64" $report.target "Beta candidate consistency report should record the target."
   Assert-Equal $fixture.vsix.sha256 $report.vsix.sha256 "Beta candidate consistency report should bind to current VSIX bytes."
+  Assert-Equal "True" ([string]$report.vsix.preRelease) "Beta candidate consistency report should require the packaged pre-release property."
   Assert-True (@($report.requiredEvidenceFiles).Count -eq 12) "Beta candidate consistency report should verify all required Beta package evidence files."
   Assert-Equal "actions/upload-artifact@v7" $report.artifactBundle.uploadAction "Beta candidate consistency report should bind the upload action."
   Assert-Equal "subversionr-win32-x64-beta-candidate" $report.artifactBundle.name "Beta candidate consistency report should bind the upload artifact name."
@@ -790,7 +837,8 @@ try {
   Assert-True ($manifestFilePaths -notcontains (Convert-ToRepoRelativePath $fixture.artifactBundleManifestPath)) "Artifact bundle manifest should not self-hash."
   Assert-True ($manifestFilePaths -notcontains (Convert-ToRepoRelativePath $fixture.outputPath)) "Artifact bundle manifest should not include the final consistency report before it exists."
   Assert-True (@($report.nonClaims | Where-Object { [string]$_ -like "*Marketplace/public install*" }).Count -gt 0) "Beta candidate consistency report should keep public install non-claims explicit."
-  Assert-True (@($report.assertions | Where-Object { [string]$_ -like "*verified live GitHub artifact attestation*" }).Count -eq 1) "Beta candidate consistency report should record the verified live attestation assertion."
+  Assert-True (@($report.assertions | Where-Object { [string]$_ -like "*pending current-candidate attestation contract*" }).Count -eq 1) "Beta candidate consistency report should distinguish the pending current candidate from historical attestation evidence."
+  Assert-True (@($report.nonClaims | Where-Object { [string]$_ -like "*current-candidate release or live GitHub attestation*" }).Count -eq 1) "Beta candidate consistency report should retain the current-candidate attestation non-claim."
   Assert-True (@($report.nonClaims | Where-Object { [string]$_ -like "*artifact attestation generation*" }).Count -eq 0) "Beta candidate consistency report should not retain the obsolete live attestation non-claim."
 
   $staleAttestationBundleFixture = New-BetaCandidateFixture (Join-Path $tempRoot "stale-attestation-bundle")
@@ -1021,11 +1069,11 @@ try {
   $reorderedBundleFixture = New-BetaCandidateFixture (Join-Path $tempRoot "reordered-upload-paths")
   $reorderedCiWorkflowLines = [System.Collections.Generic.List[string]]::new()
   $reorderedCiWorkflowLines.AddRange([string[]](Get-Content -LiteralPath $reorderedBundleFixture.ciWorkflowPath))
-  $vsixLineIndex = $reorderedCiWorkflowLines.IndexOf("            target/vsix/subversionr-win32-x64-0.2.0.vsix")
+  $vsixLineIndex = $reorderedCiWorkflowLines.IndexOf("            target/vsix/subversionr-win32-x64-0.2.1.vsix")
   $sbomLineIndex = $reorderedCiWorkflowLines.IndexOf("            target/release-evidence/subversionr-source-sbom.cdx.json")
   Assert-True ($vsixLineIndex -ge 0 -and $sbomLineIndex -eq ($vsixLineIndex + 1)) "Reordered bundle fixture should contain adjacent VSIX and source SBOM path lines."
   $reorderedCiWorkflowLines[$vsixLineIndex] = "            target/release-evidence/subversionr-source-sbom.cdx.json"
-  $reorderedCiWorkflowLines[$sbomLineIndex] = "            target/vsix/subversionr-win32-x64-0.2.0.vsix"
+  $reorderedCiWorkflowLines[$sbomLineIndex] = "            target/vsix/subversionr-win32-x64-0.2.1.vsix"
   Set-Content -LiteralPath $reorderedBundleFixture.ciWorkflowPath -Encoding utf8 -Value $reorderedCiWorkflowLines
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $reorderedBundleFixture
@@ -1098,7 +1146,7 @@ $uploadPathBlock
         with:
           name: subversionr-win32-x64-beta-candidate
           path: |
-            target/vsix/subversionr-win32-x64-0.2.0.vsix
+            target/vsix/subversionr-win32-x64-0.2.1.vsix
             target/release-evidence/subversionr-source-sbom.cdx.json
             target/release-evidence/THIRD-PARTY-NOTICES.md
             target/release-evidence/installed-source-control-ui-e2e/win32-x64/**/*.png
@@ -1139,7 +1187,7 @@ $uploadPathBlock16
         with:
           name: subversionr-win32-x64-beta-candidate
           path: |
-            target/vsix/subversionr-win32-x64-0.2.0.vsix
+            target/vsix/subversionr-win32-x64-0.2.1.vsix
             target/release-evidence/subversionr-source-sbom.cdx.json
             target/release-evidence/THIRD-PARTY-NOTICES.md
             target/release-evidence/installed-source-control-ui-e2e/win32-x64/**/*.png

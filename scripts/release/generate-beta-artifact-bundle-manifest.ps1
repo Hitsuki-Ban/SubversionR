@@ -112,7 +112,7 @@ function New-FileRecord([string]$Path, [string]$Role) {
 
 function Get-ExpectedUploadPaths([string]$Target) {
   @(
-    "target/vsix/subversionr-win32-x64-0.2.0.vsix",
+    "target/vsix/subversionr-win32-x64-0.2.1.vsix",
     "target/release-evidence/subversionr-source-sbom.cdx.json",
     "target/release-evidence/subversionr-vsix-package-$Target.json",
     "target/release-evidence/subversionr-vsix-cli-install-$Target.json",

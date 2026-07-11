@@ -126,6 +126,128 @@ function Get-ZipEntryNames([string]$ZipPath) {
   }
 }
 
+function Set-DeterministicZipTimestamps([string]$ZipPath) {
+  $bytes = [System.IO.File]::ReadAllBytes($ZipPath)
+  $minimumEocdSize = 22
+  $maximumCommentSize = 65535
+  $eocdOffset = -1
+  for ($offset = $bytes.Length - $minimumEocdSize; $offset -ge [Math]::Max(0, $bytes.Length - $minimumEocdSize - $maximumCommentSize); $offset--) {
+    if ([System.BitConverter]::ToUInt32($bytes, $offset) -eq 0x06054b50) {
+      $eocdOffset = $offset
+      break
+    }
+  }
+  if ($eocdOffset -lt 0) {
+    throw "VSIX must contain an end-of-central-directory record."
+  }
+
+  $diskNumber = [System.BitConverter]::ToUInt16($bytes, $eocdOffset + 4)
+  $centralDirectoryDisk = [System.BitConverter]::ToUInt16($bytes, $eocdOffset + 6)
+  $entriesOnDisk = [System.BitConverter]::ToUInt16($bytes, $eocdOffset + 8)
+  $entryCount = [System.BitConverter]::ToUInt16($bytes, $eocdOffset + 10)
+  $centralDirectorySize = [System.BitConverter]::ToUInt32($bytes, $eocdOffset + 12)
+  $centralDirectoryOffset = [System.BitConverter]::ToUInt32($bytes, $eocdOffset + 16)
+  if ($diskNumber -ne 0 -or $centralDirectoryDisk -ne 0 -or $entriesOnDisk -ne $entryCount -or $entryCount -eq [uint16]::MaxValue -or $centralDirectorySize -eq [uint32]::MaxValue -or $centralDirectoryOffset -eq [uint32]::MaxValue) {
+    throw "VSIX timestamp normalization supports only single-disk, non-ZIP64 archives."
+  }
+  if ([int64]$centralDirectoryOffset + [int64]$centralDirectorySize -ne $eocdOffset) {
+    throw "VSIX central directory must end immediately before its end record."
+  }
+
+  [uint16]$fixedDosTime = 0
+  [uint16]$fixedDosDate = (20 -shl 9) -bor (1 -shl 5) -bor 1
+  $fixedTimeBytes = [System.BitConverter]::GetBytes($fixedDosTime)
+  $fixedDateBytes = [System.BitConverter]::GetBytes($fixedDosDate)
+  $centralOffset = [int64]$centralDirectoryOffset
+  $records = [System.Collections.Generic.List[object]]::new()
+  for ($index = 0; $index -lt $entryCount; $index++) {
+    if ($centralOffset + 46 -gt $bytes.Length -or [System.BitConverter]::ToUInt32($bytes, [int]$centralOffset) -ne 0x02014b50) {
+      throw "VSIX central directory entry $index is invalid."
+    }
+    [System.Array]::Copy($fixedTimeBytes, 0, $bytes, $centralOffset + 12, 2)
+    [System.Array]::Copy($fixedDateBytes, 0, $bytes, $centralOffset + 14, 2)
+
+    $localHeaderOffset = [System.BitConverter]::ToUInt32($bytes, [int]$centralOffset + 42)
+    if ($localHeaderOffset -eq [uint32]::MaxValue -or $localHeaderOffset + 30 -gt $bytes.Length -or [System.BitConverter]::ToUInt32($bytes, [int]$localHeaderOffset) -ne 0x04034b50) {
+      throw "VSIX local header for central directory entry $index is invalid or ZIP64."
+    }
+    [System.Array]::Copy($fixedTimeBytes, 0, $bytes, [int64]$localHeaderOffset + 10, 2)
+    [System.Array]::Copy($fixedDateBytes, 0, $bytes, [int64]$localHeaderOffset + 12, 2)
+
+    $fileNameLength = [System.BitConverter]::ToUInt16($bytes, [int]$centralOffset + 28)
+    $extraLength = [System.BitConverter]::ToUInt16($bytes, [int]$centralOffset + 30)
+    $commentLength = [System.BitConverter]::ToUInt16($bytes, [int]$centralOffset + 32)
+    $centralRecordLength = 46 + $fileNameLength + $extraLength + $commentLength
+    $centralRecord = [byte[]]::new($centralRecordLength)
+    [System.Array]::Copy($bytes, $centralOffset, $centralRecord, 0, $centralRecordLength)
+    $name = [System.Text.Encoding]::UTF8.GetString($bytes, [int]$centralOffset + 46, $fileNameLength)
+    $records.Add([pscustomobject]@{
+        name = $name
+        localOffset = [int64]$localHeaderOffset
+        centralRecord = $centralRecord
+        localRecord = $null
+      }) | Out-Null
+    $centralOffset += $centralRecordLength
+  }
+
+  $recordsByLocalOffset = @($records | Sort-Object localOffset)
+  for ($index = 0; $index -lt $recordsByLocalOffset.Count; $index++) {
+    $record = $recordsByLocalOffset[$index]
+    $nextOffset = if ($index + 1 -lt $recordsByLocalOffset.Count) { $recordsByLocalOffset[$index + 1].localOffset } else { [int64]$centralDirectoryOffset }
+    $recordLength = $nextOffset - $record.localOffset
+    if ($recordLength -le 0 -or $record.localOffset + $recordLength -gt $centralDirectoryOffset) {
+      throw "VSIX local record layout is invalid for $($record.name)."
+    }
+    $localRecord = [byte[]]::new($recordLength)
+    [System.Array]::Copy($bytes, $record.localOffset, $localRecord, 0, $recordLength)
+    $record.localRecord = $localRecord
+  }
+
+  $orderedRecords = [object[]]$records.ToArray()
+  $recordComparer = [System.Collections.Generic.Comparer[object]]::Create(
+    [System.Comparison[object]] {
+      param($left, $right)
+      [System.StringComparer]::Ordinal.Compare([string]$left.name, [string]$right.name)
+    }
+  )
+  [System.Array]::Sort($orderedRecords, $recordComparer)
+  $output = [System.IO.MemoryStream]::new($bytes.Length)
+  try {
+    $firstLocalOffset = $recordsByLocalOffset[0].localOffset
+    if ($firstLocalOffset -gt 0) {
+      $output.Write($bytes, 0, $firstLocalOffset)
+    }
+    foreach ($record in $orderedRecords) {
+      $newLocalOffset = $output.Position
+      if ($newLocalOffset -gt [uint32]::MaxValue) {
+        throw "VSIX normalized local offset requires ZIP64."
+      }
+      $newOffsetBytes = [System.BitConverter]::GetBytes([uint32]$newLocalOffset)
+      [System.Array]::Copy($newOffsetBytes, 0, $record.centralRecord, 42, 4)
+      $output.Write($record.localRecord, 0, $record.localRecord.Length)
+    }
+
+    $newCentralDirectoryOffset = $output.Position
+    foreach ($record in $orderedRecords) {
+      $output.Write($record.centralRecord, 0, $record.centralRecord.Length)
+    }
+    $newCentralDirectorySize = $output.Position - $newCentralDirectoryOffset
+    if ($newCentralDirectoryOffset -gt [uint32]::MaxValue -or $newCentralDirectorySize -gt [uint32]::MaxValue) {
+      throw "VSIX normalized central directory requires ZIP64."
+    }
+
+    $endRecord = [byte[]]::new($bytes.Length - $eocdOffset)
+    [System.Array]::Copy($bytes, $eocdOffset, $endRecord, 0, $endRecord.Length)
+    [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$newCentralDirectorySize), 0, $endRecord, 12, 4)
+    [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$newCentralDirectoryOffset), 0, $endRecord, 16, 4)
+    $output.Write($endRecord, 0, $endRecord.Length)
+    [System.IO.File]::WriteAllBytes($ZipPath, $output.ToArray())
+  }
+  finally {
+    $output.Dispose()
+  }
+}
+
 function Assert-ZipContains([string[]]$Entries, [string]$EntryName) {
   if ($Entries -notcontains $EntryName) {
     throw "VSIX must contain $EntryName."
@@ -202,7 +324,7 @@ function Get-VsixPackageJson([string[]]$Entries, [string]$VsixPath) {
   }
 }
 
-function Get-VsixManifestIdentity([string[]]$Entries, [string]$VsixPath) {
+function Get-VsixManifestMetadata([string[]]$Entries, [string]$VsixPath) {
   Assert-ZipContains -Entries $Entries -EntryName "extension.vsixmanifest"
   $archive = [System.IO.Compression.ZipFile]::OpenRead($VsixPath)
   try {
@@ -224,11 +346,20 @@ function Get-VsixManifestIdentity([string[]]$Entries, [string]$VsixPath) {
     throw "VSIX manifest must contain exactly one Identity node."
   }
 
+  $preReleaseNodes = @($manifest.SelectNodes("//*[local-name()='PackageManifest']/*[local-name()='Metadata']/*[local-name()='Properties']/*[local-name()='Property' and @Id='Microsoft.VisualStudio.Code.PreRelease']"))
+  if ($preReleaseNodes.Count -ne 1) {
+    throw "VSIX manifest must contain exactly one Microsoft.VisualStudio.Code.PreRelease property."
+  }
+  if ([string]$preReleaseNodes[0].Value -cne "true") {
+    throw "VSIX manifest Microsoft.VisualStudio.Code.PreRelease property Value must be exactly 'true'."
+  }
+
   [pscustomobject]@{
     id = [string]$identityNodes[0].Id
     publisher = [string]$identityNodes[0].Publisher
     version = [string]$identityNodes[0].Version
     targetPlatform = [string]$identityNodes[0].TargetPlatform
+    preRelease = $true
   }
 }
 
@@ -255,12 +386,12 @@ function Assert-VsixContents([string]$VsixPath, [string]$Target) {
   if ($packageJson.name -ne "subversionr" -or $packageJson.publisher -ne "hitsuki-ban") {
     throw "VSIX package identity must be hitsuki-ban.subversionr."
   }
-  $manifestIdentity = Get-VsixManifestIdentity -Entries $entries -VsixPath $VsixPath
+  $manifestMetadata = Get-VsixManifestMetadata -Entries $entries -VsixPath $VsixPath
   $expectedExtensionId = "$($packageJson.publisher).$($packageJson.name)"
-  if ($manifestIdentity.id -ne $packageJson.name -or
-    $manifestIdentity.publisher -ne $packageJson.publisher -or
-    $manifestIdentity.version -ne $packageJson.version -or
-    $manifestIdentity.targetPlatform -ne $Target) {
+  if ($manifestMetadata.id -ne $packageJson.name -or
+    $manifestMetadata.publisher -ne $packageJson.publisher -or
+    $manifestMetadata.version -ne $packageJson.version -or
+    $manifestMetadata.targetPlatform -ne $Target) {
     throw "VSIX manifest identity must compose to $expectedExtensionId $($packageJson.version) for $Target."
   }
   if ($packageJson.main -ne "./dist/extension.js") {
@@ -278,7 +409,10 @@ function Assert-VsixContents([string]$VsixPath, [string]$Target) {
     throw "VSIX package icon must point to a PNG file: $iconRelativePath"
   }
   Assert-ZipContains -Entries $entries -EntryName "extension/$iconRelativePath"
-  $packageJson
+  [pscustomobject]@{
+    packageJson = $packageJson
+    manifestMetadata = $manifestMetadata
+  }
 }
 
 $packageRootResolved = Assert-Directory $PackageRoot "PackageRoot"
@@ -358,7 +492,7 @@ if (Test-Path -LiteralPath $vsixPath) {
 
 Push-Location $workingPackageRoot
 try {
-  & pnpm exec vsce package --target $Target --ignore-other-target-folders --out $vsixPath --no-dependencies --allow-missing-repository --ignoreFile .vscodeignore
+  & pnpm exec vsce package --target $Target --pre-release --ignore-other-target-folders --out $vsixPath --no-dependencies --allow-missing-repository --ignoreFile .vscodeignore
   if ($LASTEXITCODE -ne 0) {
     throw "vsce package failed with exit code $LASTEXITCODE."
   }
@@ -368,7 +502,9 @@ finally {
 }
 
 $vsixResolved = Assert-File $vsixPath "VSIX output"
-$vsixPackageJson = Assert-VsixContents -VsixPath $vsixResolved -Target $Target
+Set-DeterministicZipTimestamps -ZipPath $vsixResolved
+$vsixMetadata = Assert-VsixContents -VsixPath $vsixResolved -Target $Target
+$vsixPackageJson = $vsixMetadata.packageJson
 $vsixEntrypointSha256 = Get-ZipEntrySha256 -ZipPath $vsixResolved -EntryName "extension/dist/extension.js"
 if ($vsixEntrypointSha256 -ne $extensionEntrypointSha256) {
   throw "VSIX compiled extension entrypoint hash must match ExtensionDistDirectory/dist/extension.js."
@@ -396,6 +532,7 @@ $report = [pscustomobject]@{
     id = "$($vsixPackageJson.publisher).$($vsixPackageJson.name)"
     displayName = [string]$vsixPackageJson.displayName
     version = [string]$vsixPackageJson.version
+    preRelease = [bool]$vsixMetadata.manifestMetadata.preRelease
   }
   inputs = [pscustomobject]@{
     packageRoot = Get-RepoRelativePath $packageRootResolved
@@ -424,6 +561,8 @@ $report = [pscustomobject]@{
     "vsce package ran with explicit target and no dependency detection",
     "compiled extension entrypoint is present",
     "compiled extension entrypoint hash matches the input dist artifact",
+    "VSIX manifest declares Microsoft.VisualStudio.Code.PreRelease exactly once with Value=true",
+    "all VSIX ZIP entry timestamps are normalized to 2000-01-01T00:00:00Z",
     "Marketplace listing README is present and hash-bound to the explicit ReadmePath input",
     "Marketplace icon is present and hash-bound in the VSIX",
     "packaged backend sidecar, bridge, and manifest are present",

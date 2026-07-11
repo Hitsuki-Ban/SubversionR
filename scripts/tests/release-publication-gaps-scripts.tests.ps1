@@ -56,9 +56,11 @@ function New-PublicationGapsFixture([string]$Root) {
   New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
   New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
 
-  $vsixPath = Join-Path $artifactsRoot "subversionr-win32-x64-0.2.0.vsix"
+  $vsixPath = Join-Path $artifactsRoot "subversionr-win32-x64-0.2.1.vsix"
   [System.IO.File]::WriteAllBytes($vsixPath, [byte[]](0x53, 0x75, 0x62, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x52))
   $vsixSha256 = Get-Sha256 $vsixPath
+  $historicalVsixSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  $historicalVsixSize = 12
   $baselineCommit = "1111111111111111111111111111111111111111"
   $cutoverHeadCommit = "0123456789abcdef0123456789abcdef01234567"
 
@@ -71,11 +73,12 @@ function New-PublicationGapsFixture([string]$Root) {
       extension = [pscustomobject]@{
         id = "hitsuki-ban.subversionr"
         displayName = "SubversionR"
-        version = "0.2.0"
+        version = "0.2.1"
+        preRelease = $true
       }
       vsix = [pscustomobject]@{
         path = $vsixPath
-        relativePath = "target/tests/release-publication-gaps-scripts/artifacts/subversionr-win32-x64-0.2.0.vsix"
+        relativePath = "target/tests/release-publication-gaps-scripts/artifacts/subversionr-win32-x64-0.2.1.vsix"
         size = (Get-Item -LiteralPath $vsixPath).Length
         sha256 = $vsixSha256
       }
@@ -91,7 +94,7 @@ function New-PublicationGapsFixture([string]$Root) {
       extension = [pscustomobject]@{
         id = "hitsuki-ban.subversionr"
         displayName = "SubversionR"
-        version = "0.2.0"
+        version = "0.2.1"
       }
       repository = [pscustomobject]@{
         remoteUrlRecorded = $false
@@ -99,7 +102,7 @@ function New-PublicationGapsFixture([string]$Root) {
       artifacts = [pscustomobject]@{
         vsix = [pscustomobject]@{
           path = $vsixPath
-          relativePath = "target/tests/release-publication-gaps-scripts/artifacts/subversionr-win32-x64-0.2.0.vsix"
+          relativePath = "target/tests/release-publication-gaps-scripts/artifacts/subversionr-win32-x64-0.2.1.vsix"
           size = (Get-Item -LiteralPath $vsixPath).Length
           sha256 = $vsixSha256
         }
@@ -112,6 +115,7 @@ function New-PublicationGapsFixture([string]$Root) {
       }
       attestation = [pscustomobject]@{
         status = "verified"
+        scope = "historical-public-cutover-release"
         readiness = [pscustomobject]@{
           readinessStatus = "live-attestation-verified"
           action = "actions/attest@v4"
@@ -121,8 +125,8 @@ function New-PublicationGapsFixture([string]$Root) {
           artifactSignatureClaim = $false
           workflowPath = ".github/workflows/attest-release-vsix.yml"
           subjectName = "subversionr-win32-x64-0.2.0.vsix"
-          subjectSha256 = $vsixSha256
-          artifactSize = (Get-Item -LiteralPath $vsixPath).Length
+          subjectSha256 = $historicalVsixSha256
+          artifactSize = $historicalVsixSize
           repoUrlRecorded = $true
           bundleRecorded = $true
           attestationUrlRecorded = $true
@@ -132,6 +136,19 @@ function New-PublicationGapsFixture([string]$Root) {
           evidencePath = "target/tests/release-publication-gaps-scripts/github-attestation-evidence.win32-x64.json"
           evidenceSha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         }
+      }
+      candidateAttestation = [pscustomobject]@{
+        status = "pending-release-attestation"
+        scope = "current-candidate"
+        contractPath = "docs/release/github-attestation-candidate-contract.win32-x64.json"
+        contractSha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        releaseTag = "v0.2.1-beta.1"
+        releaseUrl = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.1-beta.1"
+        subjectName = "subversionr-win32-x64-0.2.1.vsix"
+        subjectSha256 = $vsixSha256
+        subjectSize = (Get-Item -LiteralPath $vsixPath).Length
+        preReleaseProperty = $true
+        liveEvidenceRecorded = $false
       }
       marketplace = [pscustomobject]@{
         status = "not-published"
@@ -237,8 +254,8 @@ function New-PublicationGapsFixture([string]$Root) {
           },
           [pscustomobject]@{
             name = "subversionr-win32-x64-0.2.0.vsix"
-            size = (Get-Item -LiteralPath $vsixPath).Length
-            sha256 = $vsixSha256
+            size = $historicalVsixSize
+            sha256 = $historicalVsixSha256
             url = "$releaseAssetBaseUrl/subversionr-win32-x64-0.2.0.vsix"
           },
           [pscustomobject]@{
@@ -260,9 +277,9 @@ function New-PublicationGapsFixture([string]$Root) {
         publishedBundleAssetName = "subversionr-win32-x64-beta-candidate.zip"
         publishedBundleSha256 = "ca79f8cd2716caadc9c6e1e6c712c6904770a05e3660835b0ab58ce75bbbb266"
         expectedVsixName = "subversionr-win32-x64-0.2.0.vsix"
-        expectedVsixSha256 = $vsixSha256
+        expectedVsixSha256 = $historicalVsixSha256
         containedVsixName = "subversionr-win32-x64-0.2.0.vsix"
-        containedVsixSha256 = $vsixSha256
+        containedVsixSha256 = $historicalVsixSha256
         declaredPayloadCount = 1462
         missingPayloadCount = 0
         mismatchedPayloadCount = 0
@@ -383,8 +400,12 @@ try {
   Assert-Equal "consistent" $report.publicCutover.betaCandidateEvidence.status "Published Beta candidate evidence should record verified consistency."
   Assert-Equal "True" ([string]$report.publicCutover.betaCandidateEvidence.consistencyVerified) "Published Beta candidate evidence should record consistency verification."
   Assert-Equal (Get-Sha256 $fixture.vsixPath) $report.artifacts.vsix.sha256 "Publication gaps should bind the exact VSIX hash."
+  Assert-Equal "pending-release-attestation" $report.currentCandidate.status "Publication gaps should keep the current 0.2.1 candidate pending before release."
+  Assert-Equal "True" ([string]$report.currentCandidate.preReleaseProperty) "Publication gaps should record current-candidate pre-release eligibility."
+  $historicalReleasedVsix = @($report.publicCutover.release.assets | Where-Object { $_.name -eq "subversionr-win32-x64-0.2.0.vsix" })[0]
+  Assert-True ($historicalReleasedVsix.sha256 -ne $report.artifacts.vsix.sha256) "Historical 0.2.0 and current 0.2.1 VSIX digests must remain distinct."
   foreach ($blocker in @(
-      "The attested 0.2.0 release VSIX is not eligible for Marketplace pre-release publication because its manifest lacks the pre-release property.",
+      "The current 0.2.1 candidate release and live GitHub attestation have not been published.",
       "Marketplace publication is not run by this local gap report.",
       "Marketplace public install evidence is not generated by this local gap report.",
       "VSIX signing remains absent in the upstream provenance preflight.",
@@ -553,11 +574,11 @@ try {
 
   $badCutoverPath = Join-Path $tempRoot "bad-released-vsix-cutover.json"
   $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json
-  @($badCutover.release.assets | Where-Object { $_.name -eq "subversionr-win32-x64-0.2.0.vsix" })[0].sha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  @($badCutover.release.assets | Where-Object { $_.name -eq "subversionr-win32-x64-0.2.0.vsix" })[0].sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   Write-JsonFile $badCutoverPath $badCutover
   Assert-NativeCommandFailsContaining {
     Invoke-GeneratePublicationGaps -Fixture $fixture -OutputPath (Join-Path $tempRoot "bad-released-vsix-report.json") -CutoverEvidencePath $badCutoverPath
-  } "Released VSIX SHA256 must match" "Publication gaps generation should reject a released VSIX hash that differs from current bytes."
+  } "Historical released VSIX SHA256 must match historical provenance attestation evidence" "Publication gaps generation should reject historical release evidence whose asset and attestation records disagree."
 
   $badCutoverPath = Join-Path $tempRoot "bad-beta-candidate-consistency-cutover.json"
   $badCutover = Get-Content -Raw -LiteralPath $fixture.cutoverEvidencePath | ConvertFrom-Json

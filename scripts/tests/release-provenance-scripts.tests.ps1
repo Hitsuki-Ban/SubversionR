@@ -54,7 +54,7 @@ function New-ProvenanceFixture([string]$Root) {
   New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
   New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
 
-  $vsixPath = Join-Path $artifactsRoot "subversionr-win32-x64-0.2.0.vsix"
+  $vsixPath = Join-Path $artifactsRoot "subversionr-win32-x64-0.2.1.vsix"
   [System.IO.File]::WriteAllBytes($vsixPath, [byte[]](0x53, 0x75, 0x62, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x52))
   $vsixSha256 = Get-Sha256 $vsixPath
   $marketplaceIconPath = Join-Path $repoRoot "packages\vscode-extension\resources\marketplace\icon.png"
@@ -70,7 +70,8 @@ function New-ProvenanceFixture([string]$Root) {
       extension = [pscustomobject]@{
         id = "hitsuki-ban.subversionr"
         displayName = "SubversionR"
-        version = "0.2.0"
+        version = "0.2.1"
+        preRelease = $true
       }
       inputs = [pscustomobject]@{
         extensionEntrypointSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -82,7 +83,7 @@ function New-ProvenanceFixture([string]$Root) {
       }
       vsix = [pscustomobject]@{
         path = $vsixPath
-        relativePath = "target/tests/release-provenance-scripts/artifacts/subversionr-win32-x64-0.2.0.vsix"
+        relativePath = "target/tests/release-provenance-scripts/artifacts/subversionr-win32-x64-0.2.1.vsix"
         size = (Get-Item -LiteralPath $vsixPath).Length
         sha256 = $vsixSha256
         extensionEntrypointSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -110,7 +111,7 @@ function New-ProvenanceFixture([string]$Root) {
         [pscustomobject]@{
           type = "application"
           name = "subversionr"
-          version = "0.2.0"
+          version = "0.2.1"
         }
       )
     })
@@ -130,7 +131,7 @@ This generated evidence is not a completed legal review.
       extension = [pscustomobject]@{
         id = "subversionr"
         displayName = "SubversionR"
-        version = "0.2.0"
+        version = "0.2.1"
       }
       artifacts = @(
         [pscustomobject]@{
@@ -141,6 +142,51 @@ This generated evidence is not a completed legal review.
       )
     })
 
+  $candidateAttestationContractPath = Join-Path $evidenceRoot "github-attestation-candidate-contract.win32-x64.json"
+  Write-JsonFile $candidateAttestationContractPath ([pscustomobject]@{
+      schemaVersion = 1
+      schema = "subversionr.release.github-attestation-contract.win32-x64.v1"
+      status = "pending-release-attestation"
+      publicReadinessClaim = $false
+      target = "win32-x64"
+      release = [pscustomobject]@{
+        tag = "v0.2.1-beta.1"
+        url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.1-beta.1"
+      }
+      subject = [pscustomobject]@{
+        name = "subversionr-win32-x64-0.2.1.vsix"
+        size = (Get-Item -LiteralPath $vsixPath).Length
+        sha256 = $vsixSha256
+        preReleaseProperty = $true
+      }
+      attestation = [pscustomobject]@{
+        provider = "github-artifact-attestations"
+        action = "actions/attest@v4"
+        actionDigest = "a1948c3f048ba23858d222213b7c278aabede763"
+        predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
+        predicateSchemaPath = "docs/release/post-release-asset-verification-predicate.v1.schema.json"
+      }
+      workflow = [pscustomobject]@{
+        path = ".github/workflows/attest-release-vsix.yml"
+        runner = "ubuntu-24.04"
+        trigger = "workflow_dispatch"
+        requiredPermissions = @("contents: read", "id-token: write", "attestations: write")
+      }
+      verificationPolicy = [pscustomobject]@{
+        repository = "Hitsuki-Ban/SubversionR"
+        signerWorkflow = "Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml"
+        predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
+        bundleRequired = $true
+        sourceRefRequired = $true
+        sourceDigestRequired = $true
+        signerDigestRequired = $true
+        denySelfHostedRunners = $true
+        format = "json"
+      }
+    })
+
+  $historicalVsixSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  $historicalVsixSize = 12
   $attestationContractPath = Join-Path $evidenceRoot "github-attestation-contract.win32-x64.json"
   Write-JsonFile $attestationContractPath ([pscustomobject]@{
       schemaVersion = 1
@@ -153,8 +199,8 @@ This generated evidence is not a completed legal review.
       }
       subject = [pscustomobject]@{
         name = "subversionr-win32-x64-0.2.0.vsix"
-        size = (Get-Item -LiteralPath $vsixPath).Length
-        sha256 = $vsixSha256
+        size = $historicalVsixSize
+        sha256 = $historicalVsixSha256
       }
       attestation = [pscustomobject]@{
         provider = "github-artifact-attestations"
@@ -192,8 +238,8 @@ This generated evidence is not a completed legal review.
       tag = "v0.2.0-beta.1"
       url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.0-beta.1"
       assetName = "subversionr-win32-x64-0.2.0.vsix"
-      assetSize = (Get-Item -LiteralPath $vsixPath).Length
-      assetSha256 = $vsixSha256
+      assetSize = $historicalVsixSize
+      assetSha256 = $historicalVsixSha256
     }
     contract = [pscustomobject]@{
       path = $attestationContractRelativePath
@@ -236,7 +282,7 @@ This generated evidence is not a completed legal review.
         }
         verifiedTimestamps = @([pscustomobject]@{ type = "Tlog"; uri = "https://rekor.sigstore.dev" })
         statement = [pscustomobject]@{
-          subject = @([pscustomobject]@{ name = "subversionr-win32-x64-0.2.0.vsix"; digest = [pscustomobject]@{ sha256 = $vsixSha256 } })
+          subject = @([pscustomobject]@{ name = "subversionr-win32-x64-0.2.0.vsix"; digest = [pscustomobject]@{ sha256 = $historicalVsixSha256 } })
           predicateType = "https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1"
           predicate = $signedPredicate
         }
@@ -265,8 +311,8 @@ This generated evidence is not a completed legal review.
       subject = [pscustomobject]@{
         name = "subversionr-win32-x64-0.2.0.vsix"
         path = "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix"
-        size = (Get-Item -LiteralPath $vsixPath).Length
-        sha256 = $vsixSha256
+        size = $historicalVsixSize
+        sha256 = $historicalVsixSha256
       }
       workflow = [pscustomobject]@{
         path = ".github/workflows/attest-release-vsix.yml"
@@ -321,6 +367,7 @@ This generated evidence is not a completed legal review.
     sbomPath = $sbomPath
     noticePath = $noticePath
     backendManifestPath = $backendManifestPath
+    candidateAttestationContractPath = $candidateAttestationContractPath
     attestationContractPath = $attestationContractPath
     attestationBundlePath = $attestationBundlePath
     attestationVerificationPath = $attestationVerificationPath
@@ -345,6 +392,7 @@ function Invoke-GenerateProvenance([object]$Fixture, [string]$OutputPath) {
     -NoticePath $Fixture.noticePath `
     -VsixEvidencePath $Fixture.vsixEvidencePath `
     -BackendManifestPath $Fixture.backendManifestPath `
+    -CandidateAttestationContractPath $Fixture.candidateAttestationContractPath `
     -AttestationContractPath $Fixture.attestationContractPath `
     -LiveAttestationEvidencePath $Fixture.liveAttestationEvidencePath `
     -OutputPath $OutputPath
@@ -385,6 +433,7 @@ exit 0
   Assert-Equal "win32-x64" $report.target "Provenance preflight evidence should record the target."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Provenance preflight should bind the extension identity."
   Assert-Equal "SubversionR" $report.extension.displayName "Provenance preflight should bind the display name."
+  Assert-Equal "True" ([string]$report.extension.preRelease) "Provenance preflight should record the pre-release package property."
   Assert-Equal "^1.101.0" $report.extension.enginesVscode "Provenance preflight should record the VS Code engine range."
   Assert-Equal "resources/marketplace/icon.png" $report.extension.icon.path "Provenance preflight should bind the Marketplace icon path."
   Assert-True ([int]$report.extension.icon.width -ge 128) "Provenance preflight should record a Marketplace icon width of at least 128 pixels."
@@ -396,7 +445,14 @@ exit 0
   Assert-Equal "False" ([string]$report.repository.remoteUrlRecorded) "Provenance preflight must not record private remote URLs."
   Assert-True ($null -ne $report.repository.dirtyWorkingTree) "Provenance preflight should record the working-tree cleanliness state."
   Assert-Equal "unsigned" $report.signing.status "Provenance preflight should keep signing status explicit."
+  Assert-Equal "pending-release-attestation" $report.candidateAttestation.status "Current candidate attestation should remain pending before release."
+  Assert-Equal "current-candidate" $report.candidateAttestation.scope "Current candidate attestation should remain scoped to the candidate."
+  Assert-Equal (Get-Sha256 $fixture.vsixPath) $report.candidateAttestation.subjectSha256 "Current candidate attestation should bind the exact candidate VSIX."
+  Assert-Equal "subversionr-win32-x64-0.2.1.vsix" $report.candidateAttestation.subjectName "Current candidate attestation should bind the 0.2.1 VSIX name."
+  Assert-Equal "True" ([string]$report.candidateAttestation.preReleaseProperty) "Current candidate attestation should require the VS Code pre-release property."
+  Assert-Equal "False" ([string]$report.candidateAttestation.liveEvidenceRecorded) "Current candidate attestation must not claim live evidence before release."
   Assert-Equal "verified" $report.attestation.status "Provenance preflight should record the verified live attestation."
+  Assert-Equal "historical-public-cutover-release" $report.attestation.scope "Verified live attestation should remain scoped to the historical public-cutover release."
   Assert-Equal "live-attestation-verified" $report.attestation.readiness.readinessStatus "Attestation readiness should record live verification."
   Assert-Equal "github-artifact-attestations" $report.attestation.readiness.provider "Attestation readiness should record the provider."
   Assert-Equal "actions/attest@v4" $report.attestation.readiness.action "Attestation readiness should record the issue #5 action contract."
@@ -406,9 +462,9 @@ exit 0
   Assert-Equal "False" ([string]$report.attestation.readiness.originalBuildProvenanceClaim) "Attestation readiness must preserve the signed original-build non-claim."
   Assert-Equal "False" ([string]$report.attestation.readiness.artifactSignatureClaim) "Attestation readiness must preserve the signed artifact-signature non-claim."
   Assert-Equal "subversionr-win32-x64-0.2.0.vsix" $report.attestation.readiness.subjectName "Attestation readiness should bind the VSIX file name."
-  Assert-Equal (Get-Sha256 $fixture.vsixPath) $report.attestation.readiness.subjectSha256 "Attestation readiness should bind the exact VSIX SHA256."
-  Assert-Equal $report.artifacts.vsix.relativePath $report.attestation.readiness.artifactPath "Attestation readiness should bind the VSIX relative path."
-  Assert-Equal ([int64](Get-Item -LiteralPath $fixture.vsixPath).Length) ([int64]$report.attestation.readiness.artifactSize) "Attestation readiness should bind the VSIX size."
+  Assert-Equal "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" $report.attestation.readiness.subjectSha256 "Historical attestation readiness should retain its own VSIX SHA256."
+  Assert-Equal "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix" $report.attestation.readiness.artifactPath "Historical attestation readiness should retain its own VSIX path."
+  Assert-Equal 12 ([int64]$report.attestation.readiness.artifactSize) "Historical attestation readiness should retain its own VSIX size."
   Assert-Equal ".github/workflows/attest-release-vsix.yml" $report.attestation.readiness.workflowPath "Attestation readiness should record the live signer workflow path."
   Assert-Equal "True" ([string]$report.attestation.readiness.repoUrlRecorded) "Attestation readiness should record the public repository URL."
   Assert-Equal "True" ([string]$report.attestation.readiness.bundleRecorded) "Attestation readiness should record the bundle digest."
@@ -452,6 +508,7 @@ exit 0
   Assert-Equal $expectedMarketplaceIconSha256 $report.evidence.marketplaceIcon.sha256 "Provenance preflight should hash the Marketplace icon evidence."
   Assert-Equal (Get-Sha256 $fixture.sbomPath) $report.evidence.sbom.sha256 "Provenance preflight should hash SBOM evidence."
   Assert-Equal (Get-Sha256 $fixture.noticePath) $report.evidence.notice.sha256 "Provenance preflight should hash NOTICE evidence."
+  Assert-Equal (Get-Sha256 $fixture.candidateAttestationContractPath) $report.evidence.candidateAttestationContract.sha256 "Provenance preflight should hash the pending candidate attestation contract."
   Assert-Equal (Get-Sha256 $fixture.attestationBundlePath) $report.evidence.attestationBundle.sha256 "Provenance preflight should hash the exact attestation bundle."
   Assert-Equal (Get-Sha256 $fixture.attestationVerificationPath) $report.evidence.attestationVerification.sha256 "Provenance preflight should hash the exact attestation verification result."
   foreach ($traceId in @("SEC-015", "MIG-009", "MIG-012")) {
@@ -459,8 +516,9 @@ exit 0
   }
   foreach ($nonClaim in @(
       "This gate does not prove VSIX signing.",
-      "This gate records live GitHub artifact attestation publication and verification but does not claim artifact signing.",
-      "This post-release attestation does not prove the original VSIX source-to-binary build provenance.",
+      "This gate records the current candidate attestation contract as pending; it does not claim current-candidate live attestation.",
+      "This gate preserves historical GitHub artifact attestation publication and verification without applying it to the current candidate.",
+      "The historical post-release attestation does not prove the current VSIX source-to-binary build provenance.",
       "This gate does not prove Marketplace publication or public install.",
       "This gate does not prove previous-stable upgrade or rollback."
     )) {
@@ -497,6 +555,7 @@ exit 0
     sbomPath = $fixture.sbomPath
     noticePath = $fixture.noticePath
     backendManifestPath = $fixture.backendManifestPath
+    candidateAttestationContractPath = $fixture.candidateAttestationContractPath
     attestationContractPath = $fixture.attestationContractPath
     liveAttestationEvidencePath = $fixture.liveAttestationEvidencePath
   }
@@ -514,6 +573,7 @@ exit 0
     sbomPath = $fixture.sbomPath
     noticePath = $fixture.noticePath
     backendManifestPath = $fixture.backendManifestPath
+    candidateAttestationContractPath = $fixture.candidateAttestationContractPath
     attestationContractPath = $fixture.attestationContractPath
     liveAttestationEvidencePath = $fixture.liveAttestationEvidencePath
   }
@@ -548,6 +608,7 @@ exit 0
         -NoticePath $fixture.noticePath `
         -VsixEvidencePath $fixture.vsixEvidencePath `
         -BackendManifestPath $fixture.backendManifestPath `
+        -CandidateAttestationContractPath $fixture.candidateAttestationContractPath `
         -AttestationContractPath $fixture.attestationContractPath `
         -LiveAttestationEvidencePath $fixture.liveAttestationEvidencePath `
         -OutputPath (Join-Path $tempRoot "bad-icon-path-$($badIconPathCase.name)-report.json")
@@ -574,6 +635,7 @@ exit 0
       -NoticePath $fixture.noticePath `
       -VsixEvidencePath $fixture.vsixEvidencePath `
       -BackendManifestPath $fixture.backendManifestPath `
+      -CandidateAttestationContractPath $fixture.candidateAttestationContractPath `
       -AttestationContractPath $fixture.attestationContractPath `
       -LiveAttestationEvidencePath $fixture.liveAttestationEvidencePath `
       -OutputPath (Join-Path $tempRoot "bad-package-report.json")
@@ -595,6 +657,7 @@ exit 0
       -NoticePath $fixture.noticePath `
       -VsixEvidencePath $fixture.vsixEvidencePath `
       -BackendManifestPath $fixture.backendManifestPath `
+      -CandidateAttestationContractPath $fixture.candidateAttestationContractPath `
       -AttestationContractPath $fixture.attestationContractPath `
       -LiveAttestationEvidencePath $fixture.liveAttestationEvidencePath `
       -OutputPath (Join-Path $tempRoot "missing-changelog-report.json")
@@ -609,7 +672,7 @@ exit 0
 
   $tamperedReportPath = Join-Path $tempRoot "tampered-nonclaims.json"
   $tamperedReport = Get-Content -Raw -LiteralPath $readinessValidReportPath | ConvertFrom-Json
-  $tamperedReport.nonClaims = @($tamperedReport.nonClaims | Where-Object { $_ -ne "This gate records live GitHub artifact attestation publication and verification but does not claim artifact signing." })
+  $tamperedReport.nonClaims = @($tamperedReport.nonClaims | Where-Object { $_ -ne "This gate records the current candidate attestation contract as pending; it does not claim current-candidate live attestation." })
   Write-JsonFile $tamperedReportPath $tamperedReport
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
@@ -619,23 +682,23 @@ exit 0
 
   $tamperedReportPath = Join-Path $tempRoot "tampered-attestation-sha.json"
   $tamperedReport = Get-Content -Raw -LiteralPath $readinessValidReportPath | ConvertFrom-Json
-  $tamperedReport.attestation.readiness.subjectSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  $tamperedReport.candidateAttestation.subjectSha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   Write-JsonFile $tamperedReportPath $tamperedReport
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
       -Target win32-x64 `
       -EvidencePath $tamperedReportPath
-  } "subjectSha256" "Provenance verification should fail when attestation readiness drifts from the VSIX SHA256."
+  } "Candidate attestation SHA256" "Provenance verification should fail when candidate attestation drifts from the current VSIX SHA256."
 
   $tamperedReportPath = Join-Path $tempRoot "tampered-attestation-path.json"
   $tamperedReport = Get-Content -Raw -LiteralPath $readinessValidReportPath | ConvertFrom-Json
-  $tamperedReport.attestation.readiness.artifactPath = "target/vsix/wrong.vsix"
+  $tamperedReport.candidateAttestation.subjectName = "wrong.vsix"
   Write-JsonFile $tamperedReportPath $tamperedReport
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
       -Target win32-x64 `
       -EvidencePath $tamperedReportPath
-  } "artifactPath" "Provenance verification should fail when attestation readiness drifts from the VSIX path."
+  } "Candidate attestation subject name" "Provenance verification should fail when candidate attestation drifts from the current VSIX name."
 
   $tamperedReportPath = Join-Path $tempRoot "tampered-attestation-permissions.json"
   $tamperedReport = Get-Content -Raw -LiteralPath $readinessValidReportPath | ConvertFrom-Json
@@ -671,6 +734,7 @@ exit 0
   $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   Assert-True ($packageJson.scripts."release:test-provenance-scripts".Contains("release-provenance-scripts.tests.ps1")) "Root package should expose provenance script tests."
   Assert-True ($packageJson.scripts."release:generate-provenance:win32-x64".Contains("generate-release-provenance.ps1")) "Root package should expose provenance generation."
+  Assert-True ($packageJson.scripts."release:generate-provenance:win32-x64".Contains("-CandidateAttestationContractPath docs/release/github-attestation-candidate-contract.win32-x64.json")) "Root package should pass the pending candidate attestation contract explicitly."
   Assert-True ($packageJson.scripts."release:generate-provenance:win32-x64".Contains("-AttestationContractPath docs/release/github-attestation-contract.win32-x64.json")) "Root package should pass the attestation contract explicitly."
   Assert-True ($packageJson.scripts."release:generate-provenance:win32-x64".Contains("-LiveAttestationEvidencePath docs/release/github-attestation-evidence.win32-x64.json")) "Root package should pass live attestation evidence explicitly."
   Assert-True ($packageJson.scripts."release:verify-provenance:win32-x64".Contains("verify-release-provenance.ps1")) "Root package should expose provenance verification."

@@ -12,6 +12,10 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  group: release-vsix-attestation-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
 jobs:
   attest:
     runs-on: ubuntu-24.04
@@ -24,7 +28,21 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           $ErrorActionPreference = "Stop"
-          $contract = Get-Content -Raw -LiteralPath docs/release/github-attestation-contract.win32-x64.json | ConvertFrom-Json
+          if ($env:GITHUB_REPOSITORY -ne "Hitsuki-Ban/SubversionR") {
+            throw "Release attestation must run in the public Hitsuki-Ban/SubversionR repository."
+          }
+          if ($env:GITHUB_REF -ne "refs/heads/main") {
+            throw "Release attestation must be dispatched from public main."
+          }
+          if ($env:GITHUB_EVENT_NAME -ne "workflow_dispatch") {
+            throw "Release attestation requires workflow_dispatch."
+          }
+          $contract = Get-Content -Raw -LiteralPath docs/release/github-attestation-candidate-contract.win32-x64.json | ConvertFrom-Json
+          if ([string]$contract.status -ne "pending-release-attestation" -or
+              $contract.publicReadinessClaim -isnot [bool] -or $contract.publicReadinessClaim -or
+              $contract.subject.preReleaseProperty -isnot [bool] -or -not $contract.subject.preReleaseProperty) {
+            throw "Candidate contract must remain pending, pre-release eligible, and publicReadinessClaim=false."
+          }
           if ($env:RELEASE_TAG -ne [string]$contract.release.tag) {
             throw "release_tag must match the attestation contract."
           }
@@ -42,8 +60,8 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass
           -File scripts/release/verify-release-attestation-subject.ps1
           -Target win32-x64
-          -ContractPath docs/release/github-attestation-contract.win32-x64.json
-          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+          -ContractPath docs/release/github-attestation-candidate-contract.win32-x64.json
+          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.1.vsix
           -ReleaseTag $env:RELEASE_TAG
       - name: Generate post-release asset verification predicate
         shell: pwsh
@@ -53,15 +71,15 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass
           -File scripts/release/generate-post-release-asset-verification-predicate.ps1
           -Target win32-x64
-          -ContractPath docs/release/github-attestation-contract.win32-x64.json
-          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+          -ContractPath docs/release/github-attestation-candidate-contract.win32-x64.json
+          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.1.vsix
           -ReleaseTag $env:RELEASE_TAG
           -OutputPath target/release-attestation/win32-x64/post-release-asset-verification-predicate.json
       - name: Publish post-release asset verification attestation
         id: attest
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
         with:
-          subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+          subject-path: target/release-attestation/win32-x64/subversionr-win32-x64-0.2.1.vsix
           predicate-type: https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1
           predicate-path: target/release-attestation/win32-x64/post-release-asset-verification-predicate.json
       - name: Verify published attestation
@@ -73,7 +91,7 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
         run: |
           $ErrorActionPreference = "Stop"
-          $subjectPath = "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix"
+          $subjectPath = "target/release-attestation/win32-x64/subversionr-win32-x64-0.2.1.vsix"
           $resultPath = "target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json"
           New-Item -ItemType Directory -Force -Path (Split-Path -Parent $resultPath) | Out-Null
           gh attestation verify $subjectPath -R Hitsuki-Ban/SubversionR --bundle $env:ATTESTATION_BUNDLE_PATH --signer-workflow Hitsuki-Ban/SubversionR/.github/workflows/attest-release-vsix.yml --signer-digest $env:SOURCE_SHA --source-ref $env:SOURCE_REF --source-digest $env:SOURCE_SHA --predicate-type https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1 --deny-self-hosted-runners --format json | Set-Content -LiteralPath $resultPath -Encoding utf8
@@ -91,8 +109,8 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass
           -File scripts/release/record-live-github-attestation.ps1
           -Target win32-x64
-          -ContractPath docs/release/github-attestation-contract.win32-x64.json
-          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.0.vsix
+          -ContractPath docs/release/github-attestation-candidate-contract.win32-x64.json
+          -SubjectPath target/release-attestation/win32-x64/subversionr-win32-x64-0.2.1.vsix
           -ReleaseTag $env:RELEASE_TAG
           -BundlePath $env:ATTESTATION_BUNDLE_PATH
           -VerificationResultPath target/release-evidence/subversionr-live-github-attestation-verification-win32-x64.json

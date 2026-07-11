@@ -44,6 +44,9 @@ param(
   [string]$BackendManifestPath,
 
   [Parameter(Mandatory = $true)]
+  [string]$CandidateAttestationContractPath,
+
+  [Parameter(Mandatory = $true)]
   [string]$AttestationContractPath,
 
   [Parameter(Mandatory = $true)]
@@ -212,6 +215,7 @@ $sbomResolved = Assert-File $SbomPath "SbomPath"
 $noticeResolved = Assert-File $NoticePath "NoticePath"
 $vsixEvidenceResolved = Assert-File $VsixEvidencePath "VsixEvidencePath"
 $backendManifestResolved = Assert-File $BackendManifestPath "BackendManifestPath"
+$candidateAttestationContractResolved = Assert-File $CandidateAttestationContractPath "CandidateAttestationContractPath"
 $attestationContractResolved = Assert-File $AttestationContractPath "AttestationContractPath"
 $liveAttestationEvidenceResolved = Assert-File $LiveAttestationEvidencePath "LiveAttestationEvidencePath"
 $outputResolved = Assert-GeneratedPath -Path $OutputPath -Name "OutputPath" -AllowedRoots @(
@@ -225,6 +229,7 @@ $sbom = Get-Content -Raw -LiteralPath $sbomResolved | ConvertFrom-Json
 $notice = Get-Content -Raw -LiteralPath $noticeResolved
 $vsixEvidence = Get-Content -Raw -LiteralPath $vsixEvidenceResolved | ConvertFrom-Json
 $backendManifest = Get-Content -Raw -LiteralPath $backendManifestResolved | ConvertFrom-Json
+$candidateAttestationContract = Get-Content -Raw -LiteralPath $candidateAttestationContractResolved | ConvertFrom-Json
 $attestationContract = Get-Content -Raw -LiteralPath $attestationContractResolved | ConvertFrom-Json
 $liveAttestationEvidence = Get-Content -Raw -LiteralPath $liveAttestationEvidenceResolved | ConvertFrom-Json
 
@@ -261,6 +266,7 @@ Assert-Equal $Target ([string]$vsixEvidence.target) "VSIX evidence target must m
 Assert-Equal "False" ([string]$vsixEvidence.publicReadinessClaim) "VSIX evidence publicReadinessClaim must remain false."
 Assert-Equal $extensionId ([string]$vsixEvidence.extension.id) "VSIX evidence extension identity must match the package manifest."
 Assert-Equal $extensionVersion ([string]$vsixEvidence.extension.version) "VSIX evidence extension version must match the package manifest."
+Assert-JsonBoolean $vsixEvidence.extension "preRelease" $true "VSIX evidence extension"
 $vsixEvidenceInputs = Get-RequiredProperty $vsixEvidence "inputs" "VSIX evidence"
 $vsixEvidenceIcon = Get-RequiredProperty $vsixEvidenceInputs "marketplaceIcon" "VSIX evidence inputs"
 Assert-Equal $iconRelativePath ([string](Get-RequiredProperty $vsixEvidenceIcon "path" "VSIX evidence Marketplace icon")) "VSIX evidence Marketplace icon path must match the package manifest."
@@ -280,9 +286,16 @@ Assert-Equal ([string]$vsixEvidence.vsix.sha256) $actualVsixSha256 "VSIX artifac
 
 & (Join-Path $PSScriptRoot "verify-release-attestation-subject.ps1") `
   -Target $Target `
-  -ContractPath $attestationContractResolved `
+  -ContractPath $candidateAttestationContractResolved `
   -SubjectPath $vsixPath `
-  -ReleaseTag ([string]$attestationContract.release.tag)
+  -ReleaseTag ([string]$candidateAttestationContract.release.tag)
+
+Assert-Equal "pending-release-attestation" ([string](Get-RequiredProperty $candidateAttestationContract "status" "Candidate attestation contract")) "Candidate attestation contract status must remain pending before release."
+Assert-JsonBoolean $candidateAttestationContract "publicReadinessClaim" $false "Candidate attestation contract"
+Assert-JsonBoolean $candidateAttestationContract.subject "preReleaseProperty" $true "Candidate attestation contract subject"
+Assert-Equal $actualVsixSha256 ([string]$candidateAttestationContract.subject.sha256) "Candidate attestation contract SHA256 must match current VSIX bytes."
+Assert-Equal ([int64](Get-Item -LiteralPath $vsixPath).Length) ([int64]$candidateAttestationContract.subject.size) "Candidate attestation contract size must match current VSIX bytes."
+Assert-Equal (Split-Path -Leaf $vsixPath) ([string]$candidateAttestationContract.subject.name) "Candidate attestation contract subject name must match current VSIX bytes."
 
 Assert-Equal 1 ([int]$liveAttestationEvidence.schemaVersion) "Live attestation evidence schemaVersion should be 1."
 Assert-Equal "subversionr.release.live-github-attestation.win32-x64.v1" ([string]$liveAttestationEvidence.schema) "Live attestation evidence schema must match."
@@ -297,7 +310,7 @@ Assert-Equal ([string]$attestationContract.release.tag) ([string]$liveAttestatio
 Assert-Equal ([string]$attestationContract.release.url) ([string]$liveAttestationEvidence.release.url) "Live attestation release URL must match the contract."
 Assert-Equal ([string]$attestationContract.subject.name) ([string]$liveAttestationEvidence.subject.name) "Live attestation subject name must match the contract."
 Assert-Equal ([int64]$attestationContract.subject.size) ([int64]$liveAttestationEvidence.subject.size) "Live attestation subject size must match the contract."
-Assert-Equal $actualVsixSha256 ([string]$liveAttestationEvidence.subject.sha256) "Live attestation subject SHA256 must match current VSIX bytes."
+Assert-Equal ([string]$attestationContract.subject.sha256) ([string]$liveAttestationEvidence.subject.sha256) "Historical live attestation subject SHA256 must match its contract."
 Assert-Equal ([string]$attestationContract.workflow.path) ([string]$liveAttestationEvidence.workflow.path) "Live attestation workflow path must match the contract."
 Assert-Equal "workflow_dispatch" ([string]$liveAttestationEvidence.workflow.event) "Live attestation workflow event must be workflow_dispatch."
 Assert-True ([string]$liveAttestationEvidence.workflow.runId -match '^[0-9]+$') "Live attestation runId must contain only digits."
@@ -396,8 +409,9 @@ $metadataBlockers += "Previous stable artifact rollback evidence is not generate
 
 $nonClaims = @(
   "This gate does not prove VSIX signing.",
-  "This gate records live GitHub artifact attestation publication and verification but does not claim artifact signing.",
-  "This post-release attestation does not prove the original VSIX source-to-binary build provenance.",
+  "This gate records the current candidate attestation contract as pending; it does not claim current-candidate live attestation.",
+  "This gate preserves historical GitHub artifact attestation publication and verification without applying it to the current candidate.",
+  "The historical post-release attestation does not prove the current VSIX source-to-binary build provenance.",
   "This gate does not prove Marketplace publication or public install.",
   "This gate does not prove previous-stable upgrade or rollback.",
   "This gate does not prove installed Source Control DOM/accessibility-tree/pixel E2E.",
@@ -424,6 +438,7 @@ $report = [pscustomobject]@{
     publisher = $extensionPublisher
     displayName = [string]$extensionPackage.displayName
     version = $extensionVersion
+    preRelease = $true
     description = $extensionDescription
     license = [string]$extensionPackage.license
     enginesVscode = $enginesVscode
@@ -470,6 +485,7 @@ $report = [pscustomobject]@{
     cargoLock = [pscustomobject]@{ path = Get-RepoRelativePath $cargoLockResolved; sha256 = Get-Sha256 $cargoLockResolved }
     sbom = [pscustomobject]@{ path = Get-RepoRelativePath $sbomResolved; sha256 = Get-Sha256 $sbomResolved }
     notice = [pscustomobject]@{ path = Get-RepoRelativePath $noticeResolved; sha256 = Get-Sha256 $noticeResolved }
+    candidateAttestationContract = [pscustomobject]@{ path = Get-RepoRelativePath $candidateAttestationContractResolved; sha256 = Get-Sha256 $candidateAttestationContractResolved; schema = [string]$candidateAttestationContract.schema }
     attestationContract = [pscustomobject]@{ path = Get-RepoRelativePath $attestationContractResolved; sha256 = Get-Sha256 $attestationContractResolved; schema = [string]$attestationContract.schema }
     liveAttestation = [pscustomobject]@{ path = Get-RepoRelativePath $liveAttestationEvidenceResolved; sha256 = Get-Sha256 $liveAttestationEvidenceResolved; schema = [string]$liveAttestationEvidence.schema }
     attestationBundle = [pscustomobject]@{ path = Get-RepoRelativePath $attestationBundleResolved; sha256 = Get-Sha256 $attestationBundleResolved; mediaType = [string]$attestationBundles[0].mediaType }
@@ -492,9 +508,25 @@ $report = [pscustomobject]@{
     status = "unsigned"
     requiredNext = "Sign VSIX/native release artifacts with the approved release signing process."
   }
+  candidateAttestation = [pscustomobject]@{
+    status = "pending-release-attestation"
+    scope = "current-candidate"
+    contractPath = Get-RepoRelativePath $candidateAttestationContractResolved
+    contractSha256 = Get-Sha256 $candidateAttestationContractResolved
+    releaseTag = [string]$candidateAttestationContract.release.tag
+    releaseUrl = [string]$candidateAttestationContract.release.url
+    subjectName = $vsixFileName
+    subjectSha256 = $actualVsixSha256
+    subjectSize = (Get-Item -LiteralPath $vsixPath).Length
+    preReleaseProperty = $true
+    liveEvidenceRecorded = $false
+    claimAllowed = $true
+    blockers = @("Create the contracted GitHub release and publish its live artifact attestation.")
+  }
   attestation = [pscustomobject]@{
     status = "verified"
-    reason = "The released VSIX has a post-release GitHub artifact attestation verified against the exact bundle, signer workflow, source ref, source digest, and run policy."
+    scope = "historical-public-cutover-release"
+    reason = "The historical public-cutover VSIX has a post-release GitHub artifact attestation verified against the exact bundle, signer workflow, source ref, source digest, and run policy."
     readiness = [pscustomobject]@{
       readinessStatus = "live-attestation-verified"
       provider = [string]$attestationContract.attestation.provider
@@ -506,10 +538,10 @@ $report = [pscustomobject]@{
       predicateClaim = [string]$liveAttestationEvidence.attestation.predicateClaim
       originalBuildProvenanceClaim = [bool]$liveAttestationEvidence.attestation.originalBuildProvenanceClaim
       artifactSignatureClaim = [bool]$liveAttestationEvidence.attestation.artifactSignatureClaim
-      subjectName = $vsixFileName
-      subjectSha256 = $actualVsixSha256
-      artifactPath = $vsixRelativePath
-      artifactSize = (Get-Item -LiteralPath $vsixPath).Length
+      subjectName = [string]$liveAttestationEvidence.subject.name
+      subjectSha256 = [string]$liveAttestationEvidence.subject.sha256
+      artifactPath = [string]$liveAttestationEvidence.subject.path
+      artifactSize = [int64]$liveAttestationEvidence.subject.size
       workflowPath = $attestationWorkflowPath
       requiredPermissions = $attestationRequiredPermissions
       verificationCommand = $attestationVerifyCommand
@@ -542,7 +574,8 @@ $report = [pscustomobject]@{
   nonClaims = $nonClaims
   assertions = @(
     "exact VSIX bytes are bound by SHA256",
-    "live GitHub artifact attestation evidence is bound to the exact VSIX, workflow run, attestation URL, source ref/digest, verification policy, bundle bytes, and verification-result bytes",
+    "the current candidate is bound to an exact pending release-attestation contract without claiming live attestation",
+    "historical GitHub artifact attestation evidence remains bound to its own released VSIX, workflow run, attestation URL, source ref/digest, verification policy, bundle bytes, and verification-result bytes",
     "Marketplace icon is present, at least 128x128 pixels, packaged into the VSIX, and bound by SHA256",
     "VSIX package evidence remains publicReadinessClaim false",
     "source lock, pnpm lock, Cargo lock, SBOM, NOTICE, package metadata, and backend manifest are bound by SHA256",

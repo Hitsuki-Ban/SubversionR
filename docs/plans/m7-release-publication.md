@@ -388,6 +388,17 @@ This slice intentionally does not publish or rewrite the attested `0.2.0` asset,
 - `pnpm release:verify-readiness:smoke` must require the three owner-exception rows while keeping the security evidence matrix release blockers and `publicReadinessClaim=false` contracts unchanged.
 - A real publication claim is allowed only after the source-controlled workflow succeeds and emits `subversionr.release.marketplace-publication.win32-x64.v1` evidence for the exact published subject.
 
+## 0.2.1 Pre-release Candidate Refresh
+
+Issue [#20](https://github.com/Hitsuki-Ban/SubversionR/issues/20) replaces the blocked current-artifact state without rewriting the historical `0.2.0` release:
+
+- root and extension versions are `0.2.1`, and `vsce package --pre-release` produces an exact `subversionr-win32-x64-0.2.1.vsix` whose manifest contains one `Microsoft.VisualStudio.Code.PreRelease=true` property;
+- VSIX ZIP timestamps and entry ordering are normalized so repeated packaging of identical inputs produces identical bytes;
+- `docs/release/github-attestation-candidate-contract.win32-x64.json` binds `v0.2.1-beta.1`, size `8251718`, SHA256 `f4d800baf7db164d3816790853608076395aa542306b3ae8bbba100b8677a753`, and status `pending-release-attestation`;
+- provenance, publication gaps, and Beta-G bind that current candidate contract while retaining the `v0.2.0-beta.1` release and attestation only as historical public-cutover evidence;
+- the attestation workflow creates and verifies the current live attestation after the release exists, and the publish workflow independently verifies that live attestation against its own public `main` workflow SHA before Azure login; and
+- `docs/release/marketplace-pre-release-owner-exception-0.2.1.md` records the exact #20 owner authorization. `publicReadinessClaim` remains false throughout the candidate, attestation, and publication evidence chain.
+
 ## M7l1 Implemented Slice
 
 The first M7l slice adds a vulnerability review input-contract preflight without querying live advisory services or claiming CVE review completion:

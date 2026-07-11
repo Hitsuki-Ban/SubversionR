@@ -8,9 +8,6 @@ param(
   [string]$ContractPath,
 
   [Parameter(Mandatory = $true)]
-  [string]$LiveAttestationEvidencePath,
-
-  [Parameter(Mandatory = $true)]
   [string]$AttestationVerificationResultPath,
 
   [Parameter(Mandatory = $true)]
@@ -50,7 +47,9 @@ param(
   [string]$EventName,
 
   [Parameter(Mandatory = $true)]
-  [string]$OutputPath
+  [string]$OutputPath,
+
+  [switch]$ValidateOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -130,14 +129,6 @@ function Assert-Equal($Expected, $Actual, [string]$Message) {
   }
 }
 
-function Assert-JsonBoolean([object]$Object, [string]$Name, [bool]$Expected, [string]$Context) {
-  $value = Get-RequiredProperty $Object $Name $Context
-  if ($value -isnot [bool]) {
-    throw "$Context $Name must be a JSON boolean."
-  }
-  Assert-Equal $Expected ([bool]$value) "$Context $Name must match."
-}
-
 function Get-ZipEntryText([System.IO.Compression.ZipArchive]$Archive, [string]$EntryName) {
   $entries = @($Archive.Entries | Where-Object { $_.FullName -ceq $EntryName })
   if ($entries.Count -ne 1) {
@@ -153,7 +144,6 @@ function Get-ZipEntryText([System.IO.Compression.ZipArchive]$Archive, [string]$E
 }
 
 $contractResolved = Assert-InputFile $ContractPath "ContractPath"
-$liveEvidenceResolved = Assert-InputFile $LiveAttestationEvidencePath "LiveAttestationEvidencePath"
 $verificationResolved = Assert-GeneratedInputFile $AttestationVerificationResultPath "AttestationVerificationResultPath"
 $vsixResolved = Assert-GeneratedInputFile $VsixPath "VsixPath"
 $outputResolved = Assert-OutputPath $OutputPath
@@ -165,85 +155,41 @@ $outputResolved = Assert-OutputPath $OutputPath
   -ReleaseTag $ReleaseTag
 
 $contract = Get-Content -Raw -LiteralPath $contractResolved | ConvertFrom-Json
-$liveEvidence = Get-Content -Raw -LiteralPath $liveEvidenceResolved | ConvertFrom-Json
-
-Assert-Equal "subversionr.release.live-github-attestation.win32-x64.v1" ([string](Get-RequiredProperty $liveEvidence "schema" "Live attestation evidence")) "Live attestation evidence schema must match."
-Assert-JsonBoolean $liveEvidence "publicReadinessClaim" $false "Live attestation evidence"
-Assert-JsonBoolean $liveEvidence "signingClaim" $false "Live attestation evidence"
-Assert-Equal $Target ([string](Get-RequiredProperty $liveEvidence "target" "Live attestation evidence")) "Live attestation target must match."
-Assert-Equal "live-attestation-verified" ([string](Get-RequiredProperty $liveEvidence "status" "Live attestation evidence")) "Live attestation status must be verified."
-
-$liveContract = Get-RequiredProperty $liveEvidence "contract" "Live attestation evidence"
-Assert-Equal (Get-RepoRelativePath $contractResolved) ([string](Get-RequiredProperty $liveContract "path" "Live attestation contract")) "Live attestation contract path must match."
-Assert-Equal (Get-Sha256 $contractResolved) ([string](Get-RequiredProperty $liveContract "sha256" "Live attestation contract")) "Live attestation contract SHA256 must match current bytes."
-Assert-Equal ([string]$contract.schema) ([string](Get-RequiredProperty $liveContract "schema" "Live attestation contract")) "Live attestation contract schema must match."
-
-$liveRelease = Get-RequiredProperty $liveEvidence "release" "Live attestation evidence"
-Assert-Equal $ReleaseTag ([string](Get-RequiredProperty $liveRelease "tag" "Live attestation release")) "Live attestation release tag must match."
-Assert-Equal ([string]$contract.release.url) ([string](Get-RequiredProperty $liveRelease "url" "Live attestation release")) "Live attestation release URL must match."
-
-$liveSubject = Get-RequiredProperty $liveEvidence "subject" "Live attestation evidence"
-Assert-Equal ([string]$contract.subject.name) ([string](Get-RequiredProperty $liveSubject "name" "Live attestation subject")) "Live attestation subject name must match."
-Assert-Equal ([int64]$contract.subject.size) ([int64](Get-RequiredProperty $liveSubject "size" "Live attestation subject")) "Live attestation subject size must match."
-Assert-Equal ([string]$contract.subject.sha256) ([string](Get-RequiredProperty $liveSubject "sha256" "Live attestation subject")) "Live attestation subject SHA256 must match."
-
-$liveWorkflow = Get-RequiredProperty $liveEvidence "workflow" "Live attestation evidence"
-Assert-Equal ([string]$contract.workflow.path) ([string](Get-RequiredProperty $liveWorkflow "path" "Live attestation workflow")) "Live attestation workflow path must match."
-Assert-Equal "workflow_dispatch" ([string](Get-RequiredProperty $liveWorkflow "event" "Live attestation workflow")) "Live attestation workflow event must match."
-Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $liveWorkflow "sourceRef" "Live attestation workflow")) "Live attestation source ref must be public main."
-$attestationSourceSha = [string](Get-RequiredProperty $liveWorkflow "headSha" "Live attestation workflow")
-if ($attestationSourceSha -notmatch '^[a-f0-9]{40}$') {
-  throw "Live attestation headSha must be a full lowercase commit SHA."
-}
-
-$liveAttestation = Get-RequiredProperty $liveEvidence "attestation" "Live attestation evidence"
-Assert-Equal ([string]$contract.attestation.provider) ([string](Get-RequiredProperty $liveAttestation "provider" "Live attestation")) "Live attestation provider must match."
-Assert-Equal ([string]$contract.attestation.action) ([string](Get-RequiredProperty $liveAttestation "action" "Live attestation")) "Live attestation action must match."
-Assert-Equal ([string]$contract.attestation.actionDigest) ([string](Get-RequiredProperty $liveAttestation "actionDigest" "Live attestation")) "Live attestation action digest must match."
-Assert-Equal ([string]$contract.attestation.predicateType) ([string](Get-RequiredProperty $liveAttestation "predicateType" "Live attestation")) "Live attestation predicate type must match."
-Assert-JsonBoolean $liveAttestation "originalBuildProvenanceClaim" $false "Live attestation"
-Assert-JsonBoolean $liveAttestation "artifactSignatureClaim" $false "Live attestation"
-$liveBundleResolved = Assert-InputFile ([string](Get-RequiredProperty $liveAttestation "bundlePath" "Live attestation")) "Live attestation bundle"
-Assert-Equal (Get-Sha256 $liveBundleResolved) ([string](Get-RequiredProperty $liveAttestation "bundleSha256" "Live attestation")) "Live attestation bundle SHA256 must match current bytes."
-
-$liveVerification = Get-RequiredProperty $liveEvidence "verification" "Live attestation evidence"
-Assert-JsonBoolean $liveVerification "verified" $true "Live attestation verification"
-Assert-Equal ([string]$contract.verificationPolicy.repository) ([string](Get-RequiredProperty $liveVerification "repository" "Live attestation verification")) "Live attestation repository must match."
-Assert-Equal ([string]$contract.verificationPolicy.signerWorkflow) ([string](Get-RequiredProperty $liveVerification "signerWorkflow" "Live attestation verification")) "Live attestation signer workflow must match."
-Assert-Equal ([string]$contract.verificationPolicy.predicateType) ([string](Get-RequiredProperty $liveVerification "predicateType" "Live attestation verification")) "Live attestation predicate type must match."
-$recordedVerificationResolved = Assert-InputFile ([string](Get-RequiredProperty $liveVerification "resultPath" "Live attestation verification")) "Recorded live attestation verification result"
-Assert-Equal (Get-Sha256 $recordedVerificationResolved) ([string](Get-RequiredProperty $liveVerification "resultSha256" "Live attestation verification")) "Recorded live attestation verification result SHA256 must match current bytes."
-$liveCertificate = Get-RequiredProperty $liveVerification "certificate" "Live attestation verification"
-Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $liveCertificate "workflowRef" "Live attestation certificate")) "Live attestation certificate workflow ref must be public main."
-Assert-Equal $attestationSourceSha ([string](Get-RequiredProperty $liveCertificate "workflowSha" "Live attestation certificate")) "Live attestation certificate workflow SHA must match."
-Assert-Equal "github-hosted" ([string](Get-RequiredProperty $liveCertificate "runnerEnvironment" "Live attestation certificate")) "Live attestation certificate runner must be GitHub-hosted."
-Assert-Equal "public" ([string](Get-RequiredProperty $liveCertificate "sourceVisibility" "Live attestation certificate")) "Live attestation certificate must record public source visibility."
-
 $verificationResults = @(Get-Content -Raw -LiteralPath $verificationResolved | ConvertFrom-Json)
-if ($verificationResults.Count -ne 1) {
-  throw "AttestationVerificationResultPath must contain exactly one verified attestation."
+if ($verificationResults.Count -lt 1) {
+  throw "AttestationVerificationResultPath must contain at least one verified attestation."
 }
-$verifiedDetails = Get-RequiredProperty $verificationResults[0] "verificationResult" "Attestation verification result"
-$verifiedTimestamps = @(Get-RequiredProperty $verifiedDetails "verifiedTimestamps" "Attestation verification result details")
-if ($verifiedTimestamps.Count -lt 1) {
-  throw "Attestation verification result must contain at least one verified timestamp."
+$expectedSignerIdentity = "https://github.com/$($contract.verificationPolicy.signerWorkflow)@refs/heads/main"
+foreach ($verificationResult in $verificationResults) {
+  $verifiedDetails = Get-RequiredProperty $verificationResult "verificationResult" "Attestation verification result"
+  $verifiedTimestamps = @(Get-RequiredProperty $verifiedDetails "verifiedTimestamps" "Attestation verification result details")
+  if ($verifiedTimestamps.Count -lt 1) {
+    throw "Attestation verification result must contain at least one verified timestamp."
+  }
+
+  $statement = Get-RequiredProperty $verifiedDetails "statement" "Attestation verification result details"
+  $verifiedSubjects = @(Get-RequiredProperty $statement "subject" "Attestation verification statement")
+  if ($verifiedSubjects.Count -ne 1) {
+    throw "Attestation verification result must contain exactly one subject."
+  }
+  $verifiedSubject = $verifiedSubjects[0]
+  Assert-Equal ([string]$contract.subject.name) ([string](Get-RequiredProperty $verifiedSubject "name" "Attestation verification subject")) "Attestation verification subject name must match."
+  $verifiedDigest = Get-RequiredProperty $verifiedSubject "digest" "Attestation verification subject"
+  Assert-Equal ([string]$contract.subject.sha256) ([string](Get-RequiredProperty $verifiedDigest "sha256" "Attestation verification subject digest")) "Attestation verification subject SHA256 must match."
+  Assert-Equal ([string]$contract.verificationPolicy.predicateType) ([string](Get-RequiredProperty $statement "predicateType" "Attestation verification statement")) "Attestation verification predicate type must match."
+
+  $certificate = Get-RequiredProperty (Get-RequiredProperty $verifiedDetails "signature" "Attestation verification result details") "certificate" "Attestation verification signature"
+  Assert-Equal $expectedSignerIdentity ([string](Get-RequiredProperty $certificate "subjectAlternativeName" "Attestation verification certificate")) "Attestation verification signer identity must match."
+  Assert-Equal ([string]$contract.verificationPolicy.repository) ([string](Get-RequiredProperty $certificate "githubWorkflowRepository" "Attestation verification certificate")) "Attestation verification repository must match."
+  Assert-Equal "workflow_dispatch" ([string](Get-RequiredProperty $certificate "githubWorkflowTrigger" "Attestation verification certificate")) "Attestation verification trigger must match."
+  Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $certificate "githubWorkflowRef" "Attestation verification certificate")) "Attestation verification signer ref must be public main."
+  Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "githubWorkflowSHA" "Attestation verification certificate")) "Attestation verification signer SHA must match the publication commit."
+  Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "buildSignerDigest" "Attestation verification certificate")) "Attestation verification signer digest must match the publication commit."
+  Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $certificate "sourceRepositoryRef" "Attestation verification certificate")) "Attestation verification source ref must be public main."
+  Assert-Equal $HeadSha ([string](Get-RequiredProperty $certificate "sourceRepositoryDigest" "Attestation verification certificate")) "Attestation verification source digest must match the publication commit."
+  Assert-Equal "github-hosted" ([string](Get-RequiredProperty $certificate "runnerEnvironment" "Attestation verification certificate")) "Attestation verification runner must be GitHub-hosted."
+  Assert-Equal "public" ([string](Get-RequiredProperty $certificate "sourceRepositoryVisibilityAtSigning" "Attestation verification certificate")) "Attestation verification source visibility must be public."
 }
-$statement = Get-RequiredProperty $verifiedDetails "statement" "Attestation verification result details"
-$matchingSubjects = @($statement.subject | Where-Object {
-    [string]$_.name -eq [string]$contract.subject.name -and
-    [string]$_.digest.sha256 -eq [string]$contract.subject.sha256
-  })
-if ($matchingSubjects.Count -ne 1) {
-  throw "Attestation verification result must bind the contracted VSIX subject."
-}
-Assert-Equal ([string]$contract.verificationPolicy.predicateType) ([string](Get-RequiredProperty $statement "predicateType" "Attestation verification statement")) "Attestation verification predicate type must match."
-$verificationCertificate = Get-RequiredProperty (Get-RequiredProperty $verifiedDetails "signature" "Attestation verification result details") "certificate" "Attestation verification signature"
-Assert-Equal ([string]$contract.verificationPolicy.repository) ([string](Get-RequiredProperty $verificationCertificate "githubWorkflowRepository" "Attestation verification certificate")) "Attestation verification repository must match."
-Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $verificationCertificate "githubWorkflowRef" "Attestation verification certificate")) "Attestation verification workflow ref must be public main."
-Assert-Equal $attestationSourceSha ([string](Get-RequiredProperty $verificationCertificate "githubWorkflowSHA" "Attestation verification certificate")) "Attestation verification workflow SHA must match live evidence."
-Assert-Equal "refs/heads/main" ([string](Get-RequiredProperty $verificationCertificate "sourceRepositoryRef" "Attestation verification certificate")) "Attestation verification source ref must be public main."
-Assert-Equal $attestationSourceSha ([string](Get-RequiredProperty $verificationCertificate "sourceRepositoryDigest" "Attestation verification certificate")) "Attestation verification source digest must match live evidence."
-Assert-Equal "public" ([string](Get-RequiredProperty $verificationCertificate "sourceRepositoryVisibilityAtSigning" "Attestation verification certificate")) "Attestation verification source visibility must be public."
 
 $archive = [System.IO.Compression.ZipFile]::OpenRead($vsixResolved)
 try {
@@ -267,7 +213,6 @@ Assert-Equal $ExtensionId "$($identity.Publisher).$($identity.Id)" "VSIX manifes
 Assert-Equal "subversionr" ([string]$packageJson.name) "VSIX package name must match."
 Assert-Equal "hitsuki-ban" ([string]$packageJson.publisher) "VSIX package publisher must match."
 Assert-Equal $ExtensionVersion ([string]$packageJson.version) "VSIX package version must match."
-Assert-Equal $ExtensionId "$($packageJson.publisher).$($packageJson.name)" "VSIX package extension id must match."
 
 $preReleaseProperties = @($vsixManifest.SelectNodes("//*[local-name()='PackageManifest']/*[local-name()='Metadata']/*[local-name()='Properties']/*[local-name()='Property' and @Id='Microsoft.VisualStudio.Code.PreRelease']"))
 if ($preReleaseProperties.Count -ne 1 -or [string]$preReleaseProperties[0].Value -cne "true") {
@@ -278,18 +223,14 @@ Assert-Equal "Hitsuki-Ban/SubversionR" $Repository "Publication repository must 
 Assert-Equal ".github/workflows/publish-marketplace.yml" $WorkflowPath "Publication workflow path must match."
 Assert-Equal "workflow_dispatch" $EventName "Publication workflow event must be workflow_dispatch."
 Assert-Equal "refs/heads/main" $SourceRef "Publication workflow source ref must be public main."
-if ($RunId -notmatch '^[0-9]+$') {
-  throw "RunId must contain only digits."
-}
-if ($RunAttempt -lt 1) {
-  throw "RunAttempt must be positive."
-}
+if ($RunId -notmatch '^[0-9]+$') { throw "RunId must contain only digits." }
+if ($RunAttempt -lt 1) { throw "RunAttempt must be positive." }
 Assert-Equal "https://github.com/Hitsuki-Ban/SubversionR/actions/runs/$RunId" $RunUrl "RunUrl must match RunId."
-if ($HeadSha -notmatch '^[a-f0-9]{40}$') {
-  throw "HeadSha must be a full lowercase commit SHA."
-}
+if ($HeadSha -notmatch '^[a-f0-9]{40}$') { throw "HeadSha must be a full lowercase commit SHA." }
 
 $vsixRelativePath = Get-RepoRelativePath $vsixResolved
+$verificationRelativePath = Get-RepoRelativePath $verificationResolved
+$verificationCommand = "gh attestation verify $vsixRelativePath -R $($contract.verificationPolicy.repository) --signer-workflow $($contract.verificationPolicy.signerWorkflow) --signer-digest $HeadSha --source-ref refs/heads/main --source-digest $HeadSha --predicate-type $($contract.verificationPolicy.predicateType) --deny-self-hosted-runners --format json"
 $publishCommand = "pnpm exec vsce publish --packagePath $vsixRelativePath --pre-release --azure-credential"
 $evidence = [pscustomobject]@{
   schemaVersion = 1
@@ -303,10 +244,7 @@ $evidence = [pscustomobject]@{
   signingClaim = $false
   rollbackClaim = $false
   finalReviewClaim = $false
-  release = [pscustomobject]@{
-    tag = $ReleaseTag
-    url = [string]$contract.release.url
-  }
+  release = [pscustomobject]@{ tag = $ReleaseTag; url = [string]$contract.release.url }
   extension = [pscustomobject]@{
     id = $ExtensionId
     version = $ExtensionVersion
@@ -325,19 +263,17 @@ $evidence = [pscustomobject]@{
     verified = $true
     contractPath = Get-RepoRelativePath $contractResolved
     contractSha256 = Get-Sha256 $contractResolved
-    liveEvidencePath = Get-RepoRelativePath $liveEvidenceResolved
-    liveEvidenceSha256 = Get-Sha256 $liveEvidenceResolved
-    bundlePath = Get-RepoRelativePath $liveBundleResolved
-    bundleSha256 = Get-Sha256 $liveBundleResolved
-    recordedVerificationResultPath = Get-RepoRelativePath $recordedVerificationResolved
-    recordedVerificationResultSha256 = Get-Sha256 $recordedVerificationResolved
-    verificationResultPath = Get-RepoRelativePath $verificationResolved
+    verificationResultPath = $verificationRelativePath
     verificationResultSha256 = Get-Sha256 $verificationResolved
+    verificationResultCount = $verificationResults.Count
     repository = [string]$contract.verificationPolicy.repository
     signerWorkflow = [string]$contract.verificationPolicy.signerWorkflow
     predicateType = [string]$contract.verificationPolicy.predicateType
     sourceRef = "refs/heads/main"
-    sourceSha = $attestationSourceSha
+    sourceSha = $HeadSha
+    denySelfHostedRunners = $true
+    format = "json"
+    command = $verificationCommand
   }
   workflow = [pscustomobject]@{
     repository = $Repository
@@ -367,8 +303,12 @@ $evidence = [pscustomobject]@{
 }
 
 $serialized = $evidence | ConvertTo-Json -Depth 20
-if ($serialized -match '(?i)(client.?secret|access.?token|refresh.?token|authorization\s*header|VSCE_PAT)') {
-  throw "Marketplace publication evidence must not contain credential values."
+if ($serialized -match '(?i)(client.?id|tenant.?id|client.?secret|access.?token|refresh.?token|authorization\s*header|azure.?credential\s*[:=]|VSCE_PAT)') {
+  throw "Marketplace publication evidence must not contain identity or credential values."
+}
+if ($ValidateOnly) {
+  Write-Host "Validated SubversionR Marketplace prerelease publication inputs for $Target without writing evidence."
+  return
 }
 $outputParent = Split-Path -Parent $outputResolved
 New-Item -ItemType Directory -Force -Path $outputParent | Out-Null

@@ -448,17 +448,17 @@ function Invoke-RequirementEvidenceRuleChecks() {
     Assert-RequirementEvidenceStatus $requirementsEvidence $id "blocked"
   }
   foreach ($id in @("SEC-015", "MIG-010", "MIG-012")) {
-    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception.md"
+    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.1.md"
   }
-  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception.md"
+  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.1.md"
   Assert-Terms $marketplaceOwnerException @(
-    "# Marketplace Pre-release Owner Exception",
-    "public issue [#14]",
-    'release tag: `v0.2.0-beta.1`',
-    'extension version: `0.2.0`',
-    "d8ea4bfc187598a80ef0131f6345a60b8f3dcba2c9b22b992ea370f12eaa85cb",
+    "# Marketplace 0.2.1 Pre-release Owner Exception",
+    "public issue [#20]",
+    'release tag: `v0.2.1-beta.1`',
+    'asset name: `subversionr-win32-x64-0.2.1.vsix`',
+    "f4d800baf7db164d3816790853608076395aa542306b3ae8bbba100b8677a753",
     '`SEC-015`, `MIG-010`, and `MIG-012`',
-    "It cannot transfer to a rebuilt asset or a later version",
+    "It cannot transfer to different bytes, another tag, or a later version",
     "does not claim public release readiness"
   ) "Marketplace pre-release owner exception scope"
 
@@ -6415,7 +6415,7 @@ Assert-Terms $betaCandidateEvidenceScript @(
   "actions/attest@v4",
   "post-release-asset-digest-verification",
   "originalBuildProvenanceClaim",
-  "provenance and publication gaps record the verified live GitHub artifact attestation for the current VSIX subject",
+  "provenance and publication gaps bind the pending current-candidate attestation contract while preserving historical public-cutover attestation evidence separately",
   "artifactBundle",
   "artifactBundleManifest",
   "subversionr.release.beta-artifact-bundle-manifest.`$Target.v1",
@@ -6440,6 +6440,8 @@ Assert-Terms $attestationWorkflow @(
   "contents: read",
   "id-token: write",
   "attestations: write",
+  'group: release-vsix-attestation-${{ inputs.release_tag }}',
+  "cancel-in-progress: false",
   "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
   "gh release download",
   "scripts/release/verify-release-attestation-subject.ps1",
@@ -6667,14 +6669,13 @@ Assert-Terms $releaseGates @(
   "subversionr.release.beta-candidate-consistency.win32-x64.v1",
   "subversionr.release.beta-artifact-bundle-manifest.win32-x64.v1",
   "current VSIX bytes",
-  'VSIX `extension/package.json`',
-  'VSIX `extension.vsixmanifest` TargetPlatform',
-  "packaged backend ZIP entries",
+  "Microsoft.VisualStudio.Code.PreRelease=true",
+  "pending candidate attestation contract",
+  'Historical `0.2.0` public-cutover attestation evidence',
   "explicit CI upload allowlist",
-  "final consistency report bind the manifest SHA256",
   "subversionr-win32-x64-beta-candidate",
   "actions/upload-artifact@v7",
-  "verified live GitHub attestation",
+  'does not claim the `0.2.1` release or live attestation exists',
   "coverage-guided fuzzing"
 ) "Beta-G candidate evidence release gate documentation"
 Assert-Terms $m7Plan @(
@@ -7054,7 +7055,8 @@ Assert-Terms $m7Plan @(
   "pnpm release:verify-publication-gaps:win32-x64",
   "pnpm release:test-marketplace-publication-scripts",
   "subversionr.release.marketplace-publication.win32-x64.v1",
-  "docs/release/marketplace-pre-release-owner-exception.md",
+  "docs/release/marketplace-pre-release-owner-exception-0.2.1.md",
+  "docs/release/github-attestation-candidate-contract.win32-x64.json",
   "docs/release/marketplace-identity-bootstrap-evidence.json",
   "docs/release/marketplace-publisher-authorization-evidence.json",
   "docs/release/marketplace-existing-listing-evidence.json",

@@ -73,6 +73,104 @@ function Get-ZipEntryText([string]$ZipPath, [string]$EntryName) {
   }
 }
 
+function New-VsixPreReleaseManifestVariant([string]$SourcePath, [string]$DestinationPath, [AllowEmptyCollection()][string[]]$Values) {
+  $parent = Split-Path -Parent $DestinationPath
+  New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
+
+  $archive = [System.IO.Compression.ZipFile]::Open($DestinationPath, [System.IO.Compression.ZipArchiveMode]::Update)
+  try {
+    $entries = @($archive.Entries | Where-Object { $_.FullName -eq "extension.vsixmanifest" })
+    Assert-True ($entries.Count -eq 1) "VSIX fixture should contain exactly one extension.vsixmanifest entry."
+    $reader = [System.IO.StreamReader]::new($entries[0].Open())
+    try {
+      [xml]$manifest = $reader.ReadToEnd()
+    }
+    finally {
+      $reader.Dispose()
+    }
+
+    $propertiesNodes = @($manifest.SelectNodes("//*[local-name()='PackageManifest']/*[local-name()='Metadata']/*[local-name()='Properties']"))
+    Assert-True ($propertiesNodes.Count -eq 1) "VSIX fixture should contain exactly one Properties node."
+    $propertiesNode = $propertiesNodes[0]
+    $existingNodes = @($propertiesNode.SelectNodes("./*[local-name()='Property' and @Id='Microsoft.VisualStudio.Code.PreRelease']"))
+    foreach ($node in $existingNodes) {
+      $propertiesNode.RemoveChild($node) | Out-Null
+    }
+    foreach ($value in $Values) {
+      $property = $manifest.CreateElement("Property", $propertiesNode.NamespaceURI)
+      $property.SetAttribute("Id", "Microsoft.VisualStudio.Code.PreRelease")
+      $property.SetAttribute("Value", $value)
+      $propertiesNode.AppendChild($property) | Out-Null
+    }
+
+    $entries[0].Delete()
+    $entry = $archive.CreateEntry("extension.vsixmanifest")
+    $writer = [System.IO.StreamWriter]::new($entry.Open(), [System.Text.UTF8Encoding]::new($false))
+    try {
+      $manifest.Save($writer)
+    }
+    finally {
+      $writer.Dispose()
+    }
+  }
+  finally {
+    $archive.Dispose()
+  }
+}
+
+function New-FakePnpm([string]$Root) {
+  New-Item -ItemType Directory -Force -Path $Root | Out-Null
+  $scriptPath = Join-Path $Root "fake-pnpm.ps1"
+  @'
+$ErrorActionPreference = "Stop"
+$argsList = @($args)
+if ($argsList.Count -lt 3 -or $argsList[0] -ne "exec" -or $argsList[1] -ne "vsce" -or $argsList[2] -ne "package") {
+  throw "Unsupported fake pnpm invocation: $($argsList -join ' ')"
+}
+if ($argsList -notcontains "--pre-release") {
+  throw "vsce package must receive --pre-release."
+}
+$outIndex = $argsList.IndexOf("--out")
+if ($outIndex -lt 0 -or $outIndex + 1 -ge $argsList.Count) {
+  throw "vsce package --out is required."
+}
+if ([string]::IsNullOrWhiteSpace($env:SUBVERSIONR_FAKE_VSIX_SOURCE)) {
+  throw "SUBVERSIONR_FAKE_VSIX_SOURCE is required."
+}
+Copy-Item -LiteralPath $env:SUBVERSIONR_FAKE_VSIX_SOURCE -Destination $argsList[$outIndex + 1] -Force
+'@ | Set-Content -LiteralPath $scriptPath -NoNewline
+  "@pwsh -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" %*" | Set-Content -LiteralPath (Join-Path $Root "pnpm.cmd") -NoNewline
+}
+
+function Assert-InvalidPreReleaseManifestFails(
+  [string]$CaseName,
+  [AllowEmptyCollection()][string[]]$Values,
+  [string]$ExpectedText,
+  [string]$SourceVsix,
+  [string]$TempRoot,
+  [string]$PackageRoot,
+  [string]$DistRoot,
+  [string]$ReadmePath
+) {
+  $variantPath = Join-Path $TempRoot "$CaseName-source.vsix"
+  New-VsixPreReleaseManifestVariant -SourcePath $SourceVsix -DestinationPath $variantPath -Values $Values
+  $env:SUBVERSIONR_FAKE_VSIX_SOURCE = $variantPath
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $packageVsixScript `
+      -Target win32-x64 `
+      -PackageRoot $PackageRoot `
+      -ExtensionDistDirectory $DistRoot `
+      -ReadmePath $ReadmePath `
+      -LicensePath LICENSE `
+      -ChangelogPath CHANGELOG.md `
+      -SupportPath SUPPORT.md `
+      -WorkRoot (Join-Path $TempRoot "$CaseName-work") `
+      -OutputRoot (Join-Path $TempRoot "$CaseName-output") `
+      -EvidencePath (Join-Path $TempRoot "evidence\$CaseName.json")
+  } $ExpectedText "VSIX packaging should reject the $CaseName pre-release manifest."
+}
+
 function Copy-TestFile([string]$Source, [string]$Destination) {
   $parent = Split-Path -Parent $Destination
   New-Item -ItemType Directory -Force -Path $parent | Out-Null
@@ -325,11 +423,13 @@ try {
   Assert-Equal "tsc -p tsconfig.build.json" $extensionPackage.scripts.build "VS Code extension should expose a release build script."
 
   $rootPackage = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
+  Assert-Equal "0.2.1" $rootPackage.version "Root package should declare the current 0.2.1 candidate version."
   Assert-True ($null -ne $rootPackage.devDependencies."@vscode/vsce") "Root devDependencies should pin @vscode/vsce."
   Assert-True ($rootPackage.scripts."release:test-vsix-scripts".Contains("release-vsix-scripts.tests.ps1")) "Root package should expose M7g VSIX script tests."
   Assert-True ($rootPackage.scripts."release:build-vscode-extension".Contains("--filter ./packages/vscode-extension build")) "Root package should expose the extension release build."
   Assert-True ($rootPackage.scripts."release:package-vsix:win32-x64".Contains("package-vscode-vsix.ps1")) "Root package should expose the win32-x64 VSIX package gate."
-  Assert-True ($rootPackage.scripts."release:package-vsix:win32-x64".Contains("-ReadmePath README.md")) "Production VSIX packaging should keep the attested 0.2.0 README input unchanged."
+  Assert-True ($rootPackage.scripts."release:package-vsix:win32-x64".Contains("-ReadmePath packages/vscode-extension/README.md")) "Production VSIX packaging should use the dedicated Marketplace listing README."
+  Assert-True ((Get-Content -Raw -LiteralPath $packageVsixScript).Contains("vsce package --target `$Target --pre-release")) "Production VSIX packaging should pass --pre-release to vsce."
   Assert-True ($rootPackage.scripts."release:test-vsix-cli-install:win32-x64".Contains("test-vscode-cli-install-vsix.ps1")) "Root package should expose the win32-x64 VSIX CLI install gate."
   Assert-True ($rootPackage.scripts."release:test-vsix-cli-install:win32-x64".Contains("%SUBVERSIONR_CODE_CLI%")) "VSIX CLI install gate should require an explicit Code CLI path."
 
@@ -365,6 +465,7 @@ try {
   Assert-Equal "subversionr.release.vsix-package.win32-x64.v1" $report.schema "VSIX package evidence should use the M7g schema."
   Assert-Equal "False" ([string]$report.publicReadinessClaim) "VSIX package evidence must not claim public readiness."
   Assert-Equal "win32-x64" $report.target "VSIX package evidence should record the VS Code target."
+  Assert-Equal "True" ([string]$report.extension.preRelease) "VSIX package evidence should record preRelease=true."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "MIG-009" }).Count -eq 1) "VSIX package evidence should trace MIG-009."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "SEC-015" }).Count -eq 1) "VSIX package evidence should trace SEC-015."
   Assert-True (Test-Path -LiteralPath $report.vsix.path -PathType Leaf) "VSIX package evidence should point to an existing VSIX."
@@ -381,8 +482,27 @@ try {
   Assert-Equal "resources/marketplace/icon.png" $report.inputs.marketplaceIcon.path "VSIX package evidence should record the Marketplace icon path."
   Assert-True ($report.inputs.marketplaceIcon.sha256 -match '^[a-f0-9]{64}$') "VSIX package evidence should record the Marketplace icon hash."
   Assert-Equal $report.inputs.marketplaceIcon.sha256 $report.vsix.marketplaceIconSha256 "VSIX package evidence should prove Marketplace icon hash continuity."
+  Assert-True (@($report.assertions | Where-Object { $_ -eq "VSIX manifest declares Microsoft.VisualStudio.Code.PreRelease exactly once with Value=true" }).Count -eq 1) "VSIX package evidence should assert the exact pre-release manifest property."
+  Assert-True (@($report.assertions | Where-Object { $_ -eq "all VSIX ZIP entry timestamps are normalized to 2000-01-01T00:00:00Z" }).Count -eq 1) "VSIX package evidence should assert deterministic ZIP timestamps."
 
   $vsixPath = $report.vsix.path
+  $firstVsixSha256 = (Get-FileHash -LiteralPath $vsixPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  & pwsh -NoProfile -ExecutionPolicy Bypass -File $packageVsixScript `
+    -Target win32-x64 `
+    -PackageRoot $packageRoot `
+    -ExtensionDistDirectory $distRoot `
+    -ReadmePath $extensionReadmePath `
+    -LicensePath LICENSE `
+    -ChangelogPath CHANGELOG.md `
+    -SupportPath SUPPORT.md `
+    -WorkRoot $workRoot `
+    -OutputRoot $outputRoot `
+    -EvidencePath $evidencePath
+  if ($LASTEXITCODE -ne 0) {
+    throw "Second package-vscode-vsix.ps1 run failed with exit code $LASTEXITCODE."
+  }
+  Assert-Equal $firstVsixSha256 ((Get-FileHash -LiteralPath $vsixPath -Algorithm SHA256).Hash.ToLowerInvariant()) "Repeated VSIX packaging should produce identical bytes."
+
   Assert-ZipContains $vsixPath "extension/package.json" "VSIX should contain extension/package.json."
   Assert-ZipContains $vsixPath "extension.vsixmanifest" "VSIX should contain the VSIX manifest."
   Assert-ZipContains $vsixPath "extension/dist/extension.js" "VSIX should contain the compiled extension entrypoint."
@@ -394,6 +514,10 @@ try {
   Assert-ZipContains $vsixPath "extension/CHANGELOG.md" "VSIX should contain the changelog."
   Assert-ZipContains $vsixPath "extension/SUPPORT.md" "VSIX should contain the support document."
   Assert-ZipContains $vsixPath "extension/resources/marketplace/icon.png" "VSIX should contain the Marketplace icon."
+  [xml]$vsixManifest = Get-ZipEntryText -ZipPath $vsixPath -EntryName "extension.vsixmanifest"
+  $preReleaseNodes = @($vsixManifest.SelectNodes("//*[local-name()='PackageManifest']/*[local-name()='Metadata']/*[local-name()='Properties']/*[local-name()='Property' and @Id='Microsoft.VisualStudio.Code.PreRelease']"))
+  Assert-True ($preReleaseNodes.Count -eq 1) "VSIX manifest should contain exactly one Microsoft.VisualStudio.Code.PreRelease property."
+  Assert-True ([string]$preReleaseNodes[0].Value -ceq "true") "VSIX manifest pre-release property Value should be exactly true."
   $packagedReadme = Get-ZipEntryText -ZipPath $vsixPath -EntryName "extension/readme.md"
   Assert-Equal $extensionReadme $packagedReadme "VSIX should contain the explicit Marketplace listing README content."
   Assert-True ($packagedReadme -notmatch '(?i)\.svg(?:\b|[?#])') "Packaged Marketplace README must not reference SVG content."
@@ -430,6 +554,44 @@ try {
   Assert-True ($installReport.codeCli.sha256 -match '^[a-f0-9]{64}$') "VSIX CLI install evidence should record the Code CLI file hash."
   Assert-True (@($installReport.traceIds | Where-Object { $_ -eq "TST-024" }).Count -eq 1) "VSIX CLI install evidence should trace TST-024."
   Assert-True (@($installReport.installedExtensions | Where-Object { $_ -eq "hitsuki-ban.subversionr@0.2.0" }).Count -eq 1) "VSIX CLI install should list the installed extension."
+
+  $fakePnpmRoot = Join-Path $tempRoot "fake-pnpm"
+  New-FakePnpm -Root $fakePnpmRoot
+  $originalPath = $env:PATH
+  try {
+    $env:PATH = "$fakePnpmRoot;$originalPath"
+    Assert-InvalidPreReleaseManifestFails `
+      -CaseName "missing-pre-release" `
+      -Values @() `
+      -ExpectedText "must contain exactly one Microsoft.VisualStudio.Code.PreRelease property" `
+      -SourceVsix $vsixPath `
+      -TempRoot $tempRoot `
+      -PackageRoot $packageRoot `
+      -DistRoot $distRoot `
+      -ReadmePath $extensionReadmePath
+    Assert-InvalidPreReleaseManifestFails `
+      -CaseName "duplicate-pre-release" `
+      -Values @("true", "true") `
+      -ExpectedText "must contain exactly one Microsoft.VisualStudio.Code.PreRelease property" `
+      -SourceVsix $vsixPath `
+      -TempRoot $tempRoot `
+      -PackageRoot $packageRoot `
+      -DistRoot $distRoot `
+      -ReadmePath $extensionReadmePath
+    Assert-InvalidPreReleaseManifestFails `
+      -CaseName "non-true-pre-release" `
+      -Values @("True") `
+      -ExpectedText "Value must be exactly 'true'" `
+      -SourceVsix $vsixPath `
+      -TempRoot $tempRoot `
+      -PackageRoot $packageRoot `
+      -DistRoot $distRoot `
+      -ReadmePath $extensionReadmePath
+  }
+  finally {
+    $env:PATH = $originalPath
+    Remove-Item Env:SUBVERSIONR_FAKE_VSIX_SOURCE -ErrorAction SilentlyContinue
+  }
 
   $missingDistRoot = Join-Path $tempRoot "missing-dist"
   New-Item -ItemType Directory -Force -Path $missingDistRoot | Out-Null
@@ -489,6 +651,7 @@ try {
   Assert-True ($ciWorkflow.Contains("Package VS Code win32-x64 VSIX")) "CI should package the win32-x64 VSIX."
   Assert-True ($ciWorkflow.Contains("Locate VS Code CLI")) "CI should locate the VS Code CLI explicitly before install."
   Assert-True ($ciWorkflow.Contains("Test VS Code CLI VSIX install")) "CI should run the real VS Code CLI install gate."
+  Assert-True ($ciWorkflow.Contains("target/vsix/subversionr-win32-x64-0.2.1.vsix")) "CI should upload the current 0.2.1 VSIX candidate."
 
   Write-Host "Release VSIX script tests passed."
 }
