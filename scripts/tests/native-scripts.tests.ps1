@@ -53,7 +53,7 @@ function Assert-SourceField($Source, [string]$Field, [string]$Expected, [string]
   Assert-Equal $Expected $actual $Message
 }
 
-function New-TestPeFile([string]$Path, [uint32]$DebugType, [switch]$InvalidSignature) {
+function New-TestPeFile([string]$Path, [uint32]$DebugType, [switch]$InvalidSignature, [switch]$DuplicateRepro) {
   $bytes = [byte[]]::new(0x400)
   $bytes[0] = 0x4d
   $bytes[1] = 0x5a
@@ -67,12 +67,16 @@ function New-TestPeFile([string]$Path, [uint32]$DebugType, [switch]$InvalidSigna
   [BitConverter]::GetBytes([uint16]0x20b).CopyTo($bytes, 0x98)
   [BitConverter]::GetBytes([uint32]16).CopyTo($bytes, 0x104)
   [BitConverter]::GetBytes([uint32]0x1000).CopyTo($bytes, 0x138)
-  [BitConverter]::GetBytes([uint32]28).CopyTo($bytes, 0x13c)
+  $debugDirectorySize = if ($DuplicateRepro) { 56 } else { 28 }
+  [BitConverter]::GetBytes([uint32]$debugDirectorySize).CopyTo($bytes, 0x13c)
   [BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x190)
   [BitConverter]::GetBytes([uint32]0x1000).CopyTo($bytes, 0x194)
   [BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x198)
   [BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x19c)
   [BitConverter]::GetBytes($DebugType).CopyTo($bytes, 0x20c)
+  if ($DuplicateRepro) {
+    [BitConverter]::GetBytes([uint32]16).CopyTo($bytes, 0x228)
+  }
   [IO.File]::WriteAllBytes($Path, $bytes)
 }
 
@@ -91,6 +95,12 @@ try {
   Assert-ThrowsContaining {
     Assert-DeterministicPeFile -Path $timestampedPePath
   } "IMAGE_DEBUG_TYPE_REPRO" "Deterministic PE validation should reject timestamped linker output."
+
+  $duplicateReproPePath = Join-Path $tempRoot "duplicate-repro.dll"
+  New-TestPeFile -Path $duplicateReproPePath -DebugType 16 -DuplicateRepro
+  Assert-ThrowsContaining {
+    Assert-DeterministicPeFile -Path $duplicateReproPePath
+  } "exactly one IMAGE_DEBUG_TYPE_REPRO" "Deterministic PE validation should reject ambiguous duplicate reproducibility metadata."
 
   $invalidPePath = Join-Path $tempRoot "invalid.dll"
   New-TestPeFile -Path $invalidPePath -DebugType 16 -InvalidSignature
