@@ -2243,6 +2243,8 @@ function runtimeLocalizationKeys(): string[] {
     "Choose cleanup options for {0}",
     "Upgrading SVN working copy",
     "Updating SVN working copy",
+    "{0}. The working copy has unresolved SVN conflicts ({1}): {2}",
+    "{0} (+{1} more)",
     "Update SVN working copy to revision",
     "Enter the SVN revision number for {0}.",
     "Revision number",

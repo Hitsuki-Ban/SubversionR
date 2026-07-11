@@ -1241,6 +1241,12 @@ describe("RepositoryCommandController", () => {
     const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
       refreshService,
       operationClient,
+      sourceControlProjection: fakeSourceControlProjection({
+        projection: scmProjection({
+          repositoryId: second.repositoryId,
+          workingCopyRoot: second.identity.workingCopyRoot,
+        }),
+      }),
     });
 
     await (controller as unknown as { updateRepository(repositoryId?: unknown): Promise<void> })
@@ -1262,6 +1268,60 @@ describe("RepositoryCommandController", () => {
     });
     expect(ui.showInformationMessage).toHaveBeenCalledWith(
       "SubversionR updated SVN working copy to revision 8: D:\\other-wc",
+    );
+  });
+
+  it("warns with a bounded unresolved-conflict summary after updating a repository", async () => {
+    const session = repositorySession();
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({
+        resources: [
+          scmConflictedProjectedResource({ path: "src/zeta.txt" }),
+          scmConflictedProjectedResource({ path: "src/alpha.txt" }),
+          scmConflictedProjectedResource({ path: "src/gamma.txt" }),
+          scmConflictedProjectedResource({ path: "src/beta.txt" }),
+        ],
+      }),
+    });
+    const operationClient = fakeOperationClient(operationResponse({ kind: "update", path: ".", revision: 8 }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await controller.updateRepository();
+
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+    expect(ui.showWarningMessage).toHaveBeenCalledWith(
+      "SubversionR updated SVN working copy to revision 8: C:\\workspace. " +
+        "The working copy has unresolved SVN conflicts (4): " +
+        "src/alpha.txt, src/beta.txt, src/gamma.txt (+1 more)",
+    );
+  });
+
+  it("fails fast instead of reporting update success when reconciled conflict state is unavailable", async () => {
+    const session = repositorySession();
+    const operationClient = fakeOperationClient(operationResponse({ kind: "update", path: ".", revision: 8 }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      {
+        operationClient,
+        sourceControlProjection: fakeSourceControlProjection({ projection: undefined }),
+      },
+    );
+
+    await controller.updateRepository();
+
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+    expect(ui.showWarningMessage).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "SubversionR repository command failed: SUBVERSIONR_UPDATE_CONFLICT_STATE_UNAVAILABLE",
     );
   });
 
@@ -1391,6 +1451,12 @@ describe("RepositoryCommandController", () => {
     const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
       refreshService,
       operationClient,
+      sourceControlProjection: fakeSourceControlProjection({
+        projection: scmProjection({
+          repositoryId: second.repositoryId,
+          workingCopyRoot: second.identity.workingCopyRoot,
+        }),
+      }),
     });
 
     await (controller as unknown as { updateToRevision(repositoryId?: unknown): Promise<void> })
@@ -3572,6 +3638,36 @@ describe("RepositoryCommandController", () => {
     );
   });
 
+  it("warns about unresolved conflicts under the selected updated resource", async () => {
+    const session = repositorySession();
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({
+        resources: [scmConflictedProjectedResource({ path: "src/module/main.c" })],
+      }),
+    });
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "update", path: "src/module", revision: 9 }),
+    );
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await controller.updateResource({
+      contextValue: "subversionr.incoming",
+      resourceUri: { fsPath: "C:\\workspace\\src\\module" },
+    });
+
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+    expect(ui.showWarningMessage).toHaveBeenCalledWith(
+      "SubversionR updated SVN resource to revision 9: src/module. " +
+        "The working copy has unresolved SVN conflicts (1): src/module/main.c",
+    );
+  });
+
   it("updates all incoming SVN resources for a repository group and performs one full reconcile", async () => {
     const session = repositorySession();
     const sessionService = fakeSessionService({ sessions: [session] });
@@ -3663,6 +3759,36 @@ describe("RepositoryCommandController", () => {
       ignoreExternals: true,
     });
     expect(refreshService.fullReconcileRepository).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns about unresolved conflicts under resources updated from the incoming group", async () => {
+    const session = repositorySession();
+    const projection = scmProjection({
+      resources: [
+        scmIncomingProjectedResource({ path: "src/module", kind: "dir" }),
+        scmConflictedProjectedResource({ path: "src/module/main.c" }),
+      ],
+    });
+    const sourceControlProjection = fakeSourceControlProjection({ projection });
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "update", path: "src/module", revision: 9 }),
+    );
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await (controller as unknown as { updateAllIncoming(commandArgument?: unknown): Promise<void> })
+      .updateAllIncoming("repo-uuid:C:/workspace");
+
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+    expect(ui.showWarningMessage).toHaveBeenCalledWith(
+      "SubversionR updated 1 incoming SVN resources: src/module. " +
+        "The working copy has unresolved SVN conflicts (1): src/module/main.c",
+    );
   });
 
   it("warns without running update when there are no incoming SVN resources", async () => {
