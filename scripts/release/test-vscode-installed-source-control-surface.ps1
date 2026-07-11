@@ -253,6 +253,7 @@ function New-SourceControlSurfaceFixture([string]$Root, [string]$SvnExe, [string
   $repoPath = Join-Path $Root "repo"
   $importRoot = Join-Path $Root "import"
   $wcRoot = Join-Path $Root "workspace\wc"
+  $peerRoot = Join-Path $Root "workspace\peer"
   $svnCliConfigRoot = Join-Path $Root "svn-cli-config"
   $svnRuntimeAppDataRoot = Join-Path $Root "runtime-appdata"
   $svnRuntimeConfigRoot = Join-Path $svnRuntimeAppDataRoot "Subversion"
@@ -292,8 +293,65 @@ store-auth-creds = no
     $svnCliConfigRoot
   ) -Description "svn checkout fixture working copy" | Out-Null
 
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "checkout",
+    "$repoUrl/trunk",
+    $peerRoot,
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $svnCliConfigRoot
+  ) -Description "svn checkout remote-status peer working copy" | Out-Null
+  Set-Content -LiteralPath (Join-Path $peerRoot "src\tracked.txt") -Value "remote edit by M7j`n" -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $peerRoot "src\incoming-only.txt") -Value "remote addition by M7j`n" -NoNewline -Encoding utf8
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "add",
+    (Join-Path $peerRoot "src\incoming-only.txt"),
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $svnCliConfigRoot
+  ) -Description "svn add remote-status fixture path" | Out-Null
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "commit",
+    $peerRoot,
+    "-m",
+    "advance remote status fixture",
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $svnCliConfigRoot
+  ) -Description "svn commit remote-status peer changes" | Out-Null
+
   Set-Content -LiteralPath (Join-Path $wcRoot "src\tracked.txt") -Value "modified by M7j`n" -NoNewline -Encoding utf8
   Set-Content -LiteralPath (Join-Path $wcRoot "scratch.txt") -Value "unversioned by M7j`n" -NoNewline -Encoding utf8
+  [xml]$remoteStatusOracle = (Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "status",
+    "--show-updates",
+    "--xml",
+    $wcRoot,
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $svnCliConfigRoot
+  ) -Description "svn remote-status XML oracle") -join "`n"
+  $oracleReportedPaths = @($remoteStatusOracle.status.target.entry |
+    Where-Object {
+      $reposStatus = $_.SelectSingleNode("repos-status")
+      $null -ne $reposStatus -and $reposStatus.item -notin @("none", "normal")
+    } |
+    ForEach-Object {
+      [System.IO.Path]::GetRelativePath($wcRoot, [string]$_.path).Replace("\", "/")
+    } |
+    Sort-Object -Unique)
+  $oracleIncomingPaths = @($oracleReportedPaths | Where-Object {
+    $_ -in @("src/tracked.txt", "src/incoming-only.txt")
+  })
+  if (@($oracleIncomingPaths).Count -ne 2 -or
+    "src/tracked.txt" -notin $oracleIncomingPaths -or
+    "src/incoming-only.txt" -notin $oracleIncomingPaths) {
+    throw "svn remote-status oracle must report src/tracked.txt and src/incoming-only.txt; got $($oracleReportedPaths -join ', ')."
+  }
 
   $svnRoot = Join-Path $wcRoot ".svn"
   [pscustomobject]@{
@@ -301,6 +359,8 @@ store-auth-creds = no
     repoUrl = $repoUrl
     importRoot = $importRoot
     workingCopyRoot = $wcRoot
+    peerWorkingCopyRoot = $peerRoot
+    oracleIncomingPaths = $oracleIncomingPaths
     svnCliConfigRoot = $svnCliConfigRoot
     svnRuntimeAppDataRoot = $svnRuntimeAppDataRoot
     svnRuntimeConfigRoot = $svnRuntimeConfigRoot
@@ -404,6 +464,7 @@ async function run() {
   let organicActivationWaitMs;
   let organicSourceControlSurfaceReport;
   let organicSourceControlCloseReport;
+  let remoteStatusSurfaceReport;
   let sourceControlSurfaceReport;
   let sourceControlSubdirectoryOpenReport;
   let versionReport;
@@ -418,6 +479,7 @@ async function run() {
       organicActivationWaitMs,
       organicSourceControlSurfaceReport,
       organicSourceControlCloseReport,
+      remoteStatusSurfaceReport,
       sourceControlSurfaceReport,
       sourceControlSubdirectoryOpenReport,
       versionReport,
@@ -438,6 +500,32 @@ async function run() {
     organicActivationWaitMs = Date.now() - organicActivationStartedAt;
     phase = "waitingForOrganicSourceControlSurface";
     organicSourceControlSurfaceReport = await waitForOrganicSourceControlSurface(workingCopyRoot, 60000);
+    phase = "checkingRemoteStatus";
+    await withTimeout(
+      vscode.commands.executeCommand(
+        "subversionr.checkRemoteChanges",
+        organicSourceControlSurfaceReport.repository.repositoryId
+      ),
+      "subversionr.checkRemoteChanges",
+      60000
+    );
+    remoteStatusSurfaceReport = await withTimeout(
+      vscode.commands.executeCommand(
+        "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+        { path: workingCopyRoot }
+      ),
+      "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+      30000
+    );
+    if (!findResource(remoteStatusSurfaceReport, "incoming", "src/tracked.txt", "subversionr.incomingFile")) {
+      throw new Error("Installed remote status did not project dual-state src/tracked.txt into Incoming.");
+    }
+    if (!findResource(remoteStatusSurfaceReport, "incoming", "src/incoming-only.txt", "subversionr.incomingFile")) {
+      throw new Error("Installed remote status did not project src/incoming-only.txt into Incoming.");
+    }
+    if (!findResource(remoteStatusSurfaceReport, "changes", "src/tracked.txt", "subversionr.changedFile.baseDiffable")) {
+      throw new Error("Installed remote status did not preserve local Changes projection for src/tracked.txt.");
+    }
     phase = "closingOrganicSourceControlSurface";
     organicSourceControlCloseReport = await withTimeout(
       vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCloseReport", {
@@ -627,6 +715,8 @@ async function run() {
       source: "installed-vsix",
       invokedCommands: [
         "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+        "subversionr.checkRemoteChanges",
+        "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
         "subversionr.diagnostics.installedSourceControlUiE2eCloseReport",
         "subversionr.diagnostics.installedSourceControlSurfaceReport",
         "subversionr.diagnostics.installedSourceControlSurfaceReport",
@@ -637,6 +727,7 @@ async function run() {
       hasInstalledSourceControlSurfaceReportCommand: true,
       organicSourceControlSurfaceReport,
       organicSourceControlCloseReport,
+      remoteStatusSurfaceReport,
       sourceControlSurfaceReport,
       sourceControlSubdirectoryOpenReport,
       versionReport
@@ -718,6 +809,16 @@ function Assert-HarnessResult(
   if ($Result.organicSourceControlCloseReport.kind -ne "subversionr.installedSourceControlUiE2eCloseReport" -or $Result.organicSourceControlCloseReport.repositoryClosed -ne $true) {
     throw "Installed Source Control surface result must close the organically opened repository before explicit surface tests."
   }
+  if ($Result.remoteStatusSurfaceReport.kind -ne "subversionr.installedSourceControlUiE2eCurrentSurfaceReport") {
+    throw "Installed Source Control surface result must include the post-check remote status surface."
+  }
+  Assert-ResourcePresent -SourceControlSurfaceReport $Result.remoteStatusSurfaceReport -GroupId "changes" -Path "src/tracked.txt" -ContextValue "subversionr.changedFile.baseDiffable"
+  Assert-ResourcePresent -SourceControlSurfaceReport $Result.remoteStatusSurfaceReport -GroupId "incoming" -Path "src/tracked.txt" -ContextValue "subversionr.incomingFile"
+  Assert-ResourcePresent -SourceControlSurfaceReport $Result.remoteStatusSurfaceReport -GroupId "incoming" -Path "src/incoming-only.txt" -ContextValue "subversionr.incomingFile"
+  $incomingGroup = @($Result.remoteStatusSurfaceReport.sourceControl.groups | Where-Object id -eq "incoming")
+  if ($incomingGroup.Count -ne 1 -or $incomingGroup[0].count -ne 2 -or @($incomingGroup[0].resources).Count -ne 2) {
+    throw "Installed remote status surface must contain exactly two Incoming resources."
+  }
   if ($Result.hasInstalledSourceControlSurfaceReportCommand -ne $true) {
     throw "Installed Source Control surface result must prove hidden diagnostic command registration."
   }
@@ -791,7 +892,7 @@ function Assert-HarnessResult(
   if (-not ([string]$Result.versionReport.backend.libsvnVersion).StartsWith("1.14.5", [System.StringComparison]::Ordinal)) {
     throw "Installed Source Control surface version report libsvnVersion must start with 1.14.5."
   }
-  foreach ($capability in @("repositoryOpen", "statusSnapshot", "statusRefresh", "realLibsvnBridge")) {
+  foreach ($capability in @("repositoryOpen", "statusSnapshot", "statusRefresh", "statusRemoteCheck", "realLibsvnBridge")) {
     if ($Result.versionReport.backend.capabilities.$capability -ne $true) {
       throw "Installed Source Control surface backend capability $capability must be true."
     }
@@ -930,7 +1031,7 @@ $report = [pscustomobject]@{
   schema = "subversionr.release.installed-source-control-surface.win32-x64.v1"
   publicReadinessClaim = $false
   target = $Target
-  traceIds = @("REP-001", "MIG-009", "TST-024", "UX-001")
+  traceIds = @("REP-001", "MIG-009", "TST-024", "UX-001", "DIR-019")
   nonClaims = @(
     "This gate does not prove Marketplace publication.",
     "This gate does not prove VSIX signing or supply-chain provenance publication.",
@@ -956,6 +1057,7 @@ $report = [pscustomobject]@{
   }
   organicSourceControlSurfaceReport = $harnessResult.organicSourceControlSurfaceReport
   organicSourceControlCloseReport = $harnessResult.organicSourceControlCloseReport
+  remoteStatusSurfaceReport = $harnessResult.remoteStatusSurfaceReport
   sourceControlSurfaceReport = $harnessResult.sourceControlSurfaceReport
   sourceControlSubdirectoryOpenReport = $harnessResult.sourceControlSubdirectoryOpenReport
   versionReport = $harnessResult.versionReport
@@ -988,6 +1090,7 @@ $report = [pscustomobject]@{
     repository = Get-RepoRelativePath $fixture.repoPath
     import = Get-RepoRelativePath $fixture.importRoot
     workingCopy = Get-RepoRelativePath $fixture.workingCopyRoot
+    peerWorkingCopy = Get-RepoRelativePath $fixture.peerWorkingCopyRoot
     workspaceOpen = Get-RepoRelativePath $workspaceOpenPath
     svnCliConfig = Get-RepoRelativePath $fixture.svnCliConfigRoot
     svnRuntimeAppData = Get-RepoRelativePath $fixture.svnRuntimeAppDataRoot
@@ -1000,6 +1103,7 @@ $report = [pscustomobject]@{
   workingCopy = [pscustomobject]@{
     root = Get-RepoRelativePath $fixture.workingCopyRoot
     repositoryUrl = $fixture.repoUrl
+    remoteStatusOracleIncomingPaths = $fixture.oracleIncomingPaths
     svnTreeBeforeSha256 = $fixture.svnTreeBeforeSha256
     svnTreeAfterSha256 = $svnTreeAfterSha256
     svnMetadataMutation = $(if ($svnTreeAfterSha256 -eq $fixture.svnTreeBeforeSha256) { "none" } else { "metadata-refreshed" })
@@ -1015,6 +1119,18 @@ $report = [pscustomobject]@{
         group = "unversioned"
         contextValue = "subversionr.unversioned"
         localStatus = "unversioned"
+      },
+      [pscustomobject]@{
+        path = "src/tracked.txt"
+        group = "incoming"
+        contextValue = "subversionr.incomingFile"
+        remoteStatus = "modified"
+      },
+      [pscustomobject]@{
+        path = "src/incoming-only.txt"
+        group = "incoming"
+        contextValue = "subversionr.incomingFile"
+        remoteStatus = "added"
       }
     )
   }
@@ -1029,6 +1145,8 @@ $report = [pscustomobject]@{
     "SubversionR opened the real fixture working copy through its Rust sidecar and libsvn bridge",
     "SubversionR opened the fixture src subdirectory and resolved the provider to the parent working copy root",
     "SubversionR produced SCM projection resources for a modified tracked file and an unversioned file",
+    "SubversionR checked remote status on demand through the installed sidecar and libsvn bridge without updating the working copy",
+    "SubversionR projected the two svn status --show-updates oracle paths into Incoming while preserving the dual-state local change",
     "SubversionR produced exactly the expected non-empty SCM projection groups for this local-only cold-start fixture",
     "SubversionR closed the repository before returning the installed Source Control surface report",
     "SubversionR version report backend status was initialized with libsvn 1.14.5",

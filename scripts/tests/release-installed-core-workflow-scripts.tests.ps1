@@ -216,6 +216,7 @@ if ($null -eq $installedPackage) {
         repositoryOpen = $true
         statusSnapshot = $true
         statusRefresh = $true
+        statusRemoteCheck = $true
         realLibsvnBridge = $true
       }
     }

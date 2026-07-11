@@ -10,7 +10,7 @@ import {
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const MINIMUM_PROTOCOL_MINOR = 27;
+const MINIMUM_PROTOCOL_MINOR = 28;
 const EXPECTED_CACHE_SCHEMA_ID = "subversionr.cache.v1";
 const EXPECTED_CACHE_SCHEMA_VERSION = 1;
 const EXPECTED_CACHE_SCHEMA_ROLLBACK = "delete-and-reconcile";
@@ -24,6 +24,7 @@ const REQUIRED_CAPABILITIES: Array<keyof InitializeResult["capabilities"]> = [
   "repositoryCheckout",
   "statusSnapshot",
   "statusRefresh",
+  "statusRemoteCheck",
   "statusStaleNotification",
   "contentGet",
   "contentGetRevision",
@@ -128,6 +129,7 @@ export interface InitializeResult {
     repositoryCheckout: boolean;
     statusSnapshot: boolean;
     statusRefresh: boolean;
+    statusRemoteCheck: boolean;
     statusStaleNotification: boolean;
     contentGet: boolean;
     contentGetRevision: boolean;
@@ -443,6 +445,10 @@ function parseInitializeResult(rawResult: unknown): InitializeResult {
       repositoryCheckout: requireBoolean(capabilities.repositoryCheckout, "capabilities.repositoryCheckout"),
       statusSnapshot: requireBoolean(capabilities.statusSnapshot, "capabilities.statusSnapshot"),
       statusRefresh: requireBoolean(capabilities.statusRefresh, "capabilities.statusRefresh"),
+      statusRemoteCheck: requireBoolean(
+        capabilities.statusRemoteCheck,
+        "capabilities.statusRemoteCheck",
+      ),
       statusStaleNotification: requireBoolean(
         capabilities.statusStaleNotification,
         "capabilities.statusStaleNotification",

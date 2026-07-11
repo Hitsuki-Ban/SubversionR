@@ -25,7 +25,7 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
         response.protocol,
         ProtocolVersion {
             major: 1,
-            minor: 27
+            minor: 28
         }
     );
     assert_eq!(response.cache_schema, default_cache_schema());
@@ -37,6 +37,7 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
     assert!(response.capabilities.repository_discover);
     assert!(response.capabilities.status_snapshot);
     assert!(response.capabilities.status_refresh);
+    assert!(response.capabilities.status_remote_check);
     assert!(response.capabilities.status_stale_notification);
     assert!(response.capabilities.content_get);
     assert!(response.capabilities.content_get_revision);
@@ -84,7 +85,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     let json = serde_json::to_value(response).expect("initialize response must serialize");
 
     assert_eq!(json["protocol"]["major"], 1);
-    assert_eq!(json["protocol"]["minor"], 27);
+    assert_eq!(json["protocol"]["minor"], 28);
     assert_eq!(json["cacheSchema"]["schemaId"], "subversionr.cache.v1");
     assert_eq!(json["cacheSchema"]["version"], 1);
     assert_eq!(json["cacheSchema"]["rollback"], "delete-and-reconcile");
@@ -97,6 +98,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     assert_eq!(json["capabilities"]["repositoryClose"], true);
     assert_eq!(json["capabilities"]["statusSnapshot"], true);
     assert_eq!(json["capabilities"]["statusRefresh"], true);
+    assert_eq!(json["capabilities"]["statusRemoteCheck"], true);
     assert_eq!(json["capabilities"]["statusStaleNotification"], true);
     assert_eq!(json["capabilities"]["contentGet"], true);
     assert_eq!(json["capabilities"]["contentGetRevision"], true);

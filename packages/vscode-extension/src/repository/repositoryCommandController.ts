@@ -15,6 +15,7 @@ import { historyCompareRevisionUriComponents } from "../history/historyCompareRe
 import type { HistoryClient } from "../history/historyLogRpcClient";
 import type { HistoryViewTarget } from "../history/historyViewTarget";
 import type { RepositoryRefreshService, RepositoryResourceRefreshTarget } from "../status/repositoryRefreshService";
+import type { RemoteStatusCheckService } from "../status/remoteStatusCheckService";
 import type {
   OperationClient,
   OperationRunClientOptions,
@@ -203,6 +204,7 @@ export interface RepositoryCommandControllerOptions {
     RepositoryRefreshService,
     "refreshRepository" | "fullReconcileRepository" | "refreshResource" | "refreshTargets"
   >;
+  remoteStatusCheckService: Pick<RemoteStatusCheckService, "checkRemoteChanges">;
   operationClient: Pick<
     OperationClient,
     | "add"
@@ -572,25 +574,33 @@ export class RepositoryCommandController {
       if (!session) {
         return;
       }
-      await this.options.ui.runOperationWithProgress(
+      const incomingChanges = await this.options.ui.runOperationWithProgress(
         this.options.localize("Checking SVN remote changes"),
         async (signal) => {
-          const target = {
+          const request = {
             repositoryId: session.repositoryId,
             epoch: session.epoch,
-            targets: [{ path: ".", depth: "infinity" as const, reason: "manualRemoteCheck" }],
           };
           const options = statusRefreshRunOptions(signal);
           if (options === undefined) {
-            await this.options.refreshService.refreshTargets(target);
-          } else {
-            await this.options.refreshService.refreshTargets(target, options);
+            return await this.options.remoteStatusCheckService.checkRemoteChanges(request);
           }
+          return await this.options.remoteStatusCheckService.checkRemoteChanges(request, options);
         },
       );
-      this.showCommandInformation(
-        this.options.localize("SubversionR checked SVN remote changes: {0}", session.identity.workingCopyRoot),
-      );
+      if (incomingChanges === 0) {
+        this.showCommandInformation(
+          this.options.localize("No incoming SVN changes: {0}", session.identity.workingCopyRoot),
+        );
+      } else {
+        this.showCommandInformation(
+          this.options.localize(
+            "SubversionR incoming SVN changes: {0} ({1})",
+            incomingChanges,
+            session.identity.workingCopyRoot,
+          ),
+        );
+      }
     } catch (error) {
       await this.showCommandError(error);
     }

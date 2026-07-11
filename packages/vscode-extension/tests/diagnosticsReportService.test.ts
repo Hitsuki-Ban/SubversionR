@@ -311,7 +311,7 @@ function fakeConnection(
 
 function initializeResult(): InitializeResult {
   return {
-    protocol: { major: 1, minor: 27 },
+    protocol: { major: 1, minor: 28 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -330,6 +330,7 @@ function initializeResult(): InitializeResult {
       repositoryCheckout: true,
       statusSnapshot: true,
       statusRefresh: true,
+      statusRemoteCheck: true,
       statusStaleNotification: true,
       contentGet: true,
       contentGetRevision: true,

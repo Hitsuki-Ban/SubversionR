@@ -52,6 +52,10 @@ export class DirtyPathPipeline {
     return this.scheduler.flushRepository(repositoryId, options);
   }
 
+  public runExclusive<T>(repositoryId: string, operation: () => Promise<T>): Promise<T> {
+    return this.scheduler.runExclusive(repositoryId, operation);
+  }
+
   public fullReconcileRepository(
     request: FullReconcileRequest,
     options?: StatusRefreshRunOptions,

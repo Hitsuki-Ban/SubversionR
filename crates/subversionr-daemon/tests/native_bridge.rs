@@ -1057,6 +1057,95 @@ fn native_bridge_update_against_svnserve_routes_credentials_through_broker() {
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
+fn native_bridge_remote_status_against_svnserve_routes_credentials_through_broker() {
+    let _guard = native_test_guard();
+    let bridge_path = native_bridge_path();
+    let tool_dir = bridge_tool_dir(&bridge_path);
+    let svnadmin = tool_dir.join("svnadmin.exe");
+    let svn = tool_dir.join("svn.exe");
+    let svnserve = tool_dir.join("svnserve.exe");
+    let fixture = SvnserveFixture::create(&svnadmin, &svn, &svnserve);
+    let checkout = fixture.temp.path.join("broker-remote-status-wc");
+    let checkout_config = fixture.temp.path.join("broker-remote-status-config");
+    let checkout_url = fixture.trunk_url();
+    run_tool(
+        &svn,
+        [
+            "checkout".as_ref(),
+            checkout_url.as_ref(),
+            checkout.as_os_str(),
+            "--username".as_ref(),
+            "alice".as_ref(),
+            "--password".as_ref(),
+            "secret".as_ref(),
+            "--no-auth-cache".as_ref(),
+            "--non-interactive".as_ref(),
+            "--config-dir".as_ref(),
+            checkout_config.as_os_str(),
+        ],
+    );
+    fixture.commit_seed_file(
+        &svn,
+        "tracked.txt",
+        "remote status through svnserve broker\n",
+        "remote edit for brokered status",
+    );
+
+    let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
+    let identity = bridge
+        .open_working_copy(
+            checkout
+                .to_str()
+                .expect("svnserve checkout path should be valid UTF-8"),
+        )
+        .expect("native bridge should open the svnserve working copy");
+    let expected_repository_id = format!(
+        "{}:{}",
+        identity.repository_uuid, identity.working_copy_root
+    );
+    let mut auth = RecordingAuthBroker::new("alice", "secret");
+
+    let snapshot = bridge
+        .status_remote_check_with_cancellation(
+            &identity,
+            73,
+            &mut auth,
+            &subversionr_daemon::NeverCancelled,
+        )
+        .expect("native bridge should check remote status through the auth broker");
+
+    assert!(!auth.credential_requests.is_empty());
+    assert_eq!(
+        auth.credential_requests[0].repository_id.as_deref(),
+        Some(expected_repository_id.as_str())
+    );
+    assert_eq!(
+        auth.credential_requests[0].working_copy_root.as_deref(),
+        Some(identity.working_copy_root.as_str())
+    );
+    assert!(
+        snapshot
+            .remote_entries
+            .iter()
+            .any(|entry| { entry.path == "tracked.txt" && entry.remote_status == "modified" })
+    );
+    assert_eq!(snapshot.source, "libsvn-remote");
+
+    let mut wrong_auth = RecordingAuthBroker::new("alice", "wrong-secret");
+    let failure = bridge
+        .status_remote_check_with_cancellation(
+            &identity,
+            74,
+            &mut wrong_auth,
+            &subversionr_daemon::NeverCancelled,
+        )
+        .expect_err("svnserve must reject incorrect remote-status credentials");
+    assert_eq!(failure.code(), "SVN_REMOTE_STATUS_AUTH_FAILED");
+    assert!(!wrong_auth.credential_requests.is_empty());
+}
+
+#[test]
+#[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
 fn native_bridge_head_content_against_svnserve_routes_credentials_through_broker() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
@@ -1919,6 +2008,103 @@ fn native_bridge_status_snapshot_reports_local_modified_and_unversioned_paths() 
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
+fn native_bridge_remote_status_matches_peer_commit_and_preserves_dual_state_path() {
+    let _guard = native_test_guard();
+    let bridge_path = native_bridge_path();
+    let tool_dir = bridge_tool_dir(&bridge_path);
+    let svn = tool_dir.join("svn.exe");
+    let fixture = WorkingCopyFixture::create(&tool_dir.join("svnadmin.exe"), &svn);
+    fixture.add_committed_file(&svn, "tracked.txt", "base\n");
+    let peer = fixture.checkout_copy(&svn, "remote-status-peer");
+
+    fs::write(fixture.wc.join("tracked.txt"), "local edit\n")
+        .expect("primary working copy should contain a local edit");
+    fs::write(peer.join("tracked.txt"), "peer edit\n")
+        .expect("peer working copy should contain a remote edit");
+    fs::write(peer.join("incoming-only.txt"), "remote addition\n")
+        .expect("peer working copy should contain a remote addition");
+    run_tool(
+        &svn,
+        [
+            "add".as_ref(),
+            peer.join("incoming-only.txt").as_os_str(),
+            "--non-interactive".as_ref(),
+        ],
+    );
+    fixture.commit_path(&svn, &peer, "remote status fixture");
+
+    let oracle = run_tool_output(
+        &svn,
+        [
+            "status".as_ref(),
+            "--show-updates".as_ref(),
+            "--xml".as_ref(),
+            fixture.wc.as_os_str(),
+            "--non-interactive".as_ref(),
+        ],
+    );
+    assert!(
+        oracle.status.success(),
+        "svn status --show-updates oracle should succeed"
+    );
+    let oracle_xml = String::from_utf8_lossy(&oracle.stdout);
+    assert!(oracle_xml.contains("tracked.txt"));
+    assert!(oracle_xml.contains("incoming-only.txt"));
+
+    let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
+    let identity = bridge
+        .open_working_copy(&fixture.wc_path())
+        .expect("native bridge should open the primary working copy");
+    let local = bridge
+        .status_snapshot(&identity, 1)
+        .expect("local status should succeed without remote access");
+    let mut auth = UnavailableAuthRequestBroker;
+    let remote = bridge
+        .status_remote_check_with_cancellation(
+            &identity,
+            2,
+            &mut auth,
+            &subversionr_daemon::NeverCancelled,
+        )
+        .expect("remote status should succeed against the file repository");
+
+    assert!(
+        local
+            .local_entries
+            .iter()
+            .any(|entry| { entry.path == "tracked.txt" && entry.local_status == "modified" })
+    );
+    assert!(remote.local_entries.is_empty());
+    assert!(
+        remote
+            .remote_entries
+            .iter()
+            .any(|entry| { entry.path == "tracked.txt" && entry.remote_status == "modified" })
+    );
+    assert!(remote.remote_entries.iter().any(|entry| {
+        entry.path == "incoming-only.txt" && entry.remote_status == "added" && entry.kind == "file"
+    }));
+    assert_eq!(
+        remote.summary.remote_changes,
+        2,
+        "unexpected remote entries: {:?}",
+        remote
+            .remote_entries
+            .iter()
+            .map(|entry| (
+                &entry.path,
+                &entry.kind,
+                &entry.remote_status,
+                &entry.text_status,
+                &entry.property_status
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(remote.source, "libsvn-remote");
+}
+
+#[test]
+#[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
 fn native_bridge_status_snapshot_excludes_ignored_items_by_default() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
@@ -2532,6 +2718,31 @@ fn native_bridge_status_scan_honors_libsvn_cancellation_token() {
         cancellation.check_count() > 0,
         "libsvn should invoke the bridge cancellation callback"
     );
+}
+
+#[test]
+#[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
+fn native_bridge_remote_status_honors_libsvn_cancellation_token() {
+    let _guard = native_test_guard();
+    let bridge_path = native_bridge_path();
+    let tool_dir = bridge_tool_dir(&bridge_path);
+    let fixture =
+        WorkingCopyFixture::create(&tool_dir.join("svnadmin.exe"), &tool_dir.join("svn.exe"));
+    fixture.add_committed_file(&tool_dir.join("svn.exe"), "tracked.txt", "initial\n");
+
+    let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
+    let identity = bridge
+        .open_working_copy(&fixture.wc_path())
+        .expect("native bridge should open the fixture working copy");
+    let cancellation = CancelOnFirstCheck::default();
+    let mut auth = UnavailableAuthRequestBroker;
+
+    let failure = bridge
+        .status_remote_check_with_cancellation(&identity, 45, &mut auth, &cancellation)
+        .expect_err("native remote status should honor libsvn cancellation");
+
+    assert_eq!(failure.code(), "SVN_REMOTE_STATUS_CANCELLED");
+    assert!(cancellation.check_count() > 0);
 }
 
 #[test]
@@ -4314,7 +4525,6 @@ impl SvnserveFixture {
             .args([
                 "--daemon",
                 "--foreground",
-                "--single-thread",
                 "--listen-host",
                 "127.0.0.1",
                 "--listen-port",

@@ -127,6 +127,9 @@ impl DaemonState {
                 self.dispatch_status_get_snapshot(&request, bridge, cancellation)
             }
             "status/refresh" => self.dispatch_status_refresh(&request, bridge, cancellation),
+            "status/checkRemote" => {
+                self.dispatch_status_check_remote(&request, bridge, auth, cancellation)
+            }
             "content/get" => self.dispatch_content_get(&request, bridge, auth),
             "properties/list" => self.dispatch_properties_list(&request, bridge),
             "history/log" => self.dispatch_history_log(&request, bridge, auth),
@@ -160,7 +163,7 @@ impl DaemonState {
             libsvn_version: bridge_info.libsvn_version,
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 27,
+                minor: 28,
             },
             platform: current_platform(),
             cache_schema: default_cache_schema(),
@@ -620,7 +623,7 @@ impl DaemonState {
         let before_entries = session.local_entries.clone();
         let before_remote_entries = session.remote_entries.clone();
         let mut next_entries = session.local_entries.clone();
-        let mut next_remote_entries = session.remote_entries.clone();
+        let next_remote_entries = session.remote_entries.clone();
         let mut coverage = Vec::with_capacity(target_count);
 
         for (target, snapshot) in scans {
@@ -644,14 +647,6 @@ impl DaemonState {
             for existing_path in covered_existing {
                 if !seen_paths.contains(&existing_path) {
                     next_entries.remove(&existing_path);
-                }
-            }
-
-            for entry in snapshot.remote_entries {
-                if is_projectable_remote_status(&entry) {
-                    next_remote_entries.insert(entry.path.clone(), entry.clone());
-                } else {
-                    next_remote_entries.remove(&entry.path);
                 }
             }
 
@@ -690,6 +685,108 @@ impl DaemonState {
             completeness,
             timestamp: current_timestamp(),
             source: "libsvn-local".to_string(),
+        };
+
+        (
+            DispatchOutcome::Continue,
+            json!({
+                "jsonrpc": "2.0",
+                "id": request.id,
+                "result": delta,
+            }),
+        )
+    }
+
+    fn dispatch_status_check_remote(
+        &mut self,
+        request: &JsonRpcRequest,
+        bridge: &dyn BridgeApi,
+        auth: &mut dyn AuthRequestBroker,
+        cancellation: &dyn BridgeCancellationToken,
+    ) -> (DispatchOutcome, Value) {
+        if let Some(field) = unexpected_param(request, &["repositoryId", "epoch"]) {
+            return invalid_param(request, &field);
+        }
+        let Some(repository_id) = repository_id_param(request) else {
+            return invalid_repository_id(request);
+        };
+        let Some(epoch) = epoch_param(request) else {
+            return invalid_param(request, "epoch");
+        };
+        let Some(session) = self.repositories.get_mut(repository_id) else {
+            return repository_not_open(request, repository_id);
+        };
+        if epoch != session.epoch {
+            return repository_not_open(request, repository_id);
+        }
+
+        let generation = session.next_generation;
+        let mut snapshot = match bridge.status_remote_check_with_cancellation(
+            &session.identity,
+            generation,
+            auth,
+            cancellation,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(failure) => {
+                return (
+                    DispatchOutcome::Continue,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": request.id,
+                        "error": bridge_error(failure),
+                    }),
+                );
+            }
+        };
+        snapshot.repository_id = session.repository_id.clone();
+        snapshot.epoch = session.epoch;
+        snapshot.generation = generation;
+        snapshot.identity = session.identity.clone();
+        snapshot.timestamp = current_timestamp();
+        for entry in &mut snapshot.remote_entries {
+            entry.generation = generation;
+        }
+        filter_snapshot_boundaries(&mut snapshot, &session.boundary_roots);
+
+        let before_summary = summarize_snapshot_entries(
+            session.local_entries.values(),
+            session.remote_entries.values(),
+        );
+        let before_remote_entries = session.remote_entries.clone();
+        let next_remote_entries = snapshot
+            .remote_entries
+            .into_iter()
+            .filter(is_projectable_remote_status)
+            .map(|entry| (entry.path.clone(), entry))
+            .collect::<BTreeMap<_, _>>();
+        let after_summary = summarize_snapshot_entries(
+            session.local_entries.values(),
+            next_remote_entries.values(),
+        );
+        let remote_upsert = changed_upserts(&before_remote_entries, &next_remote_entries);
+        let remote_remove = removed_paths(&before_remote_entries, &next_remote_entries);
+
+        session.remote_entries = next_remote_entries;
+        session.next_generation += 1;
+        let delta = StatusDelta {
+            repository_id: session.repository_id.clone(),
+            epoch: session.epoch,
+            generation,
+            coverage: vec![StatusCoverageScope {
+                path: ".".to_string(),
+                depth: "workingCopy".to_string(),
+                generation,
+                reason: "manualRemoteCheck".to_string(),
+            }],
+            upsert: Vec::new(),
+            remove: Vec::new(),
+            remote_upsert,
+            remote_remove,
+            summary_delta: summary_delta(&before_summary, &after_summary),
+            completeness: "complete".to_string(),
+            timestamp: current_timestamp(),
+            source: "libsvn-remote".to_string(),
         };
 
         (

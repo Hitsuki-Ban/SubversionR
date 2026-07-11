@@ -28,6 +28,7 @@ pub struct Capabilities {
     pub repository_close: bool,
     pub status_snapshot: bool,
     pub status_refresh: bool,
+    pub status_remote_check: bool,
     pub status_stale_notification: bool,
     pub content_get: bool,
     pub content_get_revision: bool,
@@ -599,7 +600,7 @@ impl InitializeResponse {
         Self {
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 27,
+                minor: 28,
             },
             backend_version,
             bridge_version,
@@ -629,6 +630,7 @@ pub fn default_capabilities() -> Capabilities {
         repository_close: true,
         status_snapshot: true,
         status_refresh: true,
+        status_remote_check: true,
         status_stale_notification: true,
         content_get: true,
         content_get_revision: true,

@@ -381,7 +381,8 @@ function Invoke-RequirementEvidenceRuleChecks() {
     "DIR-009",
     "DIR-010",
     "DIR-012",
-    "DIR-013"
+    "DIR-013",
+    "DIR-019"
   )) {
     Assert-RequirementEvidenceStatus $requirementsEvidence $id "verified"
   }
@@ -425,7 +426,6 @@ function Invoke-RequirementEvidenceRuleChecks() {
     "DIR-008",
     "DIR-011",
     "DIR-015",
-    "DIR-019",
     "DIR-020",
     "REP-005",
     "TOR-001",
@@ -1988,7 +1988,13 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "DIR-002" @(
   "packages/vscode-extension/tests/dirtyPathPipeline.test.ts",
   "packages/vscode-extension/tests/repositoryWatcherService.test.ts",
   "packages/vscode-extension/src/scm/sourceControlResourceStore.ts",
-  "packages/vscode-extension/tests/sourceControlResourceStore.test.ts"
+  "packages/vscode-extension/tests/sourceControlResourceStore.test.ts",
+  "packages/vscode-extension/src/status/statusRemoteCheckRpcClient.ts",
+  "packages/vscode-extension/tests/statusRemoteCheckRpcClient.test.ts",
+  "packages/vscode-extension/src/status/remoteStatusCheckService.ts",
+  "packages/vscode-extension/tests/remoteStatusCheckService.test.ts",
+  "scripts/release/test-vscode-installed-source-control-surface.ps1",
+  "scripts/tests/release-installed-source-control-surface-scripts.tests.ps1"
 )
 Assert-Terms $m3Plan @(
   '`watcherEvents` normalizes raw watcher paths',
@@ -2040,7 +2046,10 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "DIR-019" @(
 Assert-Terms $m3Plan @(
   'Remote status remains separate. `status/refresh` does not perform remote checks',
   'Incoming resources are projected only from `remoteEntries`; ordinary local refresh deltas do not alter incoming resources',
-  'Full reconcile remains a local status operation. It does not run remote status'
+  'Full reconcile remains a local status operation. It does not run remote status',
+  '`status/checkRemote`',
+  '`check_out_of_date = TRUE`',
+  'does not add default remote polling'
 ) "DIR-019 remote status separation plan coverage"
 Assert-Terms $protocolContractTests @(
   "status_snapshot_serializes_local_and_remote_dimensions_separately",
@@ -2051,7 +2060,10 @@ Assert-Terms $protocolContractTests @(
 Assert-Terms $rpcDispatchTests @(
   "status_refresh_upserts_targeted_entry_without_remote_status",
   'outcome.response()["result"]["upsert"][0]["remoteStatus"]',
-  '"notChecked"'
+  '"notChecked"',
+  "status_check_remote_upserts_authoritative_remote_entries",
+  "status_check_remote_removes_cached_entries_absent_from_authoritative_result",
+  "status_check_remote_failure_preserves_cache_and_generation"
 ) "DIR-019 daemon local refresh remote-status separation coverage"
 Assert-Terms $statusSnapshotStoreSource @(
   "remoteEntries: Map<string, StatusEntry>",
@@ -2073,6 +2085,19 @@ Assert-Terms $sourceControlResourceStoreTests @(
   "src/incoming.c",
   "remoteStatus: `"modified`""
 ) "DIR-019 Source Control incoming preservation test coverage"
+Assert-Terms $installedSourceControlSurfaceScript @(
+  'subversionr.checkRemoteChanges',
+  'src/incoming-only.txt',
+  'svn remote-status XML oracle',
+  'remoteStatusSurfaceReport',
+  'DIR-019'
+) "DIR-019 installed on-demand remote status coverage"
+Assert-Terms $installedSourceControlSurfaceScriptTests @(
+  'subversionr.checkRemoteChanges',
+  'statusRemoteCheck',
+  'two Incoming resources',
+  'DIR-019'
+) "DIR-019 installed on-demand remote status script-test coverage"
 Assert-RequirementEvidenceRefs $requirementsEvidence "DIR-006" @(
   "docs/plans/m3-dirty-path-status-engine.md",
   "packages/vscode-extension/src/status/dirtyPathSet.ts",
@@ -2415,10 +2440,10 @@ Assert-Terms $protocolContractTests @(
   "RepositoryDiscoverResponse"
 ) "REP-004 protocol file external boundary contract"
 Assert-Terms $backendProcessTests @(
-  "rejects initialize and terminates the sidecar when protocol minor is too old for branch and switch operations",
+  "rejects initialize and terminates the sidecar when protocol minor is too old for remote status",
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
-  "expectedMinimum: 27"
-) "REP-004 protocol v1.27 startup gate"
+  "expectedMinimum: 28"
+) "REP-004 protocol v1.28 startup gate"
 Assert-Terms $rpcDispatchTests @(
   "repository_discover_lazy_externals_returns_file_external_boundaries",
   "fileExternalBoundaries",

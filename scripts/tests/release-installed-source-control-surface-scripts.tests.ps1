@@ -142,6 +142,8 @@ if ($null -eq $installedPackage) {
   source = "installed-vsix"
   invokedCommands = @(
     "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+    "subversionr.checkRemoteChanges",
+    "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
     "subversionr.diagnostics.installedSourceControlUiE2eCloseReport",
     "subversionr.diagnostics.installedSourceControlSurfaceReport",
     "subversionr.diagnostics.installedSourceControlSurfaceReport",
@@ -162,6 +164,39 @@ if ($null -eq $installedPackage) {
   organicSourceControlCloseReport = [pscustomobject]@{
     kind = "subversionr.installedSourceControlUiE2eCloseReport"
     repositoryClosed = $true
+  }
+  remoteStatusSurfaceReport = [pscustomobject]@{
+    kind = "subversionr.installedSourceControlUiE2eCurrentSurfaceReport"
+    repository = [pscustomobject]@{
+      repositoryId = "repo-uuid:$workingCopyRoot"
+      epoch = 1
+      identity = [pscustomobject]@{
+        workingCopyRoot = $workingCopyRoot
+        workspaceScopeRoot = $subdirectoryOpenPath
+      }
+    }
+    sourceControl = [pscustomobject]@{
+      groups = @(
+        [pscustomobject]@{
+          id = "changes"
+          count = 1
+          resources = @([pscustomobject]@{ path = "src/tracked.txt"; contextValue = "subversionr.changedFile.baseDiffable" })
+        },
+        [pscustomobject]@{
+          id = "unversioned"
+          count = 1
+          resources = @([pscustomobject]@{ path = "scratch.txt"; contextValue = "subversionr.unversioned" })
+        },
+        [pscustomobject]@{
+          id = "incoming"
+          count = 2
+          resources = @(
+            [pscustomobject]@{ path = "src/tracked.txt"; contextValue = "subversionr.incomingFile" },
+            [pscustomobject]@{ path = "src/incoming-only.txt"; contextValue = "subversionr.incomingFile" }
+          )
+        }
+      )
+    }
   }
   sourceControlSurfaceReport = [pscustomobject]@{
     kind = "subversionr.installedSourceControlSurfaceReport"
@@ -336,6 +371,7 @@ if ($null -eq $installedPackage) {
         repositoryOpen = $true
         statusSnapshot = $true
         statusRefresh = $true
+        statusRemoteCheck = $true
         realLibsvnBridge = $true
       }
     }
@@ -385,6 +421,17 @@ public static class Program {
         File.WriteAllText(Path.Combine(wcRoot, ".svn", "wc.db"), "SubversionR fake wc metadata\n");
         return 0;
       }
+      if (exe == "svn.exe" && args.Length >= 1 && (args[0] == "add" || args[0] == "commit")) {
+        return 0;
+      }
+      if (exe == "svn.exe" && args.Length >= 4 && args[0] == "status" && args[1] == "--show-updates" && args[2] == "--xml") {
+        var wcRoot = args[3];
+        var escapedRoot = wcRoot.Replace("&", "&amp;");
+        var tracked = Path.Combine(wcRoot, "src", "tracked.txt").Replace("&", "&amp;");
+        var incoming = Path.Combine(wcRoot, "src", "incoming-only.txt").Replace("&", "&amp;");
+        Console.WriteLine("<?xml version=\"1.0\"?><status><target path=\"" + escapedRoot + "\"><entry path=\"" + tracked + "\"><wc-status item=\"modified\" props=\"none\" revision=\"1\"/><repos-status item=\"modified\" props=\"none\"/></entry><entry path=\"" + incoming + "\"><wc-status item=\"none\" props=\"none\" revision=\"-1\"/><repos-status item=\"added\" props=\"none\"/></entry></target></status>");
+        return 0;
+      }
       Console.Error.WriteLine("Unsupported fake SVN invocation: " + exe + " " + string.Join(" ", args));
       return 2;
     } catch (Exception ex) {
@@ -415,6 +462,7 @@ try {
   Assert-True ($workflowScriptText.Contains('subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport')) "Installed Source Control surface gate should inspect the current provider after organic activation."
   Assert-True ($workflowScriptText.Contains('commandsBeforeOrganicActivation: []')) "Installed Source Control surface gate should record zero commands before organic activation."
   Assert-True ($workflowScriptText.Contains('organicSourceControlCloseReport')) "Installed Source Control surface gate should close the organically opened provider before explicit open tests."
+  Assert-True ($workflowScriptText.Contains('subversionr.checkRemoteChanges')) "Installed Source Control surface gate should execute the real remote status command."
 
   Assert-True (Test-Path -LiteralPath $workflowScript -PathType Leaf) "test-vscode-installed-source-control-surface.ps1 should exist."
 
@@ -457,6 +505,9 @@ try {
   Assert-Equal "0" ([string]@($report.extension.commandsBeforeOrganicActivation).Count) "Installed Source Control surface evidence should execute no SubversionR command before organic activation."
   Assert-Equal "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport" $report.extension.firstCommandAfterOrganicActivation "Installed Source Control surface evidence should inspect the current surface only after organic activation."
   Assert-Equal "subversionr.installedSourceControlUiE2eCurrentSurfaceReport" $report.organicSourceControlSurfaceReport.kind "Installed Source Control surface evidence should include the organically opened surface."
+  Assert-Equal "subversionr.installedSourceControlUiE2eCurrentSurfaceReport" $report.remoteStatusSurfaceReport.kind "Installed Source Control surface evidence should include the post-check remote surface."
+  Assert-Equal "2" ([string](@($report.remoteStatusSurfaceReport.sourceControl.groups | Where-Object id -eq "incoming")[0].count)) "Installed Source Control surface evidence should report two Incoming resources."
+  Assert-Equal "2" ([string]@($report.workingCopy.remoteStatusOracleIncomingPaths).Count) "Installed Source Control surface evidence should bind two oracle Incoming paths."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlSurfaceReportCommand) "Installed Source Control surface evidence should prove hidden command registration."
   Assert-Equal "win32-x64" $report.vsix.targetPlatform "Installed Source Control surface evidence should bind to the VSIX manifest target platform."
   Assert-Equal "1.14.5" $report.fixtureTools.svn.version "Installed Source Control surface evidence should record source-built svn 1.14.5."
@@ -484,6 +535,7 @@ try {
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "MIG-009" }).Count -eq 1) "Installed Source Control surface evidence should trace MIG-009."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "REP-001" }).Count -eq 1) "Installed Source Control surface evidence should trace REP-001."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "UX-001" }).Count -eq 1) "Installed Source Control surface evidence should trace UX-001."
+  Assert-True (@($report.traceIds | Where-Object { $_ -eq "DIR-019" }).Count -eq 1) "Installed Source Control surface evidence should trace DIR-019."
   Assert-True (@($report.nonClaims | Where-Object { $_ -like "*Marketplace*" }).Count -gt 0) "Installed Source Control surface evidence should keep Marketplace non-claims explicit."
   Assert-True (@($report.nonClaims | Where-Object { $_ -like "*DOM*" }).Count -gt 0) "Installed Source Control surface evidence should keep DOM/pixel UI non-claims explicit."
   Assert-True ([string]$report.fixtureRoots.svnCliConfig -like "*svn-cli-config*") "Installed Source Control surface evidence should record the fixture-local SVN CLI config root."

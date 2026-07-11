@@ -22,6 +22,8 @@ struct FakeBridge {
     open_results: BTreeMap<String, Result<RepositoryIdentity, BridgeFailure>>,
     relocated_identity: RefCell<Option<RepositoryIdentity>>,
     snapshot_result: Result<StatusSnapshot, BridgeFailure>,
+    remote_result: Result<StatusSnapshot, BridgeFailure>,
+    remote_requests: RefCell<u32>,
     scan_results: BTreeMap<(String, String), Result<StatusSnapshot, BridgeFailure>>,
     content_results: BTreeMap<(String, String), Result<ContentBlob, BridgeFailure>>,
     properties_results:
@@ -219,6 +221,24 @@ impl FakeBridge {
                 timestamp: "2026-06-22T00:00:00Z".to_string(),
                 source: "libsvn-local".to_string(),
             }),
+            remote_result: Ok(StatusSnapshot {
+                repository_id: "repo-uuid:C:/wc".to_string(),
+                epoch: 1,
+                generation: 1,
+                completeness: "complete".to_string(),
+                identity: Self::identity(),
+                local_entries: Vec::new(),
+                remote_entries: Vec::new(),
+                summary: StatusSummary {
+                    local_changes: 0,
+                    remote_changes: 0,
+                    conflicts: 0,
+                    unversioned: 0,
+                },
+                timestamp: "2026-06-22T00:00:00Z".to_string(),
+                source: "libsvn-remote".to_string(),
+            }),
+            remote_requests: RefCell::new(0),
             scan_results: BTreeMap::new(),
             content_results: BTreeMap::new(),
             properties_results: BTreeMap::new(),
@@ -357,6 +377,27 @@ impl FakeBridge {
 
     fn with_snapshot_result(mut self, snapshot: StatusSnapshot) -> Self {
         self.snapshot_result = Ok(snapshot);
+        self
+    }
+
+    fn with_remote_entries(mut self, entries: Vec<StatusEntry>) -> Self {
+        self.remote_result = Ok(StatusSnapshot {
+            repository_id: "repo-uuid:C:/wc".to_string(),
+            epoch: 1,
+            generation: 1,
+            completeness: "complete".to_string(),
+            identity: Self::identity(),
+            local_entries: Vec::new(),
+            summary: status_summary_for_entries(&[], &entries),
+            remote_entries: entries,
+            timestamp: "2026-06-22T00:00:00Z".to_string(),
+            source: "libsvn-remote".to_string(),
+        });
+        self
+    }
+
+    fn with_remote_result(mut self, result: Result<StatusSnapshot, BridgeFailure>) -> Self {
+        self.remote_result = result;
         self
     }
 
@@ -662,6 +703,14 @@ impl FakeBridge {
                 serde_json::json!({ "path": "C:\\missing" }),
                 false,
             )),
+            remote_result: Err(BridgeFailure::new(
+                "SVN_REMOTE_STATUS_FAILED",
+                "network",
+                "error.native.remoteStatusFailed",
+                serde_json::json!({ "path": "C:\\missing" }),
+                false,
+            )),
+            remote_requests: RefCell::new(0),
             scan_results: BTreeMap::new(),
             content_results: BTreeMap::new(),
             properties_results: BTreeMap::new(),
@@ -870,6 +919,28 @@ impl BridgeApi for FakeBridge {
             snapshot.identity = identity.clone();
             snapshot.generation = generation;
             for entry in &mut snapshot.local_entries {
+                entry.generation = generation;
+            }
+            snapshot
+        })
+    }
+
+    fn status_remote_check_with_cancellation(
+        &self,
+        identity: &RepositoryIdentity,
+        generation: u64,
+        _auth: &mut dyn subversionr_daemon::AuthRequestBroker,
+        _cancellation: &dyn subversionr_daemon::BridgeCancellationToken,
+    ) -> Result<StatusSnapshot, BridgeFailure> {
+        *self.remote_requests.borrow_mut() += 1;
+        self.remote_result.clone().map(|mut snapshot| {
+            snapshot.repository_id = format!(
+                "{}:{}",
+                identity.repository_uuid, identity.working_copy_root
+            );
+            snapshot.identity = identity.clone();
+            snapshot.generation = generation;
+            for entry in &mut snapshot.remote_entries {
                 entry.generation = generation;
             }
             snapshot
@@ -1660,13 +1731,13 @@ fn initialize_request_returns_versions_and_keeps_process_running() {
     assert_eq!(outcome, DispatchOutcome::Continue);
     assert_eq!(outcome.response()["id"], 1);
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 27);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 28);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["schemaId"],
         "subversionr.cache.v1"
     );
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 27);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 28);
     assert_eq!(outcome.response()["result"]["cacheSchema"]["version"], 1);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["rollback"],
@@ -1694,6 +1765,10 @@ fn initialize_request_returns_versions_and_keeps_process_running() {
     );
     assert_eq!(
         outcome.response()["result"]["capabilities"]["statusSnapshot"],
+        true
+    );
+    assert_eq!(
+        outcome.response()["result"]["capabilities"]["statusRemoteCheck"],
         true
     );
     assert_eq!(
@@ -7758,22 +7833,14 @@ fn status_refresh_local_scan_does_not_clear_cached_remote_entries() {
 }
 
 #[test]
-fn status_refresh_upserts_explicit_remote_entries() {
+fn status_check_remote_upserts_authoritative_remote_entries() {
     let bridge = FakeBridge::open_success()
         .with_snapshot_entries(Vec::new())
-        .with_scan_result(
+        .with_remote_entries(vec![FakeBridge::remote_status_entry(
             "src/incoming.c",
-            "empty",
-            FakeBridge::scan_success_with_remote_entries(
-                "src/incoming.c",
-                Vec::new(),
-                vec![FakeBridge::remote_status_entry(
-                    "src/incoming.c",
-                    "modified",
-                    1,
-                )],
-            ),
-        );
+            "modified",
+            1,
+        )]);
     let mut state = DaemonState::new();
     state
         .dispatch_json_rpc_with_bridge(
@@ -7790,7 +7857,7 @@ fn status_refresh_upserts_explicit_remote_entries() {
 
     let outcome = state
         .dispatch_json_rpc_with_bridge(
-            r#"{"jsonrpc":"2.0","id":135,"method":"status/refresh","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"targets":[{"path":"src/incoming.c","depth":"empty","reason":"manualRemoteCheck"}]}}"#,
+            r#"{"jsonrpc":"2.0","id":135,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
             &bridge,
         )
         .expect("status/refresh should dispatch");
@@ -7814,29 +7881,19 @@ fn status_refresh_upserts_explicit_remote_entries() {
         outcome.response()["result"]["summaryDelta"]["remoteChanges"],
         1
     );
+    assert_eq!(outcome.response()["result"]["source"], "libsvn-remote");
+    assert_eq!(
+        outcome.response()["result"]["coverage"][0]["depth"],
+        "workingCopy"
+    );
+    assert_eq!(*bridge.remote_requests.borrow(), 1);
 }
 
 #[test]
-fn status_refresh_removes_remote_entries_only_when_remote_status_is_explicitly_neutral() {
-    let bridge = FakeBridge::open_success()
-        .with_snapshot_remote_entries(vec![FakeBridge::remote_status_entry(
-            "src/incoming.c",
-            "modified",
-            1,
-        )])
-        .with_scan_result(
-            "src/incoming.c",
-            "empty",
-            FakeBridge::scan_success_with_remote_entries(
-                "src/incoming.c",
-                Vec::new(),
-                vec![FakeBridge::remote_status_entry(
-                    "src/incoming.c",
-                    "normal",
-                    1,
-                )],
-            ),
-        );
+fn status_check_remote_removes_cached_entries_absent_from_authoritative_result() {
+    let bridge = FakeBridge::open_success().with_snapshot_remote_entries(vec![
+        FakeBridge::remote_status_entry("src/incoming.c", "modified", 1),
+    ]);
     let mut state = DaemonState::new();
     state
         .dispatch_json_rpc_with_bridge(
@@ -7853,7 +7910,7 @@ fn status_refresh_removes_remote_entries_only_when_remote_status_is_explicitly_n
 
     let outcome = state
         .dispatch_json_rpc_with_bridge(
-            r#"{"jsonrpc":"2.0","id":138,"method":"status/refresh","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"targets":[{"path":"src/incoming.c","depth":"empty","reason":"manualRemoteCheck"}]}}"#,
+            r#"{"jsonrpc":"2.0","id":138,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
             &bridge,
         )
         .expect("status/refresh should dispatch");
@@ -7876,22 +7933,54 @@ fn status_refresh_removes_remote_entries_only_when_remote_status_is_explicitly_n
 }
 
 #[test]
+fn status_check_remote_failure_preserves_cache_and_generation() {
+    let bridge = FakeBridge::open_success()
+        .with_snapshot_entries(Vec::new())
+        .with_remote_result(Err(BridgeFailure::new(
+            "SVN_REMOTE_STATUS_FAILED",
+            "network",
+            "error.native.remoteStatusFailed",
+            serde_json::json!({ "path": "C:/wc" }),
+            true,
+        )));
+    let mut state = DaemonState::new();
+    state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":143,"method":"repository/open","params":{"path":"C:\\wc"}}"#,
+            &bridge,
+        )
+        .expect("repository/open should dispatch");
+
+    let failed = state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":144,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
+            &bridge,
+        )
+        .expect("status/checkRemote failure should dispatch");
+    assert_eq!(
+        failed.response()["error"]["code"],
+        "SVN_REMOTE_STATUS_FAILED"
+    );
+
+    let snapshot = state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":145,"method":"status/getSnapshot","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
+            &bridge,
+        )
+        .expect("status/getSnapshot should dispatch after failure");
+    assert_eq!(snapshot.response()["result"]["generation"], 1);
+    assert_eq!(snapshot.response()["result"]["summary"]["remoteChanges"], 0);
+}
+
+#[test]
 fn status_get_snapshot_preserves_cached_remote_entries_when_local_snapshot_has_no_remote_status() {
     let bridge = FakeBridge::open_success()
         .with_snapshot_entries(Vec::new())
-        .with_scan_result(
+        .with_remote_entries(vec![FakeBridge::remote_status_entry(
             "src/incoming.c",
-            "empty",
-            FakeBridge::scan_success_with_remote_entries(
-                "src/incoming.c",
-                Vec::new(),
-                vec![FakeBridge::remote_status_entry(
-                    "src/incoming.c",
-                    "modified",
-                    1,
-                )],
-            ),
-        );
+            "modified",
+            1,
+        )]);
     let mut state = DaemonState::new();
     state
         .dispatch_json_rpc_with_bridge(
@@ -7907,7 +7996,7 @@ fn status_get_snapshot_preserves_cached_remote_entries_when_local_snapshot_has_n
         .expect("initial local snapshot should dispatch");
     state
         .dispatch_json_rpc_with_bridge(
-            r#"{"jsonrpc":"2.0","id":141,"method":"status/refresh","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"targets":[{"path":"src/incoming.c","depth":"empty","reason":"manualRemoteCheck"}]}}"#,
+            r#"{"jsonrpc":"2.0","id":141,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
             &bridge,
         )
         .expect("remote refresh should seed remote cache");

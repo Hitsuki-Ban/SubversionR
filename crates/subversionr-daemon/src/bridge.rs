@@ -441,6 +441,18 @@ pub trait BridgeApi {
         cancellation: &dyn BridgeCancellationToken,
     ) -> Result<StatusSnapshot, BridgeFailure>;
 
+    fn status_remote_check_with_cancellation(
+        &self,
+        identity: &RepositoryIdentity,
+        _generation: u64,
+        _auth: &mut dyn AuthRequestBroker,
+        _cancellation: &dyn BridgeCancellationToken,
+    ) -> Result<StatusSnapshot, BridgeFailure> {
+        Err(BridgeFailure::bridge_unavailable(
+            &identity.working_copy_root,
+        ))
+    }
+
     fn content_get(
         &self,
         identity: &RepositoryIdentity,

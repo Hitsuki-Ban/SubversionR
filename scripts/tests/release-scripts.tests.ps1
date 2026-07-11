@@ -2101,7 +2101,7 @@ try {
     "blocked" `
     "Remote-separate dirty status evidence intentionally tampered" `
     "DIR-019" `
-    "Release readiness should require remote-separate dirty status evidence to remain partial."
+    "Release readiness should require on-demand remote status evidence to remain verified."
   Assert-ReleaseReadinessRejectsMissingRequirementEvidenceRef `
     "DIR-019" `
     "packages/vscode-extension/tests/statusSnapshotStore.test.ts" `
