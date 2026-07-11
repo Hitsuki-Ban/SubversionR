@@ -47,7 +47,11 @@ $externalCargoConfigs.Add($legacyRepositoryCargoConfig)
 
 $cargoHomeValue = [Environment]::GetEnvironmentVariable("CARGO_HOME")
 $cargoHome = if ([string]::IsNullOrEmpty($cargoHomeValue)) {
-  Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) ".cargo"
+  $userProfile = [Environment]::GetEnvironmentVariable("USERPROFILE")
+  if ([string]::IsNullOrEmpty($userProfile)) {
+    $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+  }
+  Join-Path $userProfile ".cargo"
 }
 elseif ([IO.Path]::IsPathRooted($cargoHomeValue)) {
   [IO.Path]::GetFullPath($cargoHomeValue)

@@ -142,6 +142,7 @@ try {
   Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release --target-dir $targetRoot')) "Release daemon build should invoke the exact Cargo package, profile, and repository output directory."
   Assert-True ($buildDaemonText.Contains('$legacyRepositoryCargoConfig')) "Release daemon build should reject a legacy repository Cargo config that would override config.toml."
   Assert-True ($buildDaemonText.Contains('[Environment]::GetEnvironmentVariable("CARGO_HOME")')) "Release daemon build should inspect Cargo's configured home directory."
+  Assert-True ($buildDaemonText.Contains('[Environment]::GetEnvironmentVariable("USERPROFILE")')) "Release daemon build should use Cargo's Windows default home resolution."
   Assert-True ($buildDaemonText.Contains('[Environment+SpecialFolder]::UserProfile')) "Release daemon build should inspect the default Cargo home for external configuration."
   Assert-True ($buildDaemonText.Contains('[IO.Directory]::GetParent($repoRoot)')) "Release daemon build should inspect parent directories for merged Cargo configuration."
   Assert-True ($buildDaemonText.Contains('Remove-Item -LiteralPath $staleOutput -Force')) "Release daemon build should fail on fixed-path output deletion errors."
@@ -182,6 +183,25 @@ try {
   }
   finally {
     [Environment]::SetEnvironmentVariable($targetRustFlagsName, $savedTargetRustFlags)
+  }
+
+  $savedCargoHome = $env:CARGO_HOME
+  $savedUserProfile = $env:USERPROFILE
+  $alternateUserProfile = Join-Path $tempRoot "alternate-user-profile"
+  $alternateCargoDirectory = Join-Path $alternateUserProfile ".cargo"
+  New-Item -ItemType Directory -Force -Path $alternateCargoDirectory | Out-Null
+  "[target.x86_64-pc-windows-msvc]`nrustflags = [`"-C`", `"target-cpu=native`"]" |
+    Set-Content -LiteralPath (Join-Path $alternateCargoDirectory "config.toml") -Encoding ascii
+  try {
+    $env:CARGO_HOME = $null
+    $env:USERPROFILE = $alternateUserProfile
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $buildDaemonScript
+    } "Release daemon builds reject external Cargo configuration" "Release daemon build should inspect Cargo's USERPROFILE-derived default home."
+  }
+  finally {
+    $env:CARGO_HOME = $savedCargoHome
+    $env:USERPROFILE = $savedUserProfile
   }
 
   $releaseDirectory = Join-Path $repoRoot "target\release"
