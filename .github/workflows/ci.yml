@@ -63,6 +63,8 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $nasmBin
           & (Join-Path $nasmBin "nasm.exe") -v
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
       - name: Check native prerequisite entrypoints
         shell: pwsh
         run: |
@@ -266,7 +268,7 @@ jobs:
         shell: pwsh
         run: pnpm release:verify-native-remote-fuzz-fixed-seed-smoke:win32-x64
       - name: Build release sidecar
-        run: cargo build -p subversionr-daemon --release
+        run: pnpm native:build-daemon:release
       - name: Native script tests
         shell: pwsh
         run: pnpm native:test-scripts

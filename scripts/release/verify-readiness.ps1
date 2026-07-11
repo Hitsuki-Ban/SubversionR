@@ -455,9 +455,10 @@ function Invoke-RequirementEvidenceRuleChecks() {
     "# Marketplace 0.2.1 Pre-release Owner Exception",
     "public issues [#20]",
     "[#22]",
+    "[#24]",
     'release tag: `v0.2.1-beta.1`',
     'asset name: `subversionr-win32-x64-0.2.1.vsix`',
-    "723398d708da1ae7212b7b1447955c11e2fc4f071cca4862d1ba25f99fec69ae",
+    "13dac1f5faadff04e414d413fe4306309889b95bd03c108e42d411bc4b6fc936",
     '`SEC-015`, `MIG-010`, and `MIG-012`',
     "It cannot transfer to different bytes, another tag, or a later version",
     "does not claim public release readiness"
@@ -6561,6 +6562,7 @@ Assert-Terms $liveAttestationScriptTests @(
   "Release live GitHub attestation script tests passed"
 ) "live GitHub artifact attestation script fixture coverage"
 Assert-Terms $ciWorkflow @(
+  "pnpm native:build-daemon:release",
   "Live GitHub attestation script tests",
   "pnpm release:test-live-attestation-scripts"
 ) "live GitHub artifact attestation CI coverage"
