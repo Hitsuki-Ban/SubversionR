@@ -2119,6 +2119,42 @@ function Assert-GeneratedSubversionApacheModuleProjectGraph {
   Write-Host "Verified generated Subversion Apache DAV module MSBuild project graph."
 }
 
+function Assert-DeterministicPeFile {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
+  $stream = $null
+  $reader = $null
+  try {
+    $stream = [System.IO.File]::OpenRead($resolved.Path)
+    $reader = [System.Reflection.PortableExecutable.PEReader]::new($stream)
+    $headers = $reader.PEHeaders
+    if ($null -eq $headers -or $null -eq $headers.PEHeader) {
+      throw [System.BadImageFormatException]::new("Missing PE header.")
+    }
+    $reproducibleType = [System.Reflection.PortableExecutable.DebugDirectoryEntryType]::Reproducible
+    $reproducibleEntries = @($reader.ReadDebugDirectory() | Where-Object { $_.Type -eq $reproducibleType })
+    if ($reproducibleEntries.Count -ne 1) {
+      throw "$Path must contain exactly one IMAGE_DEBUG_TYPE_REPRO entry from deterministic PE/COFF linking."
+    }
+    return $resolved.Path
+  }
+  catch [System.BadImageFormatException] {
+    throw "$Path is not a valid PE file."
+  }
+  finally {
+    if ($null -ne $reader) {
+      $reader.Dispose()
+    }
+    if ($null -ne $stream) {
+      $stream.Dispose()
+    }
+  }
+}
+
 Export-ModuleMember -Function `
   Get-RequiredProperty, `
   Read-NativeSourceLock, `
@@ -2158,4 +2194,5 @@ Export-ModuleMember -Function `
   Update-GeneratedVcxprojPlatformToolset, `
   Assert-GeneratedVcxprojPlatformToolset, `
   Assert-GeneratedSubversionRaSerfProjectGraph, `
-  Assert-GeneratedSubversionApacheModuleProjectGraph
+  Assert-GeneratedSubversionApacheModuleProjectGraph, `
+  Assert-DeterministicPeFile

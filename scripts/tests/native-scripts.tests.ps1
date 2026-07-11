@@ -53,11 +53,65 @@ function Assert-SourceField($Source, [string]$Field, [string]$Expected, [string]
   Assert-Equal $Expected $actual $Message
 }
 
+function New-TestPeFile([string]$Path, [uint32]$DebugType, [switch]$InvalidSignature, [switch]$DuplicateRepro) {
+  $bytes = [byte[]]::new(0x400)
+  $bytes[0] = 0x4d
+  $bytes[1] = 0x5a
+  [BitConverter]::GetBytes([uint32]0x80).CopyTo($bytes, 0x3c)
+  if (-not $InvalidSignature) {
+    $bytes[0x80] = 0x50
+    $bytes[0x81] = 0x45
+  }
+  [BitConverter]::GetBytes([uint16]1).CopyTo($bytes, 0x86)
+  [BitConverter]::GetBytes([uint16]0xf0).CopyTo($bytes, 0x94)
+  [BitConverter]::GetBytes([uint16]0x20b).CopyTo($bytes, 0x98)
+  [BitConverter]::GetBytes([uint32]16).CopyTo($bytes, 0x104)
+  [BitConverter]::GetBytes([uint32]0x1000).CopyTo($bytes, 0x138)
+  $debugDirectorySize = if ($DuplicateRepro) { 56 } else { 28 }
+  [BitConverter]::GetBytes([uint32]$debugDirectorySize).CopyTo($bytes, 0x13c)
+  [BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x190)
+  [BitConverter]::GetBytes([uint32]0x1000).CopyTo($bytes, 0x194)
+  [BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x198)
+  [BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x19c)
+  [BitConverter]::GetBytes($DebugType).CopyTo($bytes, 0x20c)
+  if ($DuplicateRepro) {
+    [BitConverter]::GetBytes([uint32]16).CopyTo($bytes, 0x228)
+  }
+  [IO.File]::WriteAllBytes($Path, $bytes)
+}
+
 $tempRoot = Join-Path $repoRoot ".cache\tests\native-scripts\$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
   Import-Module $modulePath -Force
+
+  $deterministicPePath = Join-Path $tempRoot "deterministic.dll"
+  New-TestPeFile -Path $deterministicPePath -DebugType 16
+  Assert-Equal (Resolve-Path $deterministicPePath).Path (Assert-DeterministicPeFile -Path $deterministicPePath) "Deterministic PE validation should accept IMAGE_DEBUG_TYPE_REPRO."
+
+  $timestampedPePath = Join-Path $tempRoot "timestamped.dll"
+  New-TestPeFile -Path $timestampedPePath -DebugType 2
+  Assert-ThrowsContaining {
+    Assert-DeterministicPeFile -Path $timestampedPePath
+  } "IMAGE_DEBUG_TYPE_REPRO" "Deterministic PE validation should reject timestamped linker output."
+
+  $duplicateReproPePath = Join-Path $tempRoot "duplicate-repro.dll"
+  New-TestPeFile -Path $duplicateReproPePath -DebugType 16 -DuplicateRepro
+  Assert-ThrowsContaining {
+    Assert-DeterministicPeFile -Path $duplicateReproPePath
+  } "exactly one IMAGE_DEBUG_TYPE_REPRO" "Deterministic PE validation should reject ambiguous duplicate reproducibility metadata."
+
+  $invalidPePath = Join-Path $tempRoot "invalid.dll"
+  New-TestPeFile -Path $invalidPePath -DebugType 16 -InvalidSignature
+  Assert-ThrowsContaining {
+    Assert-DeterministicPeFile -Path $invalidPePath
+  } "not a valid PE file" "Deterministic PE validation should reject malformed input."
+
+  $bridgeCMakeText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "native\svn-bridge\CMakeLists.txt")
+  $buildBridgeText = Get-Content -Raw -LiteralPath $buildBridgeScript
+  Assert-True ($bridgeCMakeText.Contains('target_link_options(subversionr_svn_bridge PRIVATE "$<$<CONFIG:Release>:/Brepro>")')) "Release bridge linking should require MSVC reproducible output."
+  Assert-True ($buildBridgeText.Contains('Assert-DeterministicPeFile -Path $bridgePath')) "Release bridge build should fail fast when deterministic PE metadata is absent."
 
   $lockPath = Join-Path $tempRoot "sources.lock.json"
   @'
