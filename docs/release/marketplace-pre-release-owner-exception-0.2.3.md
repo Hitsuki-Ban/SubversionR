@@ -11,8 +11,8 @@ The owner authorizes one automated Visual Studio Marketplace pre-release publica
 - target: `win32-x64`;
 - release tag: `v0.2.3-beta.1`;
 - asset name: `subversionr-win32-x64-0.2.3.vsix`;
-- asset size: `8292657` bytes;
-- asset SHA256: `80efb2f1c13fce04530687c7a39622d461b4468b9d129b72ac519eabc5f1b3cf`.
+- asset size: `8292661` bytes;
+- asset SHA256: `991199a1cd874b76e10dd8ca383edac766b169d638e0b42253022507c435b12b`.
 
 The operation is authorized only after the source-controlled candidate contract matches those bytes, the GitHub pre-release exists, and `gh attestation verify` succeeds for the public `main` workflow SHA, signer workflow, source ref and digest, predicate type, and hosted-runner policy. The packaged VSIX must contain exactly one `Microsoft.VisualStudio.Code.PreRelease` property with `Value="true"`. Verification must finish before Azure login; publication then uses the protected `marketplace` environment and direct `vsce publish --packagePath ... --pre-release --azure-credential` with no credential fallback or rebuild.
 
