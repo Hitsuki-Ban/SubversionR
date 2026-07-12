@@ -2119,6 +2119,73 @@ function Assert-GeneratedSubversionApacheModuleProjectGraph {
   Write-Host "Verified generated Subversion Apache DAV module MSBuild project graph."
 }
 
+function Get-RequiredSourceDateEpoch {
+  $value = [Environment]::GetEnvironmentVariable("SOURCE_DATE_EPOCH")
+  if ([string]::IsNullOrWhiteSpace($value)) {
+    throw "SOURCE_DATE_EPOCH is required for reproducible native release builds."
+  }
+  if ($value -notmatch '^[1-9][0-9]*$') {
+    throw "SOURCE_DATE_EPOCH must be a positive integer Unix timestamp."
+  }
+
+  try {
+    $seconds = [Int64]::Parse($value, [Globalization.CultureInfo]::InvariantCulture)
+    return [DateTimeOffset]::FromUnixTimeSeconds($seconds).ToUniversalTime()
+  }
+  catch {
+    throw "SOURCE_DATE_EPOCH must be a valid Unix timestamp: $value"
+  }
+}
+
+function Set-SubversionReproducibleBuildTimestamp {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$SourceRoot
+  )
+
+  $sourceRootResolved = Resolve-Path -LiteralPath $SourceRoot -ErrorAction Stop
+  $timestamp = Get-RequiredSourceDateEpoch
+  $date = '{0} {1} {2}' -f `
+    $timestamp.ToString("MMM", [Globalization.CultureInfo]::InvariantCulture), `
+    $timestamp.Day.ToString([Globalization.CultureInfo]::InvariantCulture).PadLeft(2, ' '), `
+    $timestamp.Year.ToString("0000", [Globalization.CultureInfo]::InvariantCulture)
+  $time = $timestamp.ToString("HH:mm:ss", [Globalization.CultureInfo]::InvariantCulture)
+
+  $patches = @(
+    @{
+      Path = "subversion\libsvn_subr\version.c"
+      Replacements = @(
+        @{ Expected = "info->build_date = __DATE__;"; Replacement = "info->build_date = `"$date`";" },
+        @{ Expected = "info->build_time = __TIME__;"; Replacement = "info->build_time = `"$time`";" }
+      )
+    },
+    @{
+      Path = "subversion\libsvn_subr\win32_crashrpt.c"
+      Replacements = @(
+        @{ Expected = "SVN_VERSION, __DATE__, __TIME__);"; Replacement = "SVN_VERSION, `"$date`", `"$time`");" }
+      )
+    }
+  )
+
+  foreach ($patch in $patches) {
+    $path = Join-Path $sourceRootResolved.Path $patch.Path
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+      throw "Apache Subversion reproducible timestamp source is missing: $path"
+    }
+    $content = [IO.File]::ReadAllText($path)
+    foreach ($replacement in $patch.Replacements) {
+      $count = ([regex]::Matches($content, [regex]::Escape($replacement.Expected))).Count
+      if ($count -ne 1) {
+        throw "Apache Subversion reproducible timestamp patch expected exactly one '$($replacement.Expected)' in $path; found $count."
+      }
+      $content = $content.Replace($replacement.Expected, $replacement.Replacement)
+    }
+    [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
+  }
+
+  Write-Host "Pinned Apache Subversion build timestamp to $date $time UTC from SOURCE_DATE_EPOCH."
+}
+
 function Assert-DeterministicPeFile {
   param(
     [Parameter(Mandatory = $true)]
@@ -2195,4 +2262,6 @@ Export-ModuleMember -Function `
   Assert-GeneratedVcxprojPlatformToolset, `
   Assert-GeneratedSubversionRaSerfProjectGraph, `
   Assert-GeneratedSubversionApacheModuleProjectGraph, `
+  Get-RequiredSourceDateEpoch, `
+  Set-SubversionReproducibleBuildTimestamp, `
   Assert-DeterministicPeFile

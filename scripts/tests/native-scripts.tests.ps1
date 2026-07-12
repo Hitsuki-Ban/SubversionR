@@ -110,6 +110,50 @@ try {
     Assert-DeterministicPeFile -Path $invalidPePath
   } "not a valid PE file" "Deterministic PE validation should reject malformed input."
 
+  $savedSourceDateEpoch = $env:SOURCE_DATE_EPOCH
+  try {
+    $env:SOURCE_DATE_EPOCH = $null
+    Assert-ThrowsContaining {
+      Get-RequiredSourceDateEpoch
+    } "SOURCE_DATE_EPOCH is required" "Native release timestamp validation should reject a missing epoch."
+    $env:SOURCE_DATE_EPOCH = "not-a-timestamp"
+    Assert-ThrowsContaining {
+      Get-RequiredSourceDateEpoch
+    } "positive integer Unix timestamp" "Native release timestamp validation should reject malformed epochs."
+    $env:SOURCE_DATE_EPOCH = "0"
+    Assert-ThrowsContaining {
+      Get-RequiredSourceDateEpoch
+    } "positive integer Unix timestamp" "Native release timestamp validation should reject zero because OpenSSL treats it as an absent epoch."
+    $env:SOURCE_DATE_EPOCH = "9999999999999999999"
+    Assert-ThrowsContaining {
+      Get-RequiredSourceDateEpoch
+    } "valid Unix timestamp" "Native release timestamp validation should reject out-of-range epochs."
+
+    $env:SOURCE_DATE_EPOCH = "946771200"
+    $expectedTimestamp = [DateTimeOffset]::FromUnixTimeSeconds(946771200).ToUniversalTime()
+    Assert-Equal $expectedTimestamp (Get-RequiredSourceDateEpoch) "Native release timestamp validation should parse the explicit epoch."
+
+    $subversionTimestampRoot = Join-Path $tempRoot "subversion-timestamp"
+    $subversionTimestampSource = Join-Path $subversionTimestampRoot "subversion\libsvn_subr"
+    New-Item -ItemType Directory -Force -Path $subversionTimestampSource | Out-Null
+    "info->build_date = __DATE__;`ninfo->build_time = __TIME__;`n" | Set-Content -LiteralPath (Join-Path $subversionTimestampSource "version.c") -Encoding utf8 -NoNewline
+    "SVN_VERSION, __DATE__, __TIME__);`n" | Set-Content -LiteralPath (Join-Path $subversionTimestampSource "win32_crashrpt.c") -Encoding utf8 -NoNewline
+    Set-SubversionReproducibleBuildTimestamp -SourceRoot $subversionTimestampRoot
+    $expectedDate = '{0} {1} {2}' -f $expectedTimestamp.ToString("MMM", [Globalization.CultureInfo]::InvariantCulture), $expectedTimestamp.Day.ToString().PadLeft(2, ' '), $expectedTimestamp.Year.ToString("0000")
+    $expectedTime = $expectedTimestamp.ToString("HH:mm:ss", [Globalization.CultureInfo]::InvariantCulture)
+    Assert-Equal "Jan  2 2000" $expectedDate "Subversion reproducible dates should use the C macro's space-padded day format."
+    $versionTimestampText = Get-Content -Raw -LiteralPath (Join-Path $subversionTimestampSource "version.c")
+    $crashTimestampText = Get-Content -Raw -LiteralPath (Join-Path $subversionTimestampSource "win32_crashrpt.c")
+    Assert-True ($versionTimestampText.Contains("info->build_date = `"$expectedDate`";") -and $versionTimestampText.Contains("info->build_time = `"$expectedTime`";")) "Subversion version metadata should use the explicit source epoch."
+    Assert-True ($crashTimestampText.Contains("SVN_VERSION, `"$expectedDate`", `"$expectedTime`");")) "Subversion crash metadata should use the explicit source epoch."
+    Assert-ThrowsContaining {
+      Set-SubversionReproducibleBuildTimestamp -SourceRoot $subversionTimestampRoot
+    } "expected exactly one" "Subversion timestamp patching should reject an already-patched source tree."
+  }
+  finally {
+    $env:SOURCE_DATE_EPOCH = $savedSourceDateEpoch
+  }
+
   $bridgeCMakeText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "native\svn-bridge\CMakeLists.txt")
   $cargoConfigText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot ".cargo\config.toml")
   $rustToolchainText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "rust-toolchain.toml")
@@ -374,6 +418,7 @@ try {
   Assert-True ($buildDependenciesText.Contains('"openssl"')) "M6r dependency build script should expose an OpenSSL target."
   Assert-True ($buildDependenciesText.Contains('"serf"')) "M6r dependency build script should expose a Serf target."
   Assert-True ($buildDependenciesText.Contains("function Build-OpenSsl")) "M6r dependency build script should build OpenSSL from the locked source."
+  Assert-True ($buildDependenciesText.Contains("Get-RequiredSourceDateEpoch | Out-Null")) "M6r OpenSSL build should fail fast without an explicit reproducible source epoch."
   Assert-True ($buildDependenciesText.Contains("function Build-Serf")) "M6r dependency build script should build Serf from the locked source."
   Assert-True ($buildDependenciesText.Contains("function Invoke-SerfOpenSslLinkProbe")) "M6r dependency build script should include a Serf/OpenSSL mutual link probe."
   Assert-True ($buildDependenciesText.Contains('Assert-RequiredCommand "perl"') -and $buildDependenciesText.Contains('Assert-RequiredCommand "nasm"')) "M6r OpenSSL build should fail fast when required upstream Windows tools are missing."
@@ -667,6 +712,7 @@ try {
   Assert-True ($buildSubversionText.Contains('--with-openssl=$openSslRootResolved')) "M6s Subversion generator should receive the staged OpenSSL install root."
   Assert-True ($buildSubversionText.Contains('Assert-SameResolvedDirectory $dependencyRoot.Value $dependencyStageRootResolved $dependencyRoot.Name')) "M6s Subversion build should reject generator roots that differ from the packaged dependency stage."
   Assert-True ($buildSubversionText.Contains('Assert-GeneratedSubversionRaSerfProjectGraph -SourceRoot $sourceRoot')) "M6s Subversion build should verify the generated ra_serf MSBuild project graph."
+  Assert-True ($buildSubversionText.Contains('Set-SubversionReproducibleBuildTimestamp -SourceRoot $sourceRoot')) "M6s Subversion build should replace upstream compile-time clock macros with the explicit source epoch."
   Assert-True ($buildSubversionText.Contains('Assert-SubversionRaSerfRegistration -StageRoot $subversionStageRoot')) "M6s Subversion build should verify staged svn.exe reports ra_serf for http and https."
   Assert-True ($ciWorkflowText.Contains('-SerfRoot .cache/native/stage/subversion-deps-win-x64')) "CI Subversion build should pass the staged Serf root required by M6s."
   Assert-True ($ciWorkflowText.Contains('-OpenSslRoot .cache/native/stage/subversion-deps-win-x64')) "CI Subversion build should pass the staged OpenSSL root required by M6s."
@@ -682,6 +728,11 @@ try {
   Assert-True ($ciWorkflowText.Contains('Smoke native malicious SVN server-response fixture')) "CI should run the M7l6 malicious SVN server-response fixture smoke gate after building the native bridge."
   Assert-True ($ciWorkflowText.Contains('scripts/native/smoke-malicious-svn-server-response.ps1')) "CI should call the dedicated M7l6 malicious SVN server-response smoke script."
   Assert-True ($ciWorkflowText.Contains('Install NASM 3.01')) "CI should install the NASM version required by the OpenSSL Windows build before native dependency staging."
+  Assert-True ($ciWorkflowText.Contains('Set reproducible source date epoch') -and $ciWorkflowText.Contains('SOURCE_DATE_EPOCH=$epoch')) "CI should export the versioned reproducible native build epoch."
+  Assert-True ($ciWorkflowText.Contains('LINK: /Brepro')) "CI should require reproducible MSVC linking for native release artifacts."
+  Assert-True ($ciWorkflowText.IndexOf('Set reproducible source date epoch', [StringComparison]::Ordinal) -lt $ciWorkflowText.IndexOf('Build native dependency stage', [StringComparison]::Ordinal)) "CI should export the source epoch before building native dependencies."
+  Assert-True ($ciWorkflowText.Contains('native/release-build-epoch.txt') -and $ciWorkflowText.Contains("-notmatch '^[1-9][0-9]*\r?\n$'") -and $ciWorkflowText.Contains('$env:GITHUB_ENV')) "CI should require one versioned positive epoch and export it through GITHUB_ENV."
+  Assert-Equal "1783852020`n" ((Get-Content -Raw -LiteralPath (Join-Path $repoRoot "native\release-build-epoch.txt")).Replace("`r`n", "`n")) "The 0.2.3 native release epoch should remain bound to the candidate version-bump commit."
   Assert-True ($ciWorkflowText.Contains('https://www.nasm.us/pub/nasm/releasebuilds/$version/win64/$archiveName')) "CI NASM install should use the official NASM release archive URL."
   Assert-True ($ciWorkflowText.Contains('e0ba5157007abc7b1a65118a96657a961ddf55f7e3f632ee035366dfce039ca4')) "CI NASM install should verify the pinned win64 archive SHA256."
   Assert-True ($ciWorkflowText.Contains('Get-Command nasm -ErrorAction Stop')) "CI native prerequisite checks should fail fast when NASM is not on PATH."

@@ -2729,6 +2729,8 @@ try {
   Assert-True ($packageJson.scripts."release:verify-beta-candidate:win32-x64".Contains("-ArtifactBundleManifestPath target/release-evidence/subversionr-beta-artifact-bundle-manifest-win32-x64.json")) "Beta candidate consistency gate should require the artifact bundle manifest path."
 
   $ciWorkflow = Get-Content -Raw -LiteralPath $ciWorkflowPath
+  Assert-True ($ciWorkflow.Contains("LINK: /Brepro")) "CI should use reproducible MSVC linking for release-native dependencies and packaged VSIX bytes."
+  Assert-True ($ciWorkflow.Contains('Set reproducible source date epoch') -and $ciWorkflow.Contains('native/release-build-epoch.txt') -and $ciWorkflow.Contains('SOURCE_DATE_EPOCH=$epoch')) "CI should derive embedded native build timestamps from the versioned release epoch."
   Assert-True ($ciWorkflow.Contains("Release script tests")) "CI should run release script tests."
   Assert-True ($ciWorkflow.Contains("Release Beta candidate evidence script tests")) "CI should run Beta candidate evidence script tests."
   Assert-True ($ciWorkflow.Contains("Build release sidecar")) "CI should build the release sidecar before staging."

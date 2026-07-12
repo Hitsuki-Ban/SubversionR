@@ -305,6 +305,7 @@ function Build-Pcre2 {
 }
 
 function Build-OpenSsl {
+  Get-RequiredSourceDateEpoch | Out-Null
   $source = Get-NativeSourceEntry -Lock $lock -Name "openssl"
   $version = Get-RequiredProperty -Object $source -Name "version"
   $archivePath = Get-NativeArchivePath -CacheRoot $CacheRoot -Source $source -RequireExisting

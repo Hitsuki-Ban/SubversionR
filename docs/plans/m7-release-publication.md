@@ -420,7 +420,7 @@ The 0.2.3 candidate preserves the published `SVN-R` Marketplace identity and pac
 
 - root and extension versions are `0.2.3`; the extension version remains plain `major.minor.patch`, while the GitHub pre-release tag is `v0.2.3-beta.1`;
 - `vsce package --target win32-x64 --pre-release` bakes exactly one `Microsoft.VisualStudio.Code.PreRelease=true` property into the candidate before its bytes are hashed;
-- the GitHub CI release subject is `subversionr-win32-x64-0.2.3.vsix`, 8,285,059 bytes, SHA256 `e75eaabe2603cab09eb3aa1144096c8efd11acb2d7e23ddab15cd0e3c51cfc43`;
+- the reproducible GitHub CI release subject is `subversionr-win32-x64-0.2.3.vsix`, 8,292,657 bytes, SHA256 `80efb2f1c13fce04530687c7a39622d461b4468b9d129b72ac519eabc5f1b3cf`, verified byte-identical across both attempts of workflow run `29198243540`;
 - `docs/release/github-attestation-candidate-contract.win32-x64.json` records the pending release/attestation contract and requires `artifact-metadata: write` in addition to the existing GitHub attestation permissions;
 - `docs/release/marketplace-pre-release-owner-exception-0.2.3.md` authorizes only those exact bytes; and
 - the candidate state does not claim that the GitHub release, live attestation, Marketplace publication, or Gallery propagation exists. Those facts must be recorded only after the post-merge chain succeeds.
