@@ -1788,7 +1788,7 @@ function validateLastCompletedRefreshCoverageSet(report, openReport, expectedTar
     const target = coverageReport.targets[index];
     const coverage = coverageReport.coverage[index];
     if (target.path !== expected.path || target.depth !== expected.depth || target.reason !== expected.reason) {
-      throw new Error(`Installed Source Control UI E2E completed refresh target mismatch for ${expected.path}.`);
+      throw new Error(`Installed Source Control UI E2E completed refresh target mismatch for ${expected.path}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(target)}.`);
     }
     if (
       coverage.path !== expected.path ||
@@ -5869,8 +5869,8 @@ function checkoutFailureNotificationCaptureExpectations() {
   return {
     requiredDomTokens: [notificationText, "Show Log"],
     requiredAccessibilityTokens: [notificationText, "Show Log"],
-    forbiddenDomTokens: ["SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED"],
-    forbiddenAccessibilityTokens: ["SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED"],
+    forbiddenDomTokens: ["SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED"],
+    forbiddenAccessibilityTokens: ["SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED"],
     requiredScreenshot: true
   };
 }

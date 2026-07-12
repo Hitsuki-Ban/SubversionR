@@ -4845,8 +4845,8 @@ $checkoutExistingTargetFailureHashBefore = (Get-FileHash -Algorithm SHA256 -Lite
 $checkoutExistingTargetFailureNotificationExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN Checkout failed. Open the SubversionR log for details.", "Show Log")
   requiredAccessibilityTokens = @("SVN Checkout failed. Open the SubversionR log for details.", "Show Log")
-  forbiddenDomTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED")
-  forbiddenAccessibilityTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED")
+  forbiddenDomTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED")
+  forbiddenAccessibilityTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED")
   requiredScreenshot = $true
 }
 [pscustomobject]@{
@@ -5027,8 +5027,8 @@ $checkoutInvalidUrlFailureParentEntriesBefore = Get-FakeDirectoryEntries -Path $
 $checkoutInvalidUrlFailureNotificationExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN Checkout failed. Open the SubversionR log for details.", "Show Log")
   requiredAccessibilityTokens = @("SVN Checkout failed. Open the SubversionR log for details.", "Show Log")
-  forbiddenDomTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED")
-  forbiddenAccessibilityTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED")
+  forbiddenDomTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED")
+  forbiddenAccessibilityTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED")
   requiredScreenshot = $true
 }
 [pscustomobject]@{
@@ -6517,8 +6517,10 @@ const mode = process.env.SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE || "valid";
 const domPath = path.join(outputRoot, "dom-text.txt");
 const axPath = path.join(outputRoot, "accessibility-tree.json");
 const pngPath = path.join(outputRoot, "screenshot.png");
-const domText = mode === "missing-dom-token" || mode === "lying-dom-token" ? "SubversionR Changes" : expectations.requiredDomTokens.join("\n");
-const axText = expectations.requiredAccessibilityTokens.join("\n");
+const requiredDomText = mode === "missing-dom-token" || mode === "lying-dom-token" ? "SubversionR Changes" : expectations.requiredDomTokens.join("\n");
+const requiredAxText = expectations.requiredAccessibilityTokens.join("\n");
+const domText = mode === "forbidden-dom-token-lie" && forbiddenDomTokens.length > 0 ? `${requiredDomText}\n${forbiddenDomTokens[0]}` : requiredDomText;
+const axText = mode === "forbidden-accessibility-token-lie" && forbiddenAccessibilityTokens.length > 0 ? `${requiredAxText}\n${forbiddenAccessibilityTokens[0]}` : requiredAxText;
 writeFileSync(domPath, domText);
 writeFileSync(axPath, JSON.stringify({ nodes: [{ name: { value: axText } }] }, null, 2));
 const nonBlankPng = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAOSURBVBhXY/jPwABC/wEP+QP98+IdQAAAAABJRU5ErkJggg==";
@@ -6529,6 +6531,8 @@ const axMissing = expectations.requiredAccessibilityTokens.filter(token => !axTe
 const presentForbiddenDomTokens = forbiddenDomTokens.filter(token => domText.includes(token));
 const presentForbiddenAccessibilityTokens = forbiddenAccessibilityTokens.filter(token => axText.includes(token));
 const reportedDomMissing = mode === "lying-dom-token" ? [] : domMissing;
+const reportedForbiddenDomTokens = mode === "forbidden-dom-token-lie" ? [] : presentForbiddenDomTokens;
+const reportedForbiddenAccessibilityTokens = mode === "forbidden-accessibility-token-lie" ? [] : presentForbiddenAccessibilityTokens;
 const reportedScreenshotNonBlank = mode === "blank-screenshot" ? false : true;
 const cancelSurface = expectations.cancelSurface || "quickInput";
 const report = {
@@ -6554,7 +6558,7 @@ const report = {
       matchedTokens: expectations.requiredDomTokens.filter(token => domText.includes(token)),
       missingTokens: reportedDomMissing,
       forbiddenTokens: forbiddenDomTokens,
-      presentForbiddenTokens: presentForbiddenDomTokens
+      presentForbiddenTokens: reportedForbiddenDomTokens
     },
     accessibility: {
       status: mode === "partial-accessibility" ? "partial" : "captured",
@@ -6564,7 +6568,7 @@ const report = {
       matchedTokens: expectations.requiredAccessibilityTokens.filter(token => axText.includes(token)),
       missingTokens: axMissing,
       forbiddenTokens: forbiddenAccessibilityTokens,
-      presentForbiddenTokens: presentForbiddenAccessibilityTokens
+      presentForbiddenTokens: reportedForbiddenAccessibilityTokens
     },
     screenshot: {
       status: "captured",
@@ -6581,8 +6585,8 @@ const report = {
   assertions: {
     domRequiredTokensPresent: mode === "lying-dom-token" ? true : domMissing.length === 0,
     accessibilityRequiredTokensPresent: axMissing.length === 0,
-    domForbiddenTokensAbsent: presentForbiddenDomTokens.length === 0,
-    accessibilityForbiddenTokensAbsent: presentForbiddenAccessibilityTokens.length === 0,
+    domForbiddenTokensAbsent: mode === "forbidden-dom-token-lie" ? true : presentForbiddenDomTokens.length === 0,
+    accessibilityForbiddenTokensAbsent: mode === "forbidden-accessibility-token-lie" ? true : presentForbiddenAccessibilityTokens.length === 0,
     screenshotCaptured: true,
     screenshotNonBlank: reportedScreenshotNonBlank,
     ...(expectations.clickButtonText ? { clickButtonCompleted: true } : {}),
@@ -7181,6 +7185,8 @@ try {
   Assert-Equal "True" ([string]$report.checkoutExistingTargetFailureNotificationCapture.assertions.accessibilityRequiredTokensPresent) "Checkout existing-target failure notification capture should prove the failure notification was accessibility-visible before cleanup."
   Assert-Equal "True" ([string]$report.checkoutExistingTargetFailureNotificationCapture.assertions.domForbiddenTokensAbsent) "Checkout existing-target failure notification capture should exclude raw internal codes from DOM text."
   Assert-Equal "True" ([string]$report.checkoutExistingTargetFailureNotificationCapture.assertions.accessibilityForbiddenTokensAbsent) "Checkout existing-target failure notification capture should exclude raw internal codes from accessibility text."
+  Assert-True (@($report.sourceControlUiCheckoutExistingTargetFailureWorkflow.notification.rendererCaptureExpectations.forbiddenDomTokens | Where-Object { $_ -eq "SVN_REPOSITORY_CHECKOUT_FAILED" }).Count -eq 1) "Checkout failure DOM expectations should forbid the native checkout error code."
+  Assert-True (@($report.sourceControlUiCheckoutExistingTargetFailureWorkflow.notification.rendererCaptureExpectations.forbiddenAccessibilityTokens | Where-Object { $_ -eq "SVN_REPOSITORY_CHECKOUT_FAILED" }).Count -eq 1) "Checkout failure accessibility expectations should forbid the native checkout error code."
   Assert-Equal "notifications.clearAll" $report.sourceControlUiCheckoutExistingTargetFailureWorkflow.notification.cleanup.command "Checkout existing-target failure workflow should clear the failure notification through the explicit VS Code command."
   Assert-Equal "subversionr.installedSourceControlUiE2eCheckoutInvalidUrlFailureWorkflow" $report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.kind "Installed Source Control UI E2E evidence should include a Checkout invalid URL failure workflow report."
   Assert-Equal "SVN_REPOSITORY_CHECKOUT_FAILED" $report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.failure.code "Checkout invalid URL failure workflow should record the native checkout failure code."
@@ -7938,6 +7944,46 @@ try {
         -ExtensionHostTimeoutSeconds 30 `
         -UiReadyTimeoutSeconds 10
     } "DOM artifact text is missing required tokens" "Installed Source Control UI E2E gate should read DOM artifacts instead of trusting renderer assertions."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue
+  }
+
+  $env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE = "forbidden-dom-token-lie"
+  try {
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+        -Target win32-x64 `
+        -VsixPath $vsixPath `
+        -CodeCliPath $fakeCodeCliPath `
+        -SvnToolsRoot $fakeSvnRoot `
+        -RendererCaptureDriverPath $fakeDriverPath `
+        -FixtureRoot (Join-Path $tempRoot "forbidden-dom-token-lie\win32-x64") `
+        -EvidencePath (Join-Path $tempRoot "evidence\forbidden-dom-token-lie.json") `
+        -RemoteDebuggingPort 32153 `
+        -ExtensionHostTimeoutSeconds 30 `
+        -UiReadyTimeoutSeconds 10
+    } "DOM artifact text contains forbidden tokens" "Installed Source Control UI E2E gate should inspect DOM artifacts instead of trusting forbidden-token assertions."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue
+  }
+
+  $env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE = "forbidden-accessibility-token-lie"
+  try {
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+        -Target win32-x64 `
+        -VsixPath $vsixPath `
+        -CodeCliPath $fakeCodeCliPath `
+        -SvnToolsRoot $fakeSvnRoot `
+        -RendererCaptureDriverPath $fakeDriverPath `
+        -FixtureRoot (Join-Path $tempRoot "forbidden-accessibility-token-lie\win32-x64") `
+        -EvidencePath (Join-Path $tempRoot "evidence\forbidden-accessibility-token-lie.json") `
+        -RemoteDebuggingPort 32154 `
+        -ExtensionHostTimeoutSeconds 30 `
+        -UiReadyTimeoutSeconds 10
+    } "Accessibility artifact text contains forbidden tokens" "Installed Source Control UI E2E gate should inspect accessibility artifacts instead of trusting forbidden-token assertions."
   }
   finally {
     Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue

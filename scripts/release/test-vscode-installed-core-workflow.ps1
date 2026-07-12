@@ -391,6 +391,9 @@ async function run() {
       throw new Error("Installed SubversionR extension was not visible to Extension Host.");
     }
     beforeActive = extension.isActive;
+    if (beforeActive !== true) {
+      throw new Error("SubversionR did not activate organically before the installed core workflow report command executed.");
+    }
     phase = "executingInstalledCoreWorkflowReport";
     workflowReport = await withTimeout(
       vscode.commands.executeCommand("subversionr.diagnostics.installedCoreWorkflowReport", { path: workingCopyRoot }),
@@ -424,10 +427,14 @@ async function run() {
     if (path.resolve(workflowReport.repository.identity.workingCopyRoot).toLowerCase() !== path.resolve(workingCopyRoot).toLowerCase()) {
       throw new Error("Installed core workflow report workingCopyRoot did not match the fixture working copy.");
     }
-    for (const [key, value] of Object.entries(workflowReport.backendWorkflow)) {
-      if (value !== true) {
-        throw new Error(`Installed core workflow backendWorkflow.${key} must be true.`);
-      }
+    if (workflowReport.backendWorkflow.repositoryOpen !== true ||
+        workflowReport.backendWorkflow.statusSnapshot !== true ||
+        workflowReport.backendWorkflow.scmProjection !== true) {
+      throw new Error("Installed core workflow report must prove repository open, status snapshot, and SCM projection.");
+    }
+    if (workflowReport.backendWorkflow.sessionSource !== "organic-activation" ||
+        workflowReport.backendWorkflow.repositoryClosed !== false) {
+      throw new Error("Installed core workflow report must reuse and preserve the organically activated repository session.");
     }
     const tracked = findResource(workflowReport, "changes", "src/tracked.txt", "subversionr.changedFile");
     if (!tracked || tracked.localStatus !== "modified" || tracked.nodeStatus !== "modified") {
@@ -555,6 +562,9 @@ function Assert-HarnessResult(
   if ($Result.afterActive -ne $true) {
     throw "Installed core workflow result must prove SubversionR is active before workflow validation."
   }
+  if ($Result.beforeActive -ne $true) {
+    throw "Installed core workflow result must prove SubversionR activated organically before the diagnostic command."
+  }
   if ($Result.hasInstalledCoreWorkflowReportCommand -ne $true) {
     throw "Installed core workflow result must prove hidden diagnostic command registration."
   }
@@ -563,9 +573,12 @@ function Assert-HarnessResult(
   }
   if ($Result.workflowReport.backendWorkflow.repositoryOpen -ne $true -or
     $Result.workflowReport.backendWorkflow.statusSnapshot -ne $true -or
-    $Result.workflowReport.backendWorkflow.scmProjection -ne $true -or
-    $Result.workflowReport.backendWorkflow.repositoryClosed -ne $true) {
-    throw "Installed core workflow report must prove open, status, SCM projection, and close."
+    $Result.workflowReport.backendWorkflow.scmProjection -ne $true) {
+    throw "Installed core workflow report must prove open, status, and SCM projection."
+  }
+  if ($Result.workflowReport.backendWorkflow.sessionSource -ne "organic-activation" -or
+    $Result.workflowReport.backendWorkflow.repositoryClosed -ne $false) {
+    throw "Installed core workflow report must prove the organically activated repository session was reused and preserved."
   }
   if (-not (Test-IsSamePath -Left ([string]$Result.workflowReport.repository.identity.workingCopyRoot) -Right $WorkingCopyRoot)) {
     throw "Installed core workflow report workingCopyRoot must match the fixture working copy."

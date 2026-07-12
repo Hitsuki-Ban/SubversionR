@@ -37,7 +37,8 @@ export interface InstalledCoreWorkflowReport {
     repositoryOpen: true;
     statusSnapshot: true;
     scmProjection: true;
-    repositoryClosed: true;
+    sessionSource: "organic-activation" | "report-open";
+    repositoryClosed: boolean;
   };
   projection: {
     generation: number;
@@ -79,8 +80,9 @@ export async function collectInstalledCoreWorkflowReport(
   const request = parseRequest(rawRequest);
   const pathCase = deps.pathCasePolicy();
   let session: RepositorySession | undefined;
+  let sessionSource: "organic-activation" | "report-open" = "report-open";
+  let openedByReport = false;
   let closeAttempted = false;
-  let closeSucceeded = false;
 
   try {
     session = deps.sessionService
@@ -90,10 +92,15 @@ export async function collectInstalledCoreWorkflowReport(
           normalizeForCase(candidate.identity.workingCopyRoot, pathCase) ===
           normalizeForCase(request.path, pathCase),
       );
-    session ??= await deps.sessionService.openWorkingCopy({
+    if (session) {
+      sessionSource = "organic-activation";
+    } else {
+      session = await deps.sessionService.openWorkingCopy({
         path: request.path,
         pathCase,
       });
+      openedByReport = true;
+    }
     const projection = deps.sourceControlProjection.getProjection(session.repositoryId);
     if (!projection) {
       throw new InstalledCoreWorkflowReportError(
@@ -115,9 +122,10 @@ export async function collectInstalledCoreWorkflowReport(
       );
     }
 
-    closeAttempted = true;
-    await deps.sessionService.closeRepository(session.repositoryId);
-    closeSucceeded = true;
+    if (openedByReport) {
+      closeAttempted = true;
+      await deps.sessionService.closeRepository(session.repositoryId);
+    }
     return buildReport({
       generatedAt: deps.generatedAt(),
       extensionVersion: deps.extensionVersion,
@@ -125,10 +133,11 @@ export async function collectInstalledCoreWorkflowReport(
       pathCase,
       session,
       projection,
-      repositoryClosed: true,
+      sessionSource,
+      repositoryClosed: openedByReport,
     });
   } finally {
-    if (session && !closeAttempted) {
+    if (session && openedByReport && !closeAttempted) {
       await deps.sessionService.closeRepository(session.repositoryId);
     }
   }
@@ -159,7 +168,8 @@ function buildReport(options: {
   pathCase: PathCasePolicy;
   session: RepositorySession;
   projection: ScmRepositoryProjection;
-  repositoryClosed: true;
+  sessionSource: "organic-activation" | "report-open";
+  repositoryClosed: boolean;
 }): InstalledCoreWorkflowReport {
   return {
     kind: "subversionr.installedCoreWorkflowReport",
@@ -181,6 +191,7 @@ function buildReport(options: {
       repositoryOpen: true,
       statusSnapshot: true,
       scmProjection: true,
+      sessionSource: options.sessionSource,
       repositoryClosed: options.repositoryClosed,
     },
     projection: {
