@@ -13,7 +13,7 @@ export interface InstalledCoreWorkflowReportDependencies {
   extensionVersion: string;
   pathCasePolicy(): PathCasePolicy;
   workspaceTrusted(): boolean;
-  sessionService: Pick<RepositorySessionService, "openWorkingCopy" | "closeRepository">;
+  sessionService: Pick<RepositorySessionService, "listOpenSessions" | "openWorkingCopy" | "closeRepository">;
   sourceControlProjection: Pick<SourceControlProjectionService, "getProjection">;
 }
 
@@ -83,10 +83,17 @@ export async function collectInstalledCoreWorkflowReport(
   let closeSucceeded = false;
 
   try {
-    session = await deps.sessionService.openWorkingCopy({
-      path: request.path,
-      pathCase,
-    });
+    session = deps.sessionService
+      .listOpenSessions()
+      .find(
+        (candidate) =>
+          normalizeForCase(candidate.identity.workingCopyRoot, pathCase) ===
+          normalizeForCase(request.path, pathCase),
+      );
+    session ??= await deps.sessionService.openWorkingCopy({
+        path: request.path,
+        pathCase,
+      });
     const projection = deps.sourceControlProjection.getProjection(session.repositoryId);
     if (!projection) {
       throw new InstalledCoreWorkflowReportError(
@@ -214,4 +221,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isAbsolutePath(candidate: string): boolean {
   return path.isAbsolute(candidate) || path.win32.isAbsolute(candidate) || path.posix.isAbsolute(candidate);
+}
+
+function normalizeForCase(candidate: string, pathCase: PathCasePolicy): string {
+  const normalized = candidate.replaceAll("\\", "/").replace(/\/+$/u, "");
+  return pathCase === "case-insensitive" ? normalized.toLocaleLowerCase("en-US") : normalized;
 }

@@ -5,13 +5,13 @@
   "publicReadinessClaim": false,
   "target": "win32-x64",
   "release": {
-    "tag": "v0.2.2-beta.1",
-    "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.2-beta.1"
+    "tag": "v0.2.3-beta.1",
+    "url": "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.3-beta.1"
   },
   "subject": {
-    "name": "subversionr-win32-x64-0.2.2.vsix",
-    "size": 8251930,
-    "sha256": "47d6d9718614bb2e81706af2096e7387fadeeec34db7d6867c3233c8206dc378",
+    "name": "subversionr-win32-x64-0.2.3.vsix",
+    "size": 8287021,
+    "sha256": "8f6b1b5c9e8f6575c801866633c453b70bc964c96b4cf3b41b7c9150718c55ae",
     "preReleaseProperty": true
   },
   "attestation": {
@@ -28,7 +28,8 @@
     "requiredPermissions": [
       "contents: read",
       "id-token: write",
-      "attestations: write"
+      "attestations: write",
+      "artifact-metadata: write"
     ]
   },
   "verificationPolicy": {

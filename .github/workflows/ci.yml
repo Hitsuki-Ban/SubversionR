@@ -420,7 +420,7 @@ jobs:
         with:
           name: subversionr-win32-x64-beta-candidate
           path: |
-            target/vsix/subversionr-win32-x64-0.2.2.vsix
+            target/vsix/subversionr-win32-x64-0.2.3.vsix
             target/release-evidence/subversionr-source-sbom.cdx.json
             target/release-evidence/subversionr-vsix-package-win32-x64.json
             target/release-evidence/subversionr-vsix-cli-install-win32-x64.json

@@ -414,6 +414,17 @@ Issue [#26](https://github.com/Hitsuki-Ban/SubversionR/issues/26) preserves the 
 - `docs/release/marketplace-pre-release-owner-exception-0.2.2.md` scopes the one automated publication authorization to the exact 0.2.2 bytes; and
 - [`docs/release/0.2.2-publication-evidence.md`](../release/0.2.2-publication-evidence.md) records the completed GitHub release, live custom-predicate attestation, Marketplace publish workflow, and public Gallery state. Signing, signed source-to-binary provenance, previous-stable rollback, final legal and vulnerability approval, and public readiness remain separate open gates.
 
+## 0.2.3 Actionable Core-loop Candidate
+
+The 0.2.3 candidate preserves the published `SVN-R` Marketplace identity and packages the completed activation, on-demand remote status, conflict-aware Update, and actionable operation-failure slices:
+
+- root and extension versions are `0.2.3`; the extension version remains plain `major.minor.patch`, while the GitHub pre-release tag is `v0.2.3-beta.1`;
+- `vsce package --target win32-x64 --pre-release` bakes exactly one `Microsoft.VisualStudio.Code.PreRelease=true` property into the candidate before its bytes are hashed;
+- the deterministic subject is `subversionr-win32-x64-0.2.3.vsix`, 8,287,021 bytes, SHA256 `8f6b1b5c9e8f6575c801866633c453b70bc964c96b4cf3b41b7c9150718c55ae`;
+- `docs/release/github-attestation-candidate-contract.win32-x64.json` records the pending release/attestation contract and requires `artifact-metadata: write` in addition to the existing GitHub attestation permissions;
+- `docs/release/marketplace-pre-release-owner-exception-0.2.3.md` authorizes only those exact bytes; and
+- the candidate state does not claim that the GitHub release, live attestation, Marketplace publication, or Gallery propagation exists. Those facts must be recorded only after the post-merge chain succeeds.
+
 ## M7l1 Implemented Slice
 
 The first M7l slice adds a vulnerability review input-contract preflight without querying live advisory services or claiming CVE review completion:
