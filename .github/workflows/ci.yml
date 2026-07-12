@@ -12,8 +12,20 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-2022
+    env:
+      LINK: /Brepro
     steps:
       - uses: actions/checkout@v4
+      - name: Set reproducible source date epoch
+        shell: pwsh
+        run: |
+          $epochPath = "native/release-build-epoch.txt"
+          $epochContent = Get-Content -Raw -LiteralPath $epochPath
+          if ($epochContent -notmatch '^[1-9][0-9]*\r?\n$') {
+            throw "$epochPath must contain exactly one positive integer Unix timestamp and a trailing newline."
+          }
+          $epoch = $epochContent.TrimEnd("`r", "`n")
+          "SOURCE_DATE_EPOCH=$epoch" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: pnpm/action-setup@v4
         with:
           version: 11.5.2

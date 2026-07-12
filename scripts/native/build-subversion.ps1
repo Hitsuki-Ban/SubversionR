@@ -142,6 +142,7 @@ Clear-NativeGeneratedDirectory -Path $sourceRoot -WorkspaceRoot $repoRoot -Descr
 Expand-Archive -LiteralPath $archivePath -DestinationPath $workRoot -Force
 
 Assert-RequiredFile (Join-Path $sourceRoot "gen-make.py") "Subversion generator"
+Set-SubversionReproducibleBuildTimestamp -SourceRoot $sourceRoot
 Update-SubversionGeneratorForExpat272 -SourceRoot $sourceRoot
 
 Push-Location $sourceRoot

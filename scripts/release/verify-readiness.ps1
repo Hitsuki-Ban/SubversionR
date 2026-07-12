@@ -651,6 +651,7 @@ $repositoryLifecycleServiceTests = Read-RequiredDocument "packages/vscode-extens
 $repositoryLifecycleTests = Read-RequiredDocument "packages/vscode-extension/tests/repositoryLifecycleService.test.ts"
 $repositorySessionTests = Read-RequiredDocument "packages/vscode-extension/tests/repositorySessionService.test.ts"
 $ciWorkflow = Read-RequiredDocument ".github/workflows/ci.yml"
+$releaseBuildEpoch = Read-RequiredDocument "native/release-build-epoch.txt"
 $fastPrWorkflow = Read-RequiredDocument ".github/workflows/pr-fast.yml"
 $cloudflarePrFastBridgeDoc = Read-RequiredDocument "docs/ci/cloudflare-pr-fast-bridge.md"
 $githubActionsRestorationDoc = Read-RequiredDocument "docs/ci/github-actions-restoration.md"
@@ -6716,6 +6717,9 @@ Assert-Terms $rootPackageJson @(
   "target/release-evidence/subversionr-beta-candidate-consistency-win32-x64.json"
 ) "Beta-G candidate evidence package script coverage"
 Assert-Terms $ciWorkflow @(
+  "LINK: /Brepro",
+  "Set reproducible source date epoch",
+  'SOURCE_DATE_EPOCH=$epoch',
   "Release Beta candidate evidence script tests",
   "pnpm release:test-beta-candidate-evidence-scripts",
   "Generate Beta artifact bundle manifest",
@@ -6733,6 +6737,9 @@ Assert-Terms $ciWorkflow @(
   "if-no-files-found: error",
   "retention-days: 14"
 ) "Beta-G candidate evidence CI coverage"
+if ($releaseBuildEpoch.Content.Replace("`r`n", "`n") -ne "1783852020`n") {
+  throw "native/release-build-epoch.txt: 0.2.3 release epoch must remain bound to the candidate version-bump commit timestamp 1783852020."
+}
 Assert-DoesNotContain $ciWorkflow "target/release-evidence/*.json" "Beta-G candidate evidence CI coverage should not use broad release evidence JSON globs"
 Assert-Terms $releaseGates @(
   "Beta-G candidate evidence consistency gate",
