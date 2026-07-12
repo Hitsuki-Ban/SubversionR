@@ -917,7 +917,8 @@ try {
     "subversionr.showLineHistory",
     "command.showLineHistory.title",
     "Line History: {0}",
-    "SubversionR line history command failed: {0}"
+    'recordFailure("Line History", error)',
+    "SVN {0} failed. Open the SubversionR log for details."
   ) "Release readiness should verify Line History evidence."
   Assert-TextFileContainsTokens $verifyReadinessScript @(
     "HIS-001",
