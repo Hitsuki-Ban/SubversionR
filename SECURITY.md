@@ -2,15 +2,15 @@
 
 ## Supported Versions
 
-SubversionR is still in private development. No public stable release is currently supported for general security response.
+SubversionR currently publishes the Windows `win32-x64` `0.2.2` Beta through the Marketplace pre-release channel and GitHub Releases. No stable release is currently supported.
 
-Before the first public release, this policy must be updated with the exact supported stable and pre-release channels. After the first stable release, security fixes are expected to target the current stable release line and any active public pre-release candidate unless a release note states otherwise.
+Security fixes target the active public pre-release candidate. After the first stable release, fixes are expected to target the current stable release line and any active public pre-release candidate unless a release note states otherwise.
 
 ## Reporting a Vulnerability
 
 Do not report security vulnerabilities through a public issue, discussion, pull request, or social channel.
 
-During private repository development, report security issues through the private repository channel available to the maintainers. Before public release, GitHub Private Vulnerability Reporting must be enabled or an equivalent private reporting path must be documented here.
+Use GitHub Private Vulnerability Reporting from the repository **Security** tab and select **Report a vulnerability**. This sends the report privately to the maintainers.
 
 When reporting a vulnerability, include:
 
@@ -22,11 +22,7 @@ When reporting a vulnerability, include:
 
 ## Private Vulnerability Reporting
 
-The intended public-release path is GitHub Private Vulnerability Reporting. This gives security researchers a private, structured reporting channel when it is enabled for the public repository.
-
-Until the repository is public and that feature is enabled, maintainers must keep vulnerability reports inside private project channels and must not ask reporters to disclose secrets or customer source material.
-
-At public cutover, maintainers must enable GitHub Private Vulnerability Reporting on `Hitsuki-Ban/SubversionR` before inviting public vulnerability reports. If PVR is unavailable, this document must be updated in the same cutover PR with an equivalent private reporting path before the first public release is announced.
+GitHub Private Vulnerability Reporting is enabled for `Hitsuki-Ban/SubversionR` and is the supported private, structured reporting channel. Maintainers must keep vulnerability reports in that private channel and must not ask reporters to disclose secrets or customer source material.
 
 ## Do Not Include
 
