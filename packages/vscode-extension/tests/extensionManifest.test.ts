@@ -11,7 +11,7 @@ describe("extension manifest", () => {
     expect(manifest.name).toBe("subversionr");
     expect(manifest.publisher).toBe("hitsuki-ban");
     expect(manifest.displayName).toBe("SVN-R");
-    expect(manifest.version).toBe("0.2.2");
+    expect(manifest.version).toBe("0.2.3");
     expect(manifest.private).toBeUndefined();
     expect(manifest.repository).toEqual({
       type: "git",

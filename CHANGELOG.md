@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3
+
+- Activates organically when VS Code opens a working-copy root or a bounded ancestor path, with installed no-command activation evidence.
+- Adds explicit on-demand remote status with truthful Incoming projection and result counts while keeping ordinary refreshes offline.
+- Reports Update-created conflicts with warning severity, conflict counts, and bounded affected-path context after authoritative reconciliation.
+- Preserves bounded symbolic libsvn failure chains through protocol 1.29, adds the redacted SubversionR log and actionable localized recovery notifications, and keeps failed commit message and Review Commit selection state.
+- Retains the `hitsuki-ban.subversionr` identity, `SVN-R` Marketplace display name, Windows `win32-x64` pre-release channel, and existing public-claim boundary.
+
 ## 0.2.2
 
 - Includes all product content introduced in 0.2.1.

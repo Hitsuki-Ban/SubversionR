@@ -4843,8 +4843,10 @@ $checkoutExistingTargetFailureParentPath = Split-Path -Parent $checkoutExistingT
 $checkoutExistingTargetFailureParentEntriesBefore = Get-FakeDirectoryEntries -Path $checkoutExistingTargetFailureParentPath
 $checkoutExistingTargetFailureHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $checkoutExistingTargetFailureTargetPath).Hash.ToLowerInvariant()
 $checkoutExistingTargetFailureNotificationExpectations = [pscustomobject]@{
-  requiredDomTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED")
-  requiredAccessibilityTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED")
+  requiredDomTokens = @("SVN Checkout failed. Open the SubversionR log for details.", "Show Log")
+  requiredAccessibilityTokens = @("SVN Checkout failed. Open the SubversionR log for details.", "Show Log")
+  forbiddenDomTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED")
+  forbiddenAccessibilityTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED")
   requiredScreenshot = $true
 }
 [pscustomobject]@{
@@ -4861,7 +4863,7 @@ $checkoutExistingTargetFailureNotificationExpectations = [pscustomobject]@{
   failure = [pscustomobject]@{
     code = "SVN_REPOSITORY_CHECKOUT_FAILED"
     category = "native"
-    notificationText = "SubversionR repository command failed: SUBVERSIONR_REPOSITORY_COMMAND_FAILED"
+    notificationText = "SVN Checkout failed. Open the SubversionR log for details."
   }
   notification = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutExistingTargetFailureNotificationExpectations
@@ -4903,7 +4905,7 @@ $checkoutExistingTargetFailureReport = [pscustomobject]@{
   failure = [pscustomobject]@{
     code = "SVN_REPOSITORY_CHECKOUT_FAILED"
     category = "native"
-    notificationText = "SubversionR repository command failed: SUBVERSIONR_REPOSITORY_COMMAND_FAILED"
+    notificationText = "SVN Checkout failed. Open the SubversionR log for details."
   }
   notification = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutExistingTargetFailureNotificationExpectations
@@ -5023,8 +5025,10 @@ $checkoutInvalidUrlFailureParentPath = Split-Path -Parent $checkoutInvalidUrlFai
 New-Item -ItemType Directory -Force -Path $checkoutInvalidUrlFailureParentPath | Out-Null
 $checkoutInvalidUrlFailureParentEntriesBefore = Get-FakeDirectoryEntries -Path $checkoutInvalidUrlFailureParentPath
 $checkoutInvalidUrlFailureNotificationExpectations = [pscustomobject]@{
-  requiredDomTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED")
-  requiredAccessibilityTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED")
+  requiredDomTokens = @("SVN Checkout failed. Open the SubversionR log for details.", "Show Log")
+  requiredAccessibilityTokens = @("SVN Checkout failed. Open the SubversionR log for details.", "Show Log")
+  forbiddenDomTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED")
+  forbiddenAccessibilityTokens = @("SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED")
   requiredScreenshot = $true
 }
 [pscustomobject]@{
@@ -5041,7 +5045,7 @@ $checkoutInvalidUrlFailureNotificationExpectations = [pscustomobject]@{
   failure = [pscustomobject]@{
     code = "SVN_REPOSITORY_CHECKOUT_FAILED"
     category = "native"
-    notificationText = "SubversionR repository command failed: SUBVERSIONR_REPOSITORY_COMMAND_FAILED"
+    notificationText = "SVN Checkout failed. Open the SubversionR log for details."
   }
   notification = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutInvalidUrlFailureNotificationExpectations
@@ -5082,7 +5086,7 @@ $checkoutInvalidUrlFailureReport = [pscustomobject]@{
   failure = [pscustomobject]@{
     code = "SVN_REPOSITORY_CHECKOUT_FAILED"
     category = "native"
-    notificationText = "SubversionR repository command failed: SUBVERSIONR_REPOSITORY_COMMAND_FAILED"
+    notificationText = "SVN Checkout failed. Open the SubversionR log for details."
   }
   notification = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutInvalidUrlFailureNotificationExpectations
@@ -6507,12 +6511,16 @@ if (!outputRoot || !expectationsPath || !target) {
 }
 mkdirSync(outputRoot, { recursive: true });
 const expectations = JSON.parse(readFileSync(expectationsPath, "utf8"));
+const forbiddenDomTokens = expectations.forbiddenDomTokens || [];
+const forbiddenAccessibilityTokens = expectations.forbiddenAccessibilityTokens || [];
 const mode = process.env.SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE || "valid";
 const domPath = path.join(outputRoot, "dom-text.txt");
 const axPath = path.join(outputRoot, "accessibility-tree.json");
 const pngPath = path.join(outputRoot, "screenshot.png");
-const domText = mode === "missing-dom-token" || mode === "lying-dom-token" ? "SubversionR Changes" : expectations.requiredDomTokens.join("\n");
-const axText = expectations.requiredAccessibilityTokens.join("\n");
+const requiredDomText = mode === "missing-dom-token" || mode === "lying-dom-token" ? "SubversionR Changes" : expectations.requiredDomTokens.join("\n");
+const requiredAxText = expectations.requiredAccessibilityTokens.join("\n");
+const domText = mode === "forbidden-dom-token-lie" && forbiddenDomTokens.length > 0 ? `${requiredDomText}\n${forbiddenDomTokens[0]}` : requiredDomText;
+const axText = mode === "forbidden-accessibility-token-lie" && forbiddenAccessibilityTokens.length > 0 ? `${requiredAxText}\n${forbiddenAccessibilityTokens[0]}` : requiredAxText;
 writeFileSync(domPath, domText);
 writeFileSync(axPath, JSON.stringify({ nodes: [{ name: { value: axText } }] }, null, 2));
 const nonBlankPng = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAOSURBVBhXY/jPwABC/wEP+QP98+IdQAAAAABJRU5ErkJggg==";
@@ -6520,7 +6528,11 @@ const blankPng = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IArs4c6Q
 writeFileSync(pngPath, Buffer.from(mode === "blank-screenshot" || mode === "blank-screenshot-lie" ? blankPng : nonBlankPng, "base64"));
 const domMissing = expectations.requiredDomTokens.filter(token => !domText.includes(token));
 const axMissing = expectations.requiredAccessibilityTokens.filter(token => !axText.includes(token));
+const presentForbiddenDomTokens = forbiddenDomTokens.filter(token => domText.includes(token));
+const presentForbiddenAccessibilityTokens = forbiddenAccessibilityTokens.filter(token => axText.includes(token));
 const reportedDomMissing = mode === "lying-dom-token" ? [] : domMissing;
+const reportedForbiddenDomTokens = mode === "forbidden-dom-token-lie" ? [] : presentForbiddenDomTokens;
+const reportedForbiddenAccessibilityTokens = mode === "forbidden-accessibility-token-lie" ? [] : presentForbiddenAccessibilityTokens;
 const reportedScreenshotNonBlank = mode === "blank-screenshot" ? false : true;
 const cancelSurface = expectations.cancelSurface || "quickInput";
 const report = {
@@ -6544,7 +6556,9 @@ const report = {
       sha256: sha256(domPath),
       requiredTokens: expectations.requiredDomTokens,
       matchedTokens: expectations.requiredDomTokens.filter(token => domText.includes(token)),
-      missingTokens: reportedDomMissing
+      missingTokens: reportedDomMissing,
+      forbiddenTokens: forbiddenDomTokens,
+      presentForbiddenTokens: reportedForbiddenDomTokens
     },
     accessibility: {
       status: mode === "partial-accessibility" ? "partial" : "captured",
@@ -6552,7 +6566,9 @@ const report = {
       sha256: sha256(axPath),
       requiredTokens: expectations.requiredAccessibilityTokens,
       matchedTokens: expectations.requiredAccessibilityTokens.filter(token => axText.includes(token)),
-      missingTokens: axMissing
+      missingTokens: axMissing,
+      forbiddenTokens: forbiddenAccessibilityTokens,
+      presentForbiddenTokens: reportedForbiddenAccessibilityTokens
     },
     screenshot: {
       status: "captured",
@@ -6569,6 +6585,8 @@ const report = {
   assertions: {
     domRequiredTokensPresent: mode === "lying-dom-token" ? true : domMissing.length === 0,
     accessibilityRequiredTokensPresent: axMissing.length === 0,
+    domForbiddenTokensAbsent: mode === "forbidden-dom-token-lie" ? true : presentForbiddenDomTokens.length === 0,
+    accessibilityForbiddenTokensAbsent: mode === "forbidden-accessibility-token-lie" ? true : presentForbiddenAccessibilityTokens.length === 0,
     screenshotCaptured: true,
     screenshotNonBlank: reportedScreenshotNonBlank,
     ...(expectations.clickButtonText ? { clickButtonCompleted: true } : {}),
@@ -7142,6 +7160,7 @@ try {
   Assert-Equal "True" ([string]$report.checkoutCancellationPromptCapture.assertions.quickInputCancelled) "Checkout cancellation prompt capture should prove QuickInput cancellation completed."
   Assert-Equal "subversionr.installedSourceControlUiE2eCheckoutExistingTargetFailureWorkflow" $report.sourceControlUiCheckoutExistingTargetFailureWorkflow.kind "Installed Source Control UI E2E evidence should include a Checkout existing-target failure workflow report."
   Assert-Equal "SVN_REPOSITORY_CHECKOUT_FAILED" $report.sourceControlUiCheckoutExistingTargetFailureWorkflow.failure.code "Checkout existing-target failure workflow should record the native checkout failure code."
+  Assert-Equal "SVN Checkout failed. Open the SubversionR log for details." $report.sourceControlUiCheckoutExistingTargetFailureWorkflow.failure.notificationText "Checkout existing-target failure workflow should record the safe actionable notification."
   Assert-Equal "True" ([string]$report.sourceControlUiCheckoutExistingTargetFailureWorkflow.assertions.commandFailed) "Checkout existing-target failure workflow should prove the checkout command failed."
   Assert-Equal "True" ([string]$report.sourceControlUiCheckoutExistingTargetFailureWorkflow.assertions.obstructingTargetFilePreserved) "Checkout existing-target failure workflow should prove the obstructing target file stayed intact."
   Assert-Equal "True" ([string]$report.sourceControlUiCheckoutExistingTargetFailureWorkflow.assertions.svnMetadataAbsentAfter) "Checkout existing-target failure workflow should prove no .svn metadata was created."
@@ -7164,9 +7183,14 @@ try {
   Assert-Equal "subversionr.release.installed-source-control-ui-renderer-capture.v1" $report.checkoutExistingTargetFailureNotificationCapture.schema "Installed Source Control UI E2E evidence should include Checkout existing-target failure notification capture evidence."
   Assert-Equal "True" ([string]$report.checkoutExistingTargetFailureNotificationCapture.assertions.domRequiredTokensPresent) "Checkout existing-target failure notification capture should prove the failure notification text rendered before cleanup."
   Assert-Equal "True" ([string]$report.checkoutExistingTargetFailureNotificationCapture.assertions.accessibilityRequiredTokensPresent) "Checkout existing-target failure notification capture should prove the failure notification was accessibility-visible before cleanup."
+  Assert-Equal "True" ([string]$report.checkoutExistingTargetFailureNotificationCapture.assertions.domForbiddenTokensAbsent) "Checkout existing-target failure notification capture should exclude raw internal codes from DOM text."
+  Assert-Equal "True" ([string]$report.checkoutExistingTargetFailureNotificationCapture.assertions.accessibilityForbiddenTokensAbsent) "Checkout existing-target failure notification capture should exclude raw internal codes from accessibility text."
+  Assert-True (@($report.sourceControlUiCheckoutExistingTargetFailureWorkflow.notification.rendererCaptureExpectations.forbiddenDomTokens | Where-Object { $_ -eq "SVN_REPOSITORY_CHECKOUT_FAILED" }).Count -eq 1) "Checkout failure DOM expectations should forbid the native checkout error code."
+  Assert-True (@($report.sourceControlUiCheckoutExistingTargetFailureWorkflow.notification.rendererCaptureExpectations.forbiddenAccessibilityTokens | Where-Object { $_ -eq "SVN_REPOSITORY_CHECKOUT_FAILED" }).Count -eq 1) "Checkout failure accessibility expectations should forbid the native checkout error code."
   Assert-Equal "notifications.clearAll" $report.sourceControlUiCheckoutExistingTargetFailureWorkflow.notification.cleanup.command "Checkout existing-target failure workflow should clear the failure notification through the explicit VS Code command."
   Assert-Equal "subversionr.installedSourceControlUiE2eCheckoutInvalidUrlFailureWorkflow" $report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.kind "Installed Source Control UI E2E evidence should include a Checkout invalid URL failure workflow report."
   Assert-Equal "SVN_REPOSITORY_CHECKOUT_FAILED" $report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.failure.code "Checkout invalid URL failure workflow should record the native checkout failure code."
+  Assert-Equal "SVN Checkout failed. Open the SubversionR log for details." $report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.failure.notificationText "Checkout invalid URL failure workflow should record the safe actionable notification."
   Assert-Equal "True" ([string]$report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.assertions.commandFailed) "Checkout invalid URL failure workflow should prove the checkout command failed."
   Assert-Equal "True" ([string]$report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.assertions.targetAbsentAfter) "Checkout invalid URL failure workflow should prove the target working-copy root was not created."
   Assert-Equal "True" ([string]$report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.assertions.svnMetadataAbsentAfter) "Checkout invalid URL failure workflow should prove no .svn metadata was created."
@@ -7185,6 +7209,8 @@ try {
   Assert-Equal "subversionr.release.installed-source-control-ui-renderer-capture.v1" $report.checkoutInvalidUrlFailureNotificationCapture.schema "Installed Source Control UI E2E evidence should include Checkout invalid URL notification capture evidence."
   Assert-Equal "True" ([string]$report.checkoutInvalidUrlFailureNotificationCapture.assertions.domRequiredTokensPresent) "Checkout invalid URL notification capture should prove the failure notification text rendered before cleanup."
   Assert-Equal "True" ([string]$report.checkoutInvalidUrlFailureNotificationCapture.assertions.accessibilityRequiredTokensPresent) "Checkout invalid URL notification capture should prove the failure notification was accessibility-visible before cleanup."
+  Assert-Equal "True" ([string]$report.checkoutInvalidUrlFailureNotificationCapture.assertions.domForbiddenTokensAbsent) "Checkout invalid URL notification capture should exclude raw internal codes from DOM text."
+  Assert-Equal "True" ([string]$report.checkoutInvalidUrlFailureNotificationCapture.assertions.accessibilityForbiddenTokensAbsent) "Checkout invalid URL notification capture should exclude raw internal codes from accessibility text."
   Assert-Equal "notifications.clearAll" $report.sourceControlUiCheckoutInvalidUrlFailureWorkflow.notification.cleanup.command "Checkout invalid URL workflow should clear the failure notification through the explicit VS Code command."
   Assert-Equal "subversionr.installedSourceControlUiE2eUpdateToRevisionWorkflow" $report.sourceControlUiUpdateToRevisionWorkflow.kind "Installed Source Control UI E2E evidence should include an Update to Revision workflow report."
   Assert-Equal "subversionr.updateToRevision" $report.sourceControlUiUpdateToRevisionWorkflow.command.command "Update to Revision workflow should execute the installed Update to Revision command."
@@ -7923,6 +7949,46 @@ try {
     Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue
   }
 
+  $env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE = "forbidden-dom-token-lie"
+  try {
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+        -Target win32-x64 `
+        -VsixPath $vsixPath `
+        -CodeCliPath $fakeCodeCliPath `
+        -SvnToolsRoot $fakeSvnRoot `
+        -RendererCaptureDriverPath $fakeDriverPath `
+        -FixtureRoot (Join-Path $tempRoot "forbidden-dom-token-lie\win32-x64") `
+        -EvidencePath (Join-Path $tempRoot "evidence\forbidden-dom-token-lie.json") `
+        -RemoteDebuggingPort 32153 `
+        -ExtensionHostTimeoutSeconds 30 `
+        -UiReadyTimeoutSeconds 10
+    } "DOM artifact text contains forbidden tokens" "Installed Source Control UI E2E gate should inspect DOM artifacts instead of trusting forbidden-token assertions."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue
+  }
+
+  $env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE = "forbidden-accessibility-token-lie"
+  try {
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+        -Target win32-x64 `
+        -VsixPath $vsixPath `
+        -CodeCliPath $fakeCodeCliPath `
+        -SvnToolsRoot $fakeSvnRoot `
+        -RendererCaptureDriverPath $fakeDriverPath `
+        -FixtureRoot (Join-Path $tempRoot "forbidden-accessibility-token-lie\win32-x64") `
+        -EvidencePath (Join-Path $tempRoot "evidence\forbidden-accessibility-token-lie.json") `
+        -RemoteDebuggingPort 32154 `
+        -ExtensionHostTimeoutSeconds 30 `
+        -UiReadyTimeoutSeconds 10
+    } "Accessibility artifact text contains forbidden tokens" "Installed Source Control UI E2E gate should inspect accessibility artifacts instead of trusting forbidden-token assertions."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue
+  }
+
   $env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE = "partial-accessibility"
   try {
     Assert-NativeCommandFailsContaining {
@@ -8056,8 +8122,8 @@ try {
   Assert-True ($workflowContent -match '(?s)async function runCheckoutCancellationWorkflow.*?collectMissingCurrentSurfaceProbe.*?executeCommand\("subversionr\.checkoutRepository"\).*?checkoutCancellationPromptCaptureExpectations\(\).*?currentSurfaceProbes.*?targetAbsentAfter.*?sourceControlProjectionUnchanged') "Installed Source Control UI E2E harness should execute Checkout Repository, cancel the URL QuickInput, and prove no checkout state pollution through current-surface probes."
   Assert-True ($workflowContent -match "sourceControlUiCheckoutInvalidUrlFailureWorkflow") "Installed Source Control UI E2E evidence should publish the Checkout invalid URL failure workflow report."
   Assert-True ($workflowContent -match "checkoutInvalidUrlFailureNotificationCapture") "Installed Source Control UI E2E evidence should publish Checkout invalid URL failure notification renderer capture evidence."
-  Assert-True ($workflowContent -match '(?s)async function runCheckoutExistingTargetFailureWorkflow.*?checkoutFailureNotificationCaptureExpectations\(notificationCode\).*?clearWorkbenchNotificationsBeforePrompt\("checkoutExistingTargetFailureNotification"\).*?notificationCleanup') "Checkout existing-target failure should capture the notification and then clear it through the explicit VS Code notification cleanup command."
-  Assert-True ($workflowContent -match '(?s)async function runCheckoutInvalidUrlFailureWorkflow.*?checkoutFailureNotificationCaptureExpectations\(notificationCode\).*?clearWorkbenchNotificationsBeforePrompt\("checkoutInvalidUrlFailureNotification"\).*?notificationCleanup') "Checkout invalid-url failure should capture the notification and then clear it through the explicit VS Code notification cleanup command."
+  Assert-True ($workflowContent -match '(?s)async function runCheckoutExistingTargetFailureWorkflow.*?checkoutFailureNotificationCaptureExpectations\(\).*?clearWorkbenchNotificationsBeforePrompt\("checkoutExistingTargetFailureNotification"\).*?notificationCleanup') "Checkout existing-target failure should capture the notification and then clear it through the explicit VS Code notification cleanup command."
+  Assert-True ($workflowContent -match '(?s)async function runCheckoutInvalidUrlFailureWorkflow.*?checkoutFailureNotificationCaptureExpectations\(\).*?clearWorkbenchNotificationsBeforePrompt\("checkoutInvalidUrlFailureNotification"\).*?notificationCleanup') "Checkout invalid-url failure should capture the notification and then clear it through the explicit VS Code notification cleanup command."
   Assert-True ($workflowContent -match '(?s)writeResult\(\{\s*ok: true.*?checkoutExistingTargetFailureReport,\s*checkoutInvalidUrlFailureReport,\s*checkoutExistingDirectoryReport,\s*checkoutExistingDirectoryObstructionReport,\s*checkoutReport,') "Installed Source Control UI E2E final harness result should keep every Checkout workflow report required by the PowerShell evidence validator."
   Assert-True ($workflowContent -match '(?s)async function runCheckoutInvalidUrlFailureWorkflow.*?executeCommand\("subversionr\.checkoutRepository"\).*?SVN_REPOSITORY_CHECKOUT_FAILED.*?targetAbsentAfter.*?svnMetadataAbsentAfter.*?repositoryNotOpenedAfterFailure.*?sourceControlProjectionUnchanged') "Installed Source Control UI E2E harness should execute Checkout Repository with an invalid URL and prove failure without checkout state pollution."
   Assert-True ($workflowContent -match "sourceControlUiUpdateToRevisionCancellationWorkflow") "Installed Source Control UI E2E evidence should publish the Update to Revision cancellation workflow report."

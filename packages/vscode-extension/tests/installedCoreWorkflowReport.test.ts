@@ -11,6 +11,7 @@ describe("collectInstalledCoreWorkflowReport", () => {
     const session = repositorySession();
     const projection = scmProjection();
     const sessionService = {
+      listOpenSessions: vi.fn(() => []),
       openWorkingCopy: vi.fn(async () => session),
       closeRepository: vi.fn(async () => undefined),
     };
@@ -57,6 +58,7 @@ describe("collectInstalledCoreWorkflowReport", () => {
         repositoryOpen: true,
         statusSnapshot: true,
         scmProjection: true,
+        sessionSource: "report-open",
         repositoryClosed: true,
       },
       projection: {
@@ -94,8 +96,65 @@ describe("collectInstalledCoreWorkflowReport", () => {
     ]);
   });
 
+  it("uses the organically activated session for the requested working-copy root", async () => {
+    const session = repositorySession();
+    const sessionService = {
+      listOpenSessions: vi.fn(() => [session]),
+      openWorkingCopy: vi.fn(),
+      closeRepository: vi.fn(async () => undefined),
+    };
+
+    const report = await collectInstalledCoreWorkflowReport(
+      { path: "c:/FIXTURE/wc/" },
+      {
+        generatedAt: () => "2026-07-12T00:00:00Z",
+        extensionVersion: "0.2.3",
+        pathCasePolicy: () => "case-insensitive",
+        workspaceTrusted: () => true,
+        sessionService,
+        sourceControlProjection: {
+          getProjection: vi.fn(() => scmProjection()),
+        },
+      },
+    );
+
+    expect(sessionService.openWorkingCopy).not.toHaveBeenCalled();
+    expect(sessionService.closeRepository).not.toHaveBeenCalled();
+    expect(report.repository.repositoryId).toBe(session.repositoryId);
+    expect(report.backendWorkflow.sessionSource).toBe("organic-activation");
+    expect(report.backendWorkflow.repositoryClosed).toBe(false);
+  });
+
+  it("does not close an organically activated session when its projection is missing", async () => {
+    const session = repositorySession();
+    const sessionService = {
+      listOpenSessions: vi.fn(() => [session]),
+      openWorkingCopy: vi.fn(),
+      closeRepository: vi.fn(async () => undefined),
+    };
+
+    await expect(
+      collectInstalledCoreWorkflowReport(
+        { path: "C:\\fixture\\wc" },
+        {
+          generatedAt: () => "2026-07-12T00:00:00Z",
+          extensionVersion: "0.2.3",
+          pathCasePolicy: () => "case-insensitive",
+          workspaceTrusted: () => true,
+          sessionService,
+          sourceControlProjection: {
+            getProjection: vi.fn(() => undefined),
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(InstalledCoreWorkflowReportError);
+    expect(sessionService.openWorkingCopy).not.toHaveBeenCalled();
+    expect(sessionService.closeRepository).not.toHaveBeenCalled();
+  });
+
   it("rejects a missing path before opening a repository", async () => {
     const sessionService = {
+      listOpenSessions: vi.fn(() => []),
       openWorkingCopy: vi.fn(),
       closeRepository: vi.fn(),
     };
@@ -124,6 +183,7 @@ describe("collectInstalledCoreWorkflowReport", () => {
   it("closes the opened repository when the SCM projection is missing", async () => {
     const session = repositorySession();
     const sessionService = {
+      listOpenSessions: vi.fn(() => []),
       openWorkingCopy: vi.fn(async () => session),
       closeRepository: vi.fn(async () => undefined),
     };
@@ -149,6 +209,7 @@ describe("collectInstalledCoreWorkflowReport", () => {
   it("closes the opened repository when the SCM projection belongs to another epoch", async () => {
     const session = repositorySession();
     const sessionService = {
+      listOpenSessions: vi.fn(() => []),
       openWorkingCopy: vi.fn(async () => session),
       closeRepository: vi.fn(async () => undefined),
     };
@@ -187,6 +248,7 @@ describe("collectInstalledCoreWorkflowReport", () => {
     const session = repositorySession();
     const closeError = new Error("close failed");
     const sessionService = {
+      listOpenSessions: vi.fn(() => []),
       openWorkingCopy: vi.fn(async () => session),
       closeRepository: vi.fn(async () => {
         throw closeError;

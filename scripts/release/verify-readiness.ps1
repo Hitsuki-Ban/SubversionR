@@ -448,16 +448,16 @@ function Invoke-RequirementEvidenceRuleChecks() {
     Assert-RequirementEvidenceStatus $requirementsEvidence $id "blocked"
   }
   foreach ($id in @("SEC-015", "MIG-010", "MIG-012")) {
-    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.2.md"
+    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.3.md"
   }
-  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.2.md"
+  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.3.md"
   Assert-Terms $marketplaceOwnerException @(
-    "# Marketplace 0.2.2 Pre-release Owner Exception",
+    "# Marketplace 0.2.3 Pre-release Owner Exception",
     "public issues [#14]",
-    "[#26]",
-    'release tag: `v0.2.2-beta.1`',
-    'asset name: `subversionr-win32-x64-0.2.2.vsix`',
-    "47d6d9718614bb2e81706af2096e7387fadeeec34db7d6867c3233c8206dc378",
+    "[#43]",
+    'release tag: `v0.2.3-beta.1`',
+    'asset name: `subversionr-win32-x64-0.2.3.vsix`',
+    "f99b52d7b5c2b881796ddb66aa141e2ae44edcebe70a2925abdf3457b14d6db4",
     '`SEC-015`, `MIG-010`, and `MIG-012`',
     "It cannot transfer to different bytes, another tag, or a later version",
     "does not claim public release readiness"
@@ -6511,6 +6511,7 @@ Assert-Terms $attestationWorkflow @(
   "contents: read",
   "id-token: write",
   "attestations: write",
+  "artifact-metadata: write",
   'group: release-vsix-attestation-${{ inputs.release_tag }}',
   "cancel-in-progress: false",
   "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
@@ -6747,7 +6748,7 @@ Assert-Terms $releaseGates @(
   "explicit CI upload allowlist",
   "subversionr-win32-x64-beta-candidate",
   "actions/upload-artifact@v7",
-  'does not claim the `0.2.2` release or live attestation exists',
+  'does not claim the `0.2.3` release or live attestation exists',
   "coverage-guided fuzzing"
 ) "Beta-G candidate evidence release gate documentation"
 Assert-Terms $m7Plan @(
@@ -7127,7 +7128,7 @@ Assert-Terms $m7Plan @(
   "pnpm release:verify-publication-gaps:win32-x64",
   "pnpm release:test-marketplace-publication-scripts",
   "subversionr.release.marketplace-publication.win32-x64.v1",
-  "docs/release/marketplace-pre-release-owner-exception-0.2.2.md",
+  "docs/release/marketplace-pre-release-owner-exception-0.2.3.md",
   "docs/release/github-attestation-candidate-contract.win32-x64.json",
   "docs/release/marketplace-identity-bootstrap-evidence.json",
   "docs/release/marketplace-publisher-authorization-evidence.json",

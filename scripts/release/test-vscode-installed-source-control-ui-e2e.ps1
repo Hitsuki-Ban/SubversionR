@@ -1788,7 +1788,7 @@ function validateLastCompletedRefreshCoverageSet(report, openReport, expectedTar
     const target = coverageReport.targets[index];
     const coverage = coverageReport.coverage[index];
     if (target.path !== expected.path || target.depth !== expected.depth || target.reason !== expected.reason) {
-      throw new Error(`Installed Source Control UI E2E completed refresh target mismatch for ${expected.path}.`);
+      throw new Error(`Installed Source Control UI E2E completed refresh target mismatch for ${expected.path}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(target)}.`);
     }
     if (
       coverage.path !== expected.path ||
@@ -5864,10 +5864,13 @@ function checkoutCancellationPromptCaptureExpectations() {
   };
 }
 
-function checkoutFailureNotificationCaptureExpectations(errorCode) {
+function checkoutFailureNotificationCaptureExpectations() {
+  const notificationText = "SVN Checkout failed. Open the SubversionR log for details.";
   return {
-    requiredDomTokens: ["SubversionR repository command failed", errorCode],
-    requiredAccessibilityTokens: ["SubversionR repository command failed", errorCode],
+    requiredDomTokens: [notificationText, "Show Log"],
+    requiredAccessibilityTokens: [notificationText, "Show Log"],
+    forbiddenDomTokens: ["SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED"],
+    forbiddenAccessibilityTokens: ["SubversionR repository command failed", "SUBVERSIONR_REPOSITORY_COMMAND_FAILED", "SVN_REPOSITORY_CHECKOUT_FAILED"],
     requiredScreenshot: true
   };
 }
@@ -6140,8 +6143,8 @@ async function runCheckoutExistingTargetFailureWorkflow(repositoryUrl, baselineW
   await commandPromise;
 
   const failureCode = "SVN_REPOSITORY_CHECKOUT_FAILED";
-  const notificationCode = "SUBVERSIONR_REPOSITORY_COMMAND_FAILED";
-  const notificationPrompt = checkoutFailureNotificationCaptureExpectations(notificationCode);
+  const notificationText = "SVN Checkout failed. Open the SubversionR log for details.";
+  const notificationPrompt = checkoutFailureNotificationCaptureExpectations();
   await publishCheckoutPromptReadyAndWait(promptPaths.notificationReady, promptPaths.notificationDone, {
     ok: true,
     phase: "checkoutExistingTargetFailureNotificationReady",
@@ -6150,7 +6153,7 @@ async function runCheckoutExistingTargetFailureWorkflow(repositoryUrl, baselineW
     failure: {
       code: failureCode,
       category: "native",
-      notificationText: `SubversionR repository command failed: ${notificationCode}`
+      notificationText
     },
     notification: {
       rendererCaptureExpectations: notificationPrompt
@@ -6212,7 +6215,7 @@ async function runCheckoutExistingTargetFailureWorkflow(repositoryUrl, baselineW
     failure: {
       code: failureCode,
       category: "native",
-      notificationText: `SubversionR repository command failed: ${notificationCode}`
+      notificationText
     },
     notification: {
       rendererCaptureExpectations: notificationPrompt,
@@ -6353,8 +6356,8 @@ async function runCheckoutInvalidUrlFailureWorkflow(repositoryUrl, baselineWorki
   await commandPromise;
 
   const failureCode = "SVN_REPOSITORY_CHECKOUT_FAILED";
-  const notificationCode = "SUBVERSIONR_REPOSITORY_COMMAND_FAILED";
-  const notificationPrompt = checkoutFailureNotificationCaptureExpectations(notificationCode);
+  const notificationText = "SVN Checkout failed. Open the SubversionR log for details.";
+  const notificationPrompt = checkoutFailureNotificationCaptureExpectations();
   await publishCheckoutPromptReadyAndWait(promptPaths.notificationReady, promptPaths.notificationDone, {
     ok: true,
     phase: "checkoutInvalidUrlFailureNotificationReady",
@@ -6363,7 +6366,7 @@ async function runCheckoutInvalidUrlFailureWorkflow(repositoryUrl, baselineWorki
     failure: {
       code: failureCode,
       category: "native",
-      notificationText: `SubversionR repository command failed: ${notificationCode}`
+      notificationText
     },
     notification: {
       rendererCaptureExpectations: notificationPrompt
@@ -6424,7 +6427,7 @@ async function runCheckoutInvalidUrlFailureWorkflow(repositoryUrl, baselineWorki
     failure: {
       code: failureCode,
       category: "native",
-      notificationText: `SubversionR repository command failed: ${notificationCode}`
+      notificationText
     },
     notification: {
       rendererCaptureExpectations: notificationPrompt,
@@ -10198,6 +10201,13 @@ function Assert-TextContainsTokens([string]$Text, [string[]]$Tokens, [string]$Na
   }
 }
 
+function Assert-TextExcludesTokens([string]$Text, [string[]]$Tokens, [string]$Name) {
+  $present = @($Tokens | Where-Object { $Text.Contains($_) })
+  if ($present.Count -gt 0) {
+    throw "$Name artifact text contains forbidden tokens: $($present -join ', ')"
+  }
+}
+
 function Get-PngPixelEvidence([string]$Path) {
   Add-Type -AssemblyName System.Drawing
   $bitmap = [System.Drawing.Bitmap]::new($Path)
@@ -10233,23 +10243,41 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
   $captureExpectations = $OpenReport.rendererCaptureExpectations
   $expectedDomTokens = Assert-TokenArray -Tokens $captureExpectations.requiredDomTokens -Name "Open report DOM expectations"
   $expectedAccessibilityTokens = Assert-TokenArray -Tokens $captureExpectations.requiredAccessibilityTokens -Name "Open report accessibility expectations"
+  $expectedForbiddenDomTokens = @()
+  if ($captureExpectations.PSObject.Properties.Name -contains "forbiddenDomTokens") {
+    $expectedForbiddenDomTokens = @(Assert-TokenArray -Tokens $captureExpectations.forbiddenDomTokens -Name "Open report forbidden DOM expectations")
+  }
+  $expectedForbiddenAccessibilityTokens = @()
+  if ($captureExpectations.PSObject.Properties.Name -contains "forbiddenAccessibilityTokens") {
+    $expectedForbiddenAccessibilityTokens = @(Assert-TokenArray -Tokens $captureExpectations.forbiddenAccessibilityTokens -Name "Open report forbidden accessibility expectations")
+  }
   $domPath = Assert-ArtifactHash -CaptureRoot $CaptureRoot -Artifact $Capture.artifacts.dom -Name "DOM"
   $accessibilityPath = Assert-ArtifactHash -CaptureRoot $CaptureRoot -Artifact $Capture.artifacts.accessibility -Name "accessibility"
   $screenshotPath = Assert-ArtifactHash -CaptureRoot $CaptureRoot -Artifact $Capture.artifacts.screenshot -Name "screenshot"
   Assert-TokenListsEqual -Expected $expectedDomTokens -Actual $Capture.artifacts.dom.requiredTokens -Name "Renderer capture DOM requiredTokens"
   Assert-TokenListsEqual -Expected $expectedAccessibilityTokens -Actual $Capture.artifacts.accessibility.requiredTokens -Name "Renderer capture accessibility requiredTokens"
+  Assert-TokenListsEqual -Expected $expectedForbiddenDomTokens -Actual $Capture.artifacts.dom.forbiddenTokens -Name "Renderer capture DOM forbiddenTokens"
+  Assert-TokenListsEqual -Expected $expectedForbiddenAccessibilityTokens -Actual $Capture.artifacts.accessibility.forbiddenTokens -Name "Renderer capture accessibility forbiddenTokens"
   $domText = Get-Content -Raw -LiteralPath $domPath
   $accessibilityText = Get-Content -Raw -LiteralPath $accessibilityPath
   Assert-TextContainsTokens -Text $domText -Tokens $expectedDomTokens -Name "DOM"
   Assert-TextContainsTokens -Text $accessibilityText -Tokens $expectedAccessibilityTokens -Name "Accessibility"
+  Assert-TextExcludesTokens -Text $domText -Tokens $expectedForbiddenDomTokens -Name "DOM"
+  Assert-TextExcludesTokens -Text $accessibilityText -Tokens $expectedForbiddenAccessibilityTokens -Name "Accessibility"
   if (@($Capture.artifacts.dom.missingTokens).Count -ne 0) {
     throw "Renderer capture DOM report must not list missing tokens."
   }
   if (@($Capture.artifacts.accessibility.missingTokens).Count -ne 0) {
     throw "Renderer capture accessibility report must not list missing tokens."
   }
+  if (@($Capture.artifacts.dom.presentForbiddenTokens).Count -ne 0 -or @($Capture.artifacts.accessibility.presentForbiddenTokens).Count -ne 0) {
+    throw "Renderer capture reports must not list present forbidden tokens."
+  }
   if ($Capture.assertions.domRequiredTokensPresent -ne $true -or $Capture.assertions.accessibilityRequiredTokensPresent -ne $true) {
     throw "Renderer capture token assertions must prove required DOM and accessibility tokens."
+  }
+  if ($Capture.assertions.domForbiddenTokensAbsent -ne $true -or $Capture.assertions.accessibilityForbiddenTokensAbsent -ne $true) {
+    throw "Renderer capture token assertions must prove forbidden DOM and accessibility tokens are absent."
   }
   if ($Capture.assertions.screenshotCaptured -ne $true -or $Capture.assertions.screenshotNonBlank -ne $true) {
     throw "Renderer capture screenshot assertions must prove captured nonblank pixels."

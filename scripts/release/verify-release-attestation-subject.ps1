@@ -100,7 +100,7 @@ Assert-Equal ".github/workflows/attest-release-vsix.yml" ([string](Get-RequiredP
 Assert-Equal "ubuntu-24.04" ([string](Get-RequiredProperty $workflow "runner" "Attestation contract workflow")) "Attestation workflow runner must match."
 Assert-Equal "workflow_dispatch" ([string](Get-RequiredProperty $workflow "trigger" "Attestation contract workflow")) "Attestation workflow trigger must match."
 $requiredPermissions = @($workflow.requiredPermissions | ForEach-Object { [string]$_ })
-$expectedPermissions = @("contents: read", "id-token: write", "attestations: write")
+$expectedPermissions = @("contents: read", "id-token: write", "attestations: write", "artifact-metadata: write")
 Assert-Equal $expectedPermissions.Count $requiredPermissions.Count "Attestation workflow must record exactly the required permissions."
 foreach ($permission in $expectedPermissions) {
   Assert-Equal 1 @($requiredPermissions | Where-Object { $_ -eq $permission }).Count "Attestation workflow permission '$permission' must be recorded exactly once."

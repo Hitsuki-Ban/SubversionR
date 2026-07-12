@@ -133,7 +133,7 @@ if ($null -eq $installedPackage) {
   phase = "complete"
   id = "hitsuki-ban.subversionr"
   version = "0.2.0"
-  beforeActive = $false
+  beforeActive = $true
   afterActive = $true
   extensionPath = $installedPackage.FullName
   source = "installed-vsix"
@@ -168,7 +168,8 @@ if ($null -eq $installedPackage) {
       repositoryOpen = $true
       statusSnapshot = $true
       scmProjection = $true
-      repositoryClosed = $true
+      sessionSource = "organic-activation"
+      repositoryClosed = $false
     }
     projection = [pscustomobject]@{
       generation = 1
@@ -320,7 +321,8 @@ try {
   }
 
   $report = Get-Content -Raw -LiteralPath $evidencePath | ConvertFrom-Json
-  Assert-Equal "subversionr.release.installed-core-workflow.win32-x64.v1" $report.schema "Installed core workflow evidence should use the M7i schema."
+  Assert-Equal "2" ([string]$report.schemaVersion) "Installed core workflow evidence should use schema version 2."
+  Assert-Equal "subversionr.release.installed-core-workflow.win32-x64.v2" $report.schema "Installed core workflow evidence should use the organic-session M7i schema."
   Assert-Equal "False" ([string]$report.publicReadinessClaim) "Installed core workflow evidence must not claim public readiness."
   Assert-Equal "win32-x64" $report.target "Installed core workflow evidence should record the target."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Installed core workflow evidence should record the extension id."
@@ -336,7 +338,8 @@ try {
   Assert-Equal "subversionr.versionReport" $report.versionReport.kind "Installed core workflow evidence should include a version report."
   Assert-Equal "initialized" $report.versionReport.backend.status "Installed core workflow evidence should require an initialized backend."
   Assert-Equal "1.14.5" $report.versionReport.backend.libsvnVersion "Installed core workflow evidence should require libsvn 1.14.5."
-  Assert-Equal "True" ([string]$report.workflowReport.backendWorkflow.repositoryClosed) "Installed core workflow evidence should prove repository close."
+  Assert-Equal "organic-activation" $report.workflowReport.backendWorkflow.sessionSource "Installed core workflow evidence should prove organic-session reuse."
+  Assert-Equal "False" ([string]$report.workflowReport.backendWorkflow.repositoryClosed) "Installed core workflow evidence should prove the organic session remains open."
   Assert-True (@($report.workflowReport.projection.groups | Where-Object { $_.id -eq "changes" }).Count -eq 1) "Installed core workflow evidence should include changes group."
   Assert-True (@($report.workflowReport.projection.groups | Where-Object { $_.id -eq "unversioned" }).Count -eq 1) "Installed core workflow evidence should include unversioned group."
   Assert-True ($report.codeCli.sha256 -match '^[a-f0-9]{64}$') "Installed core workflow evidence should record the Code CLI hash."

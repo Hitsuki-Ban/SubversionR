@@ -180,13 +180,13 @@ This slice intentionally does not require successful Rust sidecar initialization
 
 The ninth M7 slice adds the first sidecar-backed installed-product core workflow gate for `win32-x64` without claiming public release readiness:
 
-- `subversionr.diagnostics.installedCoreWorkflowReport` is a hidden release diagnostics command. It opens an explicit absolute working-copy path through the repository session service, requires a matching SCM projection, returns stable evidence for repository identity, status snapshot, SCM projection groups, and closes the repository before returning.
+- `subversionr.diagnostics.installedCoreWorkflowReport` is a hidden release diagnostics command. It requires organic activation to have already opened the explicit absolute working-copy path, reuses that owned session without closing it, requires a matching SCM projection, and returns stable evidence for repository identity, session source, status snapshot, and SCM projection groups.
 - `scripts/release/test-vscode-installed-core-workflow.ps1` creates a local file-backed SVN repository and working copy with the source-built Apache Subversion 1.14.5 fixture tools from `.cache/native/stage/subversion-win-x64/bin`. The generated VSIX remains the product under test and does not package or use `svn.exe`/`svnadmin.exe`.
 - The fixture commits `src/tracked.txt`, checks out a real working copy, modifies the tracked file, adds an unversioned `scratch.txt`, and opens that working copy as the VS Code workspace.
 - The fixture uses dedicated SVN CLI config and fixture-local `APPDATA/Subversion` roots so the installed VSIX and sidecar do not inherit the developer or CI user's Subversion runtime configuration.
 - The installed Extension Host harness runs from a separate test extension only as the `--extensionDevelopmentPath` runner. SubversionR must load from the isolated installed VSIX package root.
-- The harness executes `subversionr.diagnostics.installedCoreWorkflowReport`, requires backend open/status/projection/close evidence, asserts SCM projection resources for the modified tracked file and unversioned file, then executes `subversionr.diagnostics.versionReport` and requires backend status `initialized`, libsvn `1.14.5`, and repository/status/real-bridge capabilities.
-- Evidence is written as `subversionr.release.installed-core-workflow.win32-x64.v1` with `publicReadinessClaim: false`, Code CLI hash/version, VSIX hash/target, source-built fixture tool hashes/versions, isolated roots, workflow report, version report, explicit non-claims, and trace IDs `MIG-009` and `TST-024`.
+- The harness executes `subversionr.diagnostics.installedCoreWorkflowReport`, requires backend open/status/projection plus organic-session reuse/preservation evidence, asserts SCM projection resources for the modified tracked file and unversioned file, then executes `subversionr.diagnostics.versionReport` and requires backend status `initialized`, libsvn `1.14.5`, and repository/status/real-bridge capabilities.
+- Evidence is written as `subversionr.release.installed-core-workflow.win32-x64.v2` with `publicReadinessClaim: false`, Code CLI hash/version, VSIX hash/target, source-built fixture tool hashes/versions, isolated roots, organic-session reuse/preservation proof, workflow report, version report, explicit non-claims, and trace IDs `MIG-009` and `TST-024`.
 - Script-level fixture tests cover the M7i evidence schema, root package scripts, CI wiring, fake VSIX/fake Code/fake source-built SVN tools, unresolved Code/SVN placeholders, fixture-root containment, target-platform mismatch, non-1.14.5 SVN tools, and Extension Host timeout handling.
 - Windows CI runs the installed core workflow script tests and then runs the real installed VSIX core workflow gate after VSIX packaging, CLI installation, and the M7h installed Extension Host version-report gate.
 
@@ -413,6 +413,17 @@ Issue [#26](https://github.com/Hitsuki-Ban/SubversionR/issues/26) preserves the 
 - `docs/release/github-attestation-candidate-contract.win32-x64.json` bound the then-pending `v0.2.2-beta.1` subject at 8,251,930 bytes with SHA256 `47d6d9718614bb2e81706af2096e7387fadeeec34db7d6867c3233c8206dc378`;
 - `docs/release/marketplace-pre-release-owner-exception-0.2.2.md` scopes the one automated publication authorization to the exact 0.2.2 bytes; and
 - [`docs/release/0.2.2-publication-evidence.md`](../release/0.2.2-publication-evidence.md) records the completed GitHub release, live custom-predicate attestation, Marketplace publish workflow, and public Gallery state. Signing, signed source-to-binary provenance, previous-stable rollback, final legal and vulnerability approval, and public readiness remain separate open gates.
+
+## 0.2.3 Actionable Core-loop Candidate
+
+The 0.2.3 candidate preserves the published `SVN-R` Marketplace identity and packages the completed activation, on-demand remote status, conflict-aware Update, and actionable operation-failure slices:
+
+- root and extension versions are `0.2.3`; the extension version remains plain `major.minor.patch`, while the GitHub pre-release tag is `v0.2.3-beta.1`;
+- `vsce package --target win32-x64 --pre-release` bakes exactly one `Microsoft.VisualStudio.Code.PreRelease=true` property into the candidate before its bytes are hashed;
+- the deterministic subject is `subversionr-win32-x64-0.2.3.vsix`, 8,287,085 bytes, SHA256 `f99b52d7b5c2b881796ddb66aa141e2ae44edcebe70a2925abdf3457b14d6db4`;
+- `docs/release/github-attestation-candidate-contract.win32-x64.json` records the pending release/attestation contract and requires `artifact-metadata: write` in addition to the existing GitHub attestation permissions;
+- `docs/release/marketplace-pre-release-owner-exception-0.2.3.md` authorizes only those exact bytes; and
+- the candidate state does not claim that the GitHub release, live attestation, Marketplace publication, or Gallery propagation exists. Those facts must be recorded only after the post-merge chain succeeds.
 
 ## M7l1 Implemented Slice
 

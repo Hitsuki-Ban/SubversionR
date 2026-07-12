@@ -25,6 +25,11 @@ const accessibilityTokens = requiredTokenArray(
   expectations.requiredAccessibilityTokens,
   "requiredAccessibilityTokens",
 );
+const forbiddenDomTokens = optionalTokenArray(expectations.forbiddenDomTokens, "forbiddenDomTokens");
+const forbiddenAccessibilityTokens = optionalTokenArray(
+  expectations.forbiddenAccessibilityTokens,
+  "forbiddenAccessibilityTokens",
+);
 const clickButtonText = optionalString(expectations.clickButtonText, "clickButtonText");
 const inputText = optionalString(expectations.inputText, "inputText");
 const submitKey = optionalString(expectations.submitKey, "submitKey");
@@ -77,6 +82,8 @@ try {
 
     const domMatches = matchTokens(domText, domTokens);
     const accessibilityMatches = matchTokens(accessibilityText, accessibilityTokens);
+    const forbiddenDomMatches = matchTokens(domText, forbiddenDomTokens);
+    const forbiddenAccessibilityMatches = matchTokens(accessibilityText, forbiddenAccessibilityTokens);
     const interaction =
       clickButtonText !== undefined
         ? await clickButtonByText(cdp, clickButtonText, domTokens)
@@ -119,11 +126,15 @@ try {
           requiredTokens: domTokens,
           matchedTokens: domMatches.matched,
           missingTokens: domMatches.missing,
+          forbiddenTokens: forbiddenDomTokens,
+          presentForbiddenTokens: forbiddenDomMatches.matched,
         }),
         accessibility: artifact("captured", outputRoot, accessibilityPath, {
           requiredTokens: accessibilityTokens,
           matchedTokens: accessibilityMatches.matched,
           missingTokens: accessibilityMatches.missing,
+          forbiddenTokens: forbiddenAccessibilityTokens,
+          presentForbiddenTokens: forbiddenAccessibilityMatches.matched,
         }),
         screenshot: artifact("captured", outputRoot, screenshotPath, {
           width: screenshotInfo.width,
@@ -137,6 +148,8 @@ try {
       assertions: {
         domRequiredTokensPresent: domMatches.missing.length === 0,
         accessibilityRequiredTokensPresent: accessibilityMatches.missing.length === 0,
+        domForbiddenTokensAbsent: forbiddenDomMatches.matched.length === 0,
+        accessibilityForbiddenTokensAbsent: forbiddenAccessibilityMatches.matched.length === 0,
         screenshotCaptured: true,
         screenshotNonBlank: screenshotInfo.nonBlank,
         ...(interaction && clickButtonText !== undefined ? { clickButtonCompleted: interaction.clicked } : {}),
@@ -160,6 +173,12 @@ try {
     }
     if (accessibilityMatches.missing.length > 0) {
       failures.push(`accessibility tree missing tokens: ${accessibilityMatches.missing.join(", ")}`);
+    }
+    if (forbiddenDomMatches.matched.length > 0) {
+      failures.push(`DOM snapshot contains forbidden tokens: ${forbiddenDomMatches.matched.join(", ")}`);
+    }
+    if (forbiddenAccessibilityMatches.matched.length > 0) {
+      failures.push(`accessibility tree contains forbidden tokens: ${forbiddenAccessibilityMatches.matched.join(", ")}`);
     }
     if (!screenshotInfo.nonBlank) {
       failures.push("screenshot PNG pixel sample was blank");
@@ -188,6 +207,8 @@ try {
       assertions: {
         domRequiredTokensPresent: false,
         accessibilityRequiredTokensPresent: false,
+        domForbiddenTokensAbsent: false,
+        accessibilityForbiddenTokensAbsent: false,
         screenshotCaptured: false,
         screenshotNonBlank: false,
       },
@@ -276,6 +297,16 @@ function requiredTokenArray(value, name) {
     value.some((token) => typeof token !== "string" || token.trim().length === 0)
   ) {
     throw new Error(`${name} must be a non-empty string array.`);
+  }
+  return value;
+}
+
+function optionalTokenArray(value, name) {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.some((token) => typeof token !== "string" || token.trim().length === 0)) {
+    throw new Error(`${name} must be a string array when provided.`);
   }
   return value;
 }

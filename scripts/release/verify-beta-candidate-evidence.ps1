@@ -317,7 +317,7 @@ function New-BetaArtifactBundleFileRecord([string]$Path, [string]$Role) {
 
 function Get-ExpectedUploadPaths([string]$Target) {
   @(
-    "target/vsix/subversionr-win32-x64-0.2.2.vsix",
+    "target/vsix/subversionr-win32-x64-0.2.3.vsix",
     "target/release-evidence/subversionr-source-sbom.cdx.json",
     "target/release-evidence/subversionr-vsix-package-$Target.json",
     "target/release-evidence/subversionr-vsix-cli-install-$Target.json",
@@ -1234,7 +1234,7 @@ Add-VerifiedEvidence $vsixCliInstall "cli-installed-vsix-sha256-and-entrypoint-m
 
 $installedEvidenceSpecs = @(
   @{ FileName = "subversionr-installed-extension-host-$Target.json"; Name = "installedExtensionHost"; Schema = "subversionr.release.installed-extension-host.$Target.v1" },
-  @{ FileName = "subversionr-installed-core-workflow-$Target.json"; Name = "installedCoreWorkflow"; Schema = "subversionr.release.installed-core-workflow.$Target.v1" },
+  @{ FileName = "subversionr-installed-core-workflow-$Target.json"; Name = "installedCoreWorkflow"; Schema = "subversionr.release.installed-core-workflow.$Target.v2" },
   @{ FileName = "subversionr-installed-source-control-surface-$Target.json"; Name = "installedSourceControlSurface"; Schema = "subversionr.release.installed-source-control-surface.$Target.v1" },
   @{ FileName = "subversionr-installed-source-control-ui-e2e-$Target.json"; Name = "installedSourceControlUiE2e"; Schema = "subversionr.release.installed-source-control-ui-e2e.$Target.v1" }
 )
@@ -1347,7 +1347,7 @@ Assert-Equal (Split-Path -Leaf $vsixResolved) (Get-RequiredString $candidateAtte
 Assert-Equal ([string]$vsixSize) ([string](Get-RequiredProperty $candidateAttestation "subjectSize" "marketplaceProvenance.candidateAttestation")) "marketplaceProvenance candidate attestation size must match current VSIX."
 Assert-RequiredBooleanTrue $candidateAttestation "preReleaseProperty" "marketplaceProvenance.candidateAttestation"
 Assert-RequiredBooleanFalse $candidateAttestation "liveEvidenceRecorded" "marketplaceProvenance.candidateAttestation"
-Assert-Equal "v0.2.2-beta.1" (Get-RequiredString $candidateAttestation "releaseTag" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate release tag must match."
+Assert-Equal "v0.2.3-beta.1" (Get-RequiredString $candidateAttestation "releaseTag" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate release tag must match."
 $candidateContractEvidence = Get-RequiredProperty $provenanceEvidence "candidateAttestationContract" "marketplaceProvenance.evidence"
 Assert-Equal (Get-RequiredString $candidateContractEvidence "path" "marketplaceProvenance.evidence.candidateAttestationContract") (Get-RequiredString $candidateAttestation "contractPath" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate contract path must match hash-bound evidence."
 Assert-Equal (Get-RequiredString $candidateContractEvidence "sha256" "marketplaceProvenance.evidence.candidateAttestationContract") (Get-RequiredString $candidateAttestation "contractSha256" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate contract SHA256 must match hash-bound evidence."
