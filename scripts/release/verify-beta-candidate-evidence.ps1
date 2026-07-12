@@ -1234,7 +1234,7 @@ Add-VerifiedEvidence $vsixCliInstall "cli-installed-vsix-sha256-and-entrypoint-m
 
 $installedEvidenceSpecs = @(
   @{ FileName = "subversionr-installed-extension-host-$Target.json"; Name = "installedExtensionHost"; Schema = "subversionr.release.installed-extension-host.$Target.v1" },
-  @{ FileName = "subversionr-installed-core-workflow-$Target.json"; Name = "installedCoreWorkflow"; Schema = "subversionr.release.installed-core-workflow.$Target.v1" },
+  @{ FileName = "subversionr-installed-core-workflow-$Target.json"; Name = "installedCoreWorkflow"; Schema = "subversionr.release.installed-core-workflow.$Target.v2" },
   @{ FileName = "subversionr-installed-source-control-surface-$Target.json"; Name = "installedSourceControlSurface"; Schema = "subversionr.release.installed-source-control-surface.$Target.v1" },
   @{ FileName = "subversionr-installed-source-control-ui-e2e-$Target.json"; Name = "installedSourceControlUiE2e"; Schema = "subversionr.release.installed-source-control-ui-e2e.$Target.v1" }
 )

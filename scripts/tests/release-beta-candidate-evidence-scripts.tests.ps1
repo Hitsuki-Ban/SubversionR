@@ -149,10 +149,10 @@ function New-BetaArtifactBundleManifest([object]$Fixture) {
   }
 }
 
-function Write-InstalledEvidence([string]$EvidenceRoot, [string]$Name, [string]$SchemaName, [object]$Vsix) {
+function Write-InstalledEvidence([string]$EvidenceRoot, [string]$Name, [string]$SchemaName, [object]$Vsix, [int]$SchemaVersion = 1) {
   Write-Json (New-EvidencePath $EvidenceRoot $Name) ([pscustomobject]@{
-    schemaVersion = 1
-    schema = "subversionr.release.$SchemaName.win32-x64.v1"
+    schemaVersion = $SchemaVersion
+    schema = "subversionr.release.$SchemaName.win32-x64.v$SchemaVersion"
     publicReadinessClaim = $false
     target = "win32-x64"
     extension = [pscustomobject]@{
@@ -440,7 +440,7 @@ function New-BetaCandidateFixture([string]$Root) {
   })
 
   Write-InstalledEvidence $evidenceRoot "installed-extension-host" "installed-extension-host" $vsix
-  Write-InstalledEvidence $evidenceRoot "installed-core-workflow" "installed-core-workflow" $vsix
+  Write-InstalledEvidence $evidenceRoot "installed-core-workflow" "installed-core-workflow" $vsix 2
   Write-InstalledEvidence $evidenceRoot "installed-source-control-surface" "installed-source-control-surface" $vsix
   Write-InstalledSourceControlUiE2eEvidence $evidenceRoot $vsix
 

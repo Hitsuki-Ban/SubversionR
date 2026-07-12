@@ -321,7 +321,8 @@ try {
   }
 
   $report = Get-Content -Raw -LiteralPath $evidencePath | ConvertFrom-Json
-  Assert-Equal "subversionr.release.installed-core-workflow.win32-x64.v1" $report.schema "Installed core workflow evidence should use the M7i schema."
+  Assert-Equal "2" ([string]$report.schemaVersion) "Installed core workflow evidence should use schema version 2."
+  Assert-Equal "subversionr.release.installed-core-workflow.win32-x64.v2" $report.schema "Installed core workflow evidence should use the organic-session M7i schema."
   Assert-Equal "False" ([string]$report.publicReadinessClaim) "Installed core workflow evidence must not claim public readiness."
   Assert-Equal "win32-x64" $report.target "Installed core workflow evidence should record the target."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Installed core workflow evidence should record the extension id."

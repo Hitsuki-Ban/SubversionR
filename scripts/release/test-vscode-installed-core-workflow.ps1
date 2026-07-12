@@ -737,8 +737,8 @@ Assert-HarnessResult -Result $harnessResult -ExpectedVersion $extensionVersion -
 $svnTreeAfterSha256 = Get-DirectoryTreeSha256 $fixture.svnRoot
 
 $report = [pscustomobject]@{
-  schemaVersion = 1
-  schema = "subversionr.release.installed-core-workflow.win32-x64.v1"
+  schemaVersion = 2
+  schema = "subversionr.release.installed-core-workflow.win32-x64.v2"
   publicReadinessClaim = $false
   target = $Target
   traceIds = @("MIG-009", "TST-024")
@@ -831,7 +831,7 @@ $report = [pscustomobject]@{
     "SubversionR opened the real fixture working copy through its Rust sidecar and libsvn bridge",
     "SubversionR produced SCM projection resources for a modified tracked file and an unversioned file",
     "SubversionR produced exactly the expected non-empty SCM projection groups for this local-only cold-start fixture",
-    "SubversionR closed the repository before returning the installed core workflow report",
+    "SubversionR reused and preserved the organically activated repository session",
     "SubversionR version report backend status was initialized with libsvn 1.14.5",
     "publicReadinessClaim remains false"
   )
