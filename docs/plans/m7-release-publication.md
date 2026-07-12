@@ -410,9 +410,9 @@ Issue [#26](https://github.com/Hitsuki-Ban/SubversionR/issues/26) preserves the 
 - root and extension versions are `0.2.2`, and the exact Marketplace package `displayName` is `SVN-R`;
 - SubversionR remains the product and brand name in README, diagnostics, SBOM, NOTICE, and Source Control UI surfaces;
 - the extension id remains `hitsuki-ban.subversionr`, with no command, protocol, or compatibility aliases;
-- `docs/release/github-attestation-candidate-contract.win32-x64.json` binds the pending `v0.2.2-beta.1` subject at 8,251,930 bytes with SHA256 `47d6d9718614bb2e81706af2096e7387fadeeec34db7d6867c3233c8206dc378`;
+- `docs/release/github-attestation-candidate-contract.win32-x64.json` bound the then-pending `v0.2.2-beta.1` subject at 8,251,930 bytes with SHA256 `47d6d9718614bb2e81706af2096e7387fadeeec34db7d6867c3233c8206dc378`;
 - `docs/release/marketplace-pre-release-owner-exception-0.2.2.md` scopes the one automated publication authorization to the exact 0.2.2 bytes; and
-- release, live attestation, Marketplace publication/public install, signing, previous-stable rollback, and public readiness remain separate gates.
+- [`docs/release/0.2.2-publication-evidence.md`](../release/0.2.2-publication-evidence.md) records the completed GitHub release, live custom-predicate attestation, Marketplace publish workflow, and public Gallery state. Signing, signed source-to-binary provenance, previous-stable rollback, final legal and vulnerability approval, and public readiness remain separate open gates.
 
 ## M7l1 Implemented Slice
 
@@ -841,6 +841,5 @@ This section records the Windows `win32-x64` Beta packaging-readiness slices for
 ## Deferred Public-Release M7 Slices
 
 - M7j4: previous-stable installed-product upgrade/rollback once a real previous stable artifact exists.
-- M7k2 continuation: produce a new attested pre-release-eligible candidate, run the configured Marketplace pipeline, and capture Marketplace publication/public-install evidence. Publisher Contributor authorization and publish-auth configuration are already recorded.
 - M7l2 continuation: produce final vulnerability release approval evidence after terminal rows receive final release review, keep affected-row remediation explicit if future findings are introduced, and avoid turning terminal VEX inputs into broad vulnerability-free claims.
 - Future coverage-guided native remote-protocol fuzzing: run coverage-guided campaigns from the source-controlled fuzzer target, prove sanitizer-instrumented libsvn coverage, record edge growth and crash/run artifacts, and close the M7l7/M7l8/M7l9 blockers only after evidence exists.

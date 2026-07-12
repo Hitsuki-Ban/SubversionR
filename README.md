@@ -2,11 +2,17 @@
 
 SubversionR is a native Apache Subversion (SVN) client for Visual Studio Code. It talks to `libsvn` directly through a bundled Rust sidecar and C bridge — no `svn` command line, no TortoiseSVN dependency, and no Git-flavored reinterpretation of SVN concepts.
 
-The current public target is a Windows `win32-x64` Beta package distributed as a VSIX from GitHub Releases. It is not yet a Marketplace or cross-platform release.
+The current public target is the Windows `win32-x64` Beta distributed through the Visual Studio Marketplace pre-release channel. The same package remains available as a VSIX from GitHub Releases for offline installation.
+
+## Install From The Marketplace
+
+1. In the VS Code Extensions view, search for `@id:hitsuki-ban.subversionr`.
+2. Open **SVN-R**, use the Install button dropdown, and select **Install Pre-Release Version**.
+3. Open a local SVN working copy or run **SubversionR: Checkout Repository**.
 
 ## Install From Releases
 
-1. After `v0.2.2-beta.1` is published, download its `subversionr-win32-x64-0.2.2.vsix` asset from GitHub Releases.
+1. Download `subversionr-win32-x64-0.2.2.vsix` from the [`v0.2.2-beta.1` GitHub release](https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.2-beta.1).
 2. In VS Code, run **Extensions: Install from VSIX...** and select the downloaded file.
 3. Open a local SVN working copy or run **SubversionR: Checkout Repository**.
 
@@ -29,7 +35,7 @@ Release assets also include the SBOM, third-party notices, and the Beta evidence
 - Local file-backed working copies are the intended test path.
 - Remote server, proxy, client-certificate, Kerberos/NTLM, SASL, and broad certificate workflows are not public Beta claims.
 - Merge, merge preview, and mergeinfo are not included.
-- Marketplace installation, signing, and cross-platform packages are not included.
+- Stable-channel publication, artifact signing, and cross-platform packages are not included.
 
 The full claim boundary is documented in [docs/release/public-claim-matrix.md](docs/release/public-claim-matrix.md).
 

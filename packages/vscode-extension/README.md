@@ -10,7 +10,7 @@ Arbitrary remote SVN servers and authentication environments, remote VS Code wor
 
 ## Install and update the pre-release
 
-In the VS Code Extensions view, search for `@id:hitsuki-ban.subversionr`, open SubversionR, use the Install button dropdown, and select **Install Pre-Release Version**. VS Code updates enabled extensions automatically when extension auto-update is enabled; select **Update** on the extension page to install an available update immediately.
+In the VS Code Extensions view, search for `@id:hitsuki-ban.subversionr`, open **SVN-R**, use the Install button dropdown, and select **Install Pre-Release Version**. VS Code updates enabled extensions automatically when extension auto-update is enabled; select **Update** on the extension page to install an available update immediately.
 
 Pre-release versions may change between updates. Check the release notes before updating a working environment.
 

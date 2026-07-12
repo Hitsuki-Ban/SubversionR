@@ -126,7 +126,7 @@ The heavy workflow remains scheduled/manual because it builds native dependencie
 
 ## Current Scope
 
-The public target is the Windows `win32-x64` Beta distributed as a VSIX from GitHub Releases. The current release claim does not include Marketplace installation, artifact signing, cross-platform packages, broad remote/auth matrices, merge/mergeinfo, or previous-stable rollback.
+The public target is the Windows `win32-x64` Beta distributed through the Visual Studio Marketplace pre-release channel, with the same VSIX available from GitHub Releases for offline installation. The current release claim does not include stable-channel publication, artifact signing, cross-platform packages, broad remote/auth matrices, merge/mergeinfo, or previous-stable rollback.
 
 Use `docs/release/public-claim-matrix.md` for the exact boundary. Never promote fixture, preflight, source-only, or local-smoke evidence into a broader product claim.
 
