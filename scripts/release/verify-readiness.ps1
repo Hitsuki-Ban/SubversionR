@@ -1853,7 +1853,7 @@ Assert-Terms $nativeBridgeSource @(
   "bridge_depth_is_sparse",
   "bridge_depth_is_sparse(status->depth)",
   "entry->depth = svn_depth_to_word(status->depth);",
-  "const svn_boolean_t get_all = TRUE;"
+  "svn_boolean_t get_all,"
 ) "REP-007 libsvn sparse depth status filtering"
 Assert-Terms $nativeBridgeRustSource @(
   'c_string_to_owned(raw_entry.depth, "status.depth")',

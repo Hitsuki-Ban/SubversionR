@@ -480,6 +480,25 @@ This slice intentionally does not implement folder-specific keep-local UX, missi
 - Existing operation RPC, backend operation, Rust RPC, and ignored native integration tests cover strict `keepLocal` payload handling and libsvn `keepLocal = true` preservation semantics.
 - The installed Source Control UI E2E gate executes `subversionr.removeResourceKeepLocal` against the source-built fixture changed resource, captures and clicks the VS Code Remove confirmation modal through CDP renderer evidence, proves the local file remains on disk, and verifies the SourceControl projection refreshes to the scheduled-removal context.
 
+## M4t Implemented Slice
+
+The twentieth M4 slice makes successful Update completion reporting reflect unresolved conflicts discovered by the mandatory post-update status reconcile:
+
+- Repository Update, Update to Revision, Update Selected, and Update All Incoming all read the authoritative local `conflicts` Source Control group after their existing full reconcile completes.
+- An Update whose reconciled scope contains unresolved text, property, or tree conflicts shows a warning instead of the ordinary information notification. The warning retains the Update result, states the total conflict count, and names at most three deterministic repository-relative paths with an explicit remaining count.
+- Selected and aggregate incoming updates report only conflicts below the paths they updated. Repository Update reports the reconciled conflicts projected by its selected repository session; child sessions are not inferred to be externals from filesystem nesting alone.
+- The notification describes unresolved working-copy state rather than attributing every projected conflict to the current Update. This keeps libsvn status authoritative and avoids deriving conflict semantics from touched paths or reimplementing SVN conflict classification in the Extension Host.
+- Missing or stale post-reconcile projection state fails fast and cannot produce a plain success notification.
+- The native ABI, daemon protocol, Update options, and reconciliation behavior are unchanged.
+
+This slice does not implement automatic conflict resolution, conflict editor handoff, or remote/auth/certificate Update failure reporting.
+
+## M4t Gates
+
+- Repository command tests cover zero-conflict information notifications, warning severity for conflicts, deterministic three-path truncation, selected-path filtering, aggregate incoming updates, and unavailable projection fail-fast behavior.
+- Runtime localization checks cover the warning and truncated-path summary in English, Japanese, and Chinese.
+- The installed Source Control UI E2E gate creates a real text conflict through the installed `subversionr.updateRepository` command, captures the warning notification through renderer DOM and accessibility evidence, verifies the conflict count and path, rejects the ordinary success-only notification, and then reuses the projected conflict in the existing Resolve workflow.
+
 ## Deferred M4 Work
 
 - Batch revert, group/folder revert, and richer status-context-specific revert variants.

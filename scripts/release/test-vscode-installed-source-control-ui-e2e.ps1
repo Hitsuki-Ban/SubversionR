@@ -751,6 +751,54 @@ function Get-UpdateToRevisionRepositoryOracle(
   }
 }
 
+function Get-UpdateConflictWorkingCopyOracle(
+  [string]$SvnExe,
+  [pscustomobject]$Fixture
+) {
+  $commonArguments = @(
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $Fixture.svnCliConfigRoot
+  )
+  $statusXmlText = (Invoke-CheckedTool -Path $SvnExe -Arguments (@("status", $Fixture.workingCopyRoot, "--xml") + $commonArguments) -Description "svn status --xml installed Update conflict oracle") -join "`n"
+  [xml]$statusXml = $statusXmlText
+  $conflictPaths = @(@(
+    foreach ($entry in @($statusXml.SelectNodes("//*[local-name()='entry']"))) {
+      $wcStatus = $entry.SelectSingleNode("*[local-name()='wc-status']")
+      if ($null -eq $wcStatus) {
+        continue
+      }
+      $item = [string]$wcStatus.GetAttribute("item")
+      $props = [string]$wcStatus.GetAttribute("props")
+      $treeConflicted = [string]$wcStatus.GetAttribute("tree-conflicted")
+      if ($item -ne "conflicted" -and $props -ne "conflicted" -and $treeConflicted -ne "true") {
+        continue
+      }
+      $entryPath = [string]$entry.GetAttribute("path")
+      if ([string]::IsNullOrWhiteSpace($entryPath)) {
+        throw "svn status --xml installed Update conflict oracle returned an empty conflict entry path."
+      }
+      $absoluteEntryPath = if ([System.IO.Path]::IsPathRooted($entryPath)) {
+        [System.IO.Path]::GetFullPath($entryPath)
+      }
+      else {
+        [System.IO.Path]::GetFullPath((Join-Path $Fixture.workingCopyRoot $entryPath))
+      }
+      ([System.IO.Path]::GetRelativePath($Fixture.workingCopyRoot, $absoluteEntryPath)).Replace("\", "/")
+    }
+  ) | Sort-Object -Unique)
+  if (@($conflictPaths).Count -ne 1 -or $conflictPaths[0] -ne $Fixture.conflictPath) {
+    throw "svn status --xml installed Update conflict oracle expected only '$($Fixture.conflictPath)', got '$($conflictPaths -join ", ")'."
+  }
+  [pscustomobject]@{
+    command = "svn status --xml"
+    workingCopyRoot = Get-RepoRelativePath $Fixture.workingCopyRoot
+    conflictCount = @($conflictPaths).Count
+    conflictPaths = $conflictPaths
+  }
+}
+
 function Get-BranchCreateRepositoryOracle(
   [string]$SvnExe,
   [pscustomobject]$Fixture
@@ -1129,7 +1177,9 @@ function New-SourceControlUiLazyExternalProviderFixture(
 function New-SourceControlUiResolveFixture(
   [string]$Root,
   [string]$SvnExe,
-  [string]$SvnAdminExe
+  [string]$SvnAdminExe,
+  [Parameter(Mandatory = $true)]
+  [bool]$MaterializeConflict
 ) {
   $repoPath = Join-Path $Root "repo"
   $importRoot = Join-Path $Root "import"
@@ -1184,19 +1234,21 @@ function New-SourceControlUiResolveFixture(
   ) -Description "svn commit resolve fixture incoming change" | Out-Null
 
   Set-Content -LiteralPath (Join-Path $wcRoot "src\tracked.txt") -Value "local by M7j3 resolve`n" -NoNewline -Encoding utf8
-  Invoke-CheckedTool -Path $SvnExe -Arguments @(
-    "update",
-    (Join-Path $wcRoot "src\tracked.txt"),
-    "--accept",
-    "postpone",
-    "--non-interactive",
-    "--no-auth-cache",
-    "--config-dir",
-    $svnCliConfigRoot
-  ) -Description "svn update resolve fixture to postponed conflict" | Out-Null
-
-  $mergedContent = "merged by M7j3 resolve`n"
-  Set-Content -LiteralPath (Join-Path $wcRoot "src\tracked.txt") -Value $mergedContent -NoNewline -Encoding utf8
+  $expectedWorkingContent = "local by M7j3 resolve`n"
+  if ($MaterializeConflict) {
+    Invoke-CheckedTool -Path $SvnExe -Arguments @(
+      "update",
+      (Join-Path $wcRoot "src\tracked.txt"),
+      "--accept",
+      "postpone",
+      "--non-interactive",
+      "--no-auth-cache",
+      "--config-dir",
+      $svnCliConfigRoot
+    ) -Description "svn update resolve cancellation fixture to postponed conflict" | Out-Null
+    $expectedWorkingContent = "merged by M7j3 resolve`n"
+    Set-Content -LiteralPath (Join-Path $wcRoot "src\tracked.txt") -Value $expectedWorkingContent -NoNewline -Encoding utf8
+  }
   $svnRoot = Join-Path $wcRoot ".svn"
   [pscustomobject]@{
     repoPath = $repoPath
@@ -1207,7 +1259,8 @@ function New-SourceControlUiResolveFixture(
     svnCliConfigRoot = $svnCliConfigRoot
     svnRoot = $svnRoot
     conflictPath = "src/tracked.txt"
-    mergedContent = $mergedContent
+    materializedConflict = $MaterializeConflict
+    expectedWorkingContent = $expectedWorkingContent
     svnTreeBeforeSha256 = Get-DirectoryTreeSha256 $svnRoot
   }
 }
@@ -1343,6 +1396,8 @@ function Write-HarnessPackage(
   [string]$RevertPromptReadyPath,
   [string]$RevertCancellationPromptReadyPath,
   [string]$RevertCancellationPromptDonePath,
+  [string]$ResolveUpdateWarningReadyPath,
+  [string]$ResolveUpdateWarningDonePath,
   [string]$ResolvePromptReadyPath,
   [string]$ResolveCancellationPromptReadyPath,
   [string]$CleanupPromptReadyPath,
@@ -2717,6 +2772,15 @@ function resolvePromptCaptureExpectations(resourcePath) {
     requiredAccessibilityTokens: ["Resolve SVN conflict", "Working copy", "Use the current working copy file"],
     requiredScreenshot: true,
     quickPickItemText: "Working copy"
+  };
+}
+
+function updateConflictWarningCaptureExpectations(resourcePath) {
+  const conflictSummary = `The working copy has unresolved SVN conflicts (1): ${resourcePath}`;
+  return {
+    requiredDomTokens: ["SubversionR updated SVN working copy to revision", conflictSummary],
+    requiredAccessibilityTokens: ["Warning", "SubversionR updated SVN working copy to revision", conflictSummary],
+    requiredScreenshot: true
   };
 }
 
@@ -4920,7 +4984,7 @@ async function runRemoveCancellationWorkflow(removeCancellationWorkingCopyRoot, 
   }
 }
 
-async function runResolveWorkflow(resolveWorkingCopyRoot, resolvePromptReadyPath) {
+async function runResolveWorkflow(resolveWorkingCopyRoot, updateWarningReadyPath, updateWarningDonePath, resolvePromptReadyPath) {
   let resolveOpenReport;
   try {
     resolveOpenReport = await withTimeout(
@@ -4934,9 +4998,50 @@ async function runResolveWorkflow(resolveWorkingCopyRoot, resolvePromptReadyPath
     if (path.resolve(resolveOpenReport.repository.identity.workingCopyRoot).toLowerCase() !== path.resolve(resolveWorkingCopyRoot).toLowerCase()) {
       throw new Error("Installed Resolve workflow workingCopyRoot did not match the resolve fixture.");
     }
-    const resource = findResource(resolveOpenReport, "conflicts", "src/tracked.txt", "subversionr.conflicted");
+    const conflictBeforeUpdate = findResource(resolveOpenReport, "conflicts", "src/tracked.txt", "subversionr.conflicted");
+    if (conflictBeforeUpdate) {
+      throw new Error("Installed Update conflict workflow fixture was already conflicted before SubversionR Update ran.");
+    }
+    const updateNotificationCleanup = await clearWorkbenchNotificationsBeforePrompt("updateRepositoryConflict");
+    await withTimeout(
+      vscode.commands.executeCommand("subversionr.updateRepository", resolveOpenReport.repository.repositoryId),
+      "subversionr.updateRepository/conflict",
+      60000
+    );
+    const postUpdateFreshnessReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport", {
+        repositoryId: resolveOpenReport.repository.repositoryId,
+        epoch: resolveOpenReport.repository.epoch,
+        scenario: "partial"
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport/updateConflict",
+      30000
+    );
+    if (!postUpdateFreshnessReport || postUpdateFreshnessReport.kind !== "subversionr.installedSourceControlUiE2eFreshnessReport") {
+      throw new Error(`Unexpected installed Source Control UI E2E update-conflict freshness report kind: ${postUpdateFreshnessReport && postUpdateFreshnessReport.kind}`);
+    }
+    if (!findStatusCommand(postUpdateFreshnessReport, "partial", resolveOpenReport.repository.repositoryId)) {
+      throw new Error("Installed Update conflict workflow did not expose the post-update full reconcile status command.");
+    }
+    const resource = findResource(postUpdateFreshnessReport, "conflicts", "src/tracked.txt", "subversionr.conflicted");
     if (!resource || resource.kind !== "file" || typeof resource.generation !== "number") {
-      throw new Error("Installed Resolve workflow could not find the conflicted src/tracked.txt resource.");
+      throw new Error("Installed Update conflict workflow did not project src/tracked.txt as conflicted before Resolve.");
+    }
+
+    const updateWarningExpectations = updateConflictWarningCaptureExpectations(resource.path);
+    fs.writeFileSync(updateWarningReadyPath, JSON.stringify({
+      ok: true,
+      phase: "updateConflictWarningReady",
+      command: "subversionr.updateRepository",
+      conflictCount: 1,
+      conflictPaths: [resource.path],
+      updateNotificationCleanup,
+      rendererCaptureExpectations: updateWarningExpectations
+    }, null, 2));
+    await waitForFile(updateWarningDonePath, 120000);
+    const updateWarningDone = JSON.parse(fs.readFileSync(updateWarningDonePath, "utf8"));
+    if (!updateWarningDone || updateWarningDone.ok !== true) {
+      throw new Error("Installed Update conflict warning renderer capture did not complete successfully.");
     }
 
     const fsPath = resourceFsPath(resolveWorkingCopyRoot, resource.path);
@@ -5020,6 +5125,17 @@ async function runResolveWorkflow(resolveWorkingCopyRoot, resolvePromptReadyPath
         depth: "empty",
         choice: "working"
       },
+      updateConflict: {
+        command: "subversionr.updateRepository",
+        conflictCount: 1,
+        conflictPaths: [resource.path],
+        warning: {
+          rendererCaptureExpectations: updateWarningExpectations,
+          plainSuccessNotificationExpected: false
+        },
+        notificationCleanup: updateNotificationCleanup,
+        postUpdateFreshnessReport
+      },
       postResolveResource: {
         path: postResolveResource.path,
         contextValue: postResolveResource.contextValue,
@@ -5036,6 +5152,11 @@ async function runResolveWorkflow(resolveWorkingCopyRoot, resolvePromptReadyPath
       closeReport: resolveCloseReport,
       assertions: {
         commandExecuted: true,
+        installedUpdateExecuted: true,
+        installedUpdateCreatedConflict: !conflictBeforeUpdate && resource.contextValue === "subversionr.conflicted",
+        updateWarningConflictCount: 1,
+        updateWarningNamedConflictPath: resource.path === "src/tracked.txt",
+        plainUpdateSuccessNotificationExpected: false,
         fileExistedBefore,
         conflictProjectedBefore: true,
         conflictProjectedAfter,
@@ -7913,6 +8034,8 @@ async function run() {
   const revertPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_PROMPT_READY;
   const revertCancellationPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_READY;
   const revertCancellationPromptDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_DONE;
+  const resolveUpdateWarningReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_READY;
+  const resolveUpdateWarningDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_DONE;
   const resolvePromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_PROMPT_READY;
   const resolveCancellationPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CANCELLATION_PROMPT_READY;
   const cleanupPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CLEANUP_PROMPT_READY;
@@ -8094,6 +8217,8 @@ async function run() {
     !revertPromptReadyPath ||
     !revertCancellationPromptReadyPath ||
     !revertCancellationPromptDonePath ||
+    !resolveUpdateWarningReadyPath ||
+    !resolveUpdateWarningDonePath ||
     !resolvePromptReadyPath ||
     !resolveCancellationPromptReadyPath ||
     !cleanupPromptReadyPath ||
@@ -8282,6 +8407,27 @@ async function run() {
       throw new Error("Installed SubversionR extension was not visible to Extension Host.");
     }
     beforeActive = extension.isActive;
+    if (beforeActive !== true) {
+      throw new Error("SubversionR did not activate organically before any installed Source Control UI E2E command executed.");
+    }
+
+    phase = "resettingOrganicallyActivatedSessionForOpenReport";
+    const organicSurfaceReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport", { path: workingCopyRoot }),
+      "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/organicActivation",
+      60000
+    );
+    if (
+      !organicSurfaceReport ||
+      organicSurfaceReport.kind !== "subversionr.installedSourceControlUiE2eCurrentSurfaceReport" ||
+      path.resolve(organicSurfaceReport.repository.identity.workingCopyRoot).toLowerCase() !== path.resolve(workingCopyRoot).toLowerCase()
+    ) {
+      throw new Error("Installed Source Control UI E2E organic activation did not open the fixture working copy before the explicit open-report workflow.");
+    }
+    const organicCloseReport = await closeOpenReport(organicSurfaceReport);
+    if (!organicCloseReport || organicCloseReport.kind !== "subversionr.installedSourceControlUiE2eCloseReport" || organicCloseReport.repositoryClosed !== true) {
+      throw new Error("Installed Source Control UI E2E could not close the organically activated fixture session before the explicit open-report workflow.");
+    }
 
     phase = "executingInstalledSourceControlUiE2eOpenReport";
     openReport = await withTimeout(
@@ -8570,7 +8716,7 @@ async function run() {
     writeResult(partialResult());
 
     phase = "executingResolveResource";
-    resolveReport = await runResolveWorkflow(resolveWorkingCopyRoot, resolvePromptReadyPath);
+    resolveReport = await runResolveWorkflow(resolveWorkingCopyRoot, resolveUpdateWarningReadyPath, resolveUpdateWarningDonePath, resolvePromptReadyPath);
     writeResult(partialResult());
 
     phase = "executingResolveResourceCancellation";
@@ -9188,6 +9334,8 @@ exports.run = run;
     RevertPromptReadyPath = $RevertPromptReadyPath
     RevertCancellationPromptReadyPath = $RevertCancellationPromptReadyPath
     RevertCancellationPromptDonePath = $RevertCancellationPromptDonePath
+    ResolveUpdateWarningReadyPath = $ResolveUpdateWarningReadyPath
+    ResolveUpdateWarningDonePath = $ResolveUpdateWarningDonePath
     ResolvePromptReadyPath = $ResolvePromptReadyPath
     ResolveCancellationPromptReadyPath = $ResolveCancellationPromptReadyPath
     CleanupPromptReadyPath = $CleanupPromptReadyPath
@@ -9880,6 +10028,12 @@ function Assert-HarnessResult(
   }
   if ($Result.resolveReport.kind -ne "subversionr.installedSourceControlUiE2eResolveWorkflow" -or
     $Result.resolveReport.command.command -ne "subversionr.resolveResource" -or
+    $Result.resolveReport.updateConflict.command -ne "subversionr.updateRepository" -or
+    $Result.resolveReport.updateConflict.conflictCount -ne 1 -or
+    @($Result.resolveReport.updateConflict.conflictPaths).Count -ne 1 -or
+    $Result.resolveReport.updateConflict.conflictPaths[0] -ne "src/tracked.txt" -or
+    $Result.resolveReport.updateConflict.warning.plainSuccessNotificationExpected -ne $false -or
+    $Result.resolveReport.updateConflict.postUpdateFreshnessReport.kind -ne "subversionr.installedSourceControlUiE2eFreshnessReport" -or
     $Result.resolveReport.resource.path -ne "src/tracked.txt" -or
     $Result.resolveReport.resource.contextValue -ne "subversionr.conflicted" -or
     $Result.resolveReport.request.choice -ne "working" -or
@@ -9887,6 +10041,11 @@ function Assert-HarnessResult(
     $Result.resolveReport.postResolveResource.contextValue -ne "subversionr.changedFile.baseDiffable" -or
     $Result.resolveReport.assertions.conflictProjectedBefore -ne $true -or
     $Result.resolveReport.assertions.conflictProjectedAfter -ne $false -or
+    $Result.resolveReport.assertions.installedUpdateExecuted -ne $true -or
+    $Result.resolveReport.assertions.installedUpdateCreatedConflict -ne $true -or
+    $Result.resolveReport.assertions.updateWarningConflictCount -ne 1 -or
+    $Result.resolveReport.assertions.updateWarningNamedConflictPath -ne $true -or
+    $Result.resolveReport.assertions.plainUpdateSuccessNotificationExpected -ne $false -or
     $Result.resolveReport.assertions.fileContentPreservedAfter -ne $true -or
     $Result.resolveReport.assertions.sourceControlProjectionRefreshed -ne $true) {
     throw "Installed Source Control UI E2E result must include a Resolve workflow proving merged conflict resolution, working-copy content preservation, and projection refresh."
@@ -10379,8 +10538,11 @@ Remove-Item -LiteralPath (Join-Path $removeFixture.workingCopyRoot "src\tracked.
 $removeCancellationFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "remove-cancellation-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
 $revertFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "revert-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
 $revertCancellationFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "revert-cancellation-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
-$resolveFixture = New-SourceControlUiResolveFixture -Root (Join-Path $fixtureRootResolved "resolve-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
-$resolveCancellationFixture = New-SourceControlUiResolveFixture -Root (Join-Path $fixtureRootResolved "resolve-cancellation-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
+$resolveFixture = New-SourceControlUiResolveFixture -Root (Join-Path $fixtureRootResolved "resolve-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved -MaterializeConflict $false
+$resolveCancellationFixture = New-SourceControlUiResolveFixture -Root (Join-Path $fixtureRootResolved "resolve-cancellation-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved -MaterializeConflict $true
+if ($resolveFixture.materializedConflict -ne $false -or $resolveCancellationFixture.materializedConflict -ne $true) {
+  throw "Resolve fixtures must reserve conflict creation for installed Update while keeping the cancellation fixture pre-conflicted."
+}
 $deleteFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "repository-lifecycle-delete-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
 $moveFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "repository-lifecycle-move-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
 $moveDestinationRoot = Join-Path $fixtureRootResolved "repository-lifecycle-move-destination\wc"
@@ -10518,6 +10680,8 @@ $harnessChangelistRevertPromptReadyPath = Join-Path $fixtureRootResolved "instal
 $harnessRevertPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-revert-prompt-ready.json"
 $harnessRevertCancellationPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-revert-cancellation-prompt-ready.json"
 $harnessRevertCancellationPromptDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-revert-cancellation-prompt-done.json"
+$harnessResolveUpdateWarningReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-update-warning-ready.json"
+$harnessResolveUpdateWarningDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-update-warning-done.json"
 $harnessResolvePromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-prompt-ready.json"
 $harnessResolveCancellationPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-cancellation-prompt-ready.json"
 $harnessCleanupPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-cleanup-prompt-ready.json"
@@ -10659,11 +10823,13 @@ $revertCancellationPromptCaptureRoot = Join-Path $fixtureRootResolved "revert-ca
 $revertCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "revert-cancellation-prompt-capture-expectations.json"
 $resolvePromptCaptureRoot = Join-Path $fixtureRootResolved "resolve-prompt-capture"
 $resolvePromptExpectationsPath = Join-Path $fixtureRootResolved "resolve-prompt-capture-expectations.json"
+$resolveUpdateWarningCaptureRoot = Join-Path $fixtureRootResolved "resolve-update-warning-capture"
+$resolveUpdateWarningExpectationsPath = Join-Path $fixtureRootResolved "resolve-update-warning-capture-expectations.json"
 $resolveCancellationPromptCaptureRoot = Join-Path $fixtureRootResolved "resolve-cancellation-prompt-capture"
 $resolveCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "resolve-cancellation-prompt-capture-expectations.json"
 $cleanupPromptCaptureRoot = Join-Path $fixtureRootResolved "cleanup-prompt-capture"
 $cleanupPromptExpectationsPath = Join-Path $fixtureRootResolved "cleanup-prompt-capture-expectations.json"
-New-Item -ItemType Directory -Force -Path $userDataRoot, $extensionsRoot, $captureRoot, $noRepositoryWelcomeRendererCaptureRoot, $partialFreshnessRendererCaptureRoot, $staleFreshnessRendererCaptureRoot, $fullReconcileCancellationCaptureRoot, $multiRepositoryRefreshPromptCaptureRoot, $deletePromptCaptureRoot, $deleteLoadPromptCaptureRoot, $removePromptCaptureRoot, $removeCancellationPromptCaptureRoot, $removeKeepLocalPromptCaptureRoot, $movePromptCaptureRoot, $moveCancellationPromptCaptureRoot, $checkoutCancellationPromptCaptureRoot, $checkoutExistingTargetFailureUrlPromptCaptureRoot, $checkoutExistingTargetFailureTargetPromptCaptureRoot, $checkoutExistingTargetFailureRevisionPromptCaptureRoot, $checkoutExistingTargetFailureDepthPromptCaptureRoot, $checkoutExistingTargetFailureExternalsPromptCaptureRoot, $checkoutExistingTargetFailureNotificationCaptureRoot, $checkoutInvalidUrlFailureUrlPromptCaptureRoot, $checkoutInvalidUrlFailureTargetPromptCaptureRoot, $checkoutInvalidUrlFailureRevisionPromptCaptureRoot, $checkoutInvalidUrlFailureDepthPromptCaptureRoot, $checkoutInvalidUrlFailureExternalsPromptCaptureRoot, $checkoutInvalidUrlFailureNotificationCaptureRoot, $checkoutExistingDirectoryUrlPromptCaptureRoot, $checkoutExistingDirectoryTargetPromptCaptureRoot, $checkoutExistingDirectoryRevisionPromptCaptureRoot, $checkoutExistingDirectoryDepthPromptCaptureRoot, $checkoutExistingDirectoryExternalsPromptCaptureRoot, $checkoutExistingDirectoryObstructionUrlPromptCaptureRoot, $checkoutExistingDirectoryObstructionTargetPromptCaptureRoot, $checkoutExistingDirectoryObstructionRevisionPromptCaptureRoot, $checkoutExistingDirectoryObstructionDepthPromptCaptureRoot, $checkoutExistingDirectoryObstructionExternalsPromptCaptureRoot, $checkoutUrlPromptCaptureRoot, $checkoutTargetPromptCaptureRoot, $checkoutRevisionPromptCaptureRoot, $checkoutDepthPromptCaptureRoot, $checkoutExternalsPromptCaptureRoot, $updateRevisionPromptCaptureRoot, $updateCancellationRevisionPromptCaptureRoot, $updateDepthPromptCaptureRoot, $updateStickyDepthPromptCaptureRoot, $updateExternalsPromptCaptureRoot, $branchCreateSourcePromptCaptureRoot, $branchCreateDestinationPromptCaptureRoot, $branchCreateRevisionPromptCaptureRoot, $branchCreateMessagePromptCaptureRoot, $branchCreateParentsPromptCaptureRoot, $branchCreateExternalsPromptCaptureRoot, $branchCreateSwitchPromptCaptureRoot, $switchUrlPromptCaptureRoot, $switchRevisionPromptCaptureRoot, $switchDepthPromptCaptureRoot, $switchStickyDepthPromptCaptureRoot, $switchExternalsPromptCaptureRoot, $switchAncestryPromptCaptureRoot, $lockMessageCancellationPromptCaptureRoot, $lockMessagePromptCaptureRoot, $lockModePromptCaptureRoot, $unlockModeCancellationPromptCaptureRoot, $unlockModePromptCaptureRoot, $changelistSetPromptCaptureRoot, $changelistRevertPromptCaptureRoot, $revertPromptCaptureRoot, $revertCancellationPromptCaptureRoot, $resolvePromptCaptureRoot, $resolveCancellationPromptCaptureRoot, $cleanupPromptCaptureRoot, (Join-Path $userDataRoot "User") | Out-Null
+New-Item -ItemType Directory -Force -Path $userDataRoot, $extensionsRoot, $captureRoot, $noRepositoryWelcomeRendererCaptureRoot, $partialFreshnessRendererCaptureRoot, $staleFreshnessRendererCaptureRoot, $fullReconcileCancellationCaptureRoot, $multiRepositoryRefreshPromptCaptureRoot, $deletePromptCaptureRoot, $deleteLoadPromptCaptureRoot, $removePromptCaptureRoot, $removeCancellationPromptCaptureRoot, $removeKeepLocalPromptCaptureRoot, $movePromptCaptureRoot, $moveCancellationPromptCaptureRoot, $checkoutCancellationPromptCaptureRoot, $checkoutExistingTargetFailureUrlPromptCaptureRoot, $checkoutExistingTargetFailureTargetPromptCaptureRoot, $checkoutExistingTargetFailureRevisionPromptCaptureRoot, $checkoutExistingTargetFailureDepthPromptCaptureRoot, $checkoutExistingTargetFailureExternalsPromptCaptureRoot, $checkoutExistingTargetFailureNotificationCaptureRoot, $checkoutInvalidUrlFailureUrlPromptCaptureRoot, $checkoutInvalidUrlFailureTargetPromptCaptureRoot, $checkoutInvalidUrlFailureRevisionPromptCaptureRoot, $checkoutInvalidUrlFailureDepthPromptCaptureRoot, $checkoutInvalidUrlFailureExternalsPromptCaptureRoot, $checkoutInvalidUrlFailureNotificationCaptureRoot, $checkoutExistingDirectoryUrlPromptCaptureRoot, $checkoutExistingDirectoryTargetPromptCaptureRoot, $checkoutExistingDirectoryRevisionPromptCaptureRoot, $checkoutExistingDirectoryDepthPromptCaptureRoot, $checkoutExistingDirectoryExternalsPromptCaptureRoot, $checkoutExistingDirectoryObstructionUrlPromptCaptureRoot, $checkoutExistingDirectoryObstructionTargetPromptCaptureRoot, $checkoutExistingDirectoryObstructionRevisionPromptCaptureRoot, $checkoutExistingDirectoryObstructionDepthPromptCaptureRoot, $checkoutExistingDirectoryObstructionExternalsPromptCaptureRoot, $checkoutUrlPromptCaptureRoot, $checkoutTargetPromptCaptureRoot, $checkoutRevisionPromptCaptureRoot, $checkoutDepthPromptCaptureRoot, $checkoutExternalsPromptCaptureRoot, $updateRevisionPromptCaptureRoot, $updateCancellationRevisionPromptCaptureRoot, $updateDepthPromptCaptureRoot, $updateStickyDepthPromptCaptureRoot, $updateExternalsPromptCaptureRoot, $branchCreateSourcePromptCaptureRoot, $branchCreateDestinationPromptCaptureRoot, $branchCreateRevisionPromptCaptureRoot, $branchCreateMessagePromptCaptureRoot, $branchCreateParentsPromptCaptureRoot, $branchCreateExternalsPromptCaptureRoot, $branchCreateSwitchPromptCaptureRoot, $switchUrlPromptCaptureRoot, $switchRevisionPromptCaptureRoot, $switchDepthPromptCaptureRoot, $switchStickyDepthPromptCaptureRoot, $switchExternalsPromptCaptureRoot, $switchAncestryPromptCaptureRoot, $lockMessageCancellationPromptCaptureRoot, $lockMessagePromptCaptureRoot, $lockModePromptCaptureRoot, $unlockModeCancellationPromptCaptureRoot, $unlockModePromptCaptureRoot, $changelistSetPromptCaptureRoot, $changelistRevertPromptCaptureRoot, $revertPromptCaptureRoot, $revertCancellationPromptCaptureRoot, $resolveUpdateWarningCaptureRoot, $resolvePromptCaptureRoot, $resolveCancellationPromptCaptureRoot, $cleanupPromptCaptureRoot, (Join-Path $userDataRoot "User") | Out-Null
 @'
 {
   "workbench.startupEditor": "none",
@@ -10822,6 +10988,8 @@ $harness = Write-HarnessPackage `
   -RevertPromptReadyPath $harnessRevertPromptReadyPath `
   -RevertCancellationPromptReadyPath $harnessRevertCancellationPromptReadyPath `
   -RevertCancellationPromptDonePath $harnessRevertCancellationPromptDonePath `
+  -ResolveUpdateWarningReadyPath $harnessResolveUpdateWarningReadyPath `
+  -ResolveUpdateWarningDonePath $harnessResolveUpdateWarningDonePath `
   -ResolvePromptReadyPath $harnessResolvePromptReadyPath `
   -ResolveCancellationPromptReadyPath $harnessResolveCancellationPromptReadyPath `
   -CleanupPromptReadyPath $harnessCleanupPromptReadyPath `
@@ -11003,6 +11171,8 @@ $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHANGELIST_REVERT_PROMPT_READY 
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_PROMPT_READY = $harness.RevertPromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_READY = $harness.RevertCancellationPromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_DONE = $harness.RevertCancellationPromptDonePath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_READY = $harness.ResolveUpdateWarningReadyPath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_DONE = $harness.ResolveUpdateWarningDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_PROMPT_READY = $harness.ResolvePromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CANCELLATION_PROMPT_READY = $harness.ResolveCancellationPromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CLEANUP_PROMPT_READY = $harness.CleanupPromptReadyPath
@@ -11069,6 +11239,8 @@ $removeCancellationPromptDriverError = $null
 $removeKeepLocalPromptDriverError = $null
 $movePromptDriverError = $null
 $moveCancellationPromptDriverError = $null
+$resolveUpdateWarningDriverError = $null
+$updateConflictWorkingCopyOracle = $null
 $updateRevisionPromptDriverError = $null
 $updateDepthPromptDriverError = $null
 $updateStickyDepthPromptDriverError = $null
@@ -11451,6 +11623,37 @@ try {
       ok = $null -eq $removeCancellationPromptDriverError
       completedAt = (Get-Date).ToUniversalTime().ToString("o")
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $harness.RemoveCancellationPromptDonePath -Encoding utf8
+  }
+
+  Wait-File -Path $harness.ResolveUpdateWarningReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E Update conflict warning ready sentinel"
+  $resolveUpdateWarningReady = Get-Content -Raw -LiteralPath $harness.ResolveUpdateWarningReadyPath | ConvertFrom-Json
+  if (
+    $resolveUpdateWarningReady.ok -ne $true -or
+    $resolveUpdateWarningReady.command -ne "subversionr.updateRepository" -or
+    $resolveUpdateWarningReady.conflictCount -ne 1 -or
+    @($resolveUpdateWarningReady.conflictPaths).Count -ne 1 -or
+    $resolveUpdateWarningReady.conflictPaths[0] -ne "src/tracked.txt"
+  ) {
+    throw "Installed Source Control UI E2E Update conflict warning sentinel did not bind one src/tracked.txt conflict to subversionr.updateRepository."
+  }
+  $updateConflictWorkingCopyOracle = Get-UpdateConflictWorkingCopyOracle -SvnExe $svnExeResolved -Fixture $resolveFixture
+  $resolveUpdateWarningReady.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $resolveUpdateWarningExpectationsPath -Encoding utf8
+  try {
+    Invoke-RendererCaptureDriver `
+      -DriverPath $rendererCaptureDriverResolved `
+      -Port $RemoteDebuggingPort `
+      -CaptureRoot $resolveUpdateWarningCaptureRoot `
+      -ExpectationsPath $resolveUpdateWarningExpectationsPath `
+      -Target $Target
+  }
+  catch {
+    $resolveUpdateWarningDriverError = $_
+  }
+  finally {
+    [pscustomobject]@{
+      ok = $null -eq $resolveUpdateWarningDriverError
+      completedAt = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $harness.ResolveUpdateWarningDonePath -Encoding utf8
   }
 
   Wait-File -Path $harness.ResolvePromptReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E Resolve prompt ready sentinel"
@@ -12117,6 +12320,9 @@ try {
   if ($null -ne $revertCancellationPromptDriverError) {
     throw $revertCancellationPromptDriverError
   }
+  if ($null -ne $resolveUpdateWarningDriverError) {
+    throw $resolveUpdateWarningDriverError
+  }
   if ($null -ne $resolvePromptDriverError) {
     throw $resolvePromptDriverError
   }
@@ -12266,6 +12472,8 @@ finally {
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_DONE -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_READY -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_DONE -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CANCELLATION_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CLEANUP_PROMPT_READY -ErrorAction SilentlyContinue
@@ -12505,6 +12713,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $revertPromptCaptureRoot "renderer-c
 }
 if (-not (Test-Path -LiteralPath (Join-Path $revertCancellationPromptCaptureRoot "renderer-capture.json") -PathType Leaf)) {
   throw "Revert cancellation prompt renderer capture driver did not write the expected capture report."
+}
+if (-not (Test-Path -LiteralPath (Join-Path $resolveUpdateWarningCaptureRoot "renderer-capture.json") -PathType Leaf)) {
+  throw "Update conflict warning renderer capture driver did not write the expected capture report."
 }
 if (-not (Test-Path -LiteralPath (Join-Path $resolvePromptCaptureRoot "renderer-capture.json") -PathType Leaf)) {
   throw "Resolve prompt renderer capture driver did not write the expected capture report."
@@ -12787,6 +12998,21 @@ $revertCancellationPromptCapture = Get-Content -Raw -LiteralPath (Join-Path $rev
 Assert-RendererCaptureReport -Capture $revertCancellationPromptCapture -CaptureRoot $revertCancellationPromptCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
   rendererCaptureExpectations = $harnessResult.revertCancellationReport.prompt.rendererCaptureExpectations
 })
+$resolveUpdateWarningCapture = Get-Content -Raw -LiteralPath (Join-Path $resolveUpdateWarningCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+Assert-RendererCaptureReport -Capture $resolveUpdateWarningCapture -CaptureRoot $resolveUpdateWarningCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+  rendererCaptureExpectations = $harnessResult.resolveReport.updateConflict.warning.rendererCaptureExpectations
+})
+$resolveUpdateWarningDomText = Get-Content -Raw -LiteralPath (Join-Path $resolveUpdateWarningCaptureRoot "dom-text.txt")
+$plainUpdateSuccessPattern = "(?m)^SubversionR updated SVN working copy to revision [0-9]+: $([regex]::Escape($harnessResult.resolveReport.repository.workingCopyRoot))\s*$"
+if ($resolveUpdateWarningDomText -match $plainUpdateSuccessPattern) {
+  throw "Installed Update conflict warning capture contained a separate plain-success notification."
+}
+if (
+  -not $resolveUpdateWarningDomText.Contains("The working copy has unresolved SVN conflicts (1): src/tracked.txt") -or
+  ([regex]::Matches($resolveUpdateWarningDomText, "SubversionR updated SVN working copy to revision")).Count -lt 1
+) {
+  throw "Installed Update conflict warning capture must contain a conflict-aware completion notification naming src/tracked.txt."
+}
 $resolvePromptCapture = Get-Content -Raw -LiteralPath (Join-Path $resolvePromptCaptureRoot "renderer-capture.json") | ConvertFrom-Json
 Assert-RendererCaptureReport -Capture $resolvePromptCapture -CaptureRoot $resolvePromptCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
   rendererCaptureExpectations = $harnessResult.resolveReport.prompt.rendererCaptureExpectations
@@ -12967,6 +13193,7 @@ $report = [pscustomObject]@{
   sourceControlUiRevertWorkflow = $harnessResult.revertReport
   sourceControlUiRevertCancellationWorkflow = $harnessResult.revertCancellationReport
   sourceControlUiResolveWorkflow = $harnessResult.resolveReport
+  updateConflictWorkingCopyOracle = $updateConflictWorkingCopyOracle
   sourceControlUiResolveCancellationWorkflow = $harnessResult.resolveCancellationReport
   sourceControlUiCleanupWorkflow = $harnessResult.cleanupReport
   cleanupPromptCapture = $cleanupPromptCapture
@@ -13038,6 +13265,8 @@ $report = [pscustomObject]@{
   changelistRevertPromptCapture = $changelistRevertPromptCapture
   revertPromptCapture = $revertPromptCapture
   revertCancellationPromptCapture = $revertCancellationPromptCapture
+  resolveUpdateWarningCapture = $resolveUpdateWarningCapture
+  resolveUpdateWarningPlainSuccessAbsent = $true
   resolvePromptCapture = $resolvePromptCapture
   resolveCancellationPromptCapture = $resolveCancellationPromptCapture
   codeCli = [pscustomobject]@{
@@ -13179,6 +13408,7 @@ $report = [pscustomObject]@{
     changelistRevertPromptCapture = Get-RepoRelativePath $changelistRevertPromptCaptureRoot
     revertPromptCapture = Get-RepoRelativePath $revertPromptCaptureRoot
     revertCancellationPromptCapture = Get-RepoRelativePath $revertCancellationPromptCaptureRoot
+    resolveUpdateWarningCapture = Get-RepoRelativePath $resolveUpdateWarningCaptureRoot
     resolvePromptCapture = Get-RepoRelativePath $resolvePromptCaptureRoot
     resolveCancellationPromptCapture = Get-RepoRelativePath $resolveCancellationPromptCaptureRoot
     cleanupPromptCapture = Get-RepoRelativePath $cleanupPromptCaptureRoot
@@ -13379,7 +13609,8 @@ $report = [pscustomObject]@{
     peerRoot = Get-RepoRelativePath $resolveFixture.peerWorkingCopyRoot
     repositoryUrl = $resolveFixture.repoUrl
     conflictPath = $resolveFixture.conflictPath
-    expectedMergedContent = $resolveFixture.mergedContent
+    materializedConflictBeforeInstalledUpdate = $resolveFixture.materializedConflict
+    expectedWorkingContentBeforeInstalledUpdate = $resolveFixture.expectedWorkingContent
     svnTreeBeforeSha256 = $resolveFixture.svnTreeBeforeSha256
     workflow = $harnessResult.resolveReport
   }
@@ -13388,7 +13619,8 @@ $report = [pscustomObject]@{
     peerRoot = Get-RepoRelativePath $resolveCancellationFixture.peerWorkingCopyRoot
     repositoryUrl = $resolveCancellationFixture.repoUrl
     conflictPath = $resolveCancellationFixture.conflictPath
-    expectedMergedContent = $resolveCancellationFixture.mergedContent
+    materializedConflictBeforeResolveCancellation = $resolveCancellationFixture.materializedConflict
+    expectedWorkingContentBeforeResolveCancellation = $resolveCancellationFixture.expectedWorkingContent
     svnTreeBeforeSha256 = $resolveCancellationFixture.svnTreeBeforeSha256
     workflow = $harnessResult.resolveCancellationReport
   }
@@ -13474,6 +13706,8 @@ $report = [pscustomObject]@{
     "SubversionR executed the installed Revert command cancellation path against an independent changed fixture resource",
     "VS Code renderer DOM, accessibility, screenshot, and Escape evidence confirmed the Revert modal cancellation",
     "SubversionR preserved the modified fixture file and kept SourceControl projection unchanged after cancelled Revert",
+    "SubversionR Update created the resolve fixture text conflict through the installed extension and completed full reconciliation",
+    "VS Code renderer DOM and accessibility evidence captured one warning naming src/tracked.txt with no separate plain-success notification",
     "SubversionR executed the installed Resolve command against an independent text-conflict fixture resource",
     "VS Code renderer DOM, accessibility, screenshot, and click evidence confirmed the Resolve modal",
     "SubversionR used the merged conflict choice, preserved the working-copy file content, and cleared the conflict projection after Resolve",

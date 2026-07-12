@@ -280,6 +280,8 @@
   "SubversionR updated SVN working copy to revision {0}: {1}": "SubversionR が SVN 作業コピーをリビジョン {0} に更新しました: {1}",
   "SubversionR updated SVN resource to revision {0}: {1}": "SubversionR が SVN リソースをリビジョン {0} に更新しました: {1}",
   "SubversionR updated {0} incoming SVN resources: {1}": "SubversionR が {0} 件の incoming SVN リソースを更新しました: {1}",
+  "{0}. The working copy has unresolved SVN conflicts ({1}): {2}": "{0}。作業コピーに未解決の SVN 競合があります（{1} 件）: {2}",
+  "{0} (+{1} more)": "{0}（ほか {1} 件）",
   "No incoming SVN resources to update.": "更新する incoming SVN リソースはありません。",
   "SubversionR history command failed: {0}": "SubversionR 履歴コマンドが失敗しました: {0}",
   "SubversionR line history command failed: {0}": "SubversionR 行履歴コマンドが失敗しました: {0}",

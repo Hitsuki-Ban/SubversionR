@@ -743,12 +743,14 @@ export class RepositoryCommandController {
         HEAD_WORKING_COPY_UPDATE_OPTIONS,
         this.options.localize("Updating SVN working copy"),
       );
-      this.showCommandInformation(
+      this.showUpdateCompletion(
         this.options.localize(
           "SubversionR updated SVN working copy to revision {0}: {1}",
           result.revision,
           session.identity.workingCopyRoot,
         ),
+        session,
+        ["."],
       );
     } catch (error) {
       await this.showCommandError(error);
@@ -775,12 +777,14 @@ export class RepositoryCommandController {
         validateRepositoryUpdateOptions(updateOptions),
         this.options.localize("Updating SVN working copy"),
       );
-      this.showCommandInformation(
+      this.showUpdateCompletion(
         this.options.localize(
           "SubversionR updated SVN working copy to revision {0}: {1}",
           result.revision,
           session.identity.workingCopyRoot,
         ),
+        session,
+        ["."],
       );
     } catch (error) {
       await this.showCommandError(error);
@@ -1711,6 +1715,12 @@ export class RepositoryCommandController {
       if (target.path === ".") {
         throw invalidResourceUpdateTarget();
       }
+      const session = this.options.sessionService
+        .listOpenSessions()
+        .find((candidate) => candidate.repositoryId === target.repositoryId && candidate.epoch === target.epoch);
+      if (!session) {
+        throw invalidResourceUpdateTarget();
+      }
 
       const result = await this.options.operationScheduler.run(target.repositoryId, async () => {
         const updateResult = await this.runJournaledOperation(
@@ -1739,12 +1749,14 @@ export class RepositoryCommandController {
         });
         return updateResult;
       });
-      this.showCommandInformation(
+      this.showUpdateCompletion(
         this.options.localize(
           "SubversionR updated SVN resource to revision {0}: {1}",
           result.revision,
           target.path,
         ),
+        session,
+        [target.path],
       );
     } catch (error) {
       await this.showCommandError(error);
@@ -1811,12 +1823,14 @@ export class RepositoryCommandController {
         });
       });
       const paths = targets.map((target) => target.path);
-      this.showCommandInformation(
+      this.showUpdateCompletion(
         this.options.localize(
           "SubversionR updated {0} incoming SVN resources: {1}",
           paths.length,
           commitPathSummary(paths),
         ),
+        session,
+        paths,
       );
     } catch (error) {
       await this.showCommandError(error);
@@ -4007,6 +4021,34 @@ export class RepositoryCommandController {
     });
   }
 
+  private showUpdateCompletion(
+    successMessage: string,
+    session: Pick<RepositorySession, "repositoryId" | "epoch" | "watchScope">,
+    updatedPaths: readonly string[],
+  ): void {
+    const conflicts = updateConflictPaths(
+      session,
+      updatedPaths,
+      this.options.sourceControlProjection,
+    );
+    if (conflicts.length === 0) {
+      this.showCommandInformation(successMessage);
+      return;
+    }
+    void this.options.ui
+      .showWarningMessage(
+        this.options.localize(
+          "{0}. The working copy has unresolved SVN conflicts ({1}): {2}",
+          successMessage,
+          conflicts.length,
+          updateConflictPathSummary(conflicts, this.options.localize),
+        ),
+      )
+      .catch((notificationError: unknown) => {
+        console.error("SubversionR repository command notification failed.", notificationError);
+      });
+  }
+
   private requireTrustedWorkspace(): void {
     requireTrustedWorkspaceState(this.options.ui.workspaceTrusted);
   }
@@ -5668,6 +5710,58 @@ function commitPathSummary(paths: readonly string[]): string {
   return paths.join(", ");
 }
 
+const UPDATE_CONFLICT_PATH_DISPLAY_LIMIT = 3;
+
+function updateConflictPaths(
+  session: Pick<RepositorySession, "repositoryId" | "epoch" | "watchScope">,
+  updatedPaths: readonly string[],
+  projectionService: Pick<SourceControlProjectionService, "getProjection">,
+): string[] {
+  const projection = projectionService.getProjection(session.repositoryId);
+  if (!projection) {
+    throw updateConflictStateUnavailable(session.repositoryId);
+  }
+  if (projection.repositoryId !== session.repositoryId || projection.epoch !== session.epoch) {
+    throw updateConflictStateStale(session.repositoryId, session.epoch, projection.epoch);
+  }
+  const conflictGroup = projection.groups.find((group) => group.id === "conflicts");
+  if (!conflictGroup) {
+    throw updateConflictStateUnavailable(session.repositoryId);
+  }
+  return Array.from(
+    new Set(
+      conflictGroup.resources
+        .filter(
+          (resource) =>
+            resource.source === "local" &&
+            updatedPaths.some((updatedPath) =>
+              repositoryPathContains(updatedPath, resource.path, session.watchScope.pathCase),
+            ),
+        )
+        .map((resource) => resource.path),
+    ),
+  ).sort((left, right) => left.localeCompare(right, "en-US"));
+}
+
+function repositoryPathContains(parent: string, candidate: string, pathCase: PathCasePolicy): boolean {
+  if (parent === ".") {
+    return true;
+  }
+  const parentKey = comparisonKey(pathCase, parent);
+  const candidateKey = comparisonKey(pathCase, candidate);
+  return candidateKey === parentKey || candidateKey.startsWith(`${parentKey}/`);
+}
+
+function updateConflictPathSummary(
+  paths: readonly string[],
+  localize: (message: string, ...args: unknown[]) => string,
+): string {
+  const visiblePaths = paths.slice(0, UPDATE_CONFLICT_PATH_DISPLAY_LIMIT);
+  const hiddenCount = paths.length - visiblePaths.length;
+  const summary = visiblePaths.join(", ");
+  return hiddenCount === 0 ? summary : localize("{0} (+{1} more)", summary, hiddenCount);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -6213,6 +6307,28 @@ function commitAllStateStale(repositoryId: string, expectedEpoch: number, actual
     "SUBVERSIONR_COMMIT_ALL_STATE_STALE",
     "lifecycle",
     "error.repository.commitAllStateStale",
+    { repositoryId, expectedEpoch, actualEpoch },
+  );
+}
+
+function updateConflictStateUnavailable(repositoryId: string): RepositoryCommandError {
+  return repositoryCommandError(
+    "SUBVERSIONR_UPDATE_CONFLICT_STATE_UNAVAILABLE",
+    "lifecycle",
+    "error.repository.updateConflictStateUnavailable",
+    { repositoryId },
+  );
+}
+
+function updateConflictStateStale(
+  repositoryId: string,
+  expectedEpoch: number,
+  actualEpoch: number,
+): RepositoryCommandError {
+  return repositoryCommandError(
+    "SUBVERSIONR_UPDATE_CONFLICT_STATE_STALE",
+    "lifecycle",
+    "error.repository.updateConflictStateStale",
     { repositoryId, expectedEpoch, actualEpoch },
   );
 }

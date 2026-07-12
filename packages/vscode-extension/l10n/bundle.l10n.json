@@ -280,6 +280,8 @@
   "SubversionR updated SVN working copy to revision {0}: {1}": "SubversionR updated SVN working copy to revision {0}: {1}",
   "SubversionR updated SVN resource to revision {0}: {1}": "SubversionR updated SVN resource to revision {0}: {1}",
   "SubversionR updated {0} incoming SVN resources: {1}": "SubversionR updated {0} incoming SVN resources: {1}",
+  "{0}. The working copy has unresolved SVN conflicts ({1}): {2}": "{0}. The working copy has unresolved SVN conflicts ({1}): {2}",
+  "{0} (+{1} more)": "{0} (+{1} more)",
   "No incoming SVN resources to update.": "No incoming SVN resources to update.",
   "SubversionR history command failed: {0}": "SubversionR history command failed: {0}",
   "SubversionR line history command failed: {0}": "SubversionR line history command failed: {0}",

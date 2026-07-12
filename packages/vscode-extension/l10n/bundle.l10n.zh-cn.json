@@ -280,6 +280,8 @@
   "SubversionR updated SVN working copy to revision {0}: {1}": "SubversionR 已将 SVN 工作副本更新到修订版 {0}：{1}",
   "SubversionR updated SVN resource to revision {0}: {1}": "SubversionR 已将 SVN 资源更新到修订版 {0}：{1}",
   "SubversionR updated {0} incoming SVN resources: {1}": "SubversionR 已更新 {0} 个 incoming SVN 资源：{1}",
+  "{0}. The working copy has unresolved SVN conflicts ({1}): {2}": "{0}。工作副本中有 {1} 个未解决的 SVN 冲突：{2}",
+  "{0} (+{1} more)": "{0}（另有 {1} 个）",
   "No incoming SVN resources to update.": "没有可更新的 incoming SVN 资源。",
   "SubversionR history command failed: {0}": "SubversionR 历史命令失败：{0}",
   "SubversionR line history command failed: {0}": "SubversionR 行历史命令失败：{0}",
