@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { collectInstalledRedactionReport } from "../src/diagnostics/installedRedactionReport";
+import { OperationDiagnostics } from "../src/diagnostics/operationDiagnostics";
 
 describe("installed redaction report", () => {
   it("fails fast outside the installed Extension Host evidence harness", async () => {
@@ -7,6 +8,7 @@ describe("installed redaction report", () => {
       collectInstalledRedactionReport({
         expectedToken: undefined,
         request: { token: "token-1" },
+        operationDiagnostics: operationDiagnostics(),
         collectDiagnosticsBundle: vi.fn().mockResolvedValue({ kind: "subversionr.diagnosticsBundle" }),
       }),
     ).rejects.toMatchObject({
@@ -20,6 +22,7 @@ describe("installed redaction report", () => {
       collectInstalledRedactionReport({
         expectedToken: "token-1",
         request: { token: "token-2" },
+        operationDiagnostics: operationDiagnostics(),
         collectDiagnosticsBundle: vi.fn().mockResolvedValue({ kind: "subversionr.diagnosticsBundle" }),
       }),
     ).rejects.toMatchObject({
@@ -32,6 +35,7 @@ describe("installed redaction report", () => {
     const report = await collectInstalledRedactionReport({
       expectedToken: "token-1",
       request: { token: "token-1" },
+      operationDiagnostics: operationDiagnostics(),
       collectDiagnosticsBundle: vi.fn().mockResolvedValue({
         kind: "subversionr.diagnosticsBundle",
         redaction: {
@@ -43,13 +47,20 @@ describe("installed redaction report", () => {
     });
 
     expect(report).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "subversionr.installedRedactionReport",
       diagnosticsBundle: {
         kind: "subversionr.diagnosticsBundle",
       },
       publicSupportFixture: {
         status: "redacted",
+      },
+      operationFailureFixture: {
+        status: "redacted",
+        channel: "SubversionR",
+        maxLines: 100,
+        maxLineLength: 4096,
+        showLogAction: "Show Log",
       },
     });
 
@@ -64,5 +75,15 @@ describe("installed redaction report", () => {
     expect(json).toContain("[REDACTED:secret]");
     expect(json).toContain("[REDACTED:repository-log]");
     expect(json).toContain("[REDACTED:source-content]");
+    expect(json).toContain("SVN_ERR_WC_NOT_UP_TO_DATE");
+    expect(json).toContain("SVN_ERR_FS_TXN_OUT_OF_DATE");
   });
 });
+
+function operationDiagnostics(): OperationDiagnostics {
+  return new OperationDiagnostics({
+    clear: vi.fn(),
+    error: vi.fn(),
+    show: vi.fn(),
+  });
+}

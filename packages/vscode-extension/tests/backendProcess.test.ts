@@ -172,7 +172,7 @@ describe("startBackendProcess", () => {
     expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
   });
 
-  it("rejects initialize and terminates the sidecar when protocol minor is too old for remote status", async () => {
+  it("rejects initialize and terminates the sidecar when protocol minor is too old for failure diagnostics", async () => {
     const spawner = new RecordingSpawner();
 
     const start = startBackendProcess(backendConfig(), backendDeps({ spawner }));
@@ -182,7 +182,7 @@ describe("startBackendProcess", () => {
       jsonRpcResponse(
         request.id,
         initializeResponse({
-          protocol: { major: 1, minor: 27 },
+          protocol: { major: 1, minor: 28 },
         }),
       ),
     );
@@ -192,8 +192,8 @@ describe("startBackendProcess", () => {
       category: "protocol",
       messageKey: "error.backend.protocolMinorUnsupported",
       safeArgs: {
-        expectedMinimum: 28,
-        actual: 27,
+        expectedMinimum: 29,
+        actual: 28,
       },
     });
     expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
@@ -764,7 +764,7 @@ function initializeResponse(
 
 function initializeResponseBase() {
   return {
-    protocol: { major: 1, minor: 28 },
+    protocol: { major: 1, minor: 29 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",

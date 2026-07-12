@@ -553,6 +553,9 @@ $tortoiseCommandControllerSource = Read-RequiredDocument "packages/vscode-extens
 $tortoiseCommandControllerTests = Read-RequiredDocument "packages/vscode-extension/tests/tortoiseCommandController.test.ts"
 $installedSourceControlSurfaceReportSource = Read-RequiredDocument "packages/vscode-extension/src/diagnostics/installedSourceControlSurfaceReport.ts"
 $installedSourceControlSurfaceReportTests = Read-RequiredDocument "packages/vscode-extension/tests/installedSourceControlSurfaceReport.test.ts"
+$operationDiagnosticsSource = Read-RequiredDocument "packages/vscode-extension/src/diagnostics/operationDiagnostics.ts"
+$operationDiagnosticsTests = Read-RequiredDocument "packages/vscode-extension/tests/operationDiagnostics.test.ts"
+$installedRedactionReportTests = Read-RequiredDocument "packages/vscode-extension/tests/installedRedactionReport.test.ts"
 $nativeBridgeTests = Read-RequiredDocument "crates/subversionr-daemon/tests/native_bridge.rs"
 $nativeBridgeSource = Read-RequiredDocument "native/svn-bridge/src/subversionr_bridge.c"
 $nativeBridgeRustSource = Read-RequiredDocument "crates/subversionr-daemon/src/native.rs"
@@ -2440,10 +2443,40 @@ Assert-Terms $protocolContractTests @(
   "RepositoryDiscoverResponse"
 ) "REP-004 protocol file external boundary contract"
 Assert-Terms $backendProcessTests @(
-  "rejects initialize and terminates the sidecar when protocol minor is too old for remote status",
+  "rejects initialize and terminates the sidecar when protocol minor is too old for failure diagnostics",
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
-  "expectedMinimum: 28"
-) "REP-004 protocol v1.28 startup gate"
+  "expectedMinimum: 29"
+) "REP-004 protocol v1.29 startup gate"
+Assert-Terms $protocolSource @(
+  "OperationFailureDiagnostics",
+  "OperationFailureCause",
+  "SvnErrorDiagnostics"
+) "OBS-007 protocol failure diagnostics contract"
+Assert-Terms $nativeBridgeHeader @(
+  "SUBVERSIONR_BRIDGE_ERROR_ENTRY_LIMIT = 8",
+  "subversionr_bridge_last_error_diagnostics"
+) "OBS-007 bounded native failure diagnostics ABI"
+Assert-Terms $operationDiagnosticsSource @(
+  "MAX_DIAGNOSTIC_LINE_BYTES = 4096",
+  "MAX_DIAGNOSTIC_LINES = 100",
+  "redactDiagnosticValue",
+  "recordRpcFailure"
+) "OBS-007 bounded redacted SubversionR operation log"
+Assert-Terms $operationDiagnosticsTests @(
+  "writes bounded redacted structured failures",
+  "keeps at most one hundred rendered records",
+  "reveals the SubversionR channel without taking editor focus"
+) "OBS-007 operation log unit coverage"
+Assert-Terms $repositoryCommandControllerTests @(
+  "preserves the reviewed selection and commit message after a failed commit",
+  "SVN_ERR_WC_NOT_UP_TO_DATE",
+  "Show Log"
+) "OBS-007 actionable failure and commit form-state coverage"
+Assert-Terms $installedRedactionReportTests @(
+  "operationFailureFixture",
+  "SVN_ERR_FS_TXN_OUT_OF_DATE",
+  "[REDACTED:url:"
+) "OBS-007 installed operation failure redaction coverage"
 Assert-Terms $rpcDispatchTests @(
   "repository_discover_lazy_externals_returns_file_external_boundaries",
   "fileExternalBoundaries",
@@ -4341,10 +4374,13 @@ Assert-Terms $lineHistoryCommandControllerSource @(
   "SUBVERSIONR_LINE_HISTORY_BLAME_INCOMPLETE",
   "SUBVERSIONR_LINE_HISTORY_LOG_INCOMPLETE",
   "SUBVERSIONR_LINE_HISTORY_REVISION_LIMIT_EXCEEDED",
-  "SubversionR line history command failed: {0}"
+  'recordFailure("Line History", error)',
+  'localize("Show Log")',
+  "SVN {0} failed. Open the SubversionR log for details."
 ) "HIS-003 Line History command implementation"
 Assert-Terms $lineHistoryCommandControllerTests @(
   "opens preloaded line history for a safe active editor selection",
+  "records failures and offers the redacted log without blocking on the notification",
   "includes merged revisions in line blame and revision log requests when history settings enable them",
   "uses the current line for an empty selection and normalizes reversed selections",
   "blocks line history in untrusted workspaces before blame or log side effects",
@@ -4439,15 +4475,18 @@ Assert-Terms $extensionPackageNlsZhCn @(
 ) "HIS-003 Chinese package localization"
 Assert-Terms $extensionBundleL10n @(
   '"Line History: {0}"',
-  '"SubversionR line history command failed: {0}"'
+  '"Show Log"',
+  '"SVN {0} failed. Open the SubversionR log for details."'
 ) "HIS-003 English runtime localization"
 Assert-Terms $extensionBundleL10nJa @(
   '"Line History: {0}"',
-  '"SubversionR line history command failed: {0}"'
+  '"Show Log"',
+  '"SVN {0} failed. Open the SubversionR log for details."'
 ) "HIS-003 Japanese runtime localization"
 Assert-Terms $extensionBundleL10nZhCn @(
   '"Line History: {0}"',
-  '"SubversionR line history command failed: {0}"'
+  '"Show Log"',
+  '"SVN {0} failed. Open the SubversionR log for details."'
 ) "HIS-003 Chinese runtime localization"
 Assert-Terms $extensionManifestTests @(
   "onCommand:subversionr.showLineHistory",
@@ -4455,7 +4494,8 @@ Assert-Terms $extensionManifestTests @(
   "subversionr.showLineHistory",
   "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorLineHistoryFile",
   "Line History: {0}",
-  "SubversionR line history command failed: {0}"
+  "Show Log",
+  "SVN {0} failed. Open the SubversionR log for details."
 ) "HIS-003 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-004" @(
   "docs/plans/m5-content-diff-history.md",

@@ -19,6 +19,19 @@ extern "C" {
 
 typedef struct subversionr_bridge_runtime subversionr_bridge_runtime;
 
+enum { SUBVERSIONR_BRIDGE_ERROR_ENTRY_LIMIT = 8 };
+
+typedef struct subversionr_bridge_error_entry {
+  int code;
+  const char *name;
+} subversionr_bridge_error_entry;
+
+typedef struct subversionr_bridge_error_diagnostics {
+  const subversionr_bridge_error_entry *entries;
+  size_t entry_count;
+  int truncated;
+} subversionr_bridge_error_diagnostics;
+
 enum {
   SUBVERSIONR_BRIDGE_AUTH_ABI_VERSION = 1
 };
@@ -243,6 +256,10 @@ typedef struct subversionr_bridge_operation_result {
 
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_runtime_create(subversionr_bridge_runtime **runtime);
 SUBVERSIONR_BRIDGE_API void subversionr_bridge_runtime_destroy(subversionr_bridge_runtime *runtime);
+SUBVERSIONR_BRIDGE_API int subversionr_bridge_last_error_diagnostics(
+  subversionr_bridge_runtime *runtime,
+  subversionr_bridge_error_diagnostics *diagnostics
+);
 SUBVERSIONR_BRIDGE_API subversionr_bridge_version_info subversionr_bridge_version(void);
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_open_working_copy(
   subversionr_bridge_runtime *runtime,

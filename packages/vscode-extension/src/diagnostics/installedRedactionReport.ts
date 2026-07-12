@@ -1,9 +1,11 @@
 import { redactDiagnosticValue } from "./diagnosticsRedaction";
+import type { OperationDiagnostics } from "./operationDiagnostics";
 
 export interface InstalledRedactionReportOptions {
   expectedToken: string | undefined;
   request: unknown;
   collectDiagnosticsBundle(): Promise<Record<string, unknown>>;
+  operationDiagnostics: Pick<OperationDiagnostics, "recordRpcFailure" | "snapshot">;
 }
 
 export async function collectInstalledRedactionReport(
@@ -17,10 +19,46 @@ export async function collectInstalledRedactionReport(
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "subversionr.installedRedactionReport",
     diagnosticsBundle: await options.collectDiagnosticsBundle(),
     publicSupportFixture: installedPublicSupportRedactionFixture(),
+    operationFailureFixture: installedOperationFailureFixture(options.operationDiagnostics),
+  };
+}
+
+function installedOperationFailureFixture(
+  diagnostics: Pick<OperationDiagnostics, "recordRpcFailure" | "snapshot">,
+): Record<string, unknown> {
+  diagnostics.recordRpcFailure("operation/run", {
+    code: "SVN_OPERATION_COMMIT_FAILED",
+    category: "native",
+    messageKey: "error.native.operationCommitFailed",
+    safeArgs: {
+      path: "C:\\Users\\Alice\\workspace\\project\\src\\main.ts",
+      repositoryUrl: "https://alice:hunter2@example.com/repos/private?token=abc123",
+      credential: "hunter2",
+      repositoryLogMessage: "private commit message",
+    },
+    retryable: false,
+    diagnostics: {
+      cause: "outOfDate",
+      svn: {
+        entries: [
+          { code: 155011, name: "SVN_ERR_WC_NOT_UP_TO_DATE" },
+          { code: 160028, name: "SVN_ERR_FS_TXN_OUT_OF_DATE" },
+        ],
+        truncated: false,
+      },
+    },
+  });
+  return {
+    status: "redacted",
+    channel: "SubversionR",
+    maxLines: 100,
+    maxLineLength: 4096,
+    showLogAction: "Show Log",
+    lines: diagnostics.snapshot(),
   };
 }
 

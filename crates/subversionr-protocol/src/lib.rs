@@ -479,6 +479,37 @@ pub struct DiagnosticsBackendStderr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SvnErrorDiagnosticEntry {
+    pub code: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SvnErrorDiagnostics {
+    pub entries: Vec<SvnErrorDiagnosticEntry>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperationFailureCause {
+    OutOfDate,
+    ConflictPresent,
+    AuthenticationFailed,
+    NotWorkingCopy,
+    UnknownNative,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationFailureDiagnostics {
+    pub cause: OperationFailureCause,
+    pub svn: SvnErrorDiagnostics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiagnosticsGetResponse {
     pub backend_version: String,
     pub bridge_version: String,
@@ -600,7 +631,7 @@ impl InitializeResponse {
         Self {
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 28,
+                minor: 29,
             },
             backend_version,
             bridge_version,

@@ -8,12 +8,14 @@ export interface JsonRpcStreamClientOptions {
   requestHandler?: JsonRpcRequestHandler;
   notificationHandler?: JsonRpcNotificationHandler;
   onProtocolFault?: (error: Error) => void;
+  onRequestError?: (method: string, error: JsonRpcStreamError) => void;
 }
 
 export type JsonRpcRequestHandler = (method: string, params: unknown) => Promise<unknown> | unknown;
 export type JsonRpcNotificationHandler = (method: string, params: unknown) => Promise<void> | void;
 
 interface PendingRequest {
+  method: string;
   cleanup(): void;
   resolve(value: unknown): void;
   reject(error: Error): void;
@@ -40,8 +42,23 @@ interface JsonRpcInboundNotification {
 }
 
 export class JsonRpcStreamError extends Error {
+  public readonly code: string;
+  public readonly category: string;
+  public readonly messageKey: string;
+  public readonly safeArgs: Record<string, unknown>;
+  public readonly retryable: boolean;
+  public readonly diagnostics: RpcErrorDiagnostics | null;
+
   public constructor(public readonly error: unknown) {
-    super(errorMessage(error));
+    const structured = requireStructuredRpcError(error);
+    super(structured.code);
+    this.name = "JsonRpcStreamError";
+    this.code = structured.code;
+    this.category = structured.category;
+    this.messageKey = structured.messageKey;
+    this.safeArgs = structured.args;
+    this.retryable = structured.retryable;
+    this.diagnostics = structured.diagnostics;
   }
 }
 
@@ -101,6 +118,7 @@ export class JsonRpcStreamClient implements JsonRpcSender {
         options.signal?.removeEventListener("abort", abortListener);
       };
       this.pending.set(id, {
+        method,
         cleanup,
         resolve: (value) => resolve(value as T),
         reject,
@@ -161,12 +179,28 @@ export class JsonRpcStreamClient implements JsonRpcSender {
       return;
     }
 
-    this.pending.delete(response.id);
-    pending.cleanup();
     if (response.error !== undefined) {
-      pending.reject(new JsonRpcStreamError(response.error));
+      let error: JsonRpcStreamError;
+      try {
+        error = new JsonRpcStreamError(response.error);
+      } catch (validationError) {
+        this.disposeForProtocolFault(
+          validationError instanceof Error ? validationError : new Error(String(validationError)),
+        );
+        return;
+      }
+      this.pending.delete(response.id);
+      pending.cleanup();
+      pending.reject(error);
+      try {
+        this.options.onRequestError?.(pending.method, error);
+      } catch (observerError) {
+        console.error("SubversionR JSON-RPC request-error observer failed.", observerError);
+      }
       return;
     }
+    this.pending.delete(response.id);
+    pending.cleanup();
     pending.resolve(response.result);
   }
 
@@ -251,11 +285,93 @@ export class JsonRpcStreamClient implements JsonRpcSender {
   }
 }
 
-function errorMessage(error: unknown): string {
-  if (typeof error === "object" && error && "code" in error) {
-    return String(error.code);
+interface StructuredRpcError {
+  code: string;
+  category: string;
+  messageKey: string;
+  args: Record<string, unknown>;
+  retryable: boolean;
+  diagnostics: RpcErrorDiagnostics | null;
+}
+
+export interface RpcErrorDiagnostics {
+  cause: "outOfDate" | "conflictPresent" | "authenticationFailed" | "notWorkingCopy" | "unknownNative";
+  svn: {
+    entries: Array<{ code: number; name: string }>;
+    truncated: boolean;
+  };
+}
+
+function requireStructuredRpcError(error: unknown): StructuredRpcError {
+  if (typeof error !== "object" || error === null) {
+    throw new Error("JSON-RPC error response must be an object");
   }
-  return "JSON-RPC request failed";
+  const value = error as Record<string, unknown>;
+  if (
+    typeof value.code !== "string" ||
+    value.code.trim().length === 0 ||
+    typeof value.category !== "string" ||
+    value.category.trim().length === 0 ||
+    typeof value.messageKey !== "string" ||
+    value.messageKey.trim().length === 0 ||
+    typeof value.args !== "object" ||
+    value.args === null ||
+    Array.isArray(value.args) ||
+    typeof value.retryable !== "boolean" ||
+    !("diagnostics" in value)
+  ) {
+    throw new Error("JSON-RPC error response does not match the structured error contract");
+  }
+  return {
+    code: value.code,
+    category: value.category,
+    messageKey: value.messageKey,
+    args: value.args as Record<string, unknown>,
+    retryable: value.retryable,
+    diagnostics: requireRpcErrorDiagnostics(value.diagnostics),
+  };
+}
+
+function requireRpcErrorDiagnostics(value: unknown): RpcErrorDiagnostics | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) {
+    throw new Error("JSON-RPC error diagnostics must be an object or null");
+  }
+  const diagnostics = value as Record<string, unknown>;
+  const causes = new Set(["outOfDate", "conflictPresent", "authenticationFailed", "notWorkingCopy", "unknownNative"]);
+  if (typeof diagnostics.cause !== "string" || !causes.has(diagnostics.cause)) {
+    throw new Error("JSON-RPC error diagnostics cause is invalid");
+  }
+  if (typeof diagnostics.svn !== "object" || diagnostics.svn === null || Array.isArray(diagnostics.svn)) {
+    throw new Error("JSON-RPC SVN diagnostics must be an object");
+  }
+  const svn = diagnostics.svn as Record<string, unknown>;
+  if (!Array.isArray(svn.entries) || svn.entries.length === 0 || svn.entries.length > 8 || typeof svn.truncated !== "boolean") {
+    throw new Error("JSON-RPC SVN diagnostics entries are invalid");
+  }
+  const entries = svn.entries.map((entry) => {
+    if (typeof entry !== "object" || entry === null) {
+      throw new Error("JSON-RPC SVN diagnostic entry must be an object");
+    }
+    const item = entry as Record<string, unknown>;
+    if (
+      !Number.isInteger(item.code) ||
+      (item.code as number) < -2_147_483_648 ||
+      (item.code as number) > 2_147_483_647 ||
+      typeof item.name !== "string" ||
+      item.name.length > 128 ||
+      !/^SVN_ERR_[A-Z0-9_]+$/u.test(item.name)
+    ) {
+      throw new Error("JSON-RPC SVN diagnostic entry is invalid");
+    }
+    return { code: item.code as number, name: item.name };
+  });
+  return {
+    cause: diagnostics.cause as RpcErrorDiagnostics["cause"],
+    svn: { entries, truncated: svn.truncated },
+  };
 }
 
 function isInboundRequest(
@@ -282,6 +398,7 @@ function rpcError(
     messageKey,
     args,
     retryable: false,
+    diagnostics: null,
   };
 }
 
@@ -300,6 +417,7 @@ function requestHandlerError(method: string, error: unknown): Record<string, unk
       messageKey: String(structured.messageKey),
       args: typeof structured.safeArgs === "object" && structured.safeArgs !== null ? structured.safeArgs : {},
       retryable: structured.retryable === true,
+      diagnostics: null,
     };
   }
 

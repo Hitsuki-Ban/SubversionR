@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { encodeContentLengthFrame } from "../src/transport/framing";
 import {
   JsonRpcRequestCancelledError,
@@ -117,6 +117,7 @@ describe("JsonRpcStreamClient", () => {
         messageKey: "error.rpc.methodNotFound",
         args: { method: "credentials/request" },
         retryable: false,
+        diagnostics: null,
       },
     });
 
@@ -201,6 +202,7 @@ describe("JsonRpcStreamClient", () => {
         messageKey: "error.auth.failed",
         args: {},
         retryable: false,
+        diagnostics: null,
       },
     });
 
@@ -220,16 +222,90 @@ describe("JsonRpcStreamClient", () => {
           category: "native",
           messageKey: "error.native.workingCopyNotFound",
           args: { path: "C:/missing" },
+          retryable: false,
+          diagnostics: null,
         },
       }),
     );
 
     await expect(request).rejects.toMatchObject({
+      code: "SVN_WC_NOT_FOUND",
+      category: "native",
+      messageKey: "error.native.workingCopyNotFound",
+      safeArgs: { path: "C:/missing" },
+      retryable: false,
+      diagnostics: null,
       error: {
         code: "SVN_WC_NOT_FOUND",
         category: "native",
       },
     });
+  });
+
+  it("rejects and terminates the connection when an error response violates the structured contract", async () => {
+    const onProtocolFault = vi.fn();
+    const { client, stdout } = createClient({ onProtocolFault });
+
+    const request = client.sendRequest("repository/open", { path: "C:/missing" });
+    stdout.write(
+      framePayload({
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: "SVN_WC_NOT_FOUND",
+          category: "native",
+          messageKey: "error.native.workingCopyNotFound",
+          args: {},
+          retryable: false,
+          diagnostics: {
+            cause: "notWorkingCopy",
+            svn: {
+              entries: [{ code: 155007, name: "C:\\Users\\Alice\\secret" }],
+              truncated: false,
+            },
+          },
+        },
+      }),
+    );
+
+    await expect(request).rejects.toThrow("SVN diagnostic entry is invalid");
+    expect(onProtocolFault).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("SVN diagnostic entry is invalid") }),
+    );
+    await expect(client.sendRequest("shutdown", {})).rejects.toThrow("JSON-RPC stream client is disposed");
+  });
+
+  it("settles an error response even when the request-error observer throws", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { client, stdout } = createClient({
+      onRequestError: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    const request = client.sendRequest("repository/open", { path: "C:/missing" });
+    stdout.write(
+      framePayload({
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: "SVN_WC_NOT_FOUND",
+          category: "native",
+          messageKey: "error.native.workingCopyNotFound",
+          args: {},
+          retryable: false,
+          diagnostics: null,
+        },
+      }),
+    );
+
+    await expect(request).rejects.toBeInstanceOf(JsonRpcStreamError);
+    expect(consoleError).toHaveBeenCalledWith(
+      "SubversionR JSON-RPC request-error observer failed.",
+      expect.objectContaining({ message: "observer failed" }),
+    );
+    client.dispose();
+    consoleError.mockRestore();
   });
 
   it("rejects pending requests when disposed", async () => {

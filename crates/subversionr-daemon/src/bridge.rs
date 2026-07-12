@@ -1,8 +1,8 @@
 use serde_json::{Value, json};
 use subversionr_protocol::{
     Capabilities, CertificateTrustRequest, CertificateTrustResponse, CredentialRequest,
-    CredentialResponse, HistoryBlameLine, HistoryLogEntry, RepositoryIdentity, StatusSnapshot,
-    default_capabilities,
+    CredentialResponse, HistoryBlameLine, HistoryLogEntry, OperationFailureDiagnostics,
+    RepositoryIdentity, StatusSnapshot, default_capabilities,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +56,7 @@ pub struct BridgeFailure {
     pub(crate) message_key: String,
     pub(crate) args: Value,
     pub(crate) retryable: bool,
+    pub(crate) diagnostics: Option<Box<OperationFailureDiagnostics>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,11 +347,21 @@ impl BridgeFailure {
             message_key: message_key.into(),
             args,
             retryable,
+            diagnostics: None,
         }
+    }
+
+    pub(crate) fn with_diagnostics(mut self, diagnostics: OperationFailureDiagnostics) -> Self {
+        self.diagnostics = Some(Box::new(diagnostics));
+        self
     }
 
     pub fn code(&self) -> &str {
         &self.code
+    }
+
+    pub fn diagnostics(&self) -> Option<&OperationFailureDiagnostics> {
+        self.diagnostics.as_deref()
     }
 
     pub(crate) fn bridge_unavailable(path: &str) -> Self {

@@ -630,6 +630,7 @@ describe("RepositorySessionService", () => {
         messageKey: "error.repository.alreadyOpen",
         args: { repositoryId: "repo-uuid:C:/wc" },
         retryable: false,
+        diagnostics: null,
       }),
     ]);
     const backendService = fakeBackendService(connection);

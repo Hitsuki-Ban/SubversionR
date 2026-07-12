@@ -171,6 +171,7 @@ pub(crate) fn rpc_error(
         "messageKey": message_key,
         "args": args,
         "retryable": retryable,
+        "diagnostics": null,
     })
 }
 
@@ -181,13 +182,16 @@ pub(crate) fn current_timestamp() -> String {
 }
 
 pub(crate) fn bridge_error(failure: BridgeFailure) -> Value {
-    rpc_error(
+    let mut error = rpc_error(
         &failure.code,
         &failure.category,
         &failure.message_key,
         failure.args,
         failure.retryable,
-    )
+    );
+    error["diagnostics"] = serde_json::to_value(failure.diagnostics)
+        .expect("operation failure diagnostics must serialize");
+    error
 }
 
 impl From<(DispatchOutcome, Value)> for DispatchResult {
@@ -197,5 +201,38 @@ impl From<(DispatchOutcome, Value)> for DispatchResult {
             response,
             notifications: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod error_contract_tests {
+    use super::*;
+    use subversionr_protocol::{
+        OperationFailureCause, OperationFailureDiagnostics, SvnErrorDiagnosticEntry,
+        SvnErrorDiagnostics,
+    };
+
+    #[test]
+    fn rpc_errors_always_include_nullable_diagnostics() {
+        assert_eq!(
+            rpc_error("RPC_TEST", "protocol", "error.rpc.test", json!({}), false)["diagnostics"],
+            Value::Null
+        );
+
+        let failure =
+            BridgeFailure::new("SVN_TEST", "native", "error.native.test", json!({}), false)
+                .with_diagnostics(OperationFailureDiagnostics {
+                    cause: OperationFailureCause::NotWorkingCopy,
+                    svn: SvnErrorDiagnostics {
+                        entries: vec![SvnErrorDiagnosticEntry {
+                            code: 155007,
+                            name: "SVN_ERR_WC_NOT_WORKING_COPY".to_string(),
+                        }],
+                        truncated: false,
+                    },
+                });
+        let error = bridge_error(failure);
+        assert_eq!(error["diagnostics"]["cause"], "notWorkingCopy");
+        assert_eq!(error["diagnostics"]["svn"]["entries"][0]["code"], 155007);
     }
 }

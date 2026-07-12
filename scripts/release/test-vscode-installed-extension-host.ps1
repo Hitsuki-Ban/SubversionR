@@ -367,6 +367,12 @@ async function run() {
   if (!installedRedactionReport.diagnosticsBundle || installedRedactionReport.diagnosticsBundle.kind !== "subversionr.diagnosticsBundle") {
     throw new Error("Installed redaction report must include a diagnostics bundle.");
   }
+  if (!installedRedactionReport.operationFailureFixture || installedRedactionReport.operationFailureFixture.channel !== "SubversionR") {
+    throw new Error("Installed redaction report must include the bounded SubversionR operation failure log fixture.");
+  }
+  if (!installedRedactionReport.operationFailureFixture.lines.some((line) => line.includes("SVN_ERR_WC_NOT_UP_TO_DATE"))) {
+    throw new Error("Installed operation failure log must retain the safe libsvn cause.");
+  }
   const redactionText = JSON.stringify(installedRedactionReport);
   for (const forbidden of ["hunter2", "abc123", "Alice", "example.com", ".svn/wc.db"]) {
     if (redactionText.includes(forbidden)) {
@@ -449,6 +455,12 @@ function Assert-HarnessResult(
   }
   if ($Result.installedRedactionReport.publicSupportFixture.status -ne "redacted") {
     throw "Installed-host public support fixture must be redacted."
+  }
+  if ($Result.installedRedactionReport.schemaVersion -ne 2 -or $Result.installedRedactionReport.operationFailureFixture.channel -ne "SubversionR") {
+    throw "Installed-host redaction report must include the v2 SubversionR operation failure fixture."
+  }
+  if (-not (($Result.installedRedactionReport.operationFailureFixture.lines -join "`n").Contains("SVN_ERR_WC_NOT_UP_TO_DATE"))) {
+    throw "Installed-host operation failure fixture must retain the safe libsvn cause."
   }
   $installedRedactionText = $Result.installedRedactionReport | ConvertTo-Json -Depth 20
   foreach ($forbidden in @("hunter2", "abc123", "Alice", "example.com", ".svn/wc.db")) {
