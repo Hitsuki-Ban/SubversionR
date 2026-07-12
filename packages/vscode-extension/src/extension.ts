@@ -174,7 +174,7 @@ const BACKEND_RESTART_MAX_BACKOFF_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_INTERVAL_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_TIMEOUT_MS = 5 * 1000;
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const operationLogChannel = vscode.window.createOutputChannel("SubversionR", { log: true });
   const diagnostics = new OperationDiagnostics(operationLogChannel);
   operationDiagnostics = diagnostics;
@@ -848,7 +848,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const workspaceFolderChange = vscode.workspace.onDidChangeWorkspaceFolders(() => {
     void repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("workspaceFolders");
   });
-  void repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("activation");
+  await repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("activation");
   const diagnosticsDocumentProvider = new DiagnosticsReadonlyDocumentProvider({
     createEventEmitter: () => new vscode.EventEmitter<vscode.Uri>(),
     uriFromComponents: (components) => vscode.Uri.from(components),

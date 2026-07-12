@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $workflowScript = Join-Path $repoRoot "scripts\release\test-vscode-installed-core-workflow.ps1"
+$extensionSourcePath = Join-Path $repoRoot "packages\vscode-extension\src\extension.ts"
 $packageJsonPath = Join-Path $repoRoot "package.json"
 $ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
 
@@ -299,6 +300,10 @@ try {
   Assert-True ($rootPackage.scripts."release:test-installed-core-workflow:win32-x64".Contains("test-vscode-installed-core-workflow.ps1")) "Root package should expose the installed core workflow E2E gate."
   Assert-True ($rootPackage.scripts."release:test-installed-core-workflow:win32-x64".Contains("%SUBVERSIONR_CODE_CLI%")) "Installed core workflow gate should require an explicit Code CLI path."
   Assert-True ($rootPackage.scripts."release:test-installed-core-workflow:win32-x64".Contains(".cache/native/stage/subversion-win-x64/bin")) "Installed core workflow gate should require the source-built SVN fixture tools root."
+  $extensionSource = Get-Content -Raw -LiteralPath $extensionSourcePath
+  Assert-True ($extensionSource.Contains("export async function activate(context: vscode.ExtensionContext): Promise<void>")) "Extension activation should remain asynchronous until initial repository reconciliation completes."
+  Assert-True ($extensionSource.Contains('await repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("activation")')) "Extension activation should await the initial organic repository reconciliation."
+  Assert-True (-not $extensionSource.Contains('void repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("activation")')) "Extension activation must not expose an active extension before organic repository reconciliation completes."
 
   $vsixPath = Join-Path $tempRoot "subversionr-win32-x64-0.2.0.vsix"
   New-TestVsix -Path $vsixPath -Version "0.2.0"
