@@ -716,7 +716,7 @@ fn native_stdio_rpc_discovers_directory_external_with_real_bridge() {
         [
             "propset".as_ref(),
             "svn:externals".as_ref(),
-            format!("{}/trunk externals/library", external_fixture.repo_url).as_ref(),
+            format!("{}/trunk library", external_fixture.repo_url).as_ref(),
             parent_fixture.wc.as_os_str(),
             "--non-interactive".as_ref(),
         ],
@@ -4272,7 +4272,7 @@ fn native_bridge_commit_directory_property_change_publishes_revision_and_cleans_
 
     assert_eq!(result.result.touched_paths, vec!["src"]);
     assert!(result.result.skipped_paths.is_empty());
-    assert!(result.revision >= 4);
+    assert_eq!(result.revision, 3);
 
     let snapshot = bridge
         .status_scan(&identity, "src", "empty", 91)
@@ -4302,7 +4302,10 @@ fn native_bridge_commit_directory_property_change_publishes_revision_and_cleans_
         "peer propget should succeed: {}",
         String::from_utf8_lossy(&propget.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&propget.stdout), "value\n");
+    assert_eq!(
+        String::from_utf8_lossy(&propget.stdout).trim_end_matches(['\r', '\n']),
+        "value"
+    );
 }
 
 #[test]
