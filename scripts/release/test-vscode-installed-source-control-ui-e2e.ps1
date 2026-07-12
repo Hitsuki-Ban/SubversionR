@@ -1614,6 +1614,58 @@ async function collectFreshnessReportUntilUnversionedCount(request, label, expec
   throw lastTransientError || new Error(`${label} timed out waiting for ${expectedCount} unversioned resources.`);
 }
 
+async function collectFreshnessReportUntilPathsAbsent(
+  request,
+  label,
+  paths,
+  openReport,
+  expectedRefreshTargets,
+  timeoutMs = 30000
+) {
+  const started = Date.now();
+  let lastReport;
+  let lastCoverageError;
+  let lastTransientError;
+  while (Date.now() - started < timeoutMs) {
+    const remainingMs = timeoutMs - (Date.now() - started);
+    try {
+      const report = await collectFreshnessReportWithSurfaceRetry(
+        request,
+        label,
+        Math.min(5000, Math.max(1, remainingMs))
+      );
+      lastReport = report;
+      const presentPaths = paths.filter(pathValue => Boolean(findAnyResource(report, pathValue)));
+      if (presentPaths.length === 0) {
+        try {
+          return {
+            report,
+            coverageReport: validateLastCompletedRefreshCoverageSet(report, openReport, expectedRefreshTargets)
+          };
+        } catch (error) {
+          lastCoverageError = error;
+        }
+      }
+    } catch (error) {
+      if (!isTransientSourceControlSurfaceMismatch(error)) {
+        throw error;
+      }
+      lastTransientError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, Math.min(250, Math.max(1, remainingMs))));
+  }
+  if (lastReport) {
+    const presentPaths = paths.filter(pathValue => Boolean(findAnyResource(lastReport, pathValue)));
+    const coverageSummary = JSON.stringify(lastReport.lastCompletedRefresh || null);
+    const coverageError = lastCoverageError instanceof Error ? ` Last coverage error: ${lastCoverageError.message}` : "";
+    if (presentPaths.length > 0) {
+      throw new Error(`${label} timed out waiting for committed paths to leave the SourceControl projection; still present: ${JSON.stringify(presentPaths)}; resources: ${sourceControlResourceSummary(lastReport)}; last completed refresh: ${coverageSummary}.${coverageError}`);
+    }
+    throw new Error(`${label} observed the committed paths leave the SourceControl projection but timed out waiting for exact refresh coverage; last completed refresh: ${coverageSummary}.${coverageError}`);
+  }
+  throw lastTransientError || new Error(`${label} timed out waiting for committed paths to leave the SourceControl projection.`);
+}
+
 function waitForFile(filePath, timeoutMs) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
@@ -3255,21 +3307,7 @@ async function runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelect
       60000
     );
 
-    const postCommitFreshnessReport = await collectFreshnessReportWithSurfaceRetry(
-      {
-        repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
-        epoch: commitSelectedMultiSelectionOpenReport.repository.epoch,
-        scenario: "partial"
-      },
-      "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport/commitSelectedMultiSelection",
-      30000
-    );
-    if (!postCommitFreshnessReport || postCommitFreshnessReport.kind !== "subversionr.installedSourceControlUiE2eFreshnessReport") {
-      throw new Error(`Unexpected installed Source Control UI E2E Commit Selected multi-selection freshness report kind: ${postCommitFreshnessReport && postCommitFreshnessReport.kind}`);
-    }
-    const firstSelectedResourceAfter = findAnyResource(postCommitFreshnessReport, firstSelected.path);
-    const secondSelectedResourceAfter = findAnyResource(postCommitFreshnessReport, secondSelected.path);
-    const coverageReport = validateLastCompletedRefreshCoverageSet(postCommitFreshnessReport, commitSelectedMultiSelectionOpenReport, [
+    const expectedRefreshTargets = [
       {
         path: firstSelected.path,
         depth: "empty",
@@ -3280,7 +3318,26 @@ async function runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelect
         depth: "empty",
         reason: "operationCommit"
       }
-    ]);
+    ];
+    const postCommitObservation = await collectFreshnessReportUntilPathsAbsent(
+      {
+        repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
+        epoch: commitSelectedMultiSelectionOpenReport.repository.epoch,
+        scenario: "partial"
+      },
+      "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport/commitSelectedMultiSelection",
+      [firstSelected.path, secondSelected.path],
+      commitSelectedMultiSelectionOpenReport,
+      expectedRefreshTargets,
+      30000
+    );
+    const postCommitFreshnessReport = postCommitObservation.report;
+    if (!postCommitFreshnessReport || postCommitFreshnessReport.kind !== "subversionr.installedSourceControlUiE2eFreshnessReport") {
+      throw new Error(`Unexpected installed Source Control UI E2E Commit Selected multi-selection freshness report kind: ${postCommitFreshnessReport && postCommitFreshnessReport.kind}`);
+    }
+    const firstSelectedResourceAfter = findAnyResource(postCommitFreshnessReport, firstSelected.path);
+    const secondSelectedResourceAfter = findAnyResource(postCommitFreshnessReport, secondSelected.path);
+    const coverageReport = postCommitObservation.coverageReport;
 
     const inputProbeAfterCommit = await withTimeout(
       vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage", {
@@ -9708,7 +9765,8 @@ function Assert-HarnessResult(
     $Result.commitSelectedMultiSelectionReport.assertions.allSelectedFilesCommitted -ne $true -or
     $Result.commitSelectedMultiSelectionReport.assertions.sourceControlProjectionClearedSelectedPaths -ne $true -or
     $Result.commitSelectedMultiSelectionReport.assertions.targetedReconcileAfterCommit -ne $true) {
-    throw "Installed Source Control UI E2E result must include a Commit Selected multi-selection workflow proving SCM resource array execution, input clearing, selected-path commit, and targeted post-commit reconcile."
+    $commitSelectedMultiSelectionSummary = $Result.commitSelectedMultiSelectionReport | ConvertTo-Json -Depth 8 -Compress
+    throw "Installed Source Control UI E2E result must include a Commit Selected multi-selection workflow proving SCM resource array execution, input clearing, selected-path commit, and targeted post-commit reconcile. Report: $commitSelectedMultiSelectionSummary"
   }
   if ($Result.addToIgnoreReport.kind -ne "subversionr.installedSourceControlUiE2eAddToIgnoreWorkflow" -or
     $Result.addToIgnoreReport.command.command -ne "subversionr.addToIgnoreResource" -or
