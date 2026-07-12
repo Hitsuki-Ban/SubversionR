@@ -457,7 +457,7 @@ function Invoke-RequirementEvidenceRuleChecks() {
     "[#43]",
     'release tag: `v0.2.3-beta.1`',
     'asset name: `subversionr-win32-x64-0.2.3.vsix`',
-    "f99b52d7b5c2b881796ddb66aa141e2ae44edcebe70a2925abdf3457b14d6db4",
+    "e75eaabe2603cab09eb3aa1144096c8efd11acb2d7e23ddab15cd0e3c51cfc43",
     '`SEC-015`, `MIG-010`, and `MIG-012`',
     "It cannot transfer to different bytes, another tag, or a later version",
     "does not claim public release readiness"
