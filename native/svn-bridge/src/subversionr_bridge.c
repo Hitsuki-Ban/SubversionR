@@ -44,7 +44,38 @@ struct subversionr_bridge_runtime {
   apr_pool_t *pool;
   apr_pool_t *result_pool;
   svn_client_ctx_t *ctx;
+  subversionr_bridge_error_entry last_error_entries[SUBVERSIONR_BRIDGE_ERROR_ENTRY_LIMIT];
+  size_t last_error_entry_count;
+  int last_error_truncated;
 };
+
+static void bridge_clear_last_error(subversionr_bridge_runtime *runtime) {
+  runtime->last_error_entry_count = 0;
+  runtime->last_error_truncated = 0;
+}
+
+static void bridge_capture_error(subversionr_bridge_runtime *runtime, const svn_error_t *error) {
+  bridge_clear_last_error(runtime);
+  for (const svn_error_t *current = error; current != NULL; current = current->child) {
+    if (runtime->last_error_entry_count == SUBVERSIONR_BRIDGE_ERROR_ENTRY_LIMIT) {
+      runtime->last_error_truncated = 1;
+      break;
+    }
+    subversionr_bridge_error_entry *entry =
+      &runtime->last_error_entries[runtime->last_error_entry_count++];
+    entry->code = (int)current->apr_err;
+    const char *name = svn_error_symbolic_name(current->apr_err);
+    entry->name = name != NULL ? name : "SVN_ERR_UNKNOWN";
+  }
+}
+
+static void bridge_prepare_call(subversionr_bridge_runtime *runtime) {
+  if (runtime == NULL) {
+    return;
+  }
+  bridge_clear_last_error(runtime);
+  apr_pool_clear(runtime->result_pool);
+}
 
 typedef struct bridge_info_receiver_baton {
   const svn_client_info2_t *info;
@@ -868,6 +899,7 @@ static int bridge_commit_target_is_versioned_file_or_dir(
     scratch_pool
   );
   if (info_err != NULL) {
+    bridge_capture_error(runtime, info_err);
     svn_error_clear(info_err);
     return -1;
   }
@@ -1284,6 +1316,19 @@ void subversionr_bridge_runtime_destroy(subversionr_bridge_runtime *runtime) {
   apr_pool_destroy(pool);
 }
 
+int subversionr_bridge_last_error_diagnostics(
+  subversionr_bridge_runtime *runtime,
+  subversionr_bridge_error_diagnostics *diagnostics
+) {
+  if (runtime == NULL || diagnostics == NULL) {
+    return 1;
+  }
+  diagnostics->entries = runtime->last_error_entries;
+  diagnostics->entry_count = runtime->last_error_entry_count;
+  diagnostics->truncated = runtime->last_error_truncated;
+  return 0;
+}
+
 subversionr_bridge_version_info subversionr_bridge_version(void) {
   const svn_version_t *version = svn_subr_version();
   subversionr_bridge_version_info result = {
@@ -1305,6 +1350,7 @@ static int bridge_open_working_copy_impl(
   const char *local_abspath = NULL;
   svn_error_t *err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -1324,6 +1370,7 @@ static int bridge_open_working_copy_impl(
     runtime->result_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -1337,6 +1384,7 @@ static int bridge_open_working_copy_impl(
   if (svn_info->wc_info != NULL && svn_info->wc_info->wcroot_abspath != NULL) {
     err = svn_wc_check_wc2(&wc_format, runtime->ctx->wc_ctx, svn_info->wc_info->wcroot_abspath, runtime->result_pool);
     if (err != NULL) {
+      bridge_capture_error(runtime, err);
       svn_error_clear(err);
       return 4;
     }
@@ -1354,11 +1402,12 @@ int subversionr_bridge_open_working_copy(
   const char *path,
   subversionr_bridge_wc_info *info
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || path == NULL || info == NULL) {
     return 1;
   }
 
-  apr_pool_clear(runtime->result_pool);
   return bridge_open_working_copy_impl(runtime, path, info);
 }
 
@@ -1368,6 +1417,8 @@ int subversionr_bridge_open_working_copy_with_auth(
   const subversionr_bridge_auth_callbacks *callbacks,
   subversionr_bridge_wc_info *info
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     path == NULL ||
@@ -1377,7 +1428,6 @@ int subversionr_bridge_open_working_copy_with_auth(
     return 1;
   }
 
-  apr_pool_clear(runtime->result_pool);
 
   apr_pool_t *auth_pool = NULL;
   if (apr_pool_create(&auth_pool, runtime->pool) != APR_SUCCESS) {
@@ -1398,6 +1448,7 @@ int subversionr_bridge_open_working_copy_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -1447,6 +1498,7 @@ static int bridge_probe_remote_url_impl(
     runtime->result_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -1461,6 +1513,8 @@ int subversionr_bridge_probe_remote_url_with_auth(
   const char *url,
   const subversionr_bridge_auth_callbacks *callbacks
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     url == NULL ||
@@ -1469,7 +1523,6 @@ int subversionr_bridge_probe_remote_url_with_auth(
     return 1;
   }
 
-  apr_pool_clear(runtime->result_pool);
 
   apr_pool_t *auth_pool = NULL;
   if (apr_pool_create(&auth_pool, runtime->pool) != APR_SUCCESS) {
@@ -1490,6 +1543,7 @@ int subversionr_bridge_probe_remote_url_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -1554,12 +1608,14 @@ static svn_error_t *bridge_cancel_check(void *baton) {
 }
 
 static int bridge_error_status_with_cancellation(
+  subversionr_bridge_runtime *runtime,
   svn_error_t *err,
   bridge_cancel_baton *cancel_baton,
   int callback_failed_status,
   int cancelled_status
 ) {
   apr_status_t error_code = err->apr_err;
+  bridge_capture_error(runtime, err);
   svn_error_clear(err);
   if (cancel_baton != NULL && cancel_baton->callback_failed) {
     return callback_failed_status;
@@ -1617,6 +1673,7 @@ static int bridge_status_scan_impl(
   const char *local_abspath = NULL;
   svn_error_t *err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -1670,10 +1727,12 @@ static int bridge_status_scan_impl(
   runtime->ctx->cancel_baton = previous_cancel_baton;
   if (err != NULL) {
     if (classify_auth_failures && bridge_error_is_auth_failure(err)) {
+      bridge_capture_error(runtime, err);
       svn_error_clear(err);
       return 12;
     }
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_STATUS_CANCEL_CALLBACK_FAILED,
@@ -1693,6 +1752,8 @@ int subversionr_bridge_status_scan(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_status_scan_info *snapshot
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL) {
     return 1;
   }
@@ -1700,7 +1761,6 @@ int subversionr_bridge_status_scan(
   if (!bridge_depth_from_word(depth, &scan_depth)) {
     return 5;
   }
-  apr_pool_clear(runtime->result_pool);
   return bridge_status_scan_impl(
     runtime,
     path,
@@ -1721,6 +1781,8 @@ int subversionr_bridge_status_remote_scan_with_auth(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_status_scan_info *snapshot
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     path == NULL ||
@@ -1730,7 +1792,6 @@ int subversionr_bridge_status_remote_scan_with_auth(
     return 1;
   }
 
-  apr_pool_clear(runtime->result_pool);
   apr_pool_t *auth_pool = NULL;
   if (apr_pool_create(&auth_pool, runtime->pool) != APR_SUCCESS) {
     return 12;
@@ -1750,6 +1811,7 @@ int subversionr_bridge_status_remote_scan_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 12;
@@ -1941,12 +2003,12 @@ static int bridge_content_get_impl(
     return 6;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(content, 0, sizeof(*content));
 
   const char *local_abspath = NULL;
   svn_error_t *err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -1967,12 +2029,14 @@ static int bridge_content_get_impl(
     runtime->result_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
 
   err = svn_stream_close(out);
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -1998,6 +2062,8 @@ int subversionr_bridge_content_get_with_auth(
   const subversionr_bridge_auth_callbacks *callbacks,
   subversionr_bridge_content_info *content
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     path == NULL ||
@@ -2027,6 +2093,7 @@ int subversionr_bridge_content_get_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -2051,16 +2118,18 @@ int subversionr_bridge_properties_list(
   const char *path,
   subversionr_bridge_property_list *properties
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || path == NULL || properties == NULL) {
     return 1;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(properties, 0, sizeof(*properties));
 
   const char *local_abspath = NULL;
   svn_error_t *err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -2084,6 +2153,7 @@ int subversionr_bridge_properties_list(
     runtime->result_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return property_baton.rejected_binary_property ? 3 : 2;
   }
@@ -2146,12 +2216,12 @@ static int bridge_history_log_impl(
     return 6;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(log, 0, sizeof(*log));
 
   const char *local_abspath = NULL;
   svn_error_t *err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -2197,6 +2267,7 @@ static int bridge_history_log_impl(
     runtime->result_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -2218,6 +2289,8 @@ int subversionr_bridge_history_log_with_auth(
   const subversionr_bridge_auth_callbacks *callbacks,
   subversionr_bridge_log_info *log
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     path == NULL ||
@@ -2250,6 +2323,7 @@ int subversionr_bridge_history_log_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -2317,7 +2391,6 @@ static int bridge_history_blame_impl(
     return 6;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(blame, 0, sizeof(*blame));
   blame->resolved_start_revision = -1;
   blame->resolved_end_revision = -1;
@@ -2325,6 +2398,7 @@ static int bridge_history_blame_impl(
   const char *local_abspath = NULL;
   svn_error_t *err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     return 2;
   }
@@ -2368,9 +2442,11 @@ static int bridge_history_blame_impl(
     if (err->apr_err == SVN_ERR_CEASE_INVOCATION) {
       svn_error_clear(err);
     } else if (err->apr_err == SVN_ERR_CLIENT_IS_BINARY_FILE) {
+      bridge_capture_error(runtime, err);
       svn_error_clear(err);
       return 9;
     } else {
+      bridge_capture_error(runtime, err);
       svn_error_clear(err);
       return 2;
     }
@@ -2404,6 +2480,8 @@ int subversionr_bridge_history_blame_with_auth(
   const subversionr_bridge_auth_callbacks *callbacks,
   subversionr_bridge_blame_info *blame
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     path == NULL ||
@@ -2439,6 +2517,7 @@ int subversionr_bridge_history_blame_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -2484,6 +2563,8 @@ int subversionr_bridge_operation_revert(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || paths == NULL || path_count == 0 || depth == NULL || cancel_callbacks == NULL || result == NULL) {
     return 1;
   }
@@ -2499,7 +2580,6 @@ int subversionr_bridge_operation_revert(
     return 5;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   apr_array_header_t *local_paths =
@@ -2511,6 +2591,7 @@ int subversionr_bridge_operation_revert(
     const char *local_abspath = NULL;
     svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, paths[index], runtime->result_pool);
     if (absolute_err != NULL) {
+      bridge_capture_error(runtime, absolute_err);
       svn_error_clear(absolute_err);
       return 2;
     }
@@ -2568,6 +2649,7 @@ int subversionr_bridge_operation_revert(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -2594,6 +2676,8 @@ int subversionr_bridge_operation_add(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || paths == NULL || path_count == 0 || depth == NULL || cancel_callbacks == NULL || result == NULL) {
     return 1;
   }
@@ -2606,7 +2690,6 @@ int subversionr_bridge_operation_add(
     return 5;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   apr_array_header_t *local_paths =
@@ -2618,6 +2701,7 @@ int subversionr_bridge_operation_add(
     const char *local_abspath = NULL;
     svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, paths[index], runtime->result_pool);
     if (absolute_err != NULL) {
+      bridge_capture_error(runtime, absolute_err);
       svn_error_clear(absolute_err);
       return 2;
     }
@@ -2673,6 +2757,7 @@ int subversionr_bridge_operation_add(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -2696,6 +2781,8 @@ int subversionr_bridge_operation_remove(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || paths == NULL || path_count == 0 || cancel_callbacks == NULL || result == NULL) {
     return 1;
   }
@@ -2703,7 +2790,6 @@ int subversionr_bridge_operation_remove(
     return BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   apr_array_header_t *local_paths =
@@ -2715,6 +2801,7 @@ int subversionr_bridge_operation_remove(
     const char *local_abspath = NULL;
     svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, paths[index], runtime->result_pool);
     if (absolute_err != NULL) {
+      bridge_capture_error(runtime, absolute_err);
       svn_error_clear(absolute_err);
       return 2;
     }
@@ -2759,6 +2846,7 @@ int subversionr_bridge_operation_remove(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -2781,6 +2869,8 @@ int subversionr_bridge_operation_move(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || source_path == NULL || destination_path == NULL || cancel_callbacks == NULL || result == NULL) {
     return 1;
   }
@@ -2788,18 +2878,19 @@ int subversionr_bridge_operation_move(
     return BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   const char *source_abspath = NULL;
   svn_error_t *source_absolute_err = svn_dirent_get_absolute(&source_abspath, source_path, runtime->result_pool);
   if (source_absolute_err != NULL) {
+    bridge_capture_error(runtime, source_absolute_err);
     svn_error_clear(source_absolute_err);
     return 2;
   }
   const char *destination_abspath = NULL;
   svn_error_t *destination_absolute_err = svn_dirent_get_absolute(&destination_abspath, destination_path, runtime->result_pool);
   if (destination_absolute_err != NULL) {
+    bridge_capture_error(runtime, destination_absolute_err);
     svn_error_clear(destination_absolute_err);
     return 2;
   }
@@ -2852,6 +2943,7 @@ int subversionr_bridge_operation_move(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -2875,6 +2967,8 @@ int subversionr_bridge_operation_resolve(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || paths == NULL || path_count != 1 || depth == NULL || choice == NULL || cancel_callbacks == NULL || result == NULL) {
     return 1;
   }
@@ -2894,7 +2988,6 @@ int subversionr_bridge_operation_resolve(
     return 7;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   apr_array_header_t *local_paths =
@@ -2906,6 +2999,7 @@ int subversionr_bridge_operation_resolve(
     const char *local_abspath = NULL;
     svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, paths[index], runtime->result_pool);
     if (absolute_err != NULL) {
+      bridge_capture_error(runtime, absolute_err);
       svn_error_clear(absolute_err);
       return 2;
     }
@@ -2958,6 +3052,7 @@ int subversionr_bridge_operation_resolve(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -2983,6 +3078,8 @@ int subversionr_bridge_operation_cleanup(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || path == NULL || cancel_callbacks == NULL || result == NULL) {
     return 1;
   }
@@ -2990,12 +3087,12 @@ int subversionr_bridge_operation_cleanup(
     return BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   const char *local_abspath = NULL;
   svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (absolute_err != NULL) {
+    bridge_capture_error(runtime, absolute_err);
     svn_error_clear(absolute_err);
     return 2;
   }
@@ -3021,6 +3118,7 @@ int subversionr_bridge_operation_cleanup(
   runtime->ctx->cancel_baton = previous_cancel_baton;
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -3047,6 +3145,8 @@ int subversionr_bridge_operation_upgrade(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (runtime == NULL || path == NULL || cancel_callbacks == NULL || result == NULL) {
     return 1;
   }
@@ -3054,12 +3154,12 @@ int subversionr_bridge_operation_upgrade(
     return BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   const char *local_abspath = NULL;
   svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (absolute_err != NULL) {
+    bridge_capture_error(runtime, absolute_err);
     svn_error_clear(absolute_err);
     return 2;
   }
@@ -3081,6 +3181,7 @@ int subversionr_bridge_operation_upgrade(
   runtime->ctx->cancel_baton = previous_cancel_baton;
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -3138,13 +3239,13 @@ static int bridge_operation_update_impl(
     return 7;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
   *result_revision = -1;
 
   const char *local_abspath = NULL;
   svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (absolute_err != NULL) {
+    bridge_capture_error(runtime, absolute_err);
     svn_error_clear(absolute_err);
     return 2;
   }
@@ -3195,6 +3296,7 @@ static int bridge_operation_update_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -3230,6 +3332,8 @@ int subversionr_bridge_operation_update(
   subversionr_bridge_operation_result *result,
   long long *result_revision
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     path == NULL ||
@@ -3265,6 +3369,7 @@ int subversionr_bridge_operation_update(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -3335,13 +3440,13 @@ static int bridge_repository_checkout_impl(
     return 5;
   }
 
-  apr_pool_clear(runtime->result_pool);
   *result_revision = -1;
 
   const char *local_abspath = NULL;
   svn_error_t *absolute_err =
     svn_dirent_get_absolute(&local_abspath, target_path, runtime->result_pool);
   if (absolute_err != NULL) {
+    bridge_capture_error(runtime, absolute_err);
     svn_error_clear(absolute_err);
     return 2;
   }
@@ -3372,6 +3477,7 @@ static int bridge_repository_checkout_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -3394,6 +3500,8 @@ int subversionr_bridge_repository_checkout_with_auth(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   long long *result_revision
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     url == NULL ||
@@ -3429,6 +3537,7 @@ int subversionr_bridge_repository_checkout_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -3478,12 +3587,12 @@ static int bridge_operation_property_apply(
     return 5;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   const char *local_abspath = NULL;
   svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (absolute_err != NULL) {
+    bridge_capture_error(runtime, absolute_err);
     svn_error_clear(absolute_err);
     return 2;
   }
@@ -3520,6 +3629,7 @@ static int bridge_operation_property_apply(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -3548,6 +3658,8 @@ int subversionr_bridge_operation_property_set(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (value == NULL) {
     return 1;
   }
@@ -3561,6 +3673,8 @@ int subversionr_bridge_operation_property_delete(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   return bridge_operation_property_apply(runtime, path, name, NULL, cancel_callbacks, result);
 }
 
@@ -3593,7 +3707,6 @@ static int bridge_operation_changelist_apply(
     return 5;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   apr_array_header_t *local_paths =
@@ -3605,6 +3718,7 @@ static int bridge_operation_changelist_apply(
     const char *local_abspath = NULL;
     svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, paths[index], runtime->result_pool);
     if (absolute_err != NULL) {
+      bridge_capture_error(runtime, absolute_err);
       svn_error_clear(absolute_err);
       return 2;
     }
@@ -3673,6 +3787,7 @@ static int bridge_operation_changelist_apply(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -3698,6 +3813,8 @@ int subversionr_bridge_operation_changelist_set(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (changelist == NULL) {
     return 1;
   }
@@ -3724,6 +3841,8 @@ int subversionr_bridge_operation_changelist_clear(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   return bridge_operation_changelist_apply(
     runtime,
     paths,
@@ -3762,7 +3881,6 @@ static int bridge_operation_lock_impl(
     return 7;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   apr_array_header_t *targets =
@@ -3775,6 +3893,7 @@ static int bridge_operation_lock_impl(
     svn_error_t *absolute_err =
       svn_dirent_get_absolute(&local_abspath, paths[index], runtime->result_pool);
     if (absolute_err != NULL) {
+      bridge_capture_error(runtime, absolute_err);
       svn_error_clear(absolute_err);
       return 2;
     }
@@ -3816,6 +3935,7 @@ static int bridge_operation_lock_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -3840,6 +3960,8 @@ int subversionr_bridge_operation_lock_with_auth(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     paths == NULL ||
@@ -3870,6 +3992,7 @@ int subversionr_bridge_operation_lock_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -3921,7 +4044,6 @@ static int bridge_operation_unlock_impl(
     return 7;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   apr_array_header_t *targets =
@@ -3934,6 +4056,7 @@ static int bridge_operation_unlock_impl(
     svn_error_t *absolute_err =
       svn_dirent_get_absolute(&local_abspath, paths[index], runtime->result_pool);
     if (absolute_err != NULL) {
+      bridge_capture_error(runtime, absolute_err);
       svn_error_clear(absolute_err);
       return 2;
     }
@@ -3974,6 +4097,7 @@ static int bridge_operation_unlock_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -3997,6 +4121,8 @@ int subversionr_bridge_operation_unlock_with_auth(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     paths == NULL ||
@@ -4027,6 +4153,7 @@ int subversionr_bridge_operation_unlock_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -4098,7 +4225,6 @@ static int bridge_operation_branch_create_impl(
     return 6;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
   *result_revision = -1;
 
@@ -4151,6 +4277,7 @@ static int bridge_operation_branch_create_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -4188,6 +4315,8 @@ int subversionr_bridge_operation_branch_create_with_auth(
   subversionr_bridge_operation_result *result,
   long long *result_revision
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     working_copy_root == NULL ||
@@ -4225,6 +4354,7 @@ int subversionr_bridge_operation_branch_create_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -4309,13 +4439,13 @@ static int bridge_operation_switch_impl(
     return 7;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
   *result_revision = -1;
 
   const char *local_abspath = NULL;
   svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, path, runtime->result_pool);
   if (absolute_err != NULL) {
+    bridge_capture_error(runtime, absolute_err);
     svn_error_clear(absolute_err);
     return 2;
   }
@@ -4363,6 +4493,7 @@ static int bridge_operation_switch_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -4399,6 +4530,8 @@ int subversionr_bridge_operation_switch_with_auth(
   subversionr_bridge_operation_result *result,
   long long *result_revision
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     path == NULL ||
@@ -4435,6 +4568,7 @@ int subversionr_bridge_operation_switch_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -4495,13 +4629,13 @@ static int bridge_operation_relocate_impl(
     return 8;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   const char *local_abspath = NULL;
   svn_error_t *absolute_err =
     svn_dirent_get_absolute(&local_abspath, working_copy_root, runtime->result_pool);
   if (absolute_err != NULL) {
+    bridge_capture_error(runtime, absolute_err);
     svn_error_clear(absolute_err);
     return 2;
   }
@@ -4542,6 +4676,7 @@ static int bridge_operation_relocate_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -4570,6 +4705,8 @@ int subversionr_bridge_operation_relocate_with_auth(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     working_copy_root == NULL ||
@@ -4604,6 +4741,7 @@ int subversionr_bridge_operation_relocate_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -4688,12 +4826,12 @@ static int bridge_operation_merge_range_impl(
     return 5;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
 
   const char *local_abspath = NULL;
   svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, target_path, runtime->result_pool);
   if (absolute_err != NULL) {
+    bridge_capture_error(runtime, absolute_err);
     svn_error_clear(absolute_err);
     return 2;
   }
@@ -4755,6 +4893,7 @@ static int bridge_operation_merge_range_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -4790,6 +4929,8 @@ int subversionr_bridge_operation_merge_range_with_auth(
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
   subversionr_bridge_operation_result *result
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     source_url == NULL ||
@@ -4824,6 +4965,7 @@ int subversionr_bridge_operation_merge_range_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;
@@ -4908,7 +5050,6 @@ static int bridge_operation_commit_impl(
     return 5;
   }
 
-  apr_pool_clear(runtime->result_pool);
   memset(result, 0, sizeof(*result));
   *result_revision = -1;
 
@@ -4937,6 +5078,7 @@ static int bridge_operation_commit_impl(
     const char *local_abspath = NULL;
     svn_error_t *absolute_err = svn_dirent_get_absolute(&local_abspath, paths[index], runtime->result_pool);
     if (absolute_err != NULL) {
+      bridge_capture_error(runtime, absolute_err);
       svn_error_clear(absolute_err);
       return 2;
     }
@@ -5005,6 +5147,7 @@ static int bridge_operation_commit_impl(
 
   if (err != NULL) {
     return bridge_error_status_with_cancellation(
+      runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
@@ -5049,6 +5192,8 @@ int subversionr_bridge_operation_commit_with_auth(
   subversionr_bridge_operation_result *result,
   long long *result_revision
 ) {
+  bridge_prepare_call(runtime);
+
   if (
     runtime == NULL ||
     paths == NULL ||
@@ -5085,6 +5230,7 @@ int subversionr_bridge_operation_commit_with_auth(
     auth_pool
   );
   if (err != NULL) {
+    bridge_capture_error(runtime, err);
     svn_error_clear(err);
     apr_pool_destroy(auth_pool);
     return 10;

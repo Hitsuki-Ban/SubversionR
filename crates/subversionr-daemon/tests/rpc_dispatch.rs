@@ -1731,13 +1731,13 @@ fn initialize_request_returns_versions_and_keeps_process_running() {
     assert_eq!(outcome, DispatchOutcome::Continue);
     assert_eq!(outcome.response()["id"], 1);
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 28);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 29);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["schemaId"],
         "subversionr.cache.v1"
     );
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 28);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 29);
     assert_eq!(outcome.response()["result"]["cacheSchema"]["version"], 1);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["rollback"],

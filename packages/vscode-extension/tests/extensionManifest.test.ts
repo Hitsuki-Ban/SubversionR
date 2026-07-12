@@ -2084,8 +2084,7 @@ describe("extension manifest", () => {
       expect(bundle).toHaveProperty("SubversionR upgraded SVN working copy: {0}");
       expect(bundle).toHaveProperty("SubversionR updated SVN working copy to revision {0}: {1}");
       expect(bundle).toHaveProperty("SubversionR updated SVN resource to revision {0}: {1}");
-      expect(bundle).toHaveProperty("SubversionR history command failed: {0}");
-      expect(bundle).toHaveProperty("SubversionR line history command failed: {0}");
+      expect(bundle).not.toHaveProperty("SubversionR line history command failed: {0}");
       expect(bundle).toHaveProperty("SubversionR TortoiseSVN command failed: {0}");
       expect(bundle).not.toHaveProperty("No TortoiseSVN executable is configured or detected.");
       expect(bundle).toHaveProperty("Copied SVN commit message.");
@@ -2218,6 +2217,20 @@ function runtimeLocalizationKeys(): string[] {
     "Enter the svn:externals value for {0}. Leave empty to clear it.",
     "Move",
     "Commit",
+    "Show Log",
+    "Retry",
+    "Update",
+    "Checkout",
+    "History",
+    "Open Working Copy",
+    "Repository Operation",
+    "SVN {0} failed because the working copy is out of date. Update the working copy and retry.",
+    "SVN {0} failed because unresolved conflicts are present. Resolve them and retry.",
+    "SVN {0} failed because authentication was rejected. Check the credentials and retry.",
+    "SVN {0} failed because the selected target is not a working copy.",
+    "SVN {0} failed because the SubversionR backend is unavailable. Retry the operation.",
+    "SVN {0} failed. Open the SubversionR log for details.",
+    "SubversionR backend startup failed. Open the SubversionR log for details.",
     "SVN commit message",
     "SVN commit message history",
     "Choose an SVN commit message to reuse",
@@ -2703,8 +2716,6 @@ function runtimeLocalizationKeys(): string[] {
     "SubversionR previewed SVN merge range r{0}:r{1} ({2}) from {3} into {4} at {5}: {6} affected SVN path(s), {7} skipped SVN path(s), {8} SVN operation warning(s)",
     "No SVN mergeinfo found on working copy root: {0}",
     "No SVN mergeinfo found on SVN path: {0}",
-    "SubversionR history command failed: {0}",
-    "SubversionR line history command failed: {0}",
     "SubversionR TortoiseSVN command failed: {0}",
     "Copied SVN commit message.",
     "Copied SVN revision number: {0}",
@@ -2718,7 +2729,6 @@ function runtimeLocalizationKeys(): string[] {
     "SubversionR reverted {0} SVN resources: {1}",
     "No SVN working copy was found in the workspace.",
     "No SVN repository is open.",
-    "SubversionR repository command failed: {0}",
     "Conflicts",
     "Changes",
     "Unversioned",

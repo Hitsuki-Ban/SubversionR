@@ -13,8 +13,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use subversionr_protocol::{
     CertificateTrustRequest, CertificateTrustResponse, CredentialRequest, CredentialResponse,
-    HistoryBlameLine, HistoryLogChangedPath, HistoryLogEntry, LockInfo, RepositoryIdentity,
-    StatusEntry, StatusSnapshot, StatusSummary,
+    HistoryBlameLine, HistoryLogChangedPath, HistoryLogEntry, LockInfo, OperationFailureCause,
+    OperationFailureDiagnostics, RepositoryIdentity, StatusEntry, StatusSnapshot, StatusSummary,
+    SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
 };
 
 use crate::{
@@ -59,6 +60,19 @@ struct RawVersionInfo {
     minor: c_int,
     patch: c_int,
     display: *const c_char,
+}
+
+#[repr(C)]
+struct RawErrorEntry {
+    code: c_int,
+    name: *const c_char,
+}
+
+#[repr(C)]
+struct RawErrorDiagnostics {
+    entries: *const RawErrorEntry,
+    entry_count: usize,
+    truncated: c_int,
 }
 
 #[repr(C)]
@@ -547,12 +561,14 @@ type OperationCommitFn = unsafe extern "C" fn(
     *mut RawOperationResult,
     *mut i64,
 ) -> c_int;
+type LastErrorDiagnosticsFn = unsafe extern "C" fn(*mut c_void, *mut RawErrorDiagnostics) -> c_int;
 
 #[derive(Clone, Copy)]
 struct NativeSymbols {
     runtime_create: RuntimeCreate,
     runtime_destroy: RuntimeDestroy,
     version: Version,
+    last_error_diagnostics: LastErrorDiagnosticsFn,
     open_working_copy: OpenWorkingCopy,
     open_working_copy_with_auth: OpenWorkingCopyWithAuth,
     probe_remote_url_with_auth: ProbeRemoteUrlWithAuth,
@@ -590,6 +606,9 @@ impl NativeSymbols {
             runtime_create: *unsafe { library.get(b"subversionr_bridge_runtime_create\0") }?,
             runtime_destroy: *unsafe { library.get(b"subversionr_bridge_runtime_destroy\0") }?,
             version: *unsafe { library.get(b"subversionr_bridge_version\0") }?,
+            last_error_diagnostics: *unsafe {
+                library.get(b"subversionr_bridge_last_error_diagnostics\0")
+            }?,
             open_working_copy: *unsafe { library.get(b"subversionr_bridge_open_working_copy\0") }?,
             open_working_copy_with_auth: *unsafe {
                 library.get(b"subversionr_bridge_open_working_copy_with_auth\0")
@@ -779,14 +798,81 @@ impl NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(remote_url_probe_failure(status, url));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(remote_url_probe_failure(status, url));
+            return Err(native_failure);
         }
 
         Ok(())
     }
+
+    fn with_native_diagnostics(&self, failure: BridgeFailure) -> BridgeFailure {
+        let mut raw = RawErrorDiagnostics {
+            entries: ptr::null(),
+            entry_count: 0,
+            truncated: 0,
+        };
+        let status =
+            unsafe { (self.symbols.last_error_diagnostics)(self.runtime.as_ptr(), &mut raw) };
+        let entries = if status == 0
+            && raw.entry_count <= 8
+            && (raw.entry_count == 0 || !raw.entries.is_null())
+        {
+            unsafe { slice::from_raw_parts(raw.entries, raw.entry_count) }
+                .iter()
+                .filter_map(|entry| {
+                    let name = unsafe { optional_c_string_to_owned(entry.name, "error.name") }
+                        .ok()
+                        .flatten()?;
+                    Some(SvnErrorDiagnosticEntry {
+                        code: entry.code,
+                        name,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if entries.is_empty() {
+            return failure;
+        }
+        let cause = native_failure_cause(&entries);
+        failure.with_diagnostics(OperationFailureDiagnostics {
+            cause,
+            svn: SvnErrorDiagnostics {
+                entries,
+                truncated: raw.truncated != 0,
+            },
+        })
+    }
+}
+
+fn native_failure_cause(entries: &[SvnErrorDiagnosticEntry]) -> OperationFailureCause {
+    for entry in entries {
+        if matches!(
+            entry.name.as_str(),
+            "SVN_ERR_FS_TXN_OUT_OF_DATE" | "SVN_ERR_RA_OUT_OF_DATE"
+        ) {
+            return OperationFailureCause::OutOfDate;
+        }
+        if entry.name.contains("CONFLICT") {
+            return OperationFailureCause::ConflictPresent;
+        }
+        if entry.name.contains("AUTH") || entry.name.contains("NOT_AUTHORIZED") {
+            return OperationFailureCause::AuthenticationFailed;
+        }
+        if matches!(
+            entry.name.as_str(),
+            "SVN_ERR_WC_NOT_WORKING_COPY" | "SVN_ERR_WC_NOT_DIRECTORY"
+        ) {
+            return OperationFailureCause::NotWorkingCopy;
+        }
+    }
+    OperationFailureCause::UnknownNative
 }
 
 impl BridgeApi for NativeBridge {
@@ -807,7 +893,7 @@ impl BridgeApi for NativeBridge {
             (self.symbols.open_working_copy)(self.runtime.as_ptr(), path_c.as_ptr(), &mut info)
         };
         if status != 0 {
-            return Err(open_working_copy_failure(status, path));
+            return Err(self.with_native_diagnostics(open_working_copy_failure(status, path)));
         }
 
         repository_identity_from_raw(path, info)
@@ -843,10 +929,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(open_working_copy_failure(status, path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(open_working_copy_failure(status, path));
+            return Err(native_failure);
         }
 
         repository_identity_from_raw(path, info)
@@ -903,10 +992,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(repository_checkout_failure(status, &target_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(repository_checkout_failure(status, &target_path));
+            return Err(native_failure);
         }
         if raw_revision < 0 {
             return Err(native_invalid_response(&target_path, "checkout.revision"));
@@ -985,7 +1077,7 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(status_snapshot_failure(status, &scan_path));
+            return Err(self.with_native_diagnostics(status_snapshot_failure(status, &scan_path)));
         }
         if raw_snapshot.entry_count > 0 && raw_snapshot.entries.is_null() {
             return Err(native_invalid_response(&scan_path, "status.entries"));
@@ -1066,10 +1158,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(remote_status_failure(status, &scan_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(remote_status_failure(status, &scan_path));
+            return Err(native_failure);
         }
         if raw_snapshot.entry_count > 0 && raw_snapshot.entries.is_null() {
             return Err(native_invalid_response(&scan_path, "remoteStatus.entries"));
@@ -1154,10 +1249,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(content_get_failure(status, &content_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(content_get_failure(status, &content_path));
+            return Err(native_failure);
         }
         if raw_content.byte_count > 0 && raw_content.data.is_null() {
             return Err(native_invalid_response(&content_path, "content.data"));
@@ -1204,7 +1302,9 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(properties_list_failure(status, &property_path));
+            return Err(
+                self.with_native_diagnostics(properties_list_failure(status, &property_path))
+            );
         }
         if raw_properties.entry_count > 0 && raw_properties.entries.is_null() {
             return Err(native_invalid_response(
@@ -1281,10 +1381,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(history_log_failure(status, &log_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(history_log_failure(status, &log_path));
+            return Err(native_failure);
         }
         if raw_log.entry_count > 0 && raw_log.entries.is_null() {
             return Err(native_invalid_response(&log_path, "history.entries"));
@@ -1373,10 +1476,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(history_blame_failure(status, &blame_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(history_blame_failure(status, &blame_path));
+            return Err(native_failure);
         }
         if raw_blame.resolved_start_revision < 0 || raw_blame.resolved_end_revision < 0 {
             return Err(native_invalid_response(
@@ -1488,10 +1594,10 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_revert_failure(
+            return Err(self.with_native_diagnostics(operation_revert_failure(
                 status,
                 &identity.working_copy_root,
-            ));
+            )));
         }
 
         Ok(OperationResult {
@@ -1564,7 +1670,10 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_add_failure(status, &identity.working_copy_root));
+            return Err(self.with_native_diagnostics(operation_add_failure(
+                status,
+                &identity.working_copy_root,
+            )));
         }
 
         Ok(OperationResult {
@@ -1626,10 +1735,10 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_remove_failure(
+            return Err(self.with_native_diagnostics(operation_remove_failure(
                 status,
                 &identity.working_copy_root,
-            ));
+            )));
         }
 
         Ok(OperationResult {
@@ -1691,11 +1800,11 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_move_failure(
+            return Err(self.with_native_diagnostics(operation_move_failure(
                 status,
                 &request.source_path,
                 &request.destination_path,
-            ));
+            )));
         }
 
         Ok(OperationResult {
@@ -1765,10 +1874,10 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_resolve_failure(
+            return Err(self.with_native_diagnostics(operation_resolve_failure(
                 status,
                 &identity.working_copy_root,
-            ));
+            )));
         }
 
         Ok(OperationResult {
@@ -1825,7 +1934,9 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_cleanup_failure(status, &cleanup_path));
+            return Err(
+                self.with_native_diagnostics(operation_cleanup_failure(status, &cleanup_path))
+            );
         }
 
         Ok(OperationResult {
@@ -1877,7 +1988,9 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_upgrade_failure(status, &upgrade_path));
+            return Err(
+                self.with_native_diagnostics(operation_upgrade_failure(status, &upgrade_path))
+            );
         }
 
         Ok(OperationResult {
@@ -1956,10 +2069,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(operation_update_failure(status, &update_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(operation_update_failure(status, &update_path));
+            return Err(native_failure);
         }
         if raw_revision < 0 {
             return Err(native_invalid_response(&update_path, "operation.revision"));
@@ -2026,7 +2142,9 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_property_failure(status, &property_path));
+            return Err(
+                self.with_native_diagnostics(operation_property_failure(status, &property_path))
+            );
         }
 
         raw_operation_result_to_protocol(raw_result, identity)
@@ -2068,7 +2186,9 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            return Err(operation_property_failure(status, &property_path));
+            return Err(
+                self.with_native_diagnostics(operation_property_failure(status, &property_path))
+            );
         }
 
         raw_operation_result_to_protocol(raw_result, identity)
@@ -2152,7 +2272,9 @@ impl BridgeApi for NativeBridge {
         };
         let failure_path = scan_path(&identity.working_copy_root, &request.paths[0]);
         if status != 0 {
-            return Err(operation_changelist_failure(status, &failure_path));
+            return Err(
+                self.with_native_diagnostics(operation_changelist_failure(status, &failure_path))
+            );
         }
 
         raw_operation_result_to_protocol(raw_result, identity)
@@ -2232,7 +2354,9 @@ impl BridgeApi for NativeBridge {
         };
         let failure_path = scan_path(&identity.working_copy_root, &request.paths[0]);
         if status != 0 {
-            return Err(operation_changelist_failure(status, &failure_path));
+            return Err(
+                self.with_native_diagnostics(operation_changelist_failure(status, &failure_path))
+            );
         }
 
         raw_operation_result_to_protocol(raw_result, identity)
@@ -2312,10 +2436,13 @@ impl BridgeApi for NativeBridge {
         };
         let failure_path = scan_path(&identity.working_copy_root, &request.paths[0]);
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(operation_lock_failure(status, &failure_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(operation_lock_failure(status, &failure_path));
+            return Err(native_failure);
         }
 
         raw_operation_result_to_protocol(raw_result, identity)
@@ -2381,10 +2508,13 @@ impl BridgeApi for NativeBridge {
         };
         let failure_path = scan_path(&identity.working_copy_root, &request.paths[0]);
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(operation_unlock_failure(status, &failure_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(operation_unlock_failure(status, &failure_path));
+            return Err(native_failure);
         }
 
         raw_operation_result_to_protocol(raw_result, identity)
@@ -2457,13 +2587,15 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
-                return Err(failure);
-            }
-            return Err(operation_branch_create_failure(
+            let native_failure = self.with_native_diagnostics(operation_branch_create_failure(
                 status,
                 &request.destination_url,
             ));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
+                return Err(failure);
+            }
+            return Err(native_failure);
         }
         if raw_revision < 0 {
             return Err(native_invalid_response(
@@ -2552,10 +2684,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(operation_switch_failure(status, &switch_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(operation_switch_failure(status, &switch_path));
+            return Err(native_failure);
         }
         if raw_revision < 0 {
             return Err(native_invalid_response(&switch_path, "operation.revision"));
@@ -2623,13 +2758,15 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
-                return Err(failure);
-            }
-            return Err(operation_relocate_failure(
+            let native_failure = self.with_native_diagnostics(operation_relocate_failure(
                 status,
                 &identity.working_copy_root,
             ));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
+                return Err(failure);
+            }
+            return Err(native_failure);
         }
 
         raw_operation_result_to_protocol(raw_result, identity)
@@ -2702,10 +2839,13 @@ impl BridgeApi for NativeBridge {
             )
         };
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(operation_merge_failure(status, &target_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(operation_merge_failure(status, &target_path));
+            return Err(native_failure);
         }
 
         raw_operation_result_to_protocol(raw_result, identity)
@@ -2815,10 +2955,13 @@ impl BridgeApi for NativeBridge {
         };
         let commit_path = scan_path(&identity.working_copy_root, &request.paths[0]);
         if status != 0 {
-            if let Some(failure) = auth_baton.take_failure() {
+            let native_failure =
+                self.with_native_diagnostics(operation_commit_failure(status, &commit_path));
+            if let Some(mut failure) = auth_baton.take_failure() {
+                failure.diagnostics = native_failure.diagnostics;
                 return Err(failure);
             }
-            return Err(operation_commit_failure(status, &commit_path));
+            return Err(native_failure);
         }
         if raw_revision < 0 {
             return Err(native_invalid_response(&commit_path, "operation.revision"));
@@ -5365,6 +5508,34 @@ unsafe fn optional_c_string_to_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_diagnostic_causes_map_only_safe_symbolic_names() {
+        let entry = |name: &str| SvnErrorDiagnosticEntry {
+            code: 1,
+            name: name.to_string(),
+        };
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_FS_TXN_OUT_OF_DATE")]),
+            OperationFailureCause::OutOfDate
+        );
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_WC_FOUND_CONFLICT")]),
+            OperationFailureCause::ConflictPresent
+        );
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_RA_NOT_AUTHORIZED")]),
+            OperationFailureCause::AuthenticationFailed
+        );
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_WC_NOT_WORKING_COPY")]),
+            OperationFailureCause::NotWorkingCopy
+        );
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_FS_GENERAL")]),
+            OperationFailureCause::UnknownNative
+        );
+    }
 
     #[test]
     fn status_summary_counts_conflict_metadata_as_a_local_change() {

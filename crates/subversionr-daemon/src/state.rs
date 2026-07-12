@@ -163,7 +163,7 @@ impl DaemonState {
             libsvn_version: bridge_info.libsvn_version,
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 28,
+                minor: 29,
             },
             platform: current_platform(),
             cache_schema: default_cache_schema(),

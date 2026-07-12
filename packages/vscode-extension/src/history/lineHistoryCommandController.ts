@@ -16,6 +16,10 @@ export interface LineHistoryCommandControllerOptions {
   sessionService: Pick<RepositorySessionService, "listOpenSessions">;
   sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource">;
   workspaceTrusted(): boolean;
+  diagnostics: {
+    recordFailure(operation: string, error: unknown): void;
+    show(): void;
+  };
   ui: LineHistoryCommandUi;
   localize(message: string, ...args: unknown[]): string;
 }
@@ -23,7 +27,7 @@ export interface LineHistoryCommandControllerOptions {
 export interface LineHistoryCommandUi {
   activeTextEditor(): LineHistoryActiveEditor | undefined;
   showLineHistory(target: HistoryViewTarget, entries: readonly HistoryLogEntry[]): Promise<void>;
-  showErrorMessage(message: string): Promise<void>;
+  showErrorMessage(message: string, ...actions: string[]): Promise<unknown>;
 }
 
 export interface LineHistoryActiveEditor {
@@ -114,9 +118,24 @@ export class LineHistoryCommandController {
 
       await this.options.ui.showLineHistory(lineHistoryViewTarget(target), entries);
     } catch (error) {
-      await this.options.ui.showErrorMessage(
-        this.options.localize("SubversionR line history command failed: {0}", errorCode(error)),
-      );
+      this.options.diagnostics.recordFailure("Line History", error);
+      const showLog = this.options.localize("Show Log");
+      void this.options.ui
+        .showErrorMessage(
+          this.options.localize(
+            "SVN {0} failed. Open the SubversionR log for details.",
+            this.options.localize("History"),
+          ),
+          showLog,
+        )
+        .then((selected) => {
+          if (selected === showLog) {
+            this.options.diagnostics.show();
+          }
+        })
+        .catch((notificationError: unknown) => {
+          console.error("SubversionR line history notification failed.", notificationError);
+        });
     }
   }
 
@@ -346,12 +365,4 @@ function lineHistoryRevisionLimitExceeded(): LineHistoryCommandError {
     "input",
     "error.history.lineRevisionLimitExceeded",
   );
-}
-
-function errorCode(error: unknown): string {
-  return isRecord(error) && typeof error.code === "string" ? error.code : "SUBVERSIONR_LINE_HISTORY_COMMAND_FAILED";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

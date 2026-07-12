@@ -66,7 +66,7 @@ export interface RepositoryCommandUi {
   pickOpenRepository(sessions: RepositorySession[]): Promise<RepositorySession | undefined>;
   showInformationMessage(message: string): Promise<void>;
   showWarningMessage(message: string): Promise<void>;
-  showErrorMessage(message: string): Promise<void>;
+  showErrorMessage(message: string, ...actions: string[]): Promise<unknown>;
   showTextDocument(document: { title: string; content: string; language: string }): Promise<void>;
   confirmRevertResource(path: string): Promise<boolean>;
   confirmRemoveResource(path: string): Promise<boolean>;
@@ -89,6 +89,7 @@ export interface RepositoryCommandUi {
   promptExternalsPropertyValue(path: string, existingValue: string | undefined): Promise<string | undefined>;
   promptReviewCommitTargets(
     targets: readonly RepositoryReviewCommitTarget[],
+    preselectedPaths: ReadonlySet<string>,
   ): Promise<readonly RepositoryReviewCommitTarget[] | undefined>;
   runOperationWithProgress<T>(
     title: string,
@@ -230,6 +231,10 @@ export interface RepositoryCommandControllerOptions {
   checkoutClient: Pick<RepositoryCheckoutClient, "checkout">;
   propertiesClient: Pick<PropertiesClient, "listProperties">;
   operationJournal: Pick<RepositoryOperationJournal, "tryRecord">;
+  diagnostics: {
+    recordFailure(operation: string, error: unknown): void;
+    show(): void;
+  };
   historyClient: Pick<HistoryClient, "getLog">;
   operationScheduler: Pick<RepositoryOperationScheduler, "run">;
   sourceControlProjection: Pick<SourceControlProjectionService, "getCommitAllTargets" | "getProjection">;
@@ -426,6 +431,8 @@ const HEAD_WORKING_COPY_UPDATE_OPTIONS: RepositoryUpdateOptions = {
 const MAX_SVN_REVNUM = 2_147_483_647;
 
 export class RepositoryCommandController {
+  private readonly reviewCommitSelections = new Map<string, Set<string>>();
+
   public constructor(private readonly options: RepositoryCommandControllerOptions) {}
 
   public async openRepository(): Promise<void> {
@@ -3021,10 +3028,22 @@ export class RepositoryCommandController {
         status: target.status,
         directory: target.directory,
       }));
-      const selectedReviewTargets = await this.options.ui.promptReviewCommitTargets(reviewTargets);
+      const previousSelection = this.reviewCommitSelections.get(session.repositoryId);
+      const candidatePaths = new Set(candidates.map((target) => target.path));
+      const preselectedPaths = previousSelection
+        ? new Set([...previousSelection].filter((path) => candidatePaths.has(path)))
+        : candidatePaths;
+      const selectedReviewTargets = await this.options.ui.promptReviewCommitTargets(
+        reviewTargets,
+        preselectedPaths,
+      );
       if (selectedReviewTargets === undefined) {
         return;
       }
+      this.reviewCommitSelections.set(
+        session.repositoryId,
+        new Set(selectedReviewTargets.map((target) => target.path)),
+      );
       if (selectedReviewTargets.length === 0) {
         await this.options.ui.showWarningMessage(this.options.localize("No SVN resources selected for commit."));
         return;
@@ -3047,6 +3066,7 @@ export class RepositoryCommandController {
         }
       }
       await this.commitTargets(targets);
+      this.reviewCommitSelections.delete(session.repositoryId);
     } catch (error) {
       await this.showCommandError(error);
     }
@@ -3992,11 +4012,13 @@ export class RepositoryCommandController {
     );
   }
 
-  private showCommandError(error: unknown): void {
+  private async showCommandError(error: unknown): Promise<void> {
     if (isStatusRefreshCancellation(error)) {
       return;
     }
     const code = errorCode(error);
+    const operation = repositoryErrorOperation(code, this.options.localize);
+    this.options.diagnostics.recordFailure(operation, error);
     if (isInstalledSourceControlUiE2eRun()) {
       const category = errorCategory(error);
       console.warn(
@@ -4008,8 +4030,17 @@ export class RepositoryCommandController {
     if (isUnknownRepositoryCommandError(error)) {
       console.error("SubversionR repository command failed.", error);
     }
+    const showLog = this.options.localize("Show Log");
     void this.options.ui
-      .showErrorMessage(this.options.localize("SubversionR repository command failed: {0}", code))
+      .showErrorMessage(
+        repositoryFailureMessage(operation, error, this.options.localize),
+        showLog,
+      )
+      .then((selected) => {
+        if (selected === showLog) {
+          this.options.diagnostics.show();
+        }
+      })
       .catch((notificationError: unknown) => {
         console.error("SubversionR repository command notification failed.", notificationError);
       });
@@ -4062,6 +4093,73 @@ function errorCode(error: unknown): string {
     }
   }
   return "SUBVERSIONR_REPOSITORY_COMMAND_FAILED";
+}
+
+type RepositoryErrorLocalize = (message: string, ...args: unknown[]) => string;
+
+function repositoryErrorOperation(code: string, localize: RepositoryErrorLocalize): string {
+  if (code.includes("COMMIT")) {
+    return localize("Commit");
+  }
+  if (code.includes("UPDATE") || code.includes("REMOTE_STATUS")) {
+    return localize("Update");
+  }
+  if (code.includes("CHECKOUT")) {
+    return localize("Checkout");
+  }
+  if (code.includes("HISTORY") || code.includes("BLAME")) {
+    return localize("History");
+  }
+  if (code.includes("OPEN") || code.includes("WC_")) {
+    return localize("Open Working Copy");
+  }
+  return localize("Repository Operation");
+}
+
+function repositoryFailureMessage(
+  operation: string,
+  error: unknown,
+  localize: RepositoryErrorLocalize,
+): string {
+  const cause = operationFailureCause(error);
+  switch (cause) {
+    case "outOfDate":
+      return localize(
+        "SVN {0} failed because the working copy is out of date. Update the working copy and retry.",
+        operation,
+      );
+    case "conflictPresent":
+      return localize("SVN {0} failed because unresolved conflicts are present. Resolve them and retry.", operation);
+    case "authenticationFailed":
+      return localize("SVN {0} failed because authentication was rejected. Check the credentials and retry.", operation);
+    case "notWorkingCopy":
+      return localize("SVN {0} failed because the selected target is not a working copy.", operation);
+    default:
+      if (errorCategory(error) === "auth") {
+        return localize("SVN {0} failed because authentication was rejected. Check the credentials and retry.", operation);
+      }
+      if (isBackendUnavailableError(error)) {
+        return localize("SVN {0} failed because the SubversionR backend is unavailable. Retry the operation.", operation);
+      }
+      return localize("SVN {0} failed. Open the SubversionR log for details.", operation);
+  }
+}
+
+function operationFailureCause(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("diagnostics" in error)) {
+    return undefined;
+  }
+  const diagnostics = (error as { diagnostics?: unknown }).diagnostics;
+  if (typeof diagnostics !== "object" || diagnostics === null || !("cause" in diagnostics)) {
+    return undefined;
+  }
+  const cause = (diagnostics as { cause?: unknown }).cause;
+  return typeof cause === "string" ? cause : undefined;
+}
+
+function isBackendUnavailableError(error: unknown): boolean {
+  const code = errorCode(error);
+  return code.includes("BACKEND") || code.includes("JSON_RPC") || code.includes("RPC_");
 }
 
 function isStatusRefreshCancellation(error: unknown): boolean {

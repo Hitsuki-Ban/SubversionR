@@ -176,7 +176,8 @@ describe("RepositoryCommandController", () => {
     expect(sessionService.openWorkingCopy).not.toHaveBeenCalled();
     expect(ui.showInformationMessage).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SVN_REPOSITORY_CHECKOUT_FAILED",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -274,7 +275,8 @@ describe("RepositoryCommandController", () => {
     expect(discoveryService.discoverRepositories).not.toHaveBeenCalled();
     expect(discoveryService.openDiscoveredRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_REPOSITORY_PATH_CASE_UNSUPPORTED",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -492,7 +494,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(sessionService.closeRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_CLOSE_REPOSITORY_ID_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -508,7 +511,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(sessionService.closeRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_CLOSE_REPOSITORY_NOT_OPEN",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -650,7 +654,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.showInformationMessage).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SVN_REMOTE_STATUS_FAILED",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -669,7 +674,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(refreshService.refreshRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_REFRESH_REPOSITORY_ID_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -688,7 +694,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(refreshService.refreshRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_REFRESH_REPOSITORY_NOT_OPEN",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -839,7 +846,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(refreshService.fullReconcileRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_FULL_RECONCILE_REPOSITORY_ID_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -857,7 +865,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(refreshService.fullReconcileRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_FULL_RECONCILE_REPOSITORY_NOT_OPEN",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1005,7 +1014,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(operationClient.cleanup).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_CLEANUP_REPOSITORY_ID_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1029,7 +1039,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(operationClient.cleanup).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_CLEANUP_REPOSITORY_NOT_OPEN",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1153,7 +1164,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(operationClient.upgrade).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_UPGRADE_WORKING_COPY_REPOSITORY_ID_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1172,7 +1184,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(operationClient.upgrade).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_UPGRADE_WORKING_COPY_REPOSITORY_NOT_OPEN",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1321,7 +1334,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.showInformationMessage).not.toHaveBeenCalled();
     expect(ui.showWarningMessage).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_UPDATE_CONFLICT_STATE_UNAVAILABLE",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1757,7 +1771,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(operationClient.branchCreate).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_BRANCH_CREATE_REPOSITORY_ID_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1781,7 +1796,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.pickOpenRepository).not.toHaveBeenCalled();
     expect(operationClient.branchCreate).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_BRANCH_CREATE_REPOSITORY_NOT_OPEN",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1922,7 +1938,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.promptSwitchOptions).not.toHaveBeenCalled();
     expect(operationClient.switch).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_SWITCH_REPOSITORY_ID_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -1948,7 +1965,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.promptSwitchOptions).not.toHaveBeenCalled();
     expect(operationClient.switch).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_SWITCH_REPOSITORY_NOT_OPEN",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -3418,7 +3436,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.commitMessage).not.toHaveBeenCalled();
     expect(ui.clearCommitMessage).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -3544,7 +3563,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.showHistory).not.toHaveBeenCalled();
     expect(ui.showBlame).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -3829,7 +3849,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.update).not.toHaveBeenCalled();
     expect(refreshService.fullReconcileRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_UPDATE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -3850,7 +3871,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.update).not.toHaveBeenCalled();
     expect(refreshService.fullReconcileRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_UPDATE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -3877,7 +3899,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.update).not.toHaveBeenCalled();
     expect(refreshService.fullReconcileRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_UPDATE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -3898,7 +3921,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.update).not.toHaveBeenCalled();
     expect(refreshService.fullReconcileRepository).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_UPDATE_TARGET_OUTSIDE_REPOSITORY",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4375,7 +4399,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.diffWithHead).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_HEAD_STATE_UNAVAILABLE",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4396,7 +4421,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.openHead).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_OPEN_HEAD_STATE_STALE",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4426,11 +4452,13 @@ describe("RepositoryCommandController", () => {
     expect(ui.diffWithHead).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenNthCalledWith(
       1,
-      "SubversionR repository command failed: SUBVERSIONR_OPEN_HEAD_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
     expect(ui.showErrorMessage).toHaveBeenNthCalledWith(
       2,
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_HEAD_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4449,7 +4477,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.openBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_OPEN_BASE_STATE_UNAVAILABLE",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4470,7 +4499,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.openBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_OPEN_BASE_STATE_STALE",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4493,7 +4523,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.openBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_OPEN_BASE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4512,7 +4543,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.openBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_OPEN_BASE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4530,7 +4562,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.diffWithBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_BASE_STATE_UNAVAILABLE",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4552,7 +4585,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.diffWithBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_BASE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4578,7 +4612,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.diffWithBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_BASE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4597,7 +4632,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.diffWithBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_BASE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4857,7 +4893,8 @@ describe("RepositoryCommandController", () => {
     expect(historyClient.getLog).not.toHaveBeenCalled();
     expect(ui.diffRevisions).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_PREVIOUS_STATE_STALE",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4883,7 +4920,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.diffRevisions).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_PREVIOUS_NO_PREVIOUS_REVISION",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4911,7 +4949,8 @@ describe("RepositoryCommandController", () => {
     expect(historyClient.getLog).not.toHaveBeenCalled();
     expect(ui.diffRevisions).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_DIFF_PREVIOUS_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4927,7 +4966,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.openBase).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_OPEN_BASE_TARGET_OUTSIDE_REPOSITORY",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4949,7 +4989,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.showHistory).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_HISTORY_FILE_STATE_UNAVAILABLE",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -4977,11 +5018,13 @@ describe("RepositoryCommandController", () => {
     expect(ui.showHistory).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenNthCalledWith(
       1,
-      "SubversionR repository command failed: SUBVERSIONR_HISTORY_FILE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
     expect(ui.showErrorMessage).toHaveBeenNthCalledWith(
       2,
-      "SubversionR repository command failed: SUBVERSIONR_HISTORY_FILE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5078,11 +5121,13 @@ describe("RepositoryCommandController", () => {
     expect(ui.showBlame).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenNthCalledWith(
       1,
-      "SubversionR repository command failed: SUBVERSIONR_BLAME_FILE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
     expect(ui.showErrorMessage).toHaveBeenNthCalledWith(
       2,
-      "SubversionR repository command failed: SUBVERSIONR_BLAME_FILE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5116,7 +5161,8 @@ describe("RepositoryCommandController", () => {
 
     expect(ui.showHistory).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_HISTORY_FILE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5220,7 +5266,8 @@ describe("RepositoryCommandController", () => {
 
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REFRESH_TARGET_OUTSIDE_REPOSITORY",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5236,7 +5283,8 @@ describe("RepositoryCommandController", () => {
 
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REFRESH_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5255,7 +5303,8 @@ describe("RepositoryCommandController", () => {
 
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REFRESH_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5274,7 +5323,8 @@ describe("RepositoryCommandController", () => {
 
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REFRESH_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5299,7 +5349,8 @@ describe("RepositoryCommandController", () => {
 
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REFRESH_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5324,7 +5375,8 @@ describe("RepositoryCommandController", () => {
 
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REFRESH_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -5659,7 +5711,8 @@ describe("RepositoryCommandController", () => {
     );
     expect(ui.showInformationMessage).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_OPERATION_FAILED",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -6173,7 +6226,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.propertyDelete).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_PROPERTIES_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -6241,7 +6295,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.propertySet).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_ADD_TO_IGNORE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -6609,7 +6664,8 @@ describe("RepositoryCommandController", () => {
 
     expect(operationClient.unlock).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_UNLOCK_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -6970,8 +7026,9 @@ describe("RepositoryCommandController", () => {
       ).resolves.toBeUndefined();
 
       expect(ui.showErrorMessage).toHaveBeenCalledWith(
-        "SubversionR repository command failed: SUBVERSIONR_REPOSITORY_COMMAND_FAILED",
-      );
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
+    );
       expect(consoleError).toHaveBeenCalledWith("SubversionR repository command failed.", unknownError);
     } finally {
       consoleError.mockRestore();
@@ -7197,7 +7254,8 @@ describe("RepositoryCommandController", () => {
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_DELETE_UNVERSIONED_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -7229,7 +7287,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.deleteLocalFile).not.toHaveBeenCalled();
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_DELETE_UNVERSIONED_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -7264,7 +7323,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.deleteLocalFile).not.toHaveBeenCalled();
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_DELETE_UNVERSIONED_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -7296,7 +7356,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.deleteLocalFile).not.toHaveBeenCalled();
     expect(refreshService.refreshResource).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_DELETE_UNVERSIONED_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -7634,7 +7695,8 @@ describe("RepositoryCommandController", () => {
       expect(operationClient[scenario.clientMethod]).not.toHaveBeenCalled();
       expectWriteConfirmationsNotCalled(ui);
       expect(ui.showErrorMessage).toHaveBeenCalledWith(
-        `SubversionR repository command failed: ${scenario.errorCode}`,
+        expect.not.stringContaining("SubversionR repository command failed:"),
+        "Show Log",
       );
     },
   );
@@ -7669,7 +7731,8 @@ describe("RepositoryCommandController", () => {
       expect(operationClient[scenario.clientMethod]).not.toHaveBeenCalled();
       expectWriteConfirmationsNotCalled(ui);
       expect(ui.showErrorMessage).toHaveBeenCalledWith(
-        `SubversionR repository command failed: ${scenario.errorCode}`,
+        expect.not.stringContaining("SubversionR repository command failed:"),
+        "Show Log",
       );
     },
   );
@@ -7696,7 +7759,8 @@ describe("RepositoryCommandController", () => {
       expect(operationClient[scenario.clientMethod]).not.toHaveBeenCalled();
       expectWriteConfirmationsNotCalled(ui);
       expect(ui.showErrorMessage).toHaveBeenCalledWith(
-        `SubversionR repository command failed: ${scenario.errorCode}`,
+        expect.not.stringContaining("SubversionR repository command failed:"),
+        "Show Log",
       );
     },
   );
@@ -7725,7 +7789,8 @@ describe("RepositoryCommandController", () => {
       expect(operationClient[scenario.clientMethod]).not.toHaveBeenCalled();
       expectWriteConfirmationsNotCalled(ui);
       expect(ui.showErrorMessage).toHaveBeenCalledWith(
-        `SubversionR repository command failed: ${scenario.errorCode}`,
+        expect.not.stringContaining("SubversionR repository command failed:"),
+        "Show Log",
       );
     },
   );
@@ -7754,7 +7819,8 @@ describe("RepositoryCommandController", () => {
       expect(operationClient[scenario.clientMethod]).not.toHaveBeenCalled();
       expectWriteConfirmationsNotCalled(ui);
       expect(ui.showErrorMessage).toHaveBeenCalledWith(
-        `SubversionR repository command failed: ${scenario.errorCode}`,
+        expect.not.stringContaining("SubversionR repository command failed:"),
+        "Show Log",
       );
     },
   );
@@ -8688,10 +8754,13 @@ describe("RepositoryCommandController", () => {
 
     await controller.reviewCommit("repo-uuid:C:/workspace");
 
-    expect(ui.promptReviewCommitTargets).toHaveBeenCalledWith([
-      { path: "src/main.c", changelist: null, status: "modified", directory: "src" },
-      { path: "src/other.c", changelist: "review", status: "added", directory: "src" },
-    ]);
+    expect(ui.promptReviewCommitTargets).toHaveBeenCalledWith(
+      [
+        { path: "src/main.c", changelist: null, status: "modified", directory: "src" },
+        { path: "src/other.c", changelist: "review", status: "added", directory: "src" },
+      ],
+      new Set(["src/main.c", "src/other.c"]),
+    );
     expect(ui.commitMessage).toHaveBeenCalledWith("repo-uuid:C:/workspace");
     expect(operationClient.commit).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
@@ -8732,12 +8801,72 @@ describe("RepositoryCommandController", () => {
 
     await controller.reviewCommit("repo-uuid:C:/workspace");
 
-    expect(ui.promptReviewCommitTargets).toHaveBeenCalledWith([
-      { path: "src/main.c", changelist: null, status: "modified", directory: "src" },
-    ]);
+    expect(ui.promptReviewCommitTargets).toHaveBeenCalledWith(
+      [{ path: "src/main.c", changelist: null, status: "modified", directory: "src" }],
+      new Set(["src/main.c"]),
+    );
     expect(ui.commitMessage).not.toHaveBeenCalled();
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(ui.clearCommitMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves the reviewed selection and commit message after a failed commit", async () => {
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/other.c", reason: "operationCommit", revision: 8 }),
+    );
+    operationClient.commit.mockRejectedValueOnce({
+      code: "SVN_OPERATION_COMMIT_FAILED",
+      category: "native",
+      messageKey: "error.native.operationCommitFailed",
+      safeArgs: {},
+      retryable: false,
+      diagnostics: {
+        cause: "outOfDate",
+        svn: {
+          entries: [{ code: 155011, name: "SVN_ERR_WC_NOT_UP_TO_DATE" }],
+          truncated: false,
+        },
+      },
+    });
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "commit reviewed files",
+      reviewCommitSelection: ["src/other.c"],
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        sourceControlProjection: fakeSourceControlProjection({
+          targets: commitAllTargets({
+            targets: [
+              { path: "src/main.c", changelist: null },
+              { path: "src/other.c", changelist: null },
+            ],
+          }),
+        }),
+      },
+    );
+
+    await controller.reviewCommit("repo-uuid:C:/workspace");
+
+    expect(ui.clearCommitMessage).not.toHaveBeenCalled();
+    expect(ui.commitMessage).toHaveBeenCalledWith("repo-uuid:C:/workspace");
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "SVN Commit failed because the working copy is out of date. Update the working copy and retry.",
+      "Show Log",
+    );
+
+    await controller.reviewCommit("repo-uuid:C:/workspace");
+
+    expect(ui.promptReviewCommitTargets).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Array),
+      new Set(["src/other.c"]),
+    );
+    expect(ui.clearCommitMessage).toHaveBeenCalledTimes(1);
   });
 
   it("warns and preserves the message when Review and Commit selection is empty", async () => {
@@ -8783,7 +8912,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.commitMessage).not.toHaveBeenCalled();
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -8848,7 +8978,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.commitMessage).not.toHaveBeenCalled();
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_COMMIT_ALL_CONFLICTS_PRESENT",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -8873,7 +9004,8 @@ describe("RepositoryCommandController", () => {
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.clearCommitMessage).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_COMMIT_FAILED",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -8923,7 +9055,8 @@ describe("RepositoryCommandController", () => {
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.clearCommitMessage).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_COMMIT_MESSAGE_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -8951,7 +9084,8 @@ describe("RepositoryCommandController", () => {
     expect(ui.commitMessage).not.toHaveBeenCalled();
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9073,7 +9207,8 @@ describe("RepositoryCommandController", () => {
 
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_COMMIT_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9125,7 +9260,8 @@ describe("RepositoryCommandController", () => {
 
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_COMMIT_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9156,7 +9292,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_COMMIT_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9187,7 +9324,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_COMMIT_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9223,7 +9361,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_COMMIT_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9356,7 +9495,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.revert).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REVERT_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9377,7 +9517,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.revert).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REVERT_TARGET_OUTSIDE_REPOSITORY",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9538,7 +9679,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.add).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_ADD_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9565,7 +9707,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.remove).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_REMOVE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9595,7 +9738,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.resolve).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_RESOLVE_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9627,7 +9771,8 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_RESOURCE_COMMIT_TARGET_INVALID",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9722,7 +9867,8 @@ describe("RepositoryCommandController", () => {
     await controller.openRepository();
 
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_REPOSITORY_DISCOVERY_FAILED",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
   });
 
@@ -9896,7 +10042,8 @@ describe("RepositoryCommandController", () => {
     await controller.updateRepository();
 
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SubversionR repository command failed: SUBVERSIONR_OPERATION_CANCELLED",
+      expect.not.stringContaining("SubversionR repository command failed:"),
+      "Show Log",
     );
     expect(operationJournal.snapshot()).toEqual([
       expect.objectContaining({
@@ -10008,6 +10155,10 @@ function commandController(
     checkoutClient?: Pick<RepositoryCheckoutClient, "checkout">;
     propertiesClient?: Pick<PropertiesClient, "listProperties">;
     operationJournal?: Pick<RepositoryOperationJournal, "tryRecord">;
+    diagnostics?: {
+      recordFailure(operation: string, error: unknown): void;
+      show(): void;
+    };
     historyClient?: Pick<HistoryClient, "getLog">;
     operationScheduler?: Pick<RepositoryOperationScheduler, "run">;
     sourceControlProjection?: Pick<SourceControlProjectionService, "getCommitAllTargets" | "getProjection">;
@@ -10027,6 +10178,10 @@ function commandController(
     checkoutClient: deps.checkoutClient ?? fakeCheckoutClient(),
     propertiesClient: deps.propertiesClient ?? fakePropertiesClient(propertiesResponse()),
     operationJournal: deps.operationJournal ?? new RepositoryOperationJournal({ maxEntries: 10 }),
+    diagnostics: deps.diagnostics ?? {
+      recordFailure: vi.fn(),
+      show: vi.fn(),
+    },
     historyClient: deps.historyClient ?? fakeHistoryClient(historyLog()),
     operationScheduler: deps.operationScheduler ?? fakeOperationScheduler(),
     sourceControlProjection: deps.sourceControlProjection ?? fakeSourceControlProjection(),

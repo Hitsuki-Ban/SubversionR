@@ -107,6 +107,7 @@ describe("RepositoryDiscoveryService", () => {
       messageKey: "error.repository.discoveryModeUnsupported",
       args: { field: "discoverNested" },
       retryable: false,
+      diagnostics: null,
     });
     const connection = fakeConnection(backendError);
     const service = new RepositoryDiscoveryService({

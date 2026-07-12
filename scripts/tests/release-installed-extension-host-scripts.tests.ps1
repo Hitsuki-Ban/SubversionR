@@ -169,7 +169,7 @@ if ($null -eq $installedPackage) {
     }
   }
   installedRedactionReport = [pscustomobject]@{
-    schemaVersion = 1
+    schemaVersion = 2
     kind = "subversionr.installedRedactionReport"
     diagnosticsBundle = [pscustomobject]@{
       kind = "subversionr.diagnosticsBundle"
@@ -196,6 +196,14 @@ if ($null -eq $installedPackage) {
         repositoryLogMessage = "[REDACTED:repository-log]"
         sourceContent = "[REDACTED:source-content]"
       }
+    }
+    operationFailureFixture = [pscustomobject]@{
+      status = "redacted"
+      channel = "SubversionR"
+      maxLines = 100
+      maxLineLength = 4096
+      showLogAction = "Show Log"
+      lines = @('{"diagnostics":{"cause":"outOfDate","svn":{"entries":[{"code":155011,"name":"SVN_ERR_WC_NOT_UP_TO_DATE"}]}}}')
     }
   }
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $resultPath -Encoding utf8
@@ -255,6 +263,9 @@ try {
   Assert-Equal "redacted" $report.installedRedactionReport.diagnosticsBundle.redaction.urls "Installed diagnostics bundle should declare URL redaction."
   Assert-Equal "redacted" $report.installedRedactionReport.diagnosticsBundle.redaction.secrets "Installed diagnostics bundle should declare secret redaction."
   Assert-Equal "redacted" $report.installedRedactionReport.publicSupportFixture.status "Installed public support fixture should declare redacted status."
+  Assert-Equal "2" ([string]$report.installedRedactionReport.schemaVersion) "Installed redaction report should use the failure-log schema."
+  Assert-Equal "SubversionR" $report.installedRedactionReport.operationFailureFixture.channel "Installed redaction report should include the SubversionR log channel."
+  Assert-True (($report.installedRedactionReport.operationFailureFixture.lines -join "`n").Contains("SVN_ERR_WC_NOT_UP_TO_DATE")) "Installed redaction report should preserve the safe libsvn cause."
   $installedRedactionJson = $report.installedRedactionReport | ConvertTo-Json -Depth 20
   Assert-True (-not $installedRedactionJson.Contains("hunter2")) "Installed redaction report must not contain synthetic fixture passwords."
   Assert-True (-not $installedRedactionJson.Contains("abc123")) "Installed redaction report must not contain synthetic fixture tokens."

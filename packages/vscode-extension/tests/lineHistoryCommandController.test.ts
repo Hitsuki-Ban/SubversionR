@@ -92,6 +92,26 @@ describe("LineHistoryCommandController", () => {
     expect(ui.showErrorMessage).not.toHaveBeenCalled();
   });
 
+  it("records failures and offers the redacted log without blocking on the notification", async () => {
+    const rawCode = "SUBVERSIONR_NATIVE_SECRET_FAILURE";
+    const failure = Object.assign(new Error("sensitive backend detail"), { code: rawCode });
+    const historyClient = fakeHistoryClient(blameResponse({ lineStart: 1, lineLimit: 1 }), logResponse(4));
+    historyClient.getBlame.mockRejectedValueOnce(failure);
+    const ui = fakeUi({ errorSelection: "l10n:Show Log" });
+    const diagnostics = fakeDiagnostics();
+    const controller = lineHistoryController({ historyClient, ui, diagnostics });
+
+    await controller.showLineHistory();
+
+    expect(diagnostics.recordFailure).toHaveBeenCalledWith("Line History", failure);
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "l10n:SVN l10n:History failed. Open the SubversionR log for details.",
+      "l10n:Show Log",
+    );
+    expect(ui.showErrorMessage.mock.calls[0]?.[0]).not.toContain(rawCode);
+    await vi.waitFor(() => expect(diagnostics.show).toHaveBeenCalledOnce());
+  });
+
   it("opens line history for a safe active editor file from an SVN changelist group", async () => {
     const historyClient = fakeHistoryClient(
       blameResponse({
@@ -240,9 +260,7 @@ describe("LineHistoryCommandController", () => {
     expect(historyClient.getBlame).not.toHaveBeenCalled();
     expect(historyClient.getLog).not.toHaveBeenCalled();
     expect(ui.showLineHistory).not.toHaveBeenCalled();
-    expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "l10n:SubversionR line history command failed: SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
-    );
+    expectLineHistoryFailure(ui);
   });
 
   it.each([
@@ -281,9 +299,7 @@ describe("LineHistoryCommandController", () => {
     expect(historyClient.getBlame).not.toHaveBeenCalled();
     expect(historyClient.getLog).not.toHaveBeenCalled();
     expect(ui.showLineHistory).not.toHaveBeenCalled();
-    expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "l10n:SubversionR line history command failed: SUBVERSIONR_LINE_HISTORY_TARGET_INVALID",
-    );
+    expectLineHistoryFailure(ui);
   });
 
   it("does not query history when line history is disabled", async () => {
@@ -300,9 +316,7 @@ describe("LineHistoryCommandController", () => {
     expect(historyClient.getBlame).not.toHaveBeenCalled();
     expect(historyClient.getLog).not.toHaveBeenCalled();
     expect(ui.showLineHistory).not.toHaveBeenCalled();
-    expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "l10n:SubversionR line history command failed: SUBVERSIONR_LINE_HISTORY_TARGET_INVALID",
-    );
+    expectLineHistoryFailure(ui);
   });
 
   it.each([
@@ -319,9 +333,7 @@ describe("LineHistoryCommandController", () => {
     expect(historyClient.getBlame).not.toHaveBeenCalled();
     expect(historyClient.getLog).not.toHaveBeenCalled();
     expect(ui.showLineHistory).not.toHaveBeenCalled();
-    expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "l10n:SubversionR line history command failed: SUBVERSIONR_LINE_HISTORY_SELECTION_INVALID",
-    );
+    expectLineHistoryFailure(ui);
   });
 
   it("does not show partial line history when blame rows are local, unknown, incomplete, or non-contiguous", async () => {
@@ -351,9 +363,7 @@ describe("LineHistoryCommandController", () => {
 
       expect(historyClient.getLog).not.toHaveBeenCalled();
       expect(ui.showLineHistory).not.toHaveBeenCalled();
-      expect(ui.showErrorMessage).toHaveBeenCalledWith(
-        "l10n:SubversionR line history command failed: SUBVERSIONR_LINE_HISTORY_BLAME_INCOMPLETE",
-      );
+      expectLineHistoryFailure(ui);
     }
   });
 
@@ -372,9 +382,7 @@ describe("LineHistoryCommandController", () => {
       await controller.showLineHistory();
 
       expect(ui.showLineHistory).not.toHaveBeenCalled();
-      expect(ui.showErrorMessage).toHaveBeenCalledWith(
-        "l10n:SubversionR line history command failed: SUBVERSIONR_LINE_HISTORY_LOG_INCOMPLETE",
-      );
+      expectLineHistoryFailure(ui);
     }
   });
 
@@ -399,9 +407,7 @@ describe("LineHistoryCommandController", () => {
 
     expect(historyClient.getLog).not.toHaveBeenCalled();
     expect(ui.showLineHistory).not.toHaveBeenCalled();
-    expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "l10n:SubversionR line history command failed: SUBVERSIONR_LINE_HISTORY_REVISION_LIMIT_EXCEEDED",
-    );
+    expectLineHistoryFailure(ui);
   });
 });
 
@@ -414,6 +420,7 @@ function lineHistoryController(options: {
   sourceControlProjection?: Pick<SourceControlProjectionService, "getProjectedResource">;
   includeMergedRevisions?: boolean;
   workspaceTrusted?: boolean;
+  diagnostics?: FakeDiagnostics;
 } = {}): LineHistoryCommandController {
   const projections = options.projections ?? new Map([["repo-uuid:C:/workspace", scmProjection()]]);
   return new LineHistoryCommandController({
@@ -423,6 +430,7 @@ function lineHistoryController(options: {
     sessionService: fakeSessionService(options.sessions ?? [repositorySession()]),
     sourceControlProjection: options.sourceControlProjection ?? fakeSourceControlProjection(projections),
     workspaceTrusted: () => options.workspaceTrusted ?? true,
+    diagnostics: options.diagnostics ?? fakeDiagnostics(),
     ui: options.ui ?? fakeUi(),
     localize: localizeForTest,
   });
@@ -448,12 +456,26 @@ function fakeHistoryClient(
   };
 }
 
-function fakeUi(options: { editor?: LineHistoryActiveEditor } = {}): FakeUi {
+function fakeUi(options: { editor?: LineHistoryActiveEditor; errorSelection?: unknown } = {}): FakeUi {
   return {
     activeTextEditor: vi.fn(() => ("editor" in options ? options.editor : activeEditor("C:\\workspace\\src\\main.c"))),
     showLineHistory: vi.fn(async () => undefined),
-    showErrorMessage: vi.fn(async () => undefined),
+    showErrorMessage: vi.fn(async () => options.errorSelection),
   };
+}
+
+function fakeDiagnostics(): FakeDiagnostics {
+  return {
+    recordFailure: vi.fn(),
+    show: vi.fn(),
+  };
+}
+
+function expectLineHistoryFailure(ui: FakeUi): void {
+  expect(ui.showErrorMessage).toHaveBeenCalledWith(
+    "l10n:SVN l10n:History failed. Open the SubversionR log for details.",
+    "l10n:Show Log",
+  );
 }
 
 function fakeSessionService(sessions: RepositorySession[]): Pick<RepositorySessionService, "listOpenSessions"> {
@@ -735,5 +757,10 @@ interface FakeUi {
   showLineHistory: ReturnType<
     typeof vi.fn<(target: HistoryViewTarget, entries: HistoryLog["entries"]) => Promise<void>>
   >;
-  showErrorMessage: ReturnType<typeof vi.fn<(message: string) => Promise<void>>>;
+  showErrorMessage: ReturnType<typeof vi.fn<(message: string, ...actions: string[]) => Promise<unknown>>>;
+}
+
+interface FakeDiagnostics {
+  recordFailure: ReturnType<typeof vi.fn<(operation: string, error: unknown) => void>>;
+  show: ReturnType<typeof vi.fn<() => void>>;
 }

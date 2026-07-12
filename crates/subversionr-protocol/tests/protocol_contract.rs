@@ -3,13 +3,37 @@ use subversionr_protocol::{
     Credential, CredentialError, CredentialRequest, CredentialResponse, DiagnosticsBackendStderr,
     DiagnosticsGetResponse, DiagnosticsRepositorySummary, HistoryBlameLine, HistoryBlameResponse,
     HistoryLogChangedPath, HistoryLogEntry, HistoryLogResponse, InitializeResponse, LockInfo,
-    OperationReconcileHint, OperationRunResponse, OperationSummary, OperationWarning,
-    PropertiesListResponse, PropertyEntry, ProtocolVersion, RepositoryCheckoutParams,
-    RepositoryCheckoutRevision, RepositoryCloseResponse, RepositoryDiscoverResponse,
-    RepositoryDiscoveryCandidate, RepositoryIdentity, StatusCoverageScope, StatusDelta,
-    StatusEntry, StatusRefreshTarget, StatusSnapshot, StatusSummary, StatusSummaryDelta,
-    current_platform, default_cache_schema, default_capabilities,
+    OperationFailureCause, OperationFailureDiagnostics, OperationReconcileHint,
+    OperationRunResponse, OperationSummary, OperationWarning, PropertiesListResponse,
+    PropertyEntry, ProtocolVersion, RepositoryCheckoutParams, RepositoryCheckoutRevision,
+    RepositoryCloseResponse, RepositoryDiscoverResponse, RepositoryDiscoveryCandidate,
+    RepositoryIdentity, StatusCoverageScope, StatusDelta, StatusEntry, StatusRefreshTarget,
+    StatusSnapshot, StatusSummary, StatusSummaryDelta, SvnErrorDiagnosticEntry,
+    SvnErrorDiagnostics, current_platform, default_cache_schema, default_capabilities,
 };
+
+#[test]
+fn operation_failure_diagnostics_serialize_strict_safe_shape() {
+    let diagnostics = OperationFailureDiagnostics {
+        cause: OperationFailureCause::OutOfDate,
+        svn: SvnErrorDiagnostics {
+            entries: vec![SvnErrorDiagnosticEntry {
+                code: 160028,
+                name: "SVN_ERR_FS_TXN_OUT_OF_DATE".to_string(),
+            }],
+            truncated: false,
+        },
+    };
+
+    let json = serde_json::to_value(diagnostics).expect("diagnostics must serialize");
+    assert_eq!(json["cause"], "outOfDate");
+    assert_eq!(json["svn"]["entries"][0]["code"], 160028);
+    assert_eq!(
+        json["svn"]["entries"][0]["name"],
+        "SVN_ERR_FS_TXN_OUT_OF_DATE"
+    );
+    assert_eq!(json["svn"]["truncated"], false);
+}
 
 #[test]
 fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
@@ -25,7 +49,7 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
         response.protocol,
         ProtocolVersion {
             major: 1,
-            minor: 28
+            minor: 29
         }
     );
     assert_eq!(response.cache_schema, default_cache_schema());
@@ -85,7 +109,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     let json = serde_json::to_value(response).expect("initialize response must serialize");
 
     assert_eq!(json["protocol"]["major"], 1);
-    assert_eq!(json["protocol"]["minor"], 28);
+    assert_eq!(json["protocol"]["minor"], 29);
     assert_eq!(json["cacheSchema"]["schemaId"], "subversionr.cache.v1");
     assert_eq!(json["cacheSchema"]["version"], 1);
     assert_eq!(json["cacheSchema"]["rollback"], "delete-and-reconcile");

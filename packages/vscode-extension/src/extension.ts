@@ -46,6 +46,7 @@ import {
   type DiagnosticsContext,
 } from "./diagnostics/diagnosticsReportService";
 import { collectInstalledRedactionReport } from "./diagnostics/installedRedactionReport";
+import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
 import {
   collectInstalledSourceControlSurfaceReport as collectInstalledSourceControlSurfaceEvidence,
@@ -155,6 +156,7 @@ import { launchTortoise } from "./tortoise/tortoiseLauncher";
 let backendService: BackendService | undefined;
 let repositorySessionService: RepositorySessionService | undefined;
 let repositoryWatcherService: RepositoryWatcherService | undefined;
+let operationDiagnostics: OperationDiagnostics | undefined;
 
 const HISTORY_COPY_MESSAGE_LEGACY_ALIASES = ["svn.itemlog.copymsg", "svn.repolog.copymsg"] as const;
 const HISTORY_COPY_REVISION_LEGACY_ALIASES = [
@@ -173,6 +175,9 @@ const BACKEND_HEARTBEAT_INTERVAL_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_TIMEOUT_MS = 5 * 1000;
 
 export function activate(context: vscode.ExtensionContext): void {
+  const operationLogChannel = vscode.window.createOutputChannel("SubversionR", { log: true });
+  const diagnostics = new OperationDiagnostics(operationLogChannel);
+  operationDiagnostics = diagnostics;
   const configuration = vscode.workspace.getConfiguration("subversionr");
   const statusSettings = readStatusSettings(configuration);
   let historySettings = readHistorySettings(configuration);
@@ -262,6 +267,7 @@ export function activate(context: vscode.ExtensionContext): void {
       startBackendProcess(config, {
         requestHandler: authRequestHandler,
         notificationHandler: statusNotificationHandler,
+        onRequestError: (method, error) => diagnostics.recordRpcFailure(method, error),
       }),
     lifecycleClock: systemBackendLifecycleClock(),
     heartbeatPolicy: {
@@ -477,6 +483,7 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
+    diagnostics,
     ui: {
       activeTextEditor: () => vscode.window.activeTextEditor,
       showLineHistory: async (target, entries) => {
@@ -487,9 +494,8 @@ export function activate(context: vscode.ExtensionContext): void {
           await historyTreeView.reveal(targetNode, { select: true, focus: true, expand: true });
         }
       },
-      showErrorMessage: async (message) => {
-        await vscode.window.showErrorMessage(message);
-      },
+      showErrorMessage: async (message, ...actions) =>
+        await vscode.window.showErrorMessage(message, ...actions),
     },
     localize: vscode.l10n.t,
   });
@@ -621,6 +627,7 @@ export function activate(context: vscode.ExtensionContext): void {
     checkoutClient: new BackendRepositoryCheckoutClient(service),
     propertiesClient: new BackendPropertiesClient(service),
     operationJournal,
+    diagnostics,
     historyClient,
     operationScheduler,
     sourceControlProjection,
@@ -640,9 +647,8 @@ export function activate(context: vscode.ExtensionContext): void {
       showWarningMessage: async (message) => {
         await vscode.window.showWarningMessage(message);
       },
-      showErrorMessage: async (message) => {
-        await vscode.window.showErrorMessage(message);
-      },
+      showErrorMessage: async (message, ...actions) =>
+        await vscode.window.showErrorMessage(message, ...actions),
       showTextDocument: async (document) => {
         const textDocument = await vscode.workspace.openTextDocument({
           content: document.content,
@@ -940,7 +946,12 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.l10n.t("SubversionR backend ready. libsvn: {0}", connection.initializeResult.libsvnVersion),
       );
     } catch (error) {
-      await vscode.window.showErrorMessage(backendStartupMessage(error));
+      diagnostics.recordFailure("Initialize Backend", error);
+      const showLog = vscode.l10n.t("Show Log");
+      const selected = await vscode.window.showErrorMessage(backendStartupMessage(error), showLog);
+      if (selected === showLog) {
+        diagnostics.show();
+      }
     }
   });
   const collectDiagnosticsCommand = vscode.commands.registerCommand("subversionr.diagnostics.collect", () =>
@@ -957,6 +968,7 @@ export function activate(context: vscode.ExtensionContext): void {
           collectInstalledRedactionReport({
             expectedToken: installedRedactionReportToken,
             request,
+            operationDiagnostics: diagnostics,
             collectDiagnosticsBundle: async () =>
               collectDiagnosticsBundle({
                 context: diagnosticsContext(context),
@@ -1423,6 +1435,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
+    operationLogChannel,
     initializeCommand,
     baseContentDocumentProvider,
     headContentDocumentProvider,
@@ -1566,10 +1579,40 @@ async function runHistoryCommand(command: () => Promise<void>): Promise<void> {
   try {
     await command();
   } catch (error) {
-    await vscode.window.showErrorMessage(
-      vscode.l10n.t("SubversionR history command failed: {0}", extensionErrorCode(error)),
-    );
+    operationDiagnostics?.recordFailure("History", error);
+    const showLog = vscode.l10n.t("Show Log");
+    const retry = vscode.l10n.t("Retry");
+    const selected = await vscode.window.showErrorMessage(historyFailureMessage(error), showLog, retry);
+    if (selected === showLog) {
+      operationDiagnostics?.show();
+    } else if (selected === retry) {
+      await runHistoryCommand(command);
+    }
   }
+}
+
+function historyFailureMessage(error: unknown): string {
+  const cause = extensionOperationFailureCause(error);
+  switch (cause) {
+    case "authenticationFailed":
+      return vscode.l10n.t("SVN {0} failed because authentication was rejected. Check the credentials and retry.", vscode.l10n.t("History"));
+    case "notWorkingCopy":
+      return vscode.l10n.t("SVN {0} failed because the selected target is not a working copy.", vscode.l10n.t("History"));
+    default:
+      return vscode.l10n.t("SVN {0} failed. Open the SubversionR log for details.", vscode.l10n.t("History"));
+  }
+}
+
+function extensionOperationFailureCause(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("diagnostics" in error)) {
+    return undefined;
+  }
+  const diagnostics = (error as { diagnostics?: unknown }).diagnostics;
+  if (typeof diagnostics !== "object" || diagnostics === null || !("cause" in diagnostics)) {
+    return undefined;
+  }
+  const cause = (diagnostics as { cause?: unknown }).cause;
+  return typeof cause === "string" ? cause : undefined;
 }
 
 async function clearSavedCredentials(credentialController: CredentialController): Promise<void> {
@@ -2023,6 +2066,7 @@ export async function deactivate(): Promise<void> {
   backendService = undefined;
   repositorySessionService = undefined;
   repositoryWatcherService = undefined;
+  operationDiagnostics = undefined;
   sessionService?.dispose();
   watcherService?.dispose();
   try {
@@ -2626,12 +2670,13 @@ function validatePropertyValueInput(value: string): string | undefined {
 
 async function promptReviewCommitTargets(
   targets: readonly RepositoryReviewCommitTarget[],
+  preselectedPaths: ReadonlySet<string>,
 ): Promise<readonly RepositoryReviewCommitTarget[] | undefined> {
   const items: Array<vscode.QuickPickItem & { target: RepositoryReviewCommitTarget }> = targets.map((target) => ({
     label: target.path,
     description: reviewCommitTargetDescription(target),
     detail: reviewCommitTargetDetail(target),
-    picked: true,
+    picked: preselectedPaths.has(target.path),
     target,
   }));
   const selected = await vscode.window.showQuickPick(items, {
@@ -3425,7 +3470,7 @@ function backendStartupMessage(error: unknown): string {
           String(error.safeArgs.rollback),
         );
       default:
-        return vscode.l10n.t("SubversionR backend startup failed: {0}", error.code);
+        return vscode.l10n.t("SubversionR backend startup failed. Open the SubversionR log for details.");
     }
   }
 

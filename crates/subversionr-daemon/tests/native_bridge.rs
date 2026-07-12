@@ -22,10 +22,126 @@ use subversionr_daemon::{
 };
 use subversionr_protocol::{
     CertificateTrustError, CertificateTrustRequest, CertificateTrustResponse, Credential,
-    CredentialRequest, CredentialResponse,
+    CredentialRequest, CredentialResponse, OperationFailureCause,
 };
 
 static NATIVE_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+#[test]
+fn native_bridge_public_operations_clear_stale_diagnostics_before_validation() {
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../native/svn-bridge/src/subversionr_bridge.c");
+    let source = fs::read_to_string(&source_path)
+        .expect("native bridge source should be readable")
+        .replace("\r\n", "\n");
+    let operations = [
+        "subversionr_bridge_open_working_copy",
+        "subversionr_bridge_open_working_copy_with_auth",
+        "subversionr_bridge_probe_remote_url_with_auth",
+        "subversionr_bridge_status_scan",
+        "subversionr_bridge_status_remote_scan_with_auth",
+        "subversionr_bridge_content_get_with_auth",
+        "subversionr_bridge_properties_list",
+        "subversionr_bridge_history_log_with_auth",
+        "subversionr_bridge_history_blame_with_auth",
+        "subversionr_bridge_operation_revert",
+        "subversionr_bridge_operation_add",
+        "subversionr_bridge_operation_remove",
+        "subversionr_bridge_operation_move",
+        "subversionr_bridge_operation_resolve",
+        "subversionr_bridge_operation_cleanup",
+        "subversionr_bridge_operation_upgrade",
+        "subversionr_bridge_operation_update",
+        "subversionr_bridge_repository_checkout_with_auth",
+        "subversionr_bridge_operation_property_set",
+        "subversionr_bridge_operation_property_delete",
+        "subversionr_bridge_operation_changelist_set",
+        "subversionr_bridge_operation_changelist_clear",
+        "subversionr_bridge_operation_lock_with_auth",
+        "subversionr_bridge_operation_unlock_with_auth",
+        "subversionr_bridge_operation_branch_create_with_auth",
+        "subversionr_bridge_operation_switch_with_auth",
+        "subversionr_bridge_operation_relocate_with_auth",
+        "subversionr_bridge_operation_merge_range_with_auth",
+        "subversionr_bridge_operation_commit_with_auth",
+    ];
+
+    for operation in operations {
+        let declaration = format!("int {operation}(");
+        let start = source
+            .find(&declaration)
+            .unwrap_or_else(|| panic!("missing public operation {operation}"));
+        let body = &source[start..];
+        let body_start = body
+            .find("{\n")
+            .unwrap_or_else(|| panic!("missing function body for {operation}"));
+        let prefix = body[body_start + 2..].trim_start();
+        assert!(
+            prefix.starts_with("bridge_prepare_call(runtime);"),
+            "{operation} must clear stale diagnostics before any validation or setup"
+        );
+    }
+
+    let getter_start = source
+        .find("int subversionr_bridge_last_error_diagnostics(")
+        .expect("last error diagnostics getter should exist");
+    let getter = &source[getter_start
+        ..source[getter_start..]
+            .find("\n}\n")
+            .map(|end| getter_start + end + 3)
+            .expect("last error diagnostics getter should be bounded")];
+    assert!(
+        !getter.contains("bridge_prepare_call(runtime)"),
+        "diagnostics getter must not clear the diagnostics it returns"
+    );
+}
+
+#[test]
+#[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
+fn native_bridge_failure_diagnostics_do_not_leak_into_later_validation_failure() {
+    let _guard = native_test_guard();
+    let bridge_path = native_bridge_path();
+    let tool_dir = bridge_tool_dir(&bridge_path);
+    let svn = tool_dir.join("svn.exe");
+    let fixture = WorkingCopyFixture::create(&tool_dir.join("svnadmin.exe"), &svn);
+    let non_working_copy = fixture._temp.path.join("not-a-working-copy");
+    fs::create_dir(&non_working_copy).expect("non-working-copy fixture should be created");
+
+    let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
+    let native_failure = bridge
+        .open_working_copy(
+            non_working_copy
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+        )
+        .expect_err("plain directory must not open as a working copy");
+    let diagnostics = native_failure
+        .diagnostics()
+        .expect("libsvn failure should retain safe diagnostics");
+    assert_eq!(diagnostics.cause, OperationFailureCause::NotWorkingCopy);
+    assert!(!diagnostics.svn.entries.is_empty());
+    assert!(diagnostics.svn.entries.len() <= 8);
+
+    let mut auth = UnavailableAuthRequestBroker;
+    let validation_failure = bridge
+        .probe_remote_url_with_auth("not-a-repository-url", &mut auth)
+        .expect_err("invalid URL should fail native validation");
+    assert!(
+        validation_failure.diagnostics().is_none(),
+        "validation failure must not reuse the previous libsvn chain"
+    );
+
+    bridge
+        .open_working_copy(&fixture.wc_path())
+        .expect("a successful call should clear earlier diagnostics");
+    let later_validation_failure = bridge
+        .probe_remote_url_with_auth("still-not-a-repository-url", &mut auth)
+        .expect_err("invalid URL should fail after a successful call");
+    assert!(
+        later_validation_failure.diagnostics().is_none(),
+        "post-success validation failure must start with empty diagnostics"
+    );
+}
 
 #[test]
 #[ignore = "requires a verified native bridge DLL built from staged Apache Subversion"]
@@ -2991,6 +3107,47 @@ fn native_bridge_history_log_returns_file_revision_entries() {
             .flat_map(|entry| entry.changed_paths.iter())
             .any(|path| path.path == "/trunk/tracked.txt" && path.action == "M")
     );
+}
+
+#[test]
+#[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
+fn native_bridge_history_log_returns_repository_root_history_for_dot_path() {
+    let _guard = native_test_guard();
+    let bridge_path = native_bridge_path();
+    let tool_dir = bridge_tool_dir(&bridge_path);
+    let svn = tool_dir.join("svn.exe");
+    let fixture = WorkingCopyFixture::create(&tool_dir.join("svnadmin.exe"), &svn);
+    fixture.add_committed_file(&svn, "tracked.txt", "root history fixture\n");
+
+    let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
+    let identity = bridge
+        .open_working_copy(&fixture.wc_path())
+        .expect("native bridge should open the fixture working copy");
+    let mut auth = UnavailableAuthRequestBroker;
+    let log = bridge
+        .history_log(
+            &identity,
+            &HistoryLogRequest {
+                path: ".".to_string(),
+                start_revision: "head".to_string(),
+                end_revision: "r0".to_string(),
+                limit: 10,
+                discover_changed_paths: true,
+                strict_node_history: false,
+                include_merged_revisions: false,
+            },
+            &mut auth,
+        )
+        .expect("native bridge should return repository-root history");
+
+    assert_eq!(log.source, "libsvn-log");
+    assert!(!log.entries.is_empty());
+    assert!(log.entries.iter().any(|entry| {
+        entry
+            .changed_paths
+            .iter()
+            .any(|path| path.path == "/trunk/tracked.txt")
+    }));
 }
 
 #[test]
