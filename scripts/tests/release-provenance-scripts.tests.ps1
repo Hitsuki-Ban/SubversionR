@@ -376,8 +376,13 @@ This generated evidence is not a completed legal review.
   }
 }
 
-function Invoke-GenerateProvenance([object]$Fixture, [string]$OutputPath) {
+function Invoke-GenerateProvenance([object]$Fixture, [string]$OutputPath, [string]$Mode) {
+  $modeArguments = @()
+  if (-not [string]::IsNullOrEmpty($Mode)) {
+    $modeArguments = @("-Mode", $Mode)
+  }
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $generateProvenanceScript `
+    @modeArguments `
     -Target win32-x64 `
     -ExtensionPackagePath "packages/vscode-extension/package.json" `
     -RootPackagePath "package.json" `
@@ -445,6 +450,8 @@ exit 0
   Assert-Equal "False" ([string]$report.repository.remoteUrlRecorded) "Provenance preflight must not record private remote URLs."
   Assert-True ($null -ne $report.repository.dirtyWorkingTree) "Provenance preflight should record the working-tree cleanliness state."
   Assert-Equal "unsigned" $report.signing.status "Provenance preflight should keep signing status explicit."
+  Assert-Equal "candidate-seal" ([string]$report.mode) "Provenance preflight should default to candidate-seal mode."
+  Assert-Equal "asserted-exact-match" ([string]$report.candidateAttestation.subjectComparison) "Candidate-seal provenance should record the asserted exact contract subject comparison."
   Assert-Equal "pending-release-attestation" $report.candidateAttestation.status "Current candidate attestation should remain pending before release."
   Assert-Equal "current-candidate" $report.candidateAttestation.scope "Current candidate attestation should remain scoped to the candidate."
   Assert-Equal (Get-Sha256 $fixture.vsixPath) $report.candidateAttestation.subjectSha256 "Current candidate attestation should bind the exact candidate VSIX."
@@ -538,6 +545,71 @@ exit 0
       -Target win32-x64 `
       -EvidencePath $fixture.outputPath
   } "VSIX SHA256" "Provenance verification should fail when the VSIX bytes drift."
+
+  $staleContractFixture = New-ProvenanceFixture (Join-Path $tempRoot "stale-contract")
+  $staleContract = Get-Content -Raw -LiteralPath $staleContractFixture.candidateAttestationContractPath | ConvertFrom-Json
+  $staleContract.subject.sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  Write-JsonFile $staleContractFixture.candidateAttestationContractPath $staleContract
+  Assert-NativeCommandFailsContaining {
+    Invoke-GenerateProvenance -Fixture $staleContractFixture -OutputPath $staleContractFixture.outputPath
+  } "Attestation subject SHA256" "Default candidate-seal provenance generation should fail when the frozen contract subject bytes are stale."
+  Assert-NativeCommandFailsContaining {
+    Invoke-GenerateProvenance -Fixture $staleContractFixture -OutputPath $staleContractFixture.outputPath -Mode candidate-seal
+  } "Attestation subject SHA256" "Explicit candidate-seal provenance generation should fail when the frozen contract subject bytes are stale."
+  Invoke-GenerateProvenance -Fixture $staleContractFixture -OutputPath $staleContractFixture.outputPath -Mode continuous-validation
+  if ($LASTEXITCODE -ne 0) {
+    throw "generate-release-provenance.ps1 failed in continuous-validation mode with exit code $LASTEXITCODE."
+  }
+  $continuousReport = Get-Content -Raw -LiteralPath $staleContractFixture.outputPath | ConvertFrom-Json
+  Assert-Equal "continuous-validation" ([string]$continuousReport.mode) "Continuous-validation provenance should record its mode."
+  Assert-Equal "not-asserted-continuous-validation" ([string]$continuousReport.candidateAttestation.subjectComparison) "Continuous-validation provenance should record that frozen contract subject byte equality is not asserted."
+  Assert-Equal "pending-release-attestation" ([string]$continuousReport.candidateAttestation.status) "Continuous-validation provenance should keep the pending candidate contract status assert."
+  Assert-Equal (Get-Sha256 $staleContractFixture.vsixPath) ([string]$continuousReport.candidateAttestation.subjectSha256) "Continuous-validation provenance should still bind the exact current VSIX bytes."
+  & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
+    -Target win32-x64 `
+    -EvidencePath $staleContractFixture.outputPath
+  if ($LASTEXITCODE -ne 0) {
+    throw "verify-release-provenance.ps1 failed for continuous-validation evidence with exit code $LASTEXITCODE."
+  }
+  & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
+    -Target win32-x64 `
+    -EvidencePath $staleContractFixture.outputPath `
+    -ExpectedMode continuous-validation
+  if ($LASTEXITCODE -ne 0) {
+    throw "verify-release-provenance.ps1 failed for the matching -ExpectedMode continuous-validation with exit code $LASTEXITCODE."
+  }
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
+      -Target win32-x64 `
+      -EvidencePath $staleContractFixture.outputPath `
+      -ExpectedMode candidate-seal
+  } "must match the expected mode" "Provenance verification should fail when -ExpectedMode disagrees with the recorded mode."
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
+      -Target win32-x64 `
+      -EvidencePath $staleContractFixture.outputPath `
+      -ExpectedMode weakened
+  } "ExpectedMode" "Provenance verification should reject -ExpectedMode values outside the documented mode set."
+
+  $tamperedModeReportPath = Join-Path $tempRoot "tampered-mode-mismatch.json"
+  $tamperedModeReport = Get-Content -Raw -LiteralPath $staleContractFixture.outputPath | ConvertFrom-Json
+  $tamperedModeReport.mode = "candidate-seal"
+  Write-JsonFile $tamperedModeReportPath $tamperedModeReport
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
+      -Target win32-x64 `
+      -EvidencePath $tamperedModeReportPath
+  } "subjectComparison" "Provenance verification should fail when the recorded mode disagrees with subjectComparison."
+
+  $tamperedModeReportPath = Join-Path $tempRoot "tampered-mode-invalid.json"
+  $tamperedModeReport = Get-Content -Raw -LiteralPath $staleContractFixture.outputPath | ConvertFrom-Json
+  $tamperedModeReport.mode = "weakened"
+  Write-JsonFile $tamperedModeReportPath $tamperedModeReport
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProvenanceScript `
+      -Target win32-x64 `
+      -EvidencePath $tamperedModeReportPath
+  } "Provenance report mode" "Provenance verification should reject recorded modes outside the documented mode set."
 
   $fixture = New-ProvenanceFixture (Join-Path $tempRoot "second")
   $badOutputPath = Join-Path ([System.IO.Path]::GetTempPath()) "subversionr-provenance-outside-target.json"
@@ -749,6 +821,11 @@ exit 0
     "Generate release provenance preflight",
     "Verify release provenance preflight"
   ) "CI should run M7j2a provenance preflight after the VSIX package exists."
+  Assert-True ($ciWorkflow.Contains("candidate_seal:")) "CI workflow_dispatch should expose the candidate_seal input."
+  Assert-True ($ciWorkflow.Contains("Run in frozen candidate-seal mode (exact-byte contract matching)")) "CI candidate_seal input should document the frozen candidate-seal mode."
+  Assert-True ($ciWorkflow.Contains('SUBVERSIONR_RELEASE_CI_MODE: ${{ github.event_name == ''workflow_dispatch'' && inputs.candidate_seal == true && ''candidate-seal'' || ''continuous-validation'' }}')) "CI should compute the release provenance mode once from the candidate_seal dispatch input with a schedule-safe expression."
+  Assert-True ($ciWorkflow.Contains('pnpm release:generate-provenance:win32-x64 -Mode $env:SUBVERSIONR_RELEASE_CI_MODE')) "CI should pass the computed mode explicitly to provenance generation."
+  Assert-True ($ciWorkflow.Contains('pnpm release:verify-provenance:win32-x64 -ExpectedMode $env:SUBVERSIONR_RELEASE_CI_MODE')) "CI should require provenance verification to match the computed mode."
 
   Write-Host "Release provenance preflight script tests passed."
 }

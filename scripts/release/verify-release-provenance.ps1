@@ -5,7 +5,11 @@ param(
   [string]$Target,
 
   [Parameter(Mandatory = $true)]
-  [string]$EvidencePath
+  [string]$EvidencePath,
+
+  [Parameter(Mandatory = $false)]
+  [ValidateSet("candidate-seal", "continuous-validation")]
+  [string]$ExpectedMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -155,6 +159,12 @@ Assert-Equal "subversionr.release.marketplace-provenance-preflight.win32-x64.v1"
 Assert-Equal $Target ([string]$report.target) "Provenance target should match the requested target."
 Assert-Equal "False" ([string]$report.publicReadinessClaim) "publicReadinessClaim must remain false."
 Assert-Equal "True" ([string]$report.localPreflightOnly) "localPreflightOnly must remain true."
+$allowedModes = @("candidate-seal", "continuous-validation")
+$recordedMode = Assert-RequiredString $report "mode" "Provenance report"
+Assert-True ($allowedModes -contains $recordedMode) "Provenance report mode must be one of: $($allowedModes -join ', ')."
+if ($PSBoundParameters.ContainsKey("ExpectedMode")) {
+  Assert-Equal $ExpectedMode $recordedMode "Provenance report mode must match the expected mode."
+}
 Assert-Equal "hitsuki-ban.subversionr" ([string]$report.extension.id) "Extension identity must remain hitsuki-ban.subversionr."
 Assert-Equal "SVN-R" ([string]$report.extension.displayName) "Extension display name should match the Marketplace listing."
 Assert-RequiredBooleanTrue $report.extension "preRelease" "Extension"
@@ -219,6 +229,8 @@ $candidateAttestation = $report.candidateAttestation
 Assert-Equal ([string]$report.artifacts.vsix.sha256) (Assert-RequiredString $candidateAttestation "subjectSha256" "Candidate attestation") "Candidate attestation SHA256 must match the exact current VSIX."
 Assert-Equal (Split-Path -Leaf $vsixPath) (Assert-RequiredString $candidateAttestation "subjectName" "Candidate attestation") "Candidate attestation subject name must match the current VSIX."
 Assert-Equal ([int64](Get-Item -LiteralPath $vsixPath).Length) ([int64]$candidateAttestation.subjectSize) "Candidate attestation size must match the exact current VSIX."
+$expectedSubjectComparison = if ($recordedMode -eq "candidate-seal") { "asserted-exact-match" } else { "not-asserted-continuous-validation" }
+Assert-Equal $expectedSubjectComparison (Assert-RequiredString $candidateAttestation "subjectComparison" "Candidate attestation") "Candidate attestation subjectComparison must match the recorded mode."
 Assert-RequiredBooleanTrue $candidateAttestation "preReleaseProperty" "Candidate attestation"
 Assert-RequiredBooleanFalse $candidateAttestation "liveEvidenceRecorded" "Candidate attestation"
 Assert-RequiredBooleanTrue $candidateAttestation "claimAllowed" "Candidate attestation"
@@ -326,7 +338,9 @@ Assert-Equal "pending-release-attestation" ([string]$candidateAttestationContrac
 Assert-RequiredBooleanFalse $candidateAttestationContract "publicReadinessClaim" "Candidate attestation contract source"
 Assert-RequiredBooleanTrue $candidateAttestationContract.subject "preReleaseProperty" "Candidate attestation contract source subject"
 Assert-Equal ([string]$candidateAttestation.contractSha256) (Get-Sha256 (Assert-File $candidateAttestationContractPath "Candidate attestation contract source")) "Candidate attestation report hash must match its source contract."
-& (Join-Path $PSScriptRoot "verify-release-attestation-subject.ps1") -Target $Target -ContractPath $candidateAttestationContractPath -SubjectPath $vsixPath -ReleaseTag ([string]$candidateAttestationContract.release.tag)
+if ($recordedMode -eq "candidate-seal") {
+  & (Join-Path $PSScriptRoot "verify-release-attestation-subject.ps1") -Target $Target -ContractPath $candidateAttestationContractPath -SubjectPath $vsixPath -ReleaseTag ([string]$candidateAttestationContract.release.tag)
+}
 $liveAttestation = Get-Content -Raw -LiteralPath (Assert-File $liveAttestationPath "Live attestation source") | ConvertFrom-Json
 Assert-Equal "live-attestation-verified" ([string]$liveAttestation.status) "Live attestation source must be verified."
 Assert-RequiredBooleanFalse $liveAttestation "publicReadinessClaim" "Live attestation source"
