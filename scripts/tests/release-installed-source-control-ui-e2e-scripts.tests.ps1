@@ -411,9 +411,33 @@ $openReport = [pscustomobject]@{
   }
   rendererCaptureExpectations = [pscustomobject]@{
     viewCommand = "workbench.view.scm"
-    requiredDomTokens = @("SVN-R", "Changes", "Unversioned", "src", "tracked.txt", "scratch.txt")
+    requiredDomTokens = @("SVN-R", "Changes", "Unversioned", "src", "tracked.txt", "scratch.txt", "SubversionR backend ready. libsvn:")
     requiredAccessibilityTokens = @("SubversionR", "Changes", "Unversioned", "src", "tracked.txt", "scratch.txt")
     requiredScreenshot = $true
+    viewport = [pscustomobject]@{ width = 1440; height = 900 }
+    scmActionSurface = [pscustomobject]@{
+      primaryActions = @(
+        [pscustomobject]@{ label = "SubversionR: Refresh"; codicon = "refresh" },
+        [pscustomobject]@{ label = "SubversionR: Commit Changes"; codicon = "check" },
+        [pscustomobject]@{ label = "SubversionR: Review and Commit…"; codicon = "diff" }
+      )
+      overflowSubmenus = @(
+        [pscustomobject]@{ label = "Commit"; commands = @("SubversionR: Pick Commit Message History…", "SubversionR: Revert All…") },
+        [pscustomobject]@{ label = "Update"; commands = @("SubversionR: Check Remote Changes", "SubversionR: Update Working Copy", "SubversionR: Update to Revision…") },
+        [pscustomobject]@{ label = "Repository"; commands = @("SubversionR: Create Branch or Tag…", "SubversionR: Switch Working Copy…", "SubversionR: Relocate Working Copy…", "SubversionR: Show Repository Properties", "SubversionR: Edit Repository svn:externals…", "SubversionR: Full Reconcile", "SubversionR: Cleanup Working Copy…", "SubversionR: Upgrade Working Copy", "SubversionR: Close Repository") },
+        [pscustomobject]@{ label = "History"; commands = @("SubversionR: Show Repository Log") }
+      )
+      resource = [pscustomobject]@{
+        pathToken = "tracked.txt"
+        inlineActions = @(
+          [pscustomobject]@{ label = "SubversionR: Diff with BASE"; codicon = "diff" },
+          [pscustomobject]@{ label = "SubversionR: Revert Resource…"; codicon = "discard" },
+          [pscustomobject]@{ label = "SubversionR: Commit Resource"; codicon = "check" }
+        )
+        contextActions = @("SubversionR: Set Changelist…", "SubversionR: Open BASE", "SubversionR: Show Selected Properties")
+      }
+      forbiddenNotificationTokens = @("SubversionR backend ready. libsvn:")
+    }
   }
   surfaceWorkflow = [pscustomobject]@{
     repositoryOpen = $true
@@ -426,6 +450,11 @@ $ready = [pscustomobject]@{
   ok = $true
   phase = "focusingSourceControlView"
   openReport = $openReport
+  organicSurfaceReadiness = [pscustomobject]@{
+    attempts = 2
+    waitedMs = 250
+    transientCode = "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CURRENT_SESSION_MISSING"
+  }
   rendererCaptureExpectations = $openReport.rendererCaptureExpectations
 }
 $ready | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $readyPath -Encoding utf8
@@ -2730,8 +2759,10 @@ $lockUnlockReport = [pscustomobject]@{
     unlockMode = [pscustomobject]@{ selected = "Unlock"; rendererCaptureExpectations = $unlockModePromptExpectations }
   }
   postLockFreshnessReport = $postLockFreshnessReport
+  lockRefreshCoverage = $postLockFreshnessReport.lastCompletedRefresh
   preUnlockSurfaceReport = $preUnlockSurfaceReport
   postUnlockFreshnessReport = $postUnlockFreshnessReport
+  unlockRefreshCoverage = $postUnlockFreshnessReport.lastCompletedRefresh
   closeReport = [pscustomobject]@{ kind = "subversionr.installedSourceControlUiE2eCloseReport"; generatedAt = "2026-06-25T00:00:07Z"; repositoryId = $lockOpenReport.repository.repositoryId; epoch = $lockOpenReport.repository.epoch; repositoryClosed = $true }
   assertions = [pscustomobject]@{
     needsLockProjectedBefore = $true
@@ -4638,18 +4669,18 @@ $closeReport = [pscustomobject]@{
 }
 $noRepositoryWelcomeRendererExpectations = [pscustomobject]@{
   viewCommand = "workbench.view.scm"
-  requiredDomTokens = @("No SVN working copy was found in the workspace", "Scan for SVN Working Copies", "Checkout Repository URL")
-  requiredAccessibilityTokens = @("No SVN working copy was found in the workspace", "Scan for SVN Working Copies", "Checkout Repository URL")
+  requiredDomTokens = @("No SVN working copy was found in the workspace", "Open SVN Working Copy…", "Checkout SVN Repository…")
+  requiredAccessibilityTokens = @("No SVN working copy was found in the workspace", "Open SVN Working Copy…", "Checkout SVN Repository…")
   requiredScreenshot = $true
 }
 [pscustomobject]@{
   ok = $true
   phase = "focusingNoRepositoryWelcome"
-  claim = "UX-002 partial: localized no-repository Scan and Checkout Repository URL welcome entries"
+  claim = "UX-002 partial: localized no-repository Open SVN Working Copy… and Checkout SVN Repository… welcome entries"
   scanCommand = "subversionr.openRepository"
   checkoutCommand = "subversionr.checkoutRepository"
   nonClaims = @(
-    "This installed UI evidence verifies the Checkout Repository URL no-repository welcome entry, URL prompt cancellation, covered local-file checkout failure/no-state-pollution flows, the local-file checkout happy path, the pre-existing local directory target success path, and the existing-directory obstruction tree-conflict projection path but does not cover repository browser, remote auth/certificate, or broader checkout failure matrices."
+    "This installed UI evidence verifies the Checkout SVN Repository… no-repository welcome entry, URL prompt cancellation, covered local-file checkout failure/no-state-pollution flows, the local-file checkout happy path, the pre-existing local directory target success path, and the existing-directory obstruction tree-conflict projection path but does not cover repository browser, remote auth/certificate, or broader checkout failure matrices."
   )
   closeReport = [pscustomobject]@{
     repositoryId = $closeReport.repositoryId
@@ -6348,6 +6379,8 @@ $lifecycleMoveReport = [pscustomobject]@{
     "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
     "workbench.view.scm",
     "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
+    "subversionr.initialize",
+    "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
     "subversionr.diagnostics.installedSourceControlUiE2eArmDirtyGenerationCancellation",
     "subversionr.diagnostics.installedSourceControlUiE2eDirtyEvent",
     "subversionr.diagnostics.installedSourceControlUiE2eDirtyGenerationCancellationReport",
@@ -6498,6 +6531,7 @@ function New-FakeRendererCaptureDriver([string]$Path) {
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { deflateSync } from "node:zlib";
 
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
@@ -6523,9 +6557,9 @@ const domText = mode === "forbidden-dom-token-lie" && forbiddenDomTokens.length 
 const axText = mode === "forbidden-accessibility-token-lie" && forbiddenAccessibilityTokens.length > 0 ? `${requiredAxText}\n${forbiddenAccessibilityTokens[0]}` : requiredAxText;
 writeFileSync(domPath, domText);
 writeFileSync(axPath, JSON.stringify({ nodes: [{ name: { value: axText } }] }, null, 2));
-const nonBlankPng = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAOSURBVBhXY/jPwABC/wEP+QP98+IdQAAAAABJRU5ErkJggg==";
-const blankPng = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAALSURBVBhXY/gPBQAj5Qf5Wr8b3QAAAABJRU5ErkJggg==";
-writeFileSync(pngPath, Buffer.from(mode === "blank-screenshot" || mode === "blank-screenshot-lie" ? blankPng : nonBlankPng, "base64"));
+const viewportWidth = expectations.viewport?.width || 2;
+const viewportHeight = expectations.viewport?.height || 1;
+writeFileSync(pngPath, makePng(viewportWidth, viewportHeight, mode === "blank-screenshot" || mode === "blank-screenshot-lie"));
 const domMissing = expectations.requiredDomTokens.filter(token => !domText.includes(token));
 const axMissing = expectations.requiredAccessibilityTokens.filter(token => !axText.includes(token));
 const presentForbiddenDomTokens = forbiddenDomTokens.filter(token => domText.includes(token));
@@ -6548,6 +6582,14 @@ const report = {
       title: "Visual Studio Code - fake workbench",
       url: "vscode-file://fixture/workbench.html"
     }
+  },
+  viewport: {
+    title: "Visual Studio Code - fake workbench",
+    url: "vscode-file://fixture/workbench.html",
+    readyState: "complete",
+    devicePixelRatio: 1,
+    innerWidth: mode === "viewport-lie" ? viewportWidth + 1 : viewportWidth,
+    innerHeight: viewportHeight
   },
   artifacts: {
     dom: {
@@ -6574,8 +6616,8 @@ const report = {
       status: "captured",
       relativePath: "screenshot.png",
       sha256: sha256(pngPath),
-      width: 2,
-      height: 1,
+      width: viewportWidth,
+      height: viewportHeight,
       bitDepth: 8,
       colorType: 6,
       nonBlank: reportedScreenshotNonBlank,
@@ -6589,6 +6631,14 @@ const report = {
     accessibilityForbiddenTokensAbsent: mode === "forbidden-accessibility-token-lie" ? true : presentForbiddenAccessibilityTokens.length === 0,
     screenshotCaptured: true,
     screenshotNonBlank: reportedScreenshotNonBlank,
+    ...(expectations.viewport ? { viewportMatched: true } : {}),
+    ...(expectations.scmActionSurface ? {
+      scmPrimaryActionsRendered: true,
+      scmOverflowSubmenusReachable: true,
+      scmResourceInlineActionsReachable: true,
+      scmResourceContextActionsReachable: true,
+      activationReadyToastAbsent: true
+    } : {}),
     ...(expectations.clickButtonText ? { clickButtonCompleted: true } : {}),
     ...(expectations.inputText ? { inputTextSubmitted: true } : {}),
     ...(expectations.quickInputSubmitKey ? { quickInputSubmitted: true } : {}),
@@ -6602,7 +6652,26 @@ const report = {
           : { quickInputCancelled: true })
     } : {})
   },
-  ...(expectations.clickButtonText ? {
+  ...(expectations.scmActionSurface ? {
+    interaction: {
+      kind: "scmActionSurface",
+      primaryActions: expectations.scmActionSurface.primaryActions.map(action => ({ ...action, rendered: mode !== "scm-primary-lie" })),
+      overflowButton: { x: 100, y: 40, ariaLabel: "More Actions...", title: "More Actions...", className: "codicon-more" },
+      overflowParentLabels: expectations.scmActionSurface.overflowSubmenus.map(submenu => submenu.label),
+      overflowSubmenus: expectations.scmActionSurface.overflowSubmenus.map(submenu => ({ ...submenu, reachable: mode !== "scm-submenu-lie", observedMenuLabels: submenu.commands })),
+      resource: {
+        pathToken: expectations.scmActionSurface.resource.pathToken,
+        row: { matchingRowCount: 1, text: expectations.scmActionSurface.resource.pathToken, x: 100, y: 100, className: "monaco-list-row" },
+        inlineActions: expectations.scmActionSurface.resource.inlineActions.map(action => ({ ...action, rendered: mode !== "scm-inline-lie" })),
+        contextActions: expectations.scmActionSurface.resource.contextActions.map(label => ({ label, reachable: mode !== "scm-context-lie" })),
+        observedContextMenuLabels: expectations.scmActionSurface.resource.contextActions
+      },
+      notifications: {
+        forbiddenTokens: expectations.scmActionSurface.forbiddenNotificationTokens,
+        presentForbiddenTokens: mode === "activation-toast-lie" ? expectations.scmActionSurface.forbiddenNotificationTokens : []
+      }
+    }
+  } : expectations.clickButtonText ? {
     interaction: {
       clicked: true,
       clickedButtonText: expectations.clickButtonText,
@@ -6676,6 +6745,48 @@ const report = {
   } : {})
 };
 writeFileSync(path.join(outputRoot, "renderer-capture.json"), JSON.stringify(report, null, 2));
+function makePng(width, height, blank) {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const stride = 1 + width * 4;
+  const raw = Buffer.alloc(stride * height, 0);
+  for (let y = 0; y < height; y += 1) {
+    const offset = y * stride;
+    raw[offset] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const pixelOffset = offset + 1 + x * 4;
+      const value = blank ? 32 : (x * 37 + y * 53) % 256;
+      raw[pixelOffset] = value;
+      raw[pixelOffset + 1] = blank ? 32 : 255 - value;
+      raw[pixelOffset + 2] = blank ? 32 : (value + 80) % 256;
+      raw[pixelOffset + 3] = 255;
+    }
+  }
+  return Buffer.concat([signature, pngChunk("IHDR", ihdr), pngChunk("IDAT", deflateSync(raw)), pngChunk("IEND", Buffer.alloc(0))]);
+}
+function pngChunk(type, data) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBytes.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), 8 + data.length);
+  return chunk;
+}
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
 function sha256(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
@@ -7065,6 +7176,7 @@ try {
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.unlockResource" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Unlock command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.branchCreateRepository" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Branch/Tag create command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.switchRepository" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Switch command invocation."
+  Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.diagnostics.installedSourceControlUiE2eShowOutput" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the command that exposes the SubversionR output channel."
   Assert-Equal "True" ([string]$report.extension.afterActive) "Installed Source Control UI E2E evidence should prove SubversionR was active before UI validation."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eOpenReportCommand) "Installed Source Control UI E2E evidence should prove hidden open command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eFreshnessReportCommand) "Installed Source Control UI E2E evidence should prove hidden freshness command registration."
@@ -7355,9 +7467,9 @@ try {
   Assert-Equal "Beta-E installed lock evidence" $report.sourceControlUiLockUnlockWorkflow.request.comment "Lock/Unlock workflow should record the lock comment."
   Assert-Equal "False" ([string]$report.sourceControlUiLockUnlockWorkflow.request.stealLock) "Lock/Unlock workflow should use the normal lock policy."
   Assert-Equal "False" ([string]$report.sourceControlUiLockUnlockWorkflow.request.breakLock) "Lock/Unlock workflow should use the normal unlock policy."
-  Assert-Equal "operationLock" $report.sourceControlUiLockUnlockWorkflow.postLockFreshnessReport.lastCompletedRefresh.targets[0].reason "Lock/Unlock workflow should record operationLock targeted refresh evidence."
+  Assert-Equal "operationLock" $report.sourceControlUiLockUnlockWorkflow.lockRefreshCoverage.targets[0].reason "Lock/Unlock workflow should record operationLock targeted refresh evidence."
   Assert-Equal "subversionr.installedSourceControlUiE2eCurrentSurfaceReport" $report.sourceControlUiLockUnlockWorkflow.preUnlockSurfaceReport.kind "Lock/Unlock workflow should refresh the current Source Control surface before Unlock."
-  Assert-Equal "operationUnlock" $report.sourceControlUiLockUnlockWorkflow.postUnlockFreshnessReport.lastCompletedRefresh.targets[0].reason "Lock/Unlock workflow should record operationUnlock targeted refresh evidence."
+  Assert-Equal "operationUnlock" $report.sourceControlUiLockUnlockWorkflow.unlockRefreshCoverage.targets[0].reason "Lock/Unlock workflow should record operationUnlock targeted refresh evidence."
   Assert-Equal "True" ([string]$report.sourceControlUiLockUnlockWorkflow.assertions.needsLockProjectedBefore) "Lock/Unlock workflow should prove the svn:needs-lock metadata resource was projected before locking."
   Assert-Equal "True" ([string]$report.sourceControlUiLockUnlockWorkflow.assertions.lockTargetedReconcile) "Lock/Unlock workflow should prove targeted post-lock reconcile evidence."
   Assert-Equal "True" ([string]$report.sourceControlUiLockUnlockWorkflow.assertions.unlockTargetedReconcile) "Lock/Unlock workflow should prove targeted post-unlock reconcile evidence."
@@ -7765,8 +7877,8 @@ try {
   Assert-Equal "True" ([string]$report.noRepositoryWelcomeRendererCapture.assertions.accessibilityRequiredTokensPresent) "No-repository welcome accessibility assertions should pass."
   Assert-Equal "True" ([string]$report.noRepositoryWelcomeRendererCapture.assertions.screenshotNonBlank) "No-repository welcome screenshot nonblank assertion should pass."
   Assert-True (@($report.noRepositoryWelcomeRendererCapture.artifacts.dom.requiredTokens | Where-Object { $_ -eq "No SVN working copy was found in the workspace" }).Count -eq 1) "No-repository welcome DOM capture should require the empty-state text."
-  Assert-True (@($report.noRepositoryWelcomeRendererCapture.artifacts.dom.requiredTokens | Where-Object { $_ -eq "Scan for SVN Working Copies" }).Count -eq 1) "No-repository welcome DOM capture should require the Scan button text."
-  Assert-True (@($report.noRepositoryWelcomeRendererCapture.artifacts.dom.requiredTokens | Where-Object { $_ -eq "Checkout Repository URL" }).Count -eq 1) "No-repository welcome DOM capture should require the Checkout button text."
+  Assert-True (@($report.noRepositoryWelcomeRendererCapture.artifacts.dom.requiredTokens | Where-Object { $_ -eq "Open SVN Working Copy…" }).Count -eq 1) "No-repository welcome DOM capture should require the Open SVN Working Copy button text."
+  Assert-True (@($report.noRepositoryWelcomeRendererCapture.artifacts.dom.requiredTokens | Where-Object { $_ -eq "Checkout SVN Repository…" }).Count -eq 1) "No-repository welcome DOM capture should require the Checkout SVN Repository button text."
   Assert-True (@($report.nonClaims | Where-Object { $_ -like "*full installed checkout command flow*" -or $_ -like "*does not execute the full checkout command flow*" }).Count -eq 0) "Installed Source Control UI E2E evidence should no longer keep the checkout-flow non-claim after executing Checkout Repository."
   Assert-True (@($report.nonClaims | Where-Object { $_ -like "*checkout cancellation*" }).Count -eq 0) "Installed Source Control UI E2E evidence should no longer keep checkout cancellation as a non-claim after the installed cancellation workflow."
   Assert-True (@($report.nonClaims | Where-Object { $_ -like "*obstructed/conflicting existing-directory variants*" }).Count -eq 0) "Installed Source Control UI E2E evidence should not keep existing-directory obstruction as a non-claim after proving the tree-conflict workflow."
@@ -8029,9 +8141,45 @@ try {
     Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue
   }
 
+  $rendererDetailLieCases = @(
+    [pscustomobject]@{ Mode = "viewport-lie"; Port = 32155; Expected = "Renderer capture must prove an exact 1440x900 DOM viewport and PNG."; Description = "viewport detail" },
+    [pscustomobject]@{ Mode = "scm-primary-lie"; Port = 32156; Expected = "Renderer capture SCM primary action/codicon evidence did not match expectations."; Description = "SCM primary action detail" },
+    [pscustomobject]@{ Mode = "scm-submenu-lie"; Port = 32157; Expected = "Renderer capture SCM overflow submenu reachability did not match expectations."; Description = "SCM submenu detail" },
+    [pscustomobject]@{ Mode = "scm-inline-lie"; Port = 32158; Expected = "Renderer capture SCM resource inline action/codicon evidence did not match expectations."; Description = "SCM inline action detail" },
+    [pscustomobject]@{ Mode = "scm-context-lie"; Port = 32159; Expected = "Renderer capture SCM resource context action reachability did not match expectations."; Description = "SCM context action detail" },
+    [pscustomobject]@{ Mode = "activation-toast-lie"; Port = 32160; Expected = "Renderer capture SCM action and activation-toast assertions must all pass."; Description = "activation notification detail" }
+  )
+  foreach ($lieCase in $rendererDetailLieCases) {
+    $env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE = $lieCase.Mode
+    try {
+      Assert-NativeCommandFailsContaining {
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+          -Target win32-x64 `
+          -VsixPath $vsixPath `
+          -CodeCliPath $fakeCodeCliPath `
+          -SvnToolsRoot $fakeSvnRoot `
+          -RendererCaptureDriverPath $fakeDriverPath `
+          -FixtureRoot (Join-Path $tempRoot "$($lieCase.Mode)\win32-x64") `
+          -EvidencePath (Join-Path $tempRoot "evidence\$($lieCase.Mode).json") `
+          -RemoteDebuggingPort $lieCase.Port `
+          -ExtensionHostTimeoutSeconds 30 `
+          -UiReadyTimeoutSeconds 10
+      } $lieCase.Expected "Installed Source Control UI E2E gate should inspect $($lieCase.Description) instead of trusting the renderer summary assertion."
+    }
+    finally {
+      Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue
+    }
+  }
+
   $ciWorkflow = Get-Content -Raw -LiteralPath $ciWorkflowPath
   $workflowContent = Get-Content -Raw -LiteralPath $workflowScript
   $driverContent = Get-Content -Raw -LiteralPath $driverScript
+  Assert-True ($driverContent -match '(?s)queryAllOpenRoots.*?element\.shadowRoot.*?monaco-menu') "Renderer capture driver should inspect VS Code menus rendered inside open Shadow DOM roots."
+  Assert-True ($driverContent -match '(?s)function matchTokens.*?normalizeTokenText\(text\).*?function normalizeTokenText.*?replace\(/\\s\+/gu') "Renderer capture driver should normalize renderer whitespace such as Output-panel non-breaking spaces before matching required and forbidden tokens."
+  Assert-True ($driverContent -match '(?s)captureScreenshotWithRetry\(cdp\).*?if \(scmActionSurface\).*?pressEscape\(cdp\)') "Renderer capture driver should preserve the SCM context menu in the screenshot and then close it before the next installed UI scenario."
+  Assert-True ($driverContent -match '(?s)captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined.*?beforeInteractionState.*?beforeInteractionScreenshot.*?const interaction.*?capturedState = captureBeforeInteraction') "Renderer capture driver should capture prompt, notification, and dialog surfaces before sending the real interaction that closes them."
+  Assert-True ($driverContent -match '(?s)captureRequiredTokenState.*?collectOpenShadowText.*?element\.shadowRoot') "Renderer capture driver should include visible open Shadow DOM text in DOM artifacts."
+  Assert-True ($driverContent -match '(?s)async function cancelInteraction.*?queryAllOpenRoots.*?quickInputSelectors.*?queryAllOpenRoots') "Renderer cancellation should locate QuickInput, notification, and dialog surfaces across open Shadow DOM roots."
   Assert-True ($driverContent -match "captureRequiredTokenState") "Renderer capture driver should retry DOM/accessibility token capture before writing artifacts."
   Assert-True ($driverContent -match "REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS") "Renderer capture driver should use a bounded token capture retry timeout."
   Assert-True ($driverContent -match "clickNotificationAction") "Renderer capture driver should click notification actions when VS Code hides action button text from DOM snapshots."
@@ -8065,6 +8213,9 @@ try {
   Assert-True ($workflowContent -match '(?s)function resolvePromptCaptureExpectations.*?quickPickItemText: "Working copy".*?async function runResolveWorkflow.*?executeCommand\("subversionr\.resolveResource"') "Resolve should expose and select the Working copy QuickPick choice."
   Assert-True ($workflowContent -match '(?s)async function runResolveWorkflow.*?executeCommand\("subversionr\.updateRepository".*?updateConflictWarningReady.*?executeCommand\("subversionr\.resolveResource"') "Resolve evidence should create the conflict through installed Update, capture its warning, then execute Resolve."
   Assert-True ($workflowContent -match '(?s)beforeActive !== true.*?did not activate organically before any installed Source Control UI E2E command executed') "Installed Source Control UI E2E should fail before its first SubversionR command when organic activation did not occur."
+  Assert-True ($workflowContent -match '(?s)executeCommand\("subversionr\.diagnostics\.installedSourceControlUiE2eShowOutput"\).*?invokedCommands:\s*\[.*?"subversionr\.diagnostics\.installedSourceControlUiE2eShowOutput"') "Installed Source Control UI E2E evidence should record the command that exposes the real SubversionR output channel."
+  Assert-True ($workflowContent -match '(?s)waitForFile\(donePath, 120000\).*?executeCommand\("workbench\.action\.closePanel"\).*?executingInstalledSourceControlUiE2ePartialFreshnessReport') "Installed Source Control UI E2E should close the Output panel after the SCM screenshot so later notification-safety captures remain surface-local."
+  Assert-True (($workflowContent -match 'function Normalize-RendererTokenText') -and ($workflowContent -match '-replace ''\\s\+'', '' ''') -and ($workflowContent -match '(?s)function Assert-TextContainsTokens.*?Normalize-RendererTokenText') -and ($workflowContent -match '(?s)function Assert-TextExcludesTokens.*?Normalize-RendererTokenText')) "Installed Source Control UI E2E gate should normalize renderer whitespace before independently checking required and forbidden artifact tokens."
   Assert-True ($workflowContent -match 'Get-UpdateConflictWorkingCopyOracle') "Installed Update conflict evidence should use the SVN status XML working-copy oracle."
   Assert-True ($workflowContent -match '(?s)async function runResolveCancellationWorkflow.*?clearWorkbenchNotificationsBeforePrompt\("resolveResourceCancellation"\).*?executeCommand\("subversionr\.resolveResource"') "Resolve cancellation should clear stale notifications before exposing the QuickInput cancellation prompt."
   Assert-True ($workflowContent -match '(?s)async function runFullReconcileCancellationWorkflow.*?executeCommand\("subversionr\.fullReconcile".*?showWorkbenchNotificationsForPrompt\("fullReconcileCancellation"\)') "Full reconcile cancellation should open the notification list after starting the cancellable progress."
@@ -8101,6 +8252,7 @@ try {
   Assert-True ($workflowContent -match "Get-LockUnlockWorkingCopyOracle") "Installed Source Control UI E2E evidence should verify unlock and svn:needs-lock preservation using an SVN working-copy oracle."
   Assert-True ($workflowContent -match "operationLock") "Installed Source Control UI E2E evidence should publish post-lock targeted reconcile coverage."
   Assert-True ($workflowContent -match "operationUnlock") "Installed Source Control UI E2E evidence should publish post-unlock targeted reconcile coverage."
+  Assert-True ($workflowContent -match 'subversionr\.diagnostics\.installedSourceControlUiE2eMatchingCompletedRefreshCoverage') "Installed Source Control UI E2E should select operation refresh evidence from bounded coverage history when a watcher refresh completes later."
   Assert-True ($workflowContent -match "sourceControlUiLockMessageCancellationWorkflow") "Installed Source Control UI E2E evidence should publish the Lock message cancellation workflow report."
   Assert-True ($workflowContent -match "sourceControlUiUnlockModeCancellationWorkflow") "Installed Source Control UI E2E evidence should publish the Unlock mode cancellation workflow report."
   Assert-True ($workflowContent -match "lockMessageCancellationPromptCapture") "Installed Source Control UI E2E evidence should publish Lock message cancellation prompt renderer capture evidence."

@@ -186,7 +186,9 @@ describe("extension manifest", () => {
   it("contributes explicit repository open and close commands", () => {
     const manifest = readJson("package.json");
 
-    expect(manifest.contributes.commands).toEqual([
+    expect(manifest.contributes.commands.map(
+      ({ icon: _icon, ...entry }: { icon?: string; [key: string]: unknown }) => entry,
+    )).toEqual([
       {
         command: "subversionr.initialize",
         title: "%command.initialize.title%",
@@ -532,7 +534,7 @@ describe("extension manifest", () => {
     );
   });
 
-  it("contributes localized SCM empty-state scan welcome content", () => {
+  it("contributes localized SCM empty-state open and checkout welcome content", () => {
     const manifest = readJson("package.json");
 
     expect(manifest.contributes.viewsWelcome).toEqual([
@@ -548,19 +550,23 @@ describe("extension manifest", () => {
 
     expect(readJson("package.nls.json")).toHaveProperty(
       "view.scm.emptyState.content",
-      "No SVN working copy was found in the workspace.\n[Scan for SVN Working Copies](command:subversionr.openRepository)\n[Checkout Repository URL](command:subversionr.checkoutRepository)",
+      "No SVN working copy was found in the workspace.\n[Open SVN Working Copy…](command:subversionr.openRepository)\n[Checkout SVN Repository…](command:subversionr.checkoutRepository)",
     );
     expect(readJson("package.nls.ja.json")).toHaveProperty(
       "view.scm.emptyState.content",
-      "ワークスペースに SVN 作業コピーが見つかりませんでした。\n[SVN 作業コピーをスキャン](command:subversionr.openRepository)\n[リポジトリ URL をチェックアウト](command:subversionr.checkoutRepository)",
+      "ワークスペースに SVN 作業コピーが見つかりませんでした。\n[SVN 作業コピーを開く…](command:subversionr.openRepository)\n[SVN リポジトリをチェックアウト…](command:subversionr.checkoutRepository)",
     );
     expect(readJson("package.nls.zh-cn.json")).toHaveProperty(
       "view.scm.emptyState.content",
-      "工作区中未找到 SVN 工作副本。\n[扫描 SVN 工作副本](command:subversionr.openRepository)\n[检出仓库 URL](command:subversionr.checkoutRepository)",
+      "工作区中未找到 SVN 工作副本。\n[打开 SVN 工作副本…](command:subversionr.openRepository)\n[检出 SVN 仓库…](command:subversionr.checkoutRepository)",
+    );
+    expect(readJson("package.nls.json")).toHaveProperty(
+      "command.openRepository.title",
+      "SubversionR: Open SVN Working Copy…",
     );
     expect(readJson("package.nls.json")).toHaveProperty(
       "command.checkoutRepository.title",
-      "SubversionR: Checkout SVN Repository...",
+      "SubversionR: Checkout SVN Repository…",
     );
   });
 
@@ -635,9 +641,77 @@ describe("extension manifest", () => {
       (step: { completionEvents: readonly string[] }) => step.completionEvents,
     );
     expect(commandCompletionEvents.every((event: string) => manifest.activationEvents.includes(event))).toBe(true);
+
+    for (const bundleName of ["package.nls.json", "package.nls.ja.json", "package.nls.zh-cn.json"]) {
+      const walkthrough = readJson(bundleName)["walkthrough.betaWorkflow.inspectHistory.description"] as string;
+      expect(walkthrough).not.toMatch(/merge|mergeinfo|合并/i);
+    }
   });
 
-  it("contributes a localized SubversionR editor context submenu", () => {
+  it("uses Unicode ellipsis exactly for command titles that collect user input", () => {
+    const dialogTitleKeys = [
+      "command.branchCreateRepository.title",
+      "command.checkoutRepository.title",
+      "command.cleanupRepository.title",
+      "command.deleteAllUnversionedResources.title",
+      "command.deleteResourceProperty.title",
+      "command.deleteUnversionedResource.title",
+      "command.diagnostics.collect.title",
+      "command.editRepositoryExternals.title",
+      "command.editResourceExternals.title",
+      "command.history.searchLoaded.title",
+      "command.lockResource.title",
+      "command.mergeRangeRepository.title",
+      "command.moveResource.title",
+      "command.openRepository.title",
+      "command.pickCommitMessageHistory.title",
+      "command.previewMergeRangeRepository.title",
+      "command.relocateRepository.title",
+      "command.removeResource.title",
+      "command.removeResourceKeepLocal.title",
+      "command.resolveAll.title",
+      "command.resolveResource.title",
+      "command.revertAll.title",
+      "command.revertChangelist.title",
+      "command.revertResource.title",
+      "command.reviewCommit.title",
+      "command.setResourceChangelist.title",
+      "command.setResourceProperty.title",
+      "command.switchRepository.title",
+      "command.unlockResource.title",
+      "command.updateToRevision.title",
+    ].sort();
+
+    for (const bundleName of ["package.nls.json", "package.nls.ja.json", "package.nls.zh-cn.json"]) {
+      const bundle = readJson(bundleName);
+      const ellipsisTitles = Object.entries(bundle)
+        .filter(([key, value]) => key.startsWith("command.") && typeof value === "string" && value.endsWith("…"))
+        .map(([key]) => key)
+        .sort();
+      expect(ellipsisTitles, bundleName).toEqual(dialogTitleKeys);
+      expect(
+        Object.entries(bundle).filter(([key, value]) =>
+          key.startsWith("command.") && typeof value === "string" && value.includes("...")
+        ),
+        bundleName,
+      ).toEqual([]);
+    }
+  });
+
+  it("logs successful backend initialization without showing an information toast", () => {
+    const source = readFileSync(join(extensionRoot, "src/extension.ts"), "utf8");
+    const start = source.indexOf('const initializeCommand = vscode.commands.registerCommand("subversionr.initialize"');
+    const end = source.indexOf("const collectDiagnosticsCommand", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const initializeCommand = source.slice(start, end);
+    expect(initializeCommand).toContain("operationLogChannel.info(");
+    expect(initializeCommand).toContain('vscode.l10n.t("SubversionR backend ready. libsvn: {0}"');
+    expect(initializeCommand).not.toContain("showInformationMessage");
+  });
+
+  it("contributes localized SubversionR editor and SCM action submenus", () => {
     const manifest = readJson("package.json");
 
     expect(manifest.contributes.submenus).toEqual([
@@ -645,120 +719,29 @@ describe("extension manifest", () => {
         id: "subversionr.editorContext",
         label: "%submenu.editorContext.label%",
       },
+      {
+        id: "subversionr.scm.commit",
+        label: "%submenu.scm.commit.label%",
+      },
+      {
+        id: "subversionr.scm.update",
+        label: "%submenu.scm.update.label%",
+      },
+      {
+        id: "subversionr.scm.repository",
+        label: "%submenu.scm.repository.label%",
+      },
+      {
+        id: "subversionr.scm.history",
+        label: "%submenu.scm.history.label%",
+      },
     ]);
   });
 
   it("contributes SubversionR SCM and history view menus only", () => {
     const manifest = readJson("package.json");
 
-    expect(manifest.contributes.menus).toEqual({
-      "scm/title": [
-        {
-          command: "subversionr.commitAll",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.reviewCommit",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.pickCommitMessageHistory",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.refreshRepository",
-          when: "scmProvider == svn-r",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.checkRemoteChanges",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.updateRepository",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.updateToRevision",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.revertAll",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.branchCreateRepository",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.switchRepository",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.relocateRepository",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showRepositoryProperties",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.editRepositoryExternals",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showRepositoryLog",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.tortoise.openRepositoryLog",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
-          group: "tortoise@1",
-        },
-        {
-          command: "subversionr.tortoise.openRevisionGraph",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
-          group: "tortoise@2",
-        },
-        {
-          command: "subversionr.tortoise.openRepositoryBrowser",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
-          group: "tortoise@3",
-        },
-        {
-          command: "subversionr.closeRepository",
-          when: "scmProvider == svn-r",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.fullReconcile",
-          when: "scmProvider == svn-r",
-          group: "repository",
-        },
-        {
-          command: "subversionr.cleanupRepository",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "repository",
-        },
-        {
-          command: "subversionr.upgradeWorkingCopy",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "repository",
-        },
-      ],
+    const expectedStableMenus = {
       "scm/resourceGroup/context": [
         {
           command: "subversionr.deleteAllUnversionedResources",
@@ -784,373 +767,6 @@ describe("extension manifest", () => {
           command: "subversionr.updateAllIncoming",
           when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceGroupState == subversionr.incoming",
           group: "inline",
-        },
-      ],
-      "scm/resourceState/context": [
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showFileHistory",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showBlame",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.tortoise.openResourceLog",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "tortoise@1",
-        },
-        {
-          command: "subversionr.tortoise.blameResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "tortoise@2",
-        },
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showFileHistory",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showBlame",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.tortoise.openResourceLog",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "tortoise@1",
-        },
-        {
-          command: "subversionr.tortoise.blameResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "tortoise@2",
-        },
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.diffWithBase",
-          when: "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.openBase",
-          when: "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.diffWithHead",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.openHead",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showFileHistory",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showBlame",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.tortoise.openResourceLog",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "tortoise@1",
-        },
-        {
-          command: "subversionr.tortoise.diffResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "tortoise@2",
-        },
-        {
-          command: "subversionr.tortoise.blameResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "tortoise@3",
-        },
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && scmResourceState == subversionr.changedUnknown",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && (scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showResourceProperties",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.setResourceProperty",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.deleteResourceProperty",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.editResourceExternals",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/ || scmResourceState == subversionr.workingCopyMetadata)",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.revertResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.revertResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.commitResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.setResourceChangelist",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "inline@2",
-        },
-        {
-          command: "subversionr.clearResourceChangelist",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.changelisted(\\.locked)?$/",
-          group: "inline@3",
-        },
-        {
-          command: "subversionr.lockResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?$/",
-          group: "inline@4",
-        },
-        {
-          command: "subversionr.unlockResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?\\.locked$/",
-          group: "inline@5",
-        },
-        {
-          command: "subversionr.commitResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.setResourceChangelist",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "inline@2",
-        },
-        {
-          command: "subversionr.clearResourceChangelist",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable\\.changelisted(\\.locked)?$/",
-          group: "inline@3",
-        },
-        {
-          command: "subversionr.lockResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?$/",
-          group: "inline@4",
-        },
-        {
-          command: "subversionr.unlockResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?\\.locked$/",
-          group: "inline@5",
-        },
-        {
-          command: "subversionr.lockResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.workingCopyMetadataFile",
-          group: "inline@4",
-        },
-        {
-          command: "subversionr.unlockResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.workingCopyMetadataFile.locked",
-          group: "inline@5",
-        },
-        {
-          command: "subversionr.removeResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.removeResourceKeepLocal",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.moveResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.removeResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.removeResourceKeepLocal",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.moveResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.revertResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.commitResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.setResourceChangelist",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          group: "inline@2",
-        },
-        {
-          command: "subversionr.clearResourceChangelist",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.changedDirectory.changelisted",
-          group: "inline@3",
-        },
-        {
-          command: "subversionr.removeResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.removeResourceKeepLocal",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.moveResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.revertResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.resolveResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.setResourceChangelist",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "inline@2",
-        },
-        {
-          command: "subversionr.clearResourceChangelist",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted\\.changelisted(\\.locked)?$/",
-          group: "inline@3",
-        },
-        {
-          command: "subversionr.lockResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?$/",
-          group: "inline@4",
-        },
-        {
-          command: "subversionr.unlockResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?\\.locked$/",
-          group: "inline@5",
-        },
-        {
-          command: "subversionr.removeResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.removeResourceKeepLocal",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.moveResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && scmResourceState == subversionr.unversioned",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.addResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
-          group: "inline",
-        },
-        {
-          command: "subversionr.addToIgnoreResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
-          group: "inline@2",
-        },
-        {
-          command: "subversionr.deleteUnversionedResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
-          group: "inline",
-        },
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && scmResourceState == subversionr.external",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.refreshResource",
-          when: "scmProvider == svn-r && scmResourceState == subversionr.ignored",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.removeFromIgnoreResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.ignored",
-          group: "inline",
-        },
-        {
-          command: "subversionr.updateResource",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incoming(File)?(\\.locked)?$/",
-          group: "inline",
-        },
-        {
-          command: "subversionr.diffWithHead",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incomingFile(\\.locked)?$/",
-          group: "inline@2",
-        },
-        {
-          command: "subversionr.openHead",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incomingFile(\\.locked)?$/",
-          group: "navigation",
         },
       ],
       "editor/context": [
@@ -1500,7 +1116,174 @@ describe("extension manifest", () => {
           when: "false",
         },
       ],
-    });
+    } as Record<string, unknown>;
+    const restructuredMenus = [
+      "scm/title",
+      "scm/resourceState/context",
+      "subversionr.scm.commit",
+      "subversionr.scm.update",
+      "subversionr.scm.repository",
+      "subversionr.scm.history",
+    ];
+    for (const menu of restructuredMenus) {
+      expectedStableMenus[menu] = manifest.contributes.menus[menu];
+    }
+    expect(manifest.contributes.menus).toEqual(expectedStableMenus);
+  });
+
+  it("keeps only Refresh, Commit, and Review as SCM title navigation icons", () => {
+    const manifest = readJson("package.json");
+    const titleMenu = manifest.contributes.menus["scm/title"] as Array<{
+      command?: string;
+      submenu?: string;
+      group: string;
+    }>;
+
+    expect(titleMenu.filter((entry) => entry.group.startsWith("navigation"))).toEqual([
+      {
+        command: "subversionr.refreshRepository",
+        when: "scmProvider == svn-r",
+        group: "navigation@1",
+      },
+      {
+        command: "subversionr.commitAll",
+        when: "scmProvider == svn-r && isWorkspaceTrusted",
+        group: "navigation@2",
+      },
+      {
+        command: "subversionr.reviewCommit",
+        when: "scmProvider == svn-r && isWorkspaceTrusted",
+        group: "navigation@3",
+      },
+    ]);
+    expect(titleMenu.filter((entry) => entry.submenu !== undefined).map((entry) => entry.submenu)).toEqual([
+      "subversionr.scm.commit",
+      "subversionr.scm.update",
+      "subversionr.scm.repository",
+      "subversionr.scm.history",
+    ]);
+    const commandIcons = new Map(
+      manifest.contributes.commands.map((entry: { command: string; icon?: string }) => [entry.command, entry.icon]),
+    );
+    expect([
+      commandIcons.get("subversionr.refreshRepository"),
+      commandIcons.get("subversionr.commitAll"),
+      commandIcons.get("subversionr.reviewCommit"),
+    ]).toEqual(["$(refresh)", "$(check)", "$(diff)"]);
+  });
+
+  it("keeps every former SCM title action reachable through the title or one overflow submenu", () => {
+    const manifest = readJson("package.json");
+    const menus = manifest.contributes.menus as Record<
+      string,
+      Array<{ command?: string; submenu?: string }>
+    >;
+    const scmMenuIds = [
+      "scm/title",
+      "subversionr.scm.commit",
+      "subversionr.scm.update",
+      "subversionr.scm.repository",
+      "subversionr.scm.history",
+    ];
+    const reachableCommands = scmMenuIds.flatMap((menu) =>
+      menus[menu].flatMap((entry) => entry.command === undefined ? [] : [entry.command]),
+    );
+
+    expect(reachableCommands.sort()).toEqual([
+      "subversionr.branchCreateRepository",
+      "subversionr.checkRemoteChanges",
+      "subversionr.cleanupRepository",
+      "subversionr.closeRepository",
+      "subversionr.commitAll",
+      "subversionr.editRepositoryExternals",
+      "subversionr.fullReconcile",
+      "subversionr.pickCommitMessageHistory",
+      "subversionr.refreshRepository",
+      "subversionr.relocateRepository",
+      "subversionr.revertAll",
+      "subversionr.reviewCommit",
+      "subversionr.showRepositoryLog",
+      "subversionr.showRepositoryProperties",
+      "subversionr.switchRepository",
+      "subversionr.tortoise.openRepositoryBrowser",
+      "subversionr.tortoise.openRepositoryLog",
+      "subversionr.tortoise.openRevisionGraph",
+      "subversionr.updateRepository",
+      "subversionr.updateToRevision",
+      "subversionr.upgradeWorkingCopy",
+    ].sort());
+    expect(new Set(reachableCommands).size).toBe(reachableCommands.length);
+  });
+
+  it("limits each SCM resource state to at most three icon-backed inline actions", () => {
+    const manifest = readJson("package.json");
+    const commands = new Map<string, { icon?: string }>(
+      manifest.contributes.commands.map((entry: { command: string; icon?: string }) => [entry.command, entry]),
+    );
+    const menus = manifest.contributes.menus as Record<
+      string,
+      Array<{ command?: string; group?: string; when?: string }>
+    >;
+    const resourceInline = menus["scm/resourceState/context"].filter((entry) => entry.group?.startsWith("inline"));
+    const inlineEntries = Object.entries(menus).flatMap(([menu, entries]) =>
+      entries.filter((entry) =>
+        entry.command !== undefined &&
+        (entry.group?.startsWith("inline") || (menu.endsWith("/title") && entry.group?.startsWith("navigation")))
+      ),
+    );
+    const resourceStates = [
+      "subversionr.conflicted",
+      "subversionr.conflicted.changelisted",
+      "subversionr.conflicted.locked",
+      "subversionr.conflicted.changelisted.locked",
+      "subversionr.changedFile",
+      "subversionr.changedFile.changelisted",
+      "subversionr.changedFile.locked",
+      "subversionr.changedFile.changelisted.locked",
+      "subversionr.changedFile.baseDiffable",
+      "subversionr.changedFile.baseDiffable.changelisted",
+      "subversionr.changedFile.baseDiffable.locked",
+      "subversionr.changedFile.baseDiffable.changelisted.locked",
+      "subversionr.changedDirectory",
+      "subversionr.changedDirectory.changelisted",
+      "subversionr.changedUnknown",
+      "subversionr.workingCopyMetadata",
+      "subversionr.workingCopyMetadataFile",
+      "subversionr.workingCopyMetadataFile.locked",
+      "subversionr.unversioned",
+      "subversionr.external",
+      "subversionr.ignored",
+      "subversionr.incoming",
+      "subversionr.incoming.locked",
+      "subversionr.incomingFile",
+      "subversionr.incomingFile.locked",
+    ];
+
+    for (const state of resourceStates) {
+      const visibleInline = resourceInline.filter((entry) => resourceStateWhenMatches(entry.when ?? "", state));
+      expect(visibleInline.length, state).toBeLessThanOrEqual(3);
+    }
+    for (const entry of inlineEntries) {
+      expect(commands.get(entry.command!)?.icon, entry.command).toMatch(/^\$\([^)]+\)$/);
+    }
+
+    const ordinaryContextCommands = new Set(
+      menus["scm/resourceState/context"]
+        .filter((entry) => !entry.group?.startsWith("inline"))
+        .flatMap((entry) => entry.command === undefined ? [] : [entry.command]),
+    );
+    for (const command of [
+      "subversionr.addToIgnoreResource",
+      "subversionr.deleteUnversionedResource",
+      "subversionr.clearResourceChangelist",
+      "subversionr.lockResource",
+      "subversionr.unlockResource",
+      "subversionr.removeResource",
+      "subversionr.removeResourceKeepLocal",
+      "subversionr.moveResource",
+    ]) {
+      expect(ordinaryContextCommands.has(command), command).toBe(true);
+    }
   });
 
   it("keeps deferred merge commands registered but hidden from every user-facing menu", () => {
@@ -1584,6 +1367,10 @@ describe("extension manifest", () => {
     ]);
     const contributedItems = [
       ...menus["scm/title"],
+      ...menus["subversionr.scm.commit"],
+      ...menus["subversionr.scm.update"],
+      ...menus["subversionr.scm.repository"],
+      ...menus["subversionr.scm.history"],
       ...menus["scm/resourceGroup/context"],
       ...menus["scm/resourceState/context"],
       ...menus["explorer/context"],
@@ -2142,6 +1929,18 @@ describe("extension manifest", () => {
     }
   });
 });
+
+function resourceStateWhenMatches(when: string, state: string): boolean {
+  const exact = when.match(/scmResourceState == ([\w.]+)/);
+  if (exact) {
+    return exact[1] === state;
+  }
+  const regex = when.match(/scmResourceState =~ \/([^/]+)\//);
+  if (regex) {
+    return new RegExp(regex[1]).test(state);
+  }
+  throw new Error(`Inline SCM resource action is missing a direct state predicate: ${when}`);
+}
 
 function listTextFiles(root: string, extensions: readonly string[]): string[] {
   const files: string[] = [];

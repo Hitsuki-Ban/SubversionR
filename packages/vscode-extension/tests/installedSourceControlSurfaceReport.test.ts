@@ -479,9 +479,75 @@ describe("collectInstalledSourceControlSurfaceReport", () => {
     expect(report.sourceControl.groups.map((group) => group.id)).toEqual(["changes", "unversioned"]);
     expect(report.rendererCaptureExpectations).toEqual({
       viewCommand: "workbench.view.scm",
-      requiredDomTokens: ["SubversionR", "Changes", "Unversioned", "src", "tracked.txt", "scratch.txt"],
-      requiredAccessibilityTokens: ["SubversionR", "Changes", "Unversioned", "src", "tracked.txt", "scratch.txt"],
+      requiredDomTokens: [
+        "SubversionR",
+        "Changes",
+        "Unversioned",
+        "src",
+        "tracked.txt",
+        "scratch.txt",
+        "SubversionR backend ready. libsvn:",
+      ],
+      requiredAccessibilityTokens: [
+        "SubversionR",
+        "Changes",
+        "Unversioned",
+        "src",
+        "tracked.txt",
+        "scratch.txt",
+      ],
       requiredScreenshot: true,
+      viewport: { width: 1440, height: 900 },
+      scmActionSurface: {
+        primaryActions: [
+          { label: "SubversionR: Refresh", codicon: "refresh" },
+          { label: "SubversionR: Commit Changes", codicon: "check" },
+          { label: "SubversionR: Review and Commit…", codicon: "diff" },
+        ],
+        overflowSubmenus: [
+          {
+            label: "Commit",
+            commands: ["SubversionR: Pick Commit Message History…", "SubversionR: Revert All…"],
+          },
+          {
+            label: "Update",
+            commands: [
+              "SubversionR: Check Remote Changes",
+              "SubversionR: Update Working Copy",
+              "SubversionR: Update to Revision…",
+            ],
+          },
+          {
+            label: "Repository",
+            commands: [
+              "SubversionR: Create Branch or Tag…",
+              "SubversionR: Switch Working Copy…",
+              "SubversionR: Relocate Working Copy…",
+              "SubversionR: Show Repository Properties",
+              "SubversionR: Edit Repository svn:externals…",
+              "SubversionR: Full Reconcile",
+              "SubversionR: Cleanup Working Copy…",
+              "SubversionR: Upgrade Working Copy",
+              "SubversionR: Close Repository",
+            ],
+          },
+          { label: "History", commands: ["SubversionR: Show Repository Log"] },
+        ],
+        resource: {
+          pathToken: "tracked.txt",
+          inlineActions: [
+            { label: "SubversionR: Diff with BASE", codicon: "diff" },
+            { label: "SubversionR: Revert Resource…", codicon: "discard" },
+            { label: "SubversionR: Commit Resource", codicon: "check" },
+          ],
+          contextActions: [
+            "SubversionR: Set Changelist…",
+            "SubversionR: Open BASE",
+            "SubversionR: Show Selected Properties",
+          ],
+        },
+        forbiddenNotificationTokens: ["SubversionR backend ready. libsvn:"],
+      },
     });
     expect(report.surfaceWorkflow).toEqual({
       repositoryOpen: true,

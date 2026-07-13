@@ -143,7 +143,7 @@ import { StatusRefreshCoverageStore } from "./status/statusRefreshCoverageStore"
 import { createStatusNotificationHandler } from "./status/statusStaleNotificationHandler";
 import { readStatusSettings } from "./status/statusSettings";
 import { StatusSnapshotStore } from "./status/statusSnapshotStore";
-import type { PathCasePolicy } from "./status/types";
+import type { PathCasePolicy, StatusRefreshDepth, StatusRefreshTarget } from "./status/types";
 import { createVscodeRepositoryWatcherFactory } from "./status/vscodeWatcherFactory";
 import { WatcherOverflowDiagnostics } from "./status/watcherOverflowDiagnostics";
 import { TortoiseCommandController } from "./tortoise/tortoiseCommandController";
@@ -173,6 +173,53 @@ const BACKEND_RESTART_INITIAL_BACKOFF_MS = 1000;
 const BACKEND_RESTART_MAX_BACKOFF_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_INTERVAL_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_TIMEOUT_MS = 5 * 1000;
+
+interface MatchingCompletedRefreshCoverageRequest {
+  repositoryId: string;
+  epoch: number;
+  target: StatusRefreshTarget;
+}
+
+function parseMatchingCompletedRefreshCoverageRequest(rawRequest: unknown): MatchingCompletedRefreshCoverageRequest {
+  if (typeof rawRequest !== "object" || rawRequest === null) {
+    throw new TypeError("Installed Source Control UI E2E matching refresh coverage request is required.");
+  }
+  const request = rawRequest as Record<string, unknown>;
+  const target = request.target;
+  if (
+    Object.keys(request).sort().join(",") !== "epoch,repositoryId,target" ||
+    typeof request.repositoryId !== "string" ||
+    request.repositoryId.trim().length === 0 ||
+    typeof request.epoch !== "number" ||
+    !Number.isInteger(request.epoch) ||
+    request.epoch < 0 ||
+    typeof target !== "object" ||
+    target === null
+  ) {
+    throw new TypeError("Installed Source Control UI E2E matching refresh coverage request is invalid.");
+  }
+  const targetRecord = target as Record<string, unknown>;
+  const depth = targetRecord.depth;
+  if (
+    Object.keys(targetRecord).sort().join(",") !== "depth,path,reason" ||
+    typeof targetRecord.path !== "string" ||
+    targetRecord.path.length === 0 ||
+    (depth !== "empty" && depth !== "files" && depth !== "immediates" && depth !== "infinity") ||
+    typeof targetRecord.reason !== "string" ||
+    targetRecord.reason.length === 0
+  ) {
+    throw new TypeError("Installed Source Control UI E2E matching refresh coverage target is invalid.");
+  }
+  return {
+    repositoryId: request.repositoryId,
+    epoch: request.epoch,
+    target: {
+      path: targetRecord.path,
+      depth: depth as StatusRefreshDepth,
+      reason: targetRecord.reason,
+    },
+  };
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const operationLogChannel = vscode.window.createOutputChannel("SubversionR", { log: true });
@@ -950,7 +997,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const initializeCommand = vscode.commands.registerCommand("subversionr.initialize", async () => {
     try {
       const connection = await service.initialize();
-      await vscode.window.showInformationMessage(
+      operationLogChannel.info(
         vscode.l10n.t("SubversionR backend ready. libsvn: {0}", connection.initializeResult.libsvnVersion),
       );
     } catch (error) {
@@ -1048,6 +1095,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         sourceControlSurface: sourceControlPresenter,
       }),
   );
+  const installedSourceControlUiE2eMatchingCompletedRefreshCoverageCommand = vscode.commands.registerCommand(
+    "subversionr.diagnostics.installedSourceControlUiE2eMatchingCompletedRefreshCoverage",
+    (rawRequest: unknown) => {
+      const request = parseMatchingCompletedRefreshCoverageRequest(rawRequest);
+      return statusRefreshCoverage.getLastCompletedRefreshMatchingTarget(
+        request.repositoryId,
+        request.epoch,
+        request.target,
+      );
+    },
+  );
   const installedSourceControlUiE2eArmFullReconcileCancellationCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedSourceControlUiE2eArmFullReconcileCancellation",
     (request: unknown) => statusRefreshClient.armNextManualFullReconcile(request),
@@ -1075,6 +1133,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const installedSourceControlUiE2eSetInputMessageCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage",
     (request: unknown) => setInstalledSourceControlUiE2eInputMessage(request, sourceControlPresenter),
+  );
+  const installedSourceControlUiE2eShowOutputCommand = vscode.commands.registerCommand(
+    "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
+    () => operationLogChannel.show(true),
   );
   const installedSourceControlUiE2eCloseReportCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedSourceControlUiE2eCloseReport",
@@ -1487,12 +1549,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     installedSourceControlUiE2eOpenReportCommand,
     installedSourceControlUiE2eCurrentSurfaceReportCommand,
     installedSourceControlUiE2eFreshnessReportCommand,
+    installedSourceControlUiE2eMatchingCompletedRefreshCoverageCommand,
     installedSourceControlUiE2eArmFullReconcileCancellationCommand,
     installedSourceControlUiE2eFullReconcileCancellationReportCommand,
     installedSourceControlUiE2eArmDirtyGenerationCancellationCommand,
     installedSourceControlUiE2eDirtyGenerationCancellationReportCommand,
     installedSourceControlUiE2eDirtyEventCommand,
     installedSourceControlUiE2eSetInputMessageCommand,
+    installedSourceControlUiE2eShowOutputCommand,
     installedSourceControlUiE2eCloseReportCommand,
     installedSourceControlUiE2eLazyExternalProviderReportCommand,
     installedRepositoryLifecycleReportCommand,
