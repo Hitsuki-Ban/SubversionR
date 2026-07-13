@@ -2,6 +2,11 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      candidate_seal:
+        description: "Run in frozen candidate-seal mode (exact-byte contract matching)"
+        type: boolean
+        default: false
   schedule:
     - cron: "17 3 * * 1"
 
@@ -14,6 +19,7 @@ jobs:
     runs-on: windows-2022
     env:
       LINK: /Brepro
+      SUBVERSIONR_RELEASE_CI_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_seal == true && 'candidate-seal' || 'continuous-validation' }}
     steps:
       - uses: actions/checkout@v4
       - name: Set reproducible source date epoch
@@ -362,10 +368,10 @@ jobs:
         run: pnpm release:verify-native-artifact-map:win32-x64
       - name: Generate release provenance preflight
         shell: pwsh
-        run: pnpm release:generate-provenance:win32-x64
+        run: pnpm release:generate-provenance:win32-x64 -Mode $env:SUBVERSIONR_RELEASE_CI_MODE
       - name: Verify release provenance preflight
         shell: pwsh
-        run: pnpm release:verify-provenance:win32-x64
+        run: pnpm release:verify-provenance:win32-x64 -ExpectedMode $env:SUBVERSIONR_RELEASE_CI_MODE
       - name: Generate publication gaps preflight
         shell: pwsh
         run: pnpm release:generate-publication-gaps:win32-x64
@@ -410,9 +416,11 @@ jobs:
         shell: pwsh
         run: pnpm release:install-rollback:win32-x64
       - name: Generate Beta artifact bundle manifest
+        if: ${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         shell: pwsh
         run: pnpm release:generate-beta-artifact-bundle-manifest:win32-x64
       - name: Verify Beta candidate evidence consistency
+        if: ${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         shell: pwsh
         run: pnpm release:verify-beta-candidate:win32-x64
       - name: Rust native bridge integration test
@@ -439,6 +447,7 @@ jobs:
           }
           exit 0
       - name: Upload Beta candidate VSIX and evidence bundle
+        if: ${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         uses: actions/upload-artifact@v7
         with:
           name: subversionr-win32-x64-beta-candidate

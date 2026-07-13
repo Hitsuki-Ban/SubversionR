@@ -6511,6 +6511,8 @@ Assert-Terms $betaCandidateEvidenceScript @(
   "provenance and publication gaps bind the pending current-candidate attestation contract while preserving historical public-cutover attestation evidence separately",
   "artifactBundle",
   "artifactBundleManifest",
+  "Beta candidate consistency requires candidate-seal provenance mode",
+  "Beta candidate consistency requires an exact frozen-contract subject comparison",
   "subversionr.release.beta-artifact-bundle-manifest.`$Target.v1",
   "manifest-self-sha256-bound-by-beta-candidate-consistency-report",
   "artifact bundle manifest binds the current VSIX, SBOM, NOTICE, release evidence, installed UI artifacts, and CI upload contract",
@@ -6681,6 +6683,11 @@ Assert-Terms $fastPrWorkflow @(
 ) "live GitHub artifact attestation PR Fast coverage"
 Assert-Terms $betaArtifactBundleManifestScript @(
   "subversionr.release.beta-artifact-bundle-manifest.`$Target.v1",
+  "Beta candidate artifact bundle generation requires candidate-seal provenance mode",
+  "Beta candidate artifact bundle generation requires an exact frozen-contract subject comparison",
+  "candidateSeal",
+  "asserted-exact-match",
+  "env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal'",
   "Beta artifact bundle manifest must be generated before the final Beta candidate consistency report",
   "subversionr-source-sbom.cdx.json",
   "subversionr-beta-artifact-bundle-manifest-`$Target.json",
@@ -6704,6 +6711,10 @@ Assert-Terms $betaCandidateEvidenceScriptTests @(
   "stale CLI install VSIX evidence",
   "stale CLI install VSIX path evidence",
   "Beta candidate consistency report should bind the upload action",
+  "Continuous validation must not generate a Beta candidate artifact bundle manifest",
+  "Continuous validation must not verify a Beta candidate consistency report",
+  "Beta candidate consistency must reject provenance that did not assert the frozen subject match",
+  "Beta candidate consistency report should bind the explicit candidate-seal upload condition",
   "Beta candidate consistency report should bind the CI workflow upload contract SHA256",
   "Beta candidate consistency report should include the CI workflow hash binding",
   "Beta candidate consistency report should include the artifact bundle manifest hash binding",
@@ -6720,9 +6731,9 @@ Assert-Terms $betaCandidateEvidenceScriptTests @(
   "duplicate upload step with blocks",
   "duplicate upload step uses keys",
   "duplicate upload step name keys",
-  "conditional upload steps",
-  "quoted conditional upload steps",
-  "quoted conditional upload steps with spaced key separators",
+  "upload conditions other than the explicit candidate-seal boundary",
+  "quoted upload conditions that weaken the candidate-seal boundary",
+  "spaced quoted upload conditions that weaken the candidate-seal boundary",
   "escaped quoted upload step keys",
   "mask upload failures",
   "quoted upload steps that can mask upload failures",
@@ -6775,6 +6786,10 @@ Assert-Terms $ciWorkflow @(
   "if-no-files-found: error",
   "retention-days: 14"
 ) "Beta-G candidate evidence CI coverage"
+$candidateSealStepCondition = "if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}"
+if (([regex]::Matches($ciWorkflow.Content, [regex]::Escape($candidateSealStepCondition))).Count -ne 3) {
+  throw "Beta-G candidate evidence CI coverage must apply the explicit candidate-seal condition exactly to manifest generation, candidate verification, and candidate upload."
+}
 if ($releaseBuildEpoch.Content.Replace("`r`n", "`n") -ne "1783852020`n") {
   throw "native/release-build-epoch.txt: 0.2.3 release epoch must remain bound to the candidate version-bump commit timestamp 1783852020."
 }
@@ -6793,6 +6808,7 @@ Assert-Terms $releaseGates @(
   "explicit CI upload allowlist",
   "subversionr-win32-x64-beta-candidate",
   "actions/upload-artifact@v7",
+  "Continuous-validation runs never enter this candidate-only sequence",
   'does not claim the `0.2.3` release or live attestation exists',
   "coverage-guided fuzzing"
 ) "Beta-G candidate evidence release gate documentation"
