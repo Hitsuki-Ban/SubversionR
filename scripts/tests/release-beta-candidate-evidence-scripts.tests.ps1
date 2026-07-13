@@ -135,14 +135,18 @@ function Get-BetaArtifactBundleUploadPathBlock([string]$Indent) {
   (Get-BetaArtifactBundleUploadPaths | ForEach-Object { "$Indent$_" }) -join "`r`n"
 }
 
-function New-BetaArtifactBundleManifest([object]$Fixture) {
-  $output = & pwsh -NoProfile -ExecutionPolicy Bypass -File $manifestScript `
+function Invoke-BetaArtifactBundleManifest([object]$Fixture) {
+  & pwsh -NoProfile -ExecutionPolicy Bypass -File $manifestScript `
     -Target win32-x64 `
     -VsixPath $Fixture.vsix.path `
     -ReleaseEvidenceRoot $Fixture.evidenceRoot `
     -NoticePath $Fixture.noticePath `
     -InstalledSourceControlUiE2eArtifactRoot $Fixture.installedUiArtifactRoot `
-    -OutputPath $Fixture.artifactBundleManifestPath 2>&1
+    -OutputPath $Fixture.artifactBundleManifestPath
+}
+
+function New-BetaArtifactBundleManifest([object]$Fixture) {
+  $output = Invoke-BetaArtifactBundleManifest $Fixture 2>&1
   if ($LASTEXITCODE -ne 0) {
     $text = $output | Out-String
     throw "generate-beta-artifact-bundle-manifest.ps1 failed with exit code $LASTEXITCODE. $text"
@@ -534,6 +538,7 @@ function New-BetaCandidateFixture([string]$Root) {
     schema = "subversionr.release.marketplace-provenance-preflight.win32-x64.v1"
     publicReadinessClaim = $false
     target = "win32-x64"
+    mode = "candidate-seal"
     artifacts = [pscustomobject]@{
       vsix = [pscustomobject]@{
         path = $vsix.path
@@ -601,6 +606,7 @@ function New-BetaCandidateFixture([string]$Root) {
       subjectName = Split-Path -Leaf $vsix.path
       subjectSha256 = $vsix.sha256
       subjectSize = $vsix.size
+      subjectComparison = "asserted-exact-match"
       preReleaseProperty = $true
       liveEvidenceRecorded = $false
     }
@@ -745,6 +751,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Upload Beta candidate VSIX and evidence bundle
+        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         uses: actions/upload-artifact@v7
         with:
           name: subversionr-win32-x64-beta-candidate
@@ -811,6 +818,7 @@ try {
   Assert-True (@($report.requiredEvidenceFiles).Count -eq 12) "Beta candidate consistency report should verify all required Beta package evidence files."
   Assert-Equal "actions/upload-artifact@v7" $report.artifactBundle.uploadAction "Beta candidate consistency report should bind the upload action."
   Assert-Equal "subversionr-win32-x64-beta-candidate" $report.artifactBundle.name "Beta candidate consistency report should bind the upload artifact name."
+  Assert-Equal "`${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}" $report.artifactBundle.condition "Beta candidate consistency report should bind the explicit candidate-seal upload condition."
   Assert-Equal "error" $report.artifactBundle.ifNoFilesFound "Beta candidate consistency report should bind upload missing-file behavior."
   Assert-Equal "14" ([string]$report.artifactBundle.retentionDays) "Beta candidate consistency report should bind artifact retention."
   Assert-Equal "False" ([string]$report.artifactBundle.includeHiddenFiles) "Beta candidate consistency report should not include hidden files in the bundle."
@@ -825,6 +833,10 @@ try {
   Assert-Equal (Convert-ToRepoRelativePath $fixture.artifactBundleManifestPath) $report.artifactBundle.manifest.relativePath "Beta candidate consistency report should bind the artifact bundle manifest path."
   Assert-Equal (Get-Sha256 $fixture.artifactBundleManifestPath) $report.artifactBundle.manifest.sha256 "Beta candidate consistency report should bind the artifact bundle manifest SHA256."
   Assert-Equal "subversionr.release.beta-artifact-bundle-manifest.win32-x64.v1" $report.artifactBundle.manifest.schema "Beta candidate consistency report should bind the artifact bundle manifest schema."
+  $artifactBundleManifest = Get-Content -Raw -LiteralPath $fixture.artifactBundleManifestPath | ConvertFrom-Json
+  Assert-Equal "candidate-seal" $artifactBundleManifest.candidateSeal.mode "Beta artifact bundle manifest should require candidate-seal provenance."
+  Assert-Equal "asserted-exact-match" $artifactBundleManifest.candidateSeal.subjectComparison "Beta artifact bundle manifest should require exact frozen-contract subject comparison."
+  Assert-Equal (Convert-ToRepoRelativePath (New-EvidencePath $fixture.evidenceRoot "marketplace-provenance-preflight")) $artifactBundleManifest.candidateSeal.provenancePath "Beta artifact bundle manifest should bind the sealed provenance path."
   Assert-True (@($report.hashBindings | Where-Object { $_.name -eq "artifactBundleManifest" -and $_.relativePath -eq (Convert-ToRepoRelativePath $fixture.artifactBundleManifestPath) -and $_.sha256 -eq (Get-Sha256 $fixture.artifactBundleManifestPath) }).Count -eq 1) "Beta candidate consistency report should include the artifact bundle manifest hash binding."
   Assert-True (@($report.requiredEvidenceFiles | Where-Object { $_.name -eq "artifactBundleManifest" }).Count -eq 1) "Beta candidate consistency report should list the artifact bundle manifest as required evidence."
   $manifestFilePaths = @($report.artifactBundle.manifest.files | ForEach-Object { [string]$_.relativePath })
@@ -840,6 +852,35 @@ try {
   Assert-True (@($report.assertions | Where-Object { [string]$_ -like "*pending current-candidate attestation contract*" }).Count -eq 1) "Beta candidate consistency report should distinguish the pending current candidate from historical attestation evidence."
   Assert-True (@($report.nonClaims | Where-Object { [string]$_ -like "*current-candidate release or live GitHub attestation*" }).Count -eq 1) "Beta candidate consistency report should retain the current-candidate attestation non-claim."
   Assert-True (@($report.nonClaims | Where-Object { [string]$_ -like "*artifact attestation generation*" }).Count -eq 0) "Beta candidate consistency report should not retain the obsolete live attestation non-claim."
+
+  $continuousManifestFixture = New-BetaCandidateFixture (Join-Path $tempRoot "continuous-manifest")
+  $continuousManifestProvenancePath = New-EvidencePath $continuousManifestFixture.evidenceRoot "marketplace-provenance-preflight"
+  $continuousManifestProvenance = Get-Content -Raw -LiteralPath $continuousManifestProvenancePath | ConvertFrom-Json
+  $continuousManifestProvenance.mode = "continuous-validation"
+  $continuousManifestProvenance.candidateAttestation.subjectComparison = "not-asserted-continuous-validation"
+  Write-Json $continuousManifestProvenancePath $continuousManifestProvenance
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaArtifactBundleManifest $continuousManifestFixture
+  } "requires candidate-seal provenance mode" "Continuous validation must not generate a Beta candidate artifact bundle manifest."
+
+  $continuousVerifierFixture = New-BetaCandidateFixture (Join-Path $tempRoot "continuous-verifier")
+  $continuousVerifierProvenancePath = New-EvidencePath $continuousVerifierFixture.evidenceRoot "marketplace-provenance-preflight"
+  $continuousVerifierProvenance = Get-Content -Raw -LiteralPath $continuousVerifierProvenancePath | ConvertFrom-Json
+  $continuousVerifierProvenance.mode = "continuous-validation"
+  $continuousVerifierProvenance.candidateAttestation.subjectComparison = "not-asserted-continuous-validation"
+  Write-Json $continuousVerifierProvenancePath $continuousVerifierProvenance
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $continuousVerifierFixture
+  } "requires candidate-seal provenance mode" "Continuous validation must not verify a Beta candidate consistency report."
+
+  $unsealedComparisonFixture = New-BetaCandidateFixture (Join-Path $tempRoot "unsealed-subject-comparison")
+  $unsealedComparisonPath = New-EvidencePath $unsealedComparisonFixture.evidenceRoot "marketplace-provenance-preflight"
+  $unsealedComparison = Get-Content -Raw -LiteralPath $unsealedComparisonPath | ConvertFrom-Json
+  $unsealedComparison.candidateAttestation.subjectComparison = "not-asserted-continuous-validation"
+  Write-Json $unsealedComparisonPath $unsealedComparison
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $unsealedComparisonFixture
+  } "requires an exact frozen-contract subject comparison" "Beta candidate consistency must reject provenance that did not assert the frozen subject match."
 
   $staleAttestationBundleFixture = New-BetaCandidateFixture (Join-Path $tempRoot "stale-attestation-bundle")
   Add-Content -LiteralPath $staleAttestationBundleFixture.attestationBundlePath -Encoding utf8 -NoNewline -Value " "
@@ -1092,6 +1133,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Upload Beta candidate VSIX and evidence bundle
+        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         uses: actions/upload-artifact@v7
         env:
           name: subversionr-win32-x64-beta-candidate
@@ -1131,6 +1173,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Upload Beta candidate VSIX and evidence bundle
+        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         uses: actions/upload-artifact@v7
         with:
           name: subversionr-win32-x64-beta-candidate
@@ -1142,6 +1185,7 @@ $uploadPathBlock
     runs-on: windows-2022
     steps:
       - name: Upload Beta candidate VSIX and evidence bundle
+        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         uses: actions/upload-artifact@v7
         with:
           name: subversionr-win32-x64-beta-candidate
@@ -1183,6 +1227,7 @@ $uploadPathBlock16
               if-no-files-found: error
               retention-days: 14
       - name: Upload Beta candidate VSIX and evidence bundle
+        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         uses: actions/upload-artifact@v7
         with:
           name: subversionr-win32-x64-beta-candidate
@@ -1248,11 +1293,11 @@ $uploadPathBlock
   } "CI Beta candidate artifact upload step must not repeat name" "Beta candidate consistency should reject duplicate upload step name keys."
 
   $conditionalUploadFixture = New-BetaCandidateFixture (Join-Path $tempRoot "conditional-upload")
-  $conditionalCiWorkflow = (Get-Content -Raw -LiteralPath $conditionalUploadFixture.ciWorkflowPath).Replace("        uses: actions/upload-artifact@v7", "        if: `${{ false }}`r`n        uses: actions/upload-artifact@v7")
+  $conditionalCiWorkflow = (Get-Content -Raw -LiteralPath $conditionalUploadFixture.ciWorkflowPath).Replace("        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}", "        if: `${{ false }}")
   Set-Content -LiteralPath $conditionalUploadFixture.ciWorkflowPath -Encoding utf8 -NoNewline -Value $conditionalCiWorkflow
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $conditionalUploadFixture
-  } "CI Beta candidate artifact upload step must not define unsupported step key if" "Beta candidate consistency should reject conditional upload steps."
+  } "must run only for explicit candidate-seal mode" "Beta candidate consistency should reject upload conditions other than the explicit candidate-seal boundary."
 
   $continueOnErrorUploadFixture = New-BetaCandidateFixture (Join-Path $tempRoot "continue-on-error-upload")
   $continueOnErrorCiWorkflow = (Get-Content -Raw -LiteralPath $continueOnErrorUploadFixture.ciWorkflowPath).Replace("        uses: actions/upload-artifact@v7", "        uses: actions/upload-artifact@v7`r`n        continue-on-error: true")
@@ -1262,21 +1307,21 @@ $uploadPathBlock
   } "CI Beta candidate artifact upload step must not define unsupported step key continue-on-error" "Beta candidate consistency should reject upload steps that can mask upload failures."
 
   $quotedConditionalUploadFixture = New-BetaCandidateFixture (Join-Path $tempRoot "quoted-conditional-upload")
-  $quotedConditionalCiWorkflow = (Get-Content -Raw -LiteralPath $quotedConditionalUploadFixture.ciWorkflowPath).Replace("        uses: actions/upload-artifact@v7", "        `"if`": `${{ false }}`r`n        uses: actions/upload-artifact@v7")
+  $quotedConditionalCiWorkflow = (Get-Content -Raw -LiteralPath $quotedConditionalUploadFixture.ciWorkflowPath).Replace("        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}", "        `"if`": `${{ false }}")
   Set-Content -LiteralPath $quotedConditionalUploadFixture.ciWorkflowPath -Encoding utf8 -NoNewline -Value $quotedConditionalCiWorkflow
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $quotedConditionalUploadFixture
-  } "CI Beta candidate artifact upload step must not define unsupported step key if" "Beta candidate consistency should reject quoted conditional upload steps."
+  } "must run only for explicit candidate-seal mode" "Beta candidate consistency should reject quoted upload conditions that weaken the candidate-seal boundary."
 
   $spacedQuotedConditionalUploadFixture = New-BetaCandidateFixture (Join-Path $tempRoot "spaced-quoted-conditional-upload")
-  $spacedQuotedConditionalCiWorkflow = (Get-Content -Raw -LiteralPath $spacedQuotedConditionalUploadFixture.ciWorkflowPath).Replace("        uses: actions/upload-artifact@v7", "        `"if`" : `${{ false }}`r`n        uses: actions/upload-artifact@v7")
+  $spacedQuotedConditionalCiWorkflow = (Get-Content -Raw -LiteralPath $spacedQuotedConditionalUploadFixture.ciWorkflowPath).Replace("        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}", "        `"if`" : `${{ false }}")
   Set-Content -LiteralPath $spacedQuotedConditionalUploadFixture.ciWorkflowPath -Encoding utf8 -NoNewline -Value $spacedQuotedConditionalCiWorkflow
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $spacedQuotedConditionalUploadFixture
-  } "CI Beta candidate artifact upload step must not define unsupported step key if" "Beta candidate consistency should reject quoted conditional upload steps with spaced key separators."
+  } "must run only for explicit candidate-seal mode" "Beta candidate consistency should reject spaced quoted upload conditions that weaken the candidate-seal boundary."
 
   $escapedQuotedConditionalUploadFixture = New-BetaCandidateFixture (Join-Path $tempRoot "escaped-quoted-conditional-upload")
-  $escapedQuotedConditionalCiWorkflow = (Get-Content -Raw -LiteralPath $escapedQuotedConditionalUploadFixture.ciWorkflowPath).Replace("        uses: actions/upload-artifact@v7", '        "i\x66": ${{ false }}' + "`r`n        uses: actions/upload-artifact@v7")
+  $escapedQuotedConditionalCiWorkflow = (Get-Content -Raw -LiteralPath $escapedQuotedConditionalUploadFixture.ciWorkflowPath).Replace("        if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}", '        "i\x66": ${{ false }}')
   Set-Content -LiteralPath $escapedQuotedConditionalUploadFixture.ciWorkflowPath -Encoding utf8 -NoNewline -Value $escapedQuotedConditionalCiWorkflow
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $escapedQuotedConditionalUploadFixture
@@ -1360,6 +1405,15 @@ $uploadPathBlock
   Assert-True ($ciWorkflow.Contains("Verify Beta candidate evidence consistency")) "CI should run the Beta candidate consistency gate."
   Assert-True ($ciWorkflow.Contains("actions/upload-artifact@v7")) "CI should use the current upload-artifact major for the Beta candidate bundle."
   Assert-True ($ciWorkflow.Contains("subversionr-win32-x64-beta-candidate")) "CI should name the Beta candidate artifact bundle."
+  $candidateSealStepCondition = "if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}"
+  Assert-Equal 3 ([regex]::Matches($ciWorkflow, [regex]::Escape($candidateSealStepCondition))).Count "CI should apply the explicit candidate-seal condition only to candidate manifest, verification, and upload steps."
+  Assert-ContainsInOrder $ciWorkflow @(
+    "Test installed VSIX Source Control UI E2E",
+    "Generate Beta artifact bundle manifest",
+    "Verify Beta candidate evidence consistency",
+    "Rust native bridge integration test",
+    "Upload Beta candidate VSIX and evidence bundle"
+  ) "CI continuous validation should retain installed/native gates while candidate-only steps share the explicit seal boundary."
   Assert-True (-not $ciWorkflow.Contains("target/release-evidence/*.json")) "CI artifact upload should not use a broad release evidence JSON glob."
   Assert-True ($ciWorkflow.Contains("target/release-evidence/subversionr-source-sbom.cdx.json")) "CI artifact upload should include the source SBOM explicitly."
   Assert-True ($ciWorkflow.Contains("target/release-evidence/subversionr-beta-artifact-bundle-manifest-win32-x64.json")) "CI artifact upload should include the artifact bundle manifest explicitly."

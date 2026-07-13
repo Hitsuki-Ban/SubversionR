@@ -377,13 +377,19 @@ function Get-ExpectedBetaArtifactPayloadFiles {
   @($files | Sort-Object relativePath)
 }
 
-function Assert-BetaArtifactBundleManifest([object]$Manifest, [object]$ArtifactBundle) {
+function Assert-BetaArtifactBundleManifest([object]$Manifest, [object]$ArtifactBundle, [object]$MarketplaceProvenance) {
   $json = $Manifest.json
   Assert-Equal "True" ([string](Get-RequiredProperty $json "localCandidateOnly" "artifactBundleManifest")) "artifactBundleManifest localCandidateOnly must remain true."
+
+  $candidateSeal = Get-RequiredProperty $json "candidateSeal" "artifactBundleManifest"
+  Assert-SamePath $MarketplaceProvenance.path (Get-RequiredString $candidateSeal "provenancePath" "artifactBundleManifest.candidateSeal") "artifactBundleManifest candidate seal must bind the verified provenance evidence."
+  Assert-Equal "candidate-seal" (Get-RequiredString $candidateSeal "mode" "artifactBundleManifest.candidateSeal") "artifactBundleManifest candidate seal mode must remain candidate-seal."
+  Assert-Equal "asserted-exact-match" (Get-RequiredString $candidateSeal "subjectComparison" "artifactBundleManifest.candidateSeal") "artifactBundleManifest candidate seal must record the exact frozen-contract subject comparison."
 
   $uploadContract = Get-RequiredProperty $json "uploadContract" "artifactBundleManifest"
   Assert-Equal $ArtifactBundle.uploadAction (Get-RequiredString $uploadContract "uploadAction" "artifactBundleManifest.uploadContract") "artifactBundleManifest upload action must match CI."
   Assert-Equal $ArtifactBundle.name (Get-RequiredString $uploadContract "name" "artifactBundleManifest.uploadContract") "artifactBundleManifest upload name must match CI."
+  Assert-Equal $ArtifactBundle.condition (Get-RequiredString $uploadContract "condition" "artifactBundleManifest.uploadContract") "artifactBundleManifest upload condition must match CI."
   Assert-Equal $ArtifactBundle.ifNoFilesFound (Get-RequiredString $uploadContract "ifNoFilesFound" "artifactBundleManifest.uploadContract") "artifactBundleManifest missing-file policy must match CI."
   Assert-Equal ([string]$ArtifactBundle.retentionDays) ([string](Get-RequiredProperty $uploadContract "retentionDays" "artifactBundleManifest.uploadContract")) "artifactBundleManifest retention must match CI."
   Assert-Equal ([string]$ArtifactBundle.includeHiddenFiles) ([string](Get-RequiredProperty $uploadContract "includeHiddenFiles" "artifactBundleManifest.uploadContract")) "artifactBundleManifest hidden-file policy must match CI."
@@ -950,6 +956,7 @@ function Assert-CiUploadStepKeySet([string[]]$StepLines) {
   $childIndent = Get-CiStepChildIndent $StepLines
   $allowedKeys = @(
     "name",
+    "if",
     "uses",
     "with"
   )
@@ -1103,6 +1110,8 @@ function Assert-CiArtifactUploadContract([string]$Path) {
 
   Assert-CiUploadStepKeySet -StepLines $stepLines
   Assert-Equal "actions/upload-artifact@v7" (Get-CiStepScalarField -StepLines $stepLines -Name "uses") "CI Beta candidate artifact upload must use actions/upload-artifact@v7."
+  $candidateSealCondition = "`${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}"
+  Assert-Equal $candidateSealCondition (Get-CiStepScalarField -StepLines $stepLines -Name "if") "CI Beta candidate artifact upload must run only for explicit candidate-seal mode."
   Assert-CiUploadInputSet -Inputs $uploadInputs
   Assert-CiUploadInputEquals -Inputs $uploadInputs -Name "name" -Expected "subversionr-win32-x64-beta-candidate" -Message "CI Beta candidate artifact upload name must be subversionr-win32-x64-beta-candidate."
   Assert-CiUploadInputEquals -Inputs $uploadInputs -Name "if-no-files-found" -Expected "error" -Message "CI Beta candidate artifact upload must fail when files are missing."
@@ -1124,6 +1133,7 @@ function Assert-CiArtifactUploadContract([string]$Path) {
   [pscustomobject]@{
     uploadAction = "actions/upload-artifact@v7"
     name = "subversionr-win32-x64-beta-candidate"
+    condition = $candidateSealCondition
     paths = $paths
     ifNoFilesFound = "error"
     retentionDays = 14
@@ -1327,6 +1337,8 @@ $marketplaceProvenance = Read-EvidenceFile `
   -FileName "subversionr-marketplace-provenance-preflight-$Target.json" `
   -Name "marketplaceProvenance" `
   -ExpectedSchema "subversionr.release.marketplace-provenance-preflight.$Target.v1"
+$provenanceMode = Get-RequiredString $marketplaceProvenance.json "mode" "marketplaceProvenance"
+Assert-Equal "candidate-seal" $provenanceMode "Beta candidate consistency requires candidate-seal provenance mode."
 $provenanceVsix = Get-RequiredProperty (Get-RequiredProperty $marketplaceProvenance.json "artifacts" "marketplaceProvenance") "vsix" "marketplaceProvenance.artifacts"
 Assert-VsixArtifactBinding $provenanceVsix "marketplaceProvenance" $true
 Assert-Equal $vsixPackage.sha256 (Get-RequiredString $provenanceVsix "evidenceSha256" "marketplaceProvenance.artifacts.vsix") "marketplaceProvenance VSIX evidence SHA256 must match current VSIX package evidence."
@@ -1340,6 +1352,7 @@ $provenanceAttestation = Get-RequiredProperty $marketplaceProvenance.json "attes
 Assert-Equal "verified" (Get-RequiredString $provenanceAttestation "status" "marketplaceProvenance.attestation") "marketplaceProvenance attestation status must record live verification."
 Assert-Equal "historical-public-cutover-release" (Get-RequiredString $provenanceAttestation "scope" "marketplaceProvenance.attestation") "marketplaceProvenance verified attestation must remain scoped to the historical public-cutover release."
 $candidateAttestation = Get-RequiredProperty $marketplaceProvenance.json "candidateAttestation" "marketplaceProvenance"
+Assert-Equal "asserted-exact-match" (Get-RequiredString $candidateAttestation "subjectComparison" "marketplaceProvenance.candidateAttestation") "Beta candidate consistency requires an exact frozen-contract subject comparison."
 Assert-Equal "pending-release-attestation" (Get-RequiredString $candidateAttestation "status" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance current candidate attestation must remain pending before release."
 Assert-Equal "current-candidate" (Get-RequiredString $candidateAttestation "scope" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate attestation scope must identify the current candidate."
 Assert-Equal $vsixSha256 (Get-RequiredString $candidateAttestation "subjectSha256" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate attestation SHA256 must match current VSIX."
@@ -1424,7 +1437,8 @@ $artifactBundleManifest = Read-EvidenceFile `
 Assert-SamePath $artifactBundleManifestResolved $artifactBundleManifest.path "ArtifactBundleManifestPath must match the required Beta artifact bundle manifest."
 $artifactBundleManifestRecord = Assert-BetaArtifactBundleManifest `
   -Manifest $artifactBundleManifest `
-  -ArtifactBundle $artifactBundle
+  -ArtifactBundle $artifactBundle `
+  -MarketplaceProvenance $marketplaceProvenance
 Add-VerifiedEvidence $artifactBundleManifest "artifact-bundle-manifest-payload-hashes-and-upload-contract"
 $script:hashBindings += [pscustomobject]@{
   name = "artifactBundleManifest"

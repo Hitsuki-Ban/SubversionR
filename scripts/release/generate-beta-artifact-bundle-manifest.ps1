@@ -31,6 +31,20 @@ function Assert-True([bool]$Condition, [string]$Message) {
   }
 }
 
+function Assert-Equal($Expected, $Actual, [string]$Message) {
+  if ($Expected -ne $Actual) {
+    throw "$Message Expected '$Expected', got '$Actual'."
+  }
+}
+
+function Get-RequiredProperty([object]$Object, [string]$Name, [string]$Context) {
+  $property = $Object.PSObject.Properties[$Name]
+  if ($null -eq $property -or $null -eq $property.Value) {
+    throw "$Context must define $Name."
+  }
+  $property.Value
+}
+
 function Assert-ExplicitPath([string]$Path, [string]$Name) {
   Assert-True (-not [string]::IsNullOrWhiteSpace($Path)) "$Name is required."
   Assert-True (-not $Path.Contains("%")) "$Name must be an explicit path, not an unresolved environment placeholder."
@@ -145,6 +159,20 @@ $releaseEvidenceRootResolved = Assert-PathWithinAny `
   -Description "target/release-evidence or target/tests/release-beta-candidate-evidence-scripts"
 $releaseEvidenceRootResolved = Assert-Directory $releaseEvidenceRootResolved "ReleaseEvidenceRoot"
 
+$provenancePath = Assert-File `
+  (Join-Path $releaseEvidenceRootResolved "subversionr-marketplace-provenance-preflight-$Target.json") `
+  "Marketplace provenance preflight"
+$provenance = Get-Content -Raw -LiteralPath $provenancePath | ConvertFrom-Json
+Assert-Equal `
+  "candidate-seal" `
+  ([string](Get-RequiredProperty $provenance "mode" "Marketplace provenance preflight")) `
+  "Beta candidate artifact bundle generation requires candidate-seal provenance mode."
+$candidateAttestation = Get-RequiredProperty $provenance "candidateAttestation" "Marketplace provenance preflight"
+Assert-Equal `
+  "asserted-exact-match" `
+  ([string](Get-RequiredProperty $candidateAttestation "subjectComparison" "Marketplace provenance candidateAttestation")) `
+  "Beta candidate artifact bundle generation requires an exact frozen-contract subject comparison."
+
 $vsixResolved = Assert-PathWithinAny `
   -Path $VsixPath `
   -Name "VsixPath" `
@@ -235,9 +263,15 @@ $manifest = [pscustomobject]@{
   localCandidateOnly = $true
   target = $Target
   generatedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ")
+  candidateSeal = [pscustomobject]@{
+    provenancePath = Get-RepoRelativePath $provenancePath
+    mode = "candidate-seal"
+    subjectComparison = "asserted-exact-match"
+  }
   uploadContract = [pscustomobject]@{
     uploadAction = "actions/upload-artifact@v7"
     name = "subversionr-win32-x64-beta-candidate"
+    condition = "`${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}"
     paths = @(Get-ExpectedUploadPaths -Target $Target)
     ifNoFilesFound = "error"
     retentionDays = 14

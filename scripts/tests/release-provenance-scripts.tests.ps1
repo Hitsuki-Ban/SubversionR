@@ -826,6 +826,15 @@ exit 0
   Assert-True ($ciWorkflow.Contains('SUBVERSIONR_RELEASE_CI_MODE: ${{ github.event_name == ''workflow_dispatch'' && inputs.candidate_seal == true && ''candidate-seal'' || ''continuous-validation'' }}')) "CI should compute the release provenance mode once from the candidate_seal dispatch input with a schedule-safe expression."
   Assert-True ($ciWorkflow.Contains('pnpm release:generate-provenance:win32-x64 -Mode $env:SUBVERSIONR_RELEASE_CI_MODE')) "CI should pass the computed mode explicitly to provenance generation."
   Assert-True ($ciWorkflow.Contains('pnpm release:verify-provenance:win32-x64 -ExpectedMode $env:SUBVERSIONR_RELEASE_CI_MODE')) "CI should require provenance verification to match the computed mode."
+  $candidateSealStepCondition = "if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}"
+  Assert-Equal 3 ([regex]::Matches($ciWorkflow, [regex]::Escape($candidateSealStepCondition))).Count "CI should apply the explicit candidate-seal condition only to candidate manifest generation, verification, and upload."
+  Assert-ContainsInOrder $ciWorkflow @(
+    "Test installed VSIX Source Control UI E2E",
+    "Generate Beta artifact bundle manifest",
+    "Verify Beta candidate evidence consistency",
+    "Rust native bridge integration test",
+    "Upload Beta candidate VSIX and evidence bundle"
+  ) "Continuous validation should retain installed/native gates while candidate-only steps remain sealed."
 
   Write-Host "Release provenance preflight script tests passed."
 }

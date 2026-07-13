@@ -416,9 +416,11 @@ jobs:
         shell: pwsh
         run: pnpm release:install-rollback:win32-x64
       - name: Generate Beta artifact bundle manifest
+        if: ${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         shell: pwsh
         run: pnpm release:generate-beta-artifact-bundle-manifest:win32-x64
       - name: Verify Beta candidate evidence consistency
+        if: ${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         shell: pwsh
         run: pnpm release:verify-beta-candidate:win32-x64
       - name: Rust native bridge integration test
@@ -445,6 +447,7 @@ jobs:
           }
           exit 0
       - name: Upload Beta candidate VSIX and evidence bundle
+        if: ${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'candidate-seal' }}
         uses: actions/upload-artifact@v7
         with:
           name: subversionr-win32-x64-beta-candidate
