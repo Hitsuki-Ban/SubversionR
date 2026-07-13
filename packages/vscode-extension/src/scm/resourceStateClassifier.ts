@@ -5,6 +5,7 @@ export type ScmResourceGroupId =
   | "conflicts"
   | "changes"
   | "unversioned"
+  | "metadata"
   | "incoming"
   | "externals"
   | "ignored"
@@ -61,7 +62,7 @@ export function classifyLocalStatusEntry(entry: StatusEntry): ScmResourceClassif
     return classification("changes", "changedUnknown");
   }
   if (hasWorkingCopyMetadataStatus(entry)) {
-    return classification("changes", "workingCopyMetadata");
+    return classification("metadata", "workingCopyMetadata");
   }
   return undefined;
 }

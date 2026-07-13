@@ -60,6 +60,53 @@ describe("SourceControlProjectionService", () => {
     ]);
   });
 
+  it("reprojects count policy changes without refreshing or mutating repository generations", () => {
+    const presenter = fakePresenter();
+    const service = new SourceControlProjectionService(sourceControlResourceStore(), presenter);
+    const events: unknown[] = [];
+    service.onDidChangeProjection((event) => events.push(event));
+    service.registerRepository(repository());
+    const initial = service.applySnapshot(
+      snapshotResponse({
+        localEntries: [
+          statusEntry({ path: "src/main.c", localStatus: "modified" }),
+          statusEntry({ path: "src/review.c", localStatus: "modified", changelist: "review" }),
+          statusEntry({ path: "notes.txt", localStatus: "unversioned" }),
+          statusEntry({ path: "src/needs-lock.c", needsLock: true }),
+        ],
+        remoteEntries: [statusEntry({ path: "src/incoming.c", remoteStatus: "modified" })],
+      }),
+    );
+    presenter.updateRepository.mockClear();
+    events.length = 0;
+
+    const [withUnversioned] = service.updateCountPolicy({
+      countUnversioned: true,
+      ignoreChangelistsInCount: ["review"],
+    });
+    const [restored] = service.updateCountPolicy({
+      countUnversioned: false,
+      ignoreChangelistsInCount: [],
+    });
+
+    expect(withUnversioned.count).toBe(2);
+    expect(restored.count).toBe(2);
+    expect(presenter.updateRepository).toHaveBeenNthCalledWith(1, withUnversioned);
+    expect(presenter.updateRepository).toHaveBeenNthCalledWith(2, restored);
+    for (const projection of [withUnversioned, restored]) {
+      expect(projection.epoch).toBe(initial.epoch);
+      expect(projection.generation).toBe(initial.generation);
+      expect(projection.freshness).toEqual(initial.freshness);
+      expect(projection.groups.find((group) => group.id === "incoming")?.resources.map((resource) => resource.path)).toEqual([
+        "src/incoming.c",
+      ]);
+      expect(projection.groups.find((group) => group.id === "metadata")?.resources.map((resource) => resource.path)).toEqual([
+        "src/needs-lock.c",
+      ]);
+    }
+    expect(events).toEqual([]);
+  });
+
   it("emits lightweight projection change events after successful updates", () => {
     const presenter = fakePresenter();
     const service = new SourceControlProjectionService(sourceControlResourceStore(), presenter);

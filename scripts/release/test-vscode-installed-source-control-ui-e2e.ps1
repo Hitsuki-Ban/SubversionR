@@ -3599,7 +3599,7 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
     if (!openReport || openReport.kind !== "subversionr.installedSourceControlUiE2eOpenReport") {
       throw new Error(`Unexpected installed Lock/Unlock open report kind: ${openReport && openReport.kind}`);
     }
-    const resource = findResource(openReport, "changes", resourcePath, "subversionr.workingCopyMetadataFile");
+    const resource = findResource(openReport, "metadata", resourcePath, "subversionr.workingCopyMetadataFile");
     if (!resource || resource.kind !== "file" || typeof resource.generation !== "number") {
       throw new Error("Installed Lock/Unlock workflow could not find the clean svn:needs-lock metadata resource.");
     }
@@ -3691,7 +3691,7 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
       "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport/lock",
       30000
     );
-    const lockedResource = findResource(postLockFreshnessReport, "changes", resource.path, "subversionr.workingCopyMetadataFile.locked");
+    const lockedResource = findResource(postLockFreshnessReport, "metadata", resource.path, "subversionr.workingCopyMetadataFile.locked");
     if (!lockedResource) {
       throw new Error("Installed Lock workflow did not preserve the needs-lock metadata resource projection after locking.");
     }
@@ -3726,7 +3726,7 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
     ) {
       throw new Error(`Unexpected installed pre-Unlock current surface report kind: ${preUnlockSurfaceReport && preUnlockSurfaceReport.kind}`);
     }
-    const currentUnlockResource = findResource(preUnlockSurfaceReport, "changes", resource.path, "subversionr.workingCopyMetadataFile.locked");
+    const currentUnlockResource = findResource(preUnlockSurfaceReport, "metadata", resource.path, "subversionr.workingCopyMetadataFile.locked");
     if (!currentUnlockResource || currentUnlockResource.kind !== "file" || typeof currentUnlockResource.generation !== "number") {
       throw new Error("Installed Lock/Unlock workflow could not find the current locked resource before Unlock cancellation.");
     }
@@ -3772,7 +3772,7 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
     if (!unlockModeCancellationProjectionUnchanged) {
       throw new Error("Installed Unlock mode cancellation workflow changed the Source Control projection after cancellation.");
     }
-    const currentUnlockResourceAfterCancellation = findResource(unlockModeCancellationSurfaceReport, "changes", resource.path, "subversionr.workingCopyMetadataFile.locked");
+    const currentUnlockResourceAfterCancellation = findResource(unlockModeCancellationSurfaceReport, "metadata", resource.path, "subversionr.workingCopyMetadataFile.locked");
     if (!currentUnlockResourceAfterCancellation || currentUnlockResourceAfterCancellation.kind !== "file" || typeof currentUnlockResourceAfterCancellation.generation !== "number") {
       throw new Error("Installed Lock/Unlock workflow could not find the current locked resource after Unlock cancellation.");
     }
@@ -3809,7 +3809,7 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
       "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport/unlock",
       30000
     );
-    const unlockedResource = findResource(postUnlockFreshnessReport, "changes", resource.path, "subversionr.workingCopyMetadataFile");
+    const unlockedResource = findResource(postUnlockFreshnessReport, "metadata", resource.path, "subversionr.workingCopyMetadataFile");
     if (!unlockedResource) {
       throw new Error("Installed Unlock workflow did not preserve the svn:needs-lock metadata projection after unlocking.");
     }

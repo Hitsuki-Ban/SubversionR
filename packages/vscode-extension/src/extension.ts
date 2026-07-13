@@ -248,6 +248,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     sourceControlPresenter,
   );
+  const statusConfigurationChange = vscode.workspace.onDidChangeConfiguration((event) => {
+    if (
+      event.affectsConfiguration("subversionr.status.countUnversioned") ||
+      event.affectsConfiguration("subversionr.status.ignoreChangelistsInCount")
+    ) {
+      sourceControlProjection.updateCountPolicy(readStatusSettings(vscode.workspace.getConfiguration("subversionr")));
+    }
+  });
   const statusNotificationHandler = createStatusNotificationHandler({
     statusSnapshotStore,
     sourceControlProjection,
@@ -1452,6 +1460,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     currentLineBlameHoverRegistration,
     lensConfigurationChange,
     historyConfigurationChange,
+    statusConfigurationChange,
     projectionCodeLensRefresh,
     sessionCodeLensRefresh,
     activeEditorChange,

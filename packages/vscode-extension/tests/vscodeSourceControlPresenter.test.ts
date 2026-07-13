@@ -31,6 +31,7 @@ describe("VscodeSourceControlPresenter", () => {
       "conflicts",
       "changes",
       "unversioned",
+      "metadata",
       "incoming",
       "externals",
       "ignored",
@@ -39,6 +40,7 @@ describe("VscodeSourceControlPresenter", () => {
       "l10n:Conflicts",
       "l10n:Changes",
       "l10n:Unversioned",
+      "l10n:Working Copy Metadata",
       "l10n:Incoming",
       "l10n:Externals",
       "l10n:Ignored",
@@ -98,8 +100,9 @@ describe("VscodeSourceControlPresenter", () => {
               ),
             ],
           },
-          { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
-          { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
+      { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
+      { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
           { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
           { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
         ],
@@ -129,6 +132,7 @@ describe("VscodeSourceControlPresenter", () => {
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
           { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
           { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+          { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
           {
             id: "incoming",
             labelKey: "scm.group.incoming",
@@ -172,6 +176,7 @@ describe("VscodeSourceControlPresenter", () => {
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
           { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
           { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+          { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
           {
             id: "incoming",
             labelKey: "scm.group.incoming",
@@ -234,6 +239,7 @@ describe("VscodeSourceControlPresenter", () => {
       "changelist:review",
       "changes",
       "unversioned",
+      "metadata",
       "incoming",
       "externals",
       "ignored",
@@ -246,6 +252,7 @@ describe("VscodeSourceControlPresenter", () => {
       "conflicts",
       "changes",
       "unversioned",
+      "metadata",
       "incoming",
       "externals",
       "ignored",
@@ -316,6 +323,7 @@ describe("VscodeSourceControlPresenter", () => {
           ],
         },
         { id: "unversioned", contextValue: "subversionr.unversioned", hideWhenEmpty: true, count: 0, resources: [] },
+        { id: "metadata", contextValue: "subversionr.metadata", hideWhenEmpty: true, count: 0, resources: [] },
         { id: "incoming", contextValue: "subversionr.incoming", hideWhenEmpty: true, count: 0, resources: [] },
         { id: "externals", contextValue: "subversionr.externals", hideWhenEmpty: true, count: 0, resources: [] },
         { id: "ignored", contextValue: "subversionr.ignored", hideWhenEmpty: true, count: 0, resources: [] },
@@ -345,8 +353,9 @@ describe("VscodeSourceControlPresenter", () => {
             }),
           ],
         },
-        { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
-        { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
+      { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
+      { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
         { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
         { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
       ],
@@ -494,13 +503,15 @@ describe("VscodeSourceControlPresenter", () => {
     });
     presenter.updateRepository(projectionWithWorkingCopyMetadata());
 
-    expect(api.group("changes").resourceStates).toEqual([
+    expect(api.group("metadata").resourceStates).toEqual([
       expect.objectContaining({
         contextValue: "subversionr.workingCopyMetadata",
         decorations: {
           tooltip: "l10n:SVN working copy metadata\nl10n:SVN switched node\nl10n:SVN sparse depth: files",
         },
       }),
+    ]);
+    expect(api.group("changes").resourceStates).toEqual([
       expect.objectContaining({
         contextValue: "subversionr.changedFile.baseDiffable",
         decorations: {
@@ -534,17 +545,24 @@ describe("VscodeSourceControlPresenter", () => {
             id: "changes",
             labelKey: "scm.group.changes",
             changelist: null,
+            resources: [],
+          },
+          { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+          {
+            id: "metadata",
+            labelKey: "scm.group.metadata",
+            changelist: null,
             resources: [
               projectedResource(
                 "local",
-                "changes",
+                "metadata",
                 "subversionr.workingCopyMetadata",
                 statusEntry("src/needs-lock.c", "normal", { needsLock: true }),
                 { tooltipKey: "scm.resource.workingCopyMetadata" },
               ),
               projectedResource(
                 "local",
-                "changes",
+                "metadata",
                 "subversionr.workingCopyMetadata",
                 statusEntry("src/locked.c", "normal", {
                   lock: {
@@ -560,14 +578,13 @@ describe("VscodeSourceControlPresenter", () => {
               ),
               projectedResource(
                 "local",
-                "changes",
+                "metadata",
                 "subversionr.workingCopyMetadata",
                 statusEntry("branches/feature", "normal", { kind: "dir", switched: true }),
                 { tooltipKey: "scm.resource.workingCopyMetadata" },
               ),
             ],
           },
-          { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
           { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
           { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
           { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
@@ -575,7 +592,7 @@ describe("VscodeSourceControlPresenter", () => {
       },
     );
 
-    expect(api.group("changes").resourceStates.map((resource) => resource.contextValue)).toEqual([
+    expect(api.group("metadata").resourceStates.map((resource) => resource.contextValue)).toEqual([
       "subversionr.workingCopyMetadataFile",
       "subversionr.workingCopyMetadataFile.locked",
       "subversionr.workingCopyMetadata",
@@ -636,6 +653,7 @@ describe("VscodeSourceControlPresenter", () => {
               ),
             ],
           },
+          { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
           {
             id: "incoming",
             labelKey: "scm.group.incoming",
@@ -735,8 +753,9 @@ describe("VscodeSourceControlPresenter", () => {
               ),
             ],
           },
-          { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
-          { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
+      { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
+      { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
           { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
           { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
         ],
@@ -795,8 +814,9 @@ describe("VscodeSourceControlPresenter", () => {
               ),
             ],
           },
-          { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
-          { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
+      { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
+      { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
           { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
           { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
         ],
@@ -849,8 +869,9 @@ describe("VscodeSourceControlPresenter", () => {
               ),
             ],
           },
-          { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
-          { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
+      { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
+      { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
           { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
           { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
         ],
@@ -1245,6 +1266,7 @@ function projection(
         ],
       },
       { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
       { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
       { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
       { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
@@ -1282,6 +1304,7 @@ function projectionWithLockedResources(): ScmRepositoryProjection {
         resources: [projectedResource("local", "changes", "subversionr.changedFile", lockedEntry)],
       },
       { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
       { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
       { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
       { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
@@ -1327,6 +1350,7 @@ function projectionWithNonBaseResources(): ScmRepositoryProjection {
         changelist: null,
         resources: [projectedResource("local", "unversioned", "subversionr.unversioned", unversionedEntry)],
       },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
       {
         id: "incoming",
         labelKey: "scm.group.incoming",
@@ -1370,6 +1394,7 @@ function projectionWithUnsupportedChangedFiles(): ScmRepositoryProjection {
         resources: entries.map((entry) => projectedResource("local", "changes", "subversionr.changedFile", entry)),
       },
       { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
       { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
       { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
       { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
@@ -1396,14 +1421,19 @@ function projectionWithWorkingCopyMetadata(): ScmRepositoryProjection {
         id: "changes",
         labelKey: "scm.group.changes",
         changelist: null,
-        resources: [
-          projectedResource("local", "changes", "subversionr.workingCopyMetadata", metadataOnlyEntry, {
-            tooltipKey: "scm.resource.workingCopyMetadata",
-          }),
-          projectedResource("local", "changes", "subversionr.changedFile", changedEntry),
-        ],
+        resources: [projectedResource("local", "changes", "subversionr.changedFile", changedEntry)],
       },
       { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      {
+        id: "metadata",
+        labelKey: "scm.group.metadata",
+        changelist: null,
+        resources: [
+          projectedResource("local", "metadata", "subversionr.workingCopyMetadata", metadataOnlyEntry, {
+            tooltipKey: "scm.resource.workingCopyMetadata",
+          }),
+        ],
+      },
       { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
       { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
       { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
@@ -1432,6 +1462,7 @@ function projectionWithConflictedIgnoredAndExternal(): ScmRepositoryProjection {
       },
       { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
       { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
       { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
       { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
       { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },

@@ -116,6 +116,7 @@ const GROUP_LABELS = {
   conflicts: "Conflicts",
   changes: "Changes",
   unversioned: "Unversioned",
+  metadata: "Working Copy Metadata",
   incoming: "Incoming",
   externals: "Externals",
   ignored: "Ignored",

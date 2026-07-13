@@ -5,6 +5,7 @@
   "Delete": "削除",
   "Resolve": "解決",
   "Working copy": "作業コピー",
+  "Working Copy Metadata": "作業コピーメタデータ",
   "Use the current working copy file": "現在の作業コピーのファイルを使用します",
   "Base": "BASE",
   "Use the pre-conflict base file": "競合前の BASE ファイルを使用します",

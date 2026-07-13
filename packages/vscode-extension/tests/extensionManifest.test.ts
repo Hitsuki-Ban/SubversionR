@@ -2196,6 +2196,7 @@ function runtimeLocalizationKeys(): string[] {
     "Delete",
     "Resolve",
     "Working copy",
+    "Working Copy Metadata",
     "Use the current working copy file",
     "Base",
     "Use the pre-conflict base file",

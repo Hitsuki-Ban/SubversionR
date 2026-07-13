@@ -15,6 +15,7 @@ export const SCM_RESOURCE_GROUP_IDS = [
   "conflicts",
   "changes",
   "unversioned",
+  "metadata",
   "incoming",
   "externals",
   "ignored",
@@ -123,7 +124,7 @@ export class SourceControlResourceStoreError extends Error {
 
 export class SourceControlResourceStore {
   private readonly repositories = new Map<string, RepositoryProjectionState>();
-  private readonly countPolicy: SourceControlCountPolicy;
+  private countPolicy: SourceControlCountPolicy;
 
   public constructor(options: SourceControlResourceStoreOptions) {
     this.countPolicy = validateCountPolicy(options.countPolicy);
@@ -293,6 +294,15 @@ export class SourceControlResourceStore {
       return undefined;
     }
     return projectionFromState(state, this.countPolicy);
+  }
+
+  public updateCountPolicy(countPolicy: SourceControlCountPolicy): ScmRepositoryProjection[] {
+    const validatedPolicy = validateCountPolicy(countPolicy);
+    const projections = Array.from(this.repositories.values())
+      .filter((state) => state.generation !== undefined)
+      .map((state) => projectionFromState(state, validatedPolicy));
+    this.countPolicy = validatedPolicy;
+    return projections;
   }
 
   public getProjectedResource(
@@ -466,6 +476,7 @@ function projectionGroupsFromState(state: RepositoryProjectionState): ScmProject
     ...changelistProjectionGroups(state),
     fixedProjectionGroup(state, "changes"),
     fixedProjectionGroup(state, "unversioned"),
+    fixedProjectionGroup(state, "metadata"),
     fixedProjectionGroup(state, "incoming"),
     fixedProjectionGroup(state, "externals"),
     fixedProjectionGroup(state, "ignored"),

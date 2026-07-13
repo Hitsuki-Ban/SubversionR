@@ -84,6 +84,7 @@ describe("SourceControlResourceStore", () => {
       "changelist:shelved",
       "changes",
       "unversioned",
+      "metadata",
       "incoming",
       "externals",
       "ignored",
@@ -94,7 +95,7 @@ describe("SourceControlResourceStore", () => {
     expect(groupPaths(projection, "changes")).toEqual(["src/main.c"]);
   });
 
-  it("projects switched and sparse metadata-only nodes without counting them as committable changes", () => {
+  it("projects clean working-copy metadata into its own non-committable group", () => {
     const store = sourceControlResourceStore();
     store.registerRepository(repository());
 
@@ -103,19 +104,88 @@ describe("SourceControlResourceStore", () => {
         localEntries: [
           statusEntry({ path: "branches/feature", kind: "dir", switched: true }),
           statusEntry({ path: "src/sparse", kind: "dir", depth: "files" }),
+          statusEntry({ path: "src/needs-lock.c", needsLock: true }),
+          statusEntry({
+            path: "src/locked.c",
+            lock: {
+              token: "opaquelocktoken:1",
+              owner: "alice",
+              comment: null,
+              createdDate: "2026-06-22T00:00:00Z",
+              expiresDate: null,
+              isRemote: false,
+            },
+          }),
         ],
       }),
     );
 
-    expect(groupPaths(projection, "changes")).toEqual(["branches/feature", "src/sparse"]);
-    expect(groupContexts(projection, "changes")).toEqual([
+    expect(groupPaths(projection, "changes")).toEqual([]);
+    expect(groupPaths(projection, "metadata")).toEqual([
+      "branches/feature",
+      "src/locked.c",
+      "src/needs-lock.c",
+      "src/sparse",
+    ]);
+    expect(groupContexts(projection, "metadata")).toEqual([
+      "subversionr.workingCopyMetadata",
+      "subversionr.workingCopyMetadata",
       "subversionr.workingCopyMetadata",
       "subversionr.workingCopyMetadata",
     ]);
     expect(projection.count).toBe(0);
+    expect(store.getCommitAllTargets("repo-uuid:C:/wc")?.targets).toEqual([]);
   });
 
-  it("keeps changed switched and sparse files committable instead of downgrading them to metadata-only", () => {
+  it("atomically reprojects both count settings without changing snapshot or incoming state", () => {
+    const store = sourceControlResourceStore();
+    store.registerRepository(repository());
+    const initial = store.applySnapshot(
+      snapshotResponse({
+        localEntries: [
+          statusEntry({ path: "src/main.c", localStatus: "modified" }),
+          statusEntry({ path: "src/review.c", localStatus: "modified", changelist: "review" }),
+          statusEntry({ path: "notes.txt", localStatus: "unversioned" }),
+          statusEntry({ path: "src/needs-lock.c", needsLock: true }),
+        ],
+        remoteEntries: [statusEntry({ path: "src/incoming.c", remoteStatus: "modified" })],
+      }),
+    );
+    expect(initial.count).toBe(2);
+
+    const [countUnversioned] = store.updateCountPolicy({
+      countUnversioned: true,
+      ignoreChangelistsInCount: ["ignore-on-commit"],
+    });
+    expect(countUnversioned.count).toBe(3);
+    expect(countUnversioned.epoch).toBe(initial.epoch);
+    expect(countUnversioned.generation).toBe(initial.generation);
+    expect(countUnversioned.freshness).toEqual(initial.freshness);
+    expect(groupPaths(countUnversioned, "incoming")).toEqual(["src/incoming.c"]);
+    expect(groupPaths(countUnversioned, "metadata")).toEqual(["src/needs-lock.c"]);
+
+    const [ignoreReview] = store.updateCountPolicy({
+      countUnversioned: true,
+      ignoreChangelistsInCount: ["review"],
+    });
+    expect(ignoreReview.count).toBe(2);
+    expect(store.getCommitAllTargets("repo-uuid:C:/wc")?.targets.map((target) => target.path)).toEqual([
+      "src/main.c",
+    ]);
+    expect(groupPaths(ignoreReview, "incoming")).toEqual(["src/incoming.c"]);
+
+    const [restored] = store.updateCountPolicy({
+      countUnversioned: false,
+      ignoreChangelistsInCount: [],
+    });
+    expect(restored.count).toBe(2);
+    expect(store.getCommitAllTargets("repo-uuid:C:/wc")?.targets.map((target) => target.path)).toEqual([
+      "src/main.c",
+      "src/review.c",
+    ]);
+  });
+
+  it("keeps changed switched sparse and needs-lock files committable instead of downgrading them", () => {
     const store = sourceControlResourceStore();
     store.registerRepository(repository());
 
@@ -128,14 +198,23 @@ describe("SourceControlResourceStore", () => {
             switched: true,
             depth: "files",
           }),
+          statusEntry({
+            path: "src/needs-lock.c",
+            localStatus: "modified",
+            needsLock: true,
+          }),
         ],
       }),
     );
 
-    expect(groupPaths(projection, "changes")).toEqual(["src/switched-sparse.c"]);
-    expect(groupContexts(projection, "changes")).toEqual(["subversionr.changedFile"]);
-    expect(projection.count).toBe(1);
+    expect(groupPaths(projection, "changes")).toEqual(["src/needs-lock.c", "src/switched-sparse.c"]);
+    expect(groupContexts(projection, "changes")).toEqual([
+      "subversionr.changedFile",
+      "subversionr.changedFile",
+    ]);
+    expect(projection.count).toBe(2);
     expect(store.getCommitAllTargets("repo-uuid:C:/wc")?.targets).toEqual([
+      { path: "src/needs-lock.c", changelist: null, status: "modified", directory: "src" },
       { path: "src/switched-sparse.c", changelist: null, status: "modified", directory: "src" },
     ]);
   });
@@ -233,11 +312,11 @@ describe("SourceControlResourceStore", () => {
       }),
     );
 
-    const projectedLock = projection.groups.find((group) => group.id === "changes")?.resources[0]?.entry.lock;
+    const projectedLock = projection.groups.find((group) => group.id === "metadata")?.resources[0]?.entry.lock;
     expect(projectedLock?.owner).toBe("alice");
     projectedLock!.owner = "mallory";
 
-    const currentLock = store.getProjection("repo-uuid:C:/wc")?.groups.find((group) => group.id === "changes")?.resources[0]?.entry.lock;
+    const currentLock = store.getProjection("repo-uuid:C:/wc")?.groups.find((group) => group.id === "metadata")?.resources[0]?.entry.lock;
     expect(currentLock?.owner).toBe("alice");
   });
 
