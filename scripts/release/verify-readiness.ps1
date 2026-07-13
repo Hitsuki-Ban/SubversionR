@@ -441,6 +441,9 @@ function Invoke-RequirementEvidenceRuleChecks() {
   }
   foreach ($id in @(
     "BRM-004",
+    "BRM-006",
+    "BRM-008",
+    "BRM-009",
     "SEC-012",
     "SEC-016",
     "TST-024"
@@ -2934,6 +2937,23 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "BRM-005" @(
   "scripts/release/test-vscode-installed-source-control-ui-e2e.ps1",
   "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1"
 )
+foreach ($id in @("BRM-006", "BRM-008", "BRM-009")) {
+  Assert-RequirementEvidenceRefs $requirementsEvidence $id @(
+    "docs/release/public-claim-matrix.md",
+    "README.md",
+    "packages/vscode-extension/package.json",
+    "packages/vscode-extension/tests/extensionManifest.test.ts"
+  )
+}
+Assert-Terms $extensionManifestTests @(
+  "keeps deferred merge commands registered but hidden from every user-facing menu",
+  "subversionr.mergeRangeRepository",
+  "subversionr.previewMergeRangeRepository",
+  "subversionr.showRepositoryMergeinfo",
+  "subversionr.showResourceMergeinfo",
+  "visibleEntries",
+  'when: "false"'
+) "BRM-006/BRM-008/BRM-009 deferred merge command boundary"
 Assert-Terms $installedSourceControlUiE2eScript @(
   "runAddToIgnoreWorkflow",
   "sourceControlUiAddToIgnoreWorkflow",
@@ -7033,7 +7053,12 @@ Assert-Terms $publicClaimMatrix @(
   "Malicious input corpus preflight",
   "Native remote-protocol fuzz readiness contract",
   "Native remote-protocol fuzz target source preflight",
-  "Native remote-protocol fixed seed harness smoke"
+  "Native remote-protocol fixed seed harness smoke",
+  'keeps `subversionr.mergeRangeRepository`',
+  "hides all four from the Command Palette",
+  "contributes none to user-facing menus",
+  "FBL-06 deferral repro",
+  "No SVN repository is open."
 ) "public claim matrix coverage"
 
 Assert-Terms $m7Plan @(
@@ -7316,6 +7341,7 @@ Assert-TableStatusIn $publicClaimMatrix "client certificates" @("deferred", "uns
 Assert-TableStatusIn $publicClaimMatrix "Kerberos/NTLM" @("deferred", "unsupported")
 Assert-TableStatusIn $publicClaimMatrix "SASL" @("deferred", "unsupported")
 Assert-TableStatusIn $publicClaimMatrix "TortoiseSVN" @("deferred", "unsupported")
+Assert-TableStatusIn $publicClaimMatrix "Merge, merge preview, and mergeinfo" @("deferred")
 Assert-TableStatusIn $publicClaimMatrix "localhost HTTPS DAV" @("fixture-only")
 Assert-TableStatusIn $publicClaimMatrix "System ``svn`` CLI" @("unsupported")
 Assert-TableStatusIn $publicClaimMatrix '`win32-x64` staged package layout' @("fixture-only")

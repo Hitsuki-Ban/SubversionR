@@ -709,21 +709,6 @@ describe("extension manifest", () => {
           group: "navigation",
         },
         {
-          command: "subversionr.mergeRangeRepository",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.previewMergeRangeRepository",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showRepositoryMergeinfo",
-          when: "scmProvider == svn-r && isWorkspaceTrusted",
-          group: "navigation",
-        },
-        {
           command: "subversionr.showRepositoryProperties",
           when: "scmProvider == svn-r && isWorkspaceTrusted",
           group: "navigation",
@@ -915,11 +900,6 @@ describe("extension manifest", () => {
         {
           command: "subversionr.refreshResource",
           when: "scmProvider == svn-r && (scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
-          group: "navigation",
-        },
-        {
-          command: "subversionr.showResourceMergeinfo",
-          when: "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
           group: "navigation",
         },
         {
@@ -1234,11 +1214,6 @@ describe("extension manifest", () => {
           group: "history@3",
         },
         {
-          command: "subversionr.showResourceMergeinfo",
-          when: "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
-          group: "history@4",
-        },
-        {
           command: "subversionr.showResourceProperties",
           when: "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
           group: "history@5",
@@ -1453,6 +1428,18 @@ describe("extension manifest", () => {
           when: "false",
         },
         {
+          command: "subversionr.mergeRangeRepository",
+          when: "false",
+        },
+        {
+          command: "subversionr.previewMergeRangeRepository",
+          when: "false",
+        },
+        {
+          command: "subversionr.showRepositoryMergeinfo",
+          when: "false",
+        },
+        {
           command: "subversionr.showResourceMergeinfo",
           when: "false",
         },
@@ -1516,6 +1503,38 @@ describe("extension manifest", () => {
     });
   });
 
+  it("keeps deferred merge commands registered but hidden from every user-facing menu", () => {
+    const manifest = readJson("package.json");
+    const deferredCommands = [
+      "subversionr.mergeRangeRepository",
+      "subversionr.previewMergeRangeRepository",
+      "subversionr.showRepositoryMergeinfo",
+      "subversionr.showResourceMergeinfo",
+    ];
+    const contributedCommands = new Set(
+      manifest.contributes.commands.map((entry: { command: string }) => entry.command),
+    );
+    const menus = manifest.contributes.menus as Record<
+      string,
+      Array<{ command?: string; when?: string }>
+    >;
+    const visibleEntries = Object.entries(menus)
+      .filter(([menu]) => menu !== "commandPalette")
+      .flatMap(([menu, entries]) =>
+        entries
+          .filter((entry) => entry.command !== undefined && deferredCommands.includes(entry.command))
+          .map((entry) => ({ menu, ...entry })),
+      );
+
+    expect(deferredCommands.every((command) => contributedCommands.has(command))).toBe(true);
+    expect(visibleEntries).toEqual([]);
+    expect(
+      menus.commandPalette.filter(
+        (entry) => entry.command !== undefined && deferredCommands.includes(entry.command),
+      ),
+    ).toEqual(deferredCommands.map((command) => ({ command, when: "false" })));
+  });
+
   it("hides current write and remote operation menu entries in untrusted workspaces", () => {
     const manifest = readJson("package.json");
     const menus = manifest.contributes.menus;
@@ -1535,12 +1554,8 @@ describe("extension manifest", () => {
       "subversionr.deleteAllUnversionedResources",
       "subversionr.diffWithHead",
       "subversionr.diffWithPrevious",
-      "subversionr.mergeRangeRepository",
-      "subversionr.previewMergeRangeRepository",
       "subversionr.relocateRepository",
-      "subversionr.showRepositoryMergeinfo",
       "subversionr.showRepositoryProperties",
-      "subversionr.showResourceMergeinfo",
       "subversionr.showResourceProperties",
       "subversionr.setResourceProperty",
       "subversionr.deleteResourceProperty",
@@ -1577,7 +1592,7 @@ describe("extension manifest", () => {
       ...menus["view/item/context"],
     ].filter((item) => trustSensitiveCommands.has(item.command));
 
-    expect(contributedItems).toHaveLength(74);
+    expect(contributedItems).toHaveLength(69);
     for (const item of contributedItems) {
       expect(item.when).toContain("isWorkspaceTrusted");
     }
