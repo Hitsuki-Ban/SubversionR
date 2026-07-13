@@ -7,6 +7,7 @@ import {
   type ScmProjectionFreshness,
   type ScmProjectedResourceLookup,
   type ScmRepositoryProjection,
+  type SourceControlCountPolicy,
   type SourceControlProjectionRepository,
 } from "./sourceControlResourceStore";
 import type { PathCasePolicy } from "../status/types";
@@ -136,6 +137,14 @@ export class SourceControlProjectionService {
 
   public getProjection(repositoryId: string): ScmRepositoryProjection | undefined {
     return this.store.getProjection(repositoryId);
+  }
+
+  public updateCountPolicy(countPolicy: SourceControlCountPolicy): ScmRepositoryProjection[] {
+    const projections = this.store.updateCountPolicy(countPolicy);
+    for (const projection of projections) {
+      this.presenter.updateRepository(projection);
+    }
+    return projections;
   }
 
   public getCommitAllTargets(repositoryId: string): ScmCommitAllTargets | undefined {

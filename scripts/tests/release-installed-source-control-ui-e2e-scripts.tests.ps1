@@ -2390,12 +2390,12 @@ $lockOpenReport = [pscustomobject]@{
     epoch = 6
     workingCopyRoot = $lockWorkingCopyRoot
     generation = 1
-    count = 1
+    count = 0
     inputBox = $openReport.sourceControl.inputBox
     groups = @(
       [pscustomobject]@{
-        id = "changes"
-        contextValue = "subversionr.changes"
+        id = "metadata"
+        contextValue = "subversionr.metadata"
         hideWhenEmpty = $true
         count = 1
         resources = @(
@@ -8095,7 +8095,7 @@ try {
   Assert-True ($workflowContent -match '(?s)async function runCommitSelectedMultiSelectionWorkflow.*?postCommitObservation\s*=\s*await collectFreshnessReportUntilPathsAbsent\([\s\S]*?\[firstSelected\.path, secondSelected\.path\][\s\S]*?expectedRefreshTargets') "Commit Selected multi-selection should wait for both committed paths to leave the SourceControl projection and for exact targeted refresh coverage."
   Assert-True ($workflowContent -match "sourceControlUiCommitSelectedMultiSelectionWorkflow") "Installed Source Control UI E2E evidence should publish the Commit Selected multi-selection workflow report."
   Assert-True ($workflowContent -match "Get-CommitSelectedMultiSelectionRepositoryOracle") "Installed Source Control UI E2E evidence should verify Commit Selected multi-selection using an SVN repository oracle."
-  Assert-True ($workflowContent -match '(?s)async function runLockUnlockWorkflow.*?findResource\(openReport, "changes", resourcePath, "subversionr\.workingCopyMetadataFile"\).*?executeCommand\("subversionr\.lockResource", resourceStateArgument\(lockWorkingCopyRoot, resource\)\).*?currentUnlockResource.*?findResource\(preUnlockSurfaceReport, "changes", resource\.path, "subversionr\.workingCopyMetadataFile\.locked"\).*?executeCommand\("subversionr\.unlockResource", resourceStateArgument\(lockWorkingCopyRoot, currentUnlockResource\)\)') "Installed Source Control UI E2E harness should refresh the installed SCM resource command argument before Unlock so the projection generation is current."
+  Assert-True ($workflowContent -match '(?s)async function runLockUnlockWorkflow.*?findResource\(openReport, "metadata", resourcePath, "subversionr\.workingCopyMetadataFile"\).*?executeCommand\("subversionr\.lockResource", resourceStateArgument\(lockWorkingCopyRoot, resource\)\).*?currentUnlockResource.*?findResource\(preUnlockSurfaceReport, "metadata", resource\.path, "subversionr\.workingCopyMetadataFile\.locked"\).*?executeCommand\("subversionr\.unlockResource", resourceStateArgument\(lockWorkingCopyRoot, currentUnlockResource\)\)') "Installed Source Control UI E2E harness should refresh the installed SCM resource command argument before Unlock so the projection generation is current."
   Assert-True ($workflowContent -match "sourceControlUiLockUnlockWorkflow") "Installed Source Control UI E2E evidence should publish the Lock/Unlock workflow report."
   Assert-True ($workflowContent -match "Get-LockHeldWorkingCopyOracle") "Installed Source Control UI E2E evidence should verify the held lock using an SVN working-copy oracle."
   Assert-True ($workflowContent -match "Get-LockUnlockWorkingCopyOracle") "Installed Source Control UI E2E evidence should verify unlock and svn:needs-lock preservation using an SVN working-copy oracle."

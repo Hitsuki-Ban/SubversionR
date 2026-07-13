@@ -5,6 +5,7 @@
   "Delete": "删除",
   "Resolve": "解决",
   "Working copy": "工作副本",
+  "Working Copy Metadata": "工作副本元数据",
   "Use the current working copy file": "使用当前工作副本文件",
   "Base": "BASE",
   "Use the pre-conflict base file": "使用冲突前的 BASE 文件",

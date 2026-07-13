@@ -351,12 +351,12 @@ describe("collectInstalledSourceControlSurfaceReport", () => {
       closeRepository: vi.fn(async () => undefined),
     };
     const projection = scmProjection();
-    const [projectionChanges] = projection.groups.filter((group) => group.id === "changes");
-    projectionChanges.resources.unshift(
+    const [projectionMetadata] = projection.groups.filter((group) => group.id === "metadata");
+    projectionMetadata.resources.push(
       projectedResource({
         path: "src/needs-lock.txt",
         kind: "file",
-        groupId: "changes",
+        groupId: "metadata",
         contextValue: "subversionr.workingCopyMetadata",
         localStatus: "normal",
         nodeStatus: "normal",
@@ -364,9 +364,9 @@ describe("collectInstalledSourceControlSurfaceReport", () => {
     );
 
     const sourceControl = sourceControlSnapshot();
-    const [surfaceChanges] = sourceControl.groups.filter((group) => group.id === "changes");
-    surfaceChanges.count = 2;
-    surfaceChanges.resources.unshift({
+    const [surfaceMetadata] = sourceControl.groups.filter((group) => group.id === "metadata");
+    surfaceMetadata.count = 1;
+    surfaceMetadata.resources.push({
       path: "src/needs-lock.txt",
       contextValue: "subversionr.workingCopyMetadataFile",
       kind: "file",
@@ -390,7 +390,7 @@ describe("collectInstalledSourceControlSurfaceReport", () => {
       },
     );
 
-    expect(report.sourceControl.groups.find((group) => group.id === "changes")?.resources[0]).toEqual({
+    expect(report.sourceControl.groups.find((group) => group.id === "metadata")?.resources[0]).toEqual({
       path: "src/needs-lock.txt",
       contextValue: "subversionr.workingCopyMetadataFile",
       kind: "file",
@@ -961,6 +961,7 @@ function scmProjection(
           }),
         ],
       },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
       { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
       { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
       { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
@@ -978,6 +979,7 @@ function changelistScmProjection(
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
       { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
       { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
       {
         id: "changelist:review",
         labelKey: "scm.group.changelist",
@@ -1051,6 +1053,7 @@ function sourceControlSnapshot(
           },
         ],
       },
+      { id: "metadata", contextValue: "subversionr.metadata", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "incoming", contextValue: "subversionr.incoming", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "externals", contextValue: "subversionr.externals", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "ignored", contextValue: "subversionr.ignored", hideWhenEmpty: true, count: 0, resources: [] },
@@ -1068,6 +1071,7 @@ function changelistSourceControlSnapshot(
       { id: "conflicts", contextValue: "subversionr.conflicts", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "changes", contextValue: "subversionr.changes", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "unversioned", contextValue: "subversionr.unversioned", hideWhenEmpty: true, count: 0, resources: [] },
+      { id: "metadata", contextValue: "subversionr.metadata", hideWhenEmpty: true, count: 0, resources: [] },
       {
         id: "changelist:review",
         contextValue: "subversionr.changelist",
@@ -1117,6 +1121,7 @@ function sourceControlSnapshotFor(session: RepositorySession, resourcePath: stri
         ],
       },
       { id: "unversioned", contextValue: "subversionr.unversioned", hideWhenEmpty: true, count: 0, resources: [] },
+      { id: "metadata", contextValue: "subversionr.metadata", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "incoming", contextValue: "subversionr.incoming", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "externals", contextValue: "subversionr.externals", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "ignored", contextValue: "subversionr.ignored", hideWhenEmpty: true, count: 0, resources: [] },
