@@ -536,21 +536,6 @@
           "group": "navigation"
         },
         {
-          "command": "subversionr.mergeRangeRepository",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.previewMergeRangeRepository",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.showRepositoryMergeinfo",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
-        },
-        {
           "command": "subversionr.showRepositoryProperties",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
           "group": "navigation"
@@ -742,11 +727,6 @@
         {
           "command": "subversionr.refreshResource",
           "when": "scmProvider == svn-r && (scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.showResourceMergeinfo",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && (scmResourceState =~ /^subversionr\\.(conflicted|changedFile|changedFile\\.baseDiffable|changedDirectory)(\\.changelisted)?(\\.locked)?$/ || scmResourceState == subversionr.workingCopyMetadata || scmResourceState =~ /^subversionr\\.workingCopyMetadataFile(\\.locked)?$/)",
           "group": "navigation"
         },
         {
@@ -1061,11 +1041,6 @@
           "group": "history@3"
         },
         {
-          "command": "subversionr.showResourceMergeinfo",
-          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
-          "group": "history@4"
-        },
-        {
           "command": "subversionr.showResourceProperties",
           "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
           "group": "history@5"
@@ -1277,6 +1252,18 @@
         },
         {
           "command": "subversionr.showBlame",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.mergeRangeRepository",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.previewMergeRangeRepository",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.showRepositoryMergeinfo",
           "when": "false"
         },
         {

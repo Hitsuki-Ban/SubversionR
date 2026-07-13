@@ -34,7 +34,7 @@ Release assets also include the SBOM, third-party notices, and the Beta evidence
 - Windows `win32-x64` only.
 - Local file-backed working copies are the intended test path.
 - Remote server, proxy, client-certificate, Kerberos/NTLM, SASL, and broad certificate workflows are not public Beta claims.
-- Merge, merge preview, and mergeinfo are not included.
+- Merge, merge preview, and mergeinfo are post-Beta work and their commands are intentionally hidden from the Command Palette and all menus.
 - Stable-channel publication, artifact signing, and cross-platform packages are not included.
 
 The full claim boundary is documented in [docs/release/public-claim-matrix.md](docs/release/public-claim-matrix.md).
