@@ -7,6 +7,7 @@
 - Reports Update-created conflicts with warning severity, conflict counts, and bounded affected-path context after authoritative reconciliation.
 - Preserves bounded symbolic libsvn failure chains through protocol 1.29, adds the redacted SubversionR log and actionable localized recovery notifications, and keeps failed commit message and Review Commit selection state.
 - Retains the `hitsuki-ban.subversionr` identity, `SVN-R` Marketplace display name, Windows `win32-x64` pre-release channel, and existing public-claim boundary.
+- Publishes the exact Windows package through the Visual Studio Marketplace pre-release channel and as the `v0.2.3-beta.1` GitHub pre-release, with live digest attestation and Gallery byte-continuity evidence.
 
 ## 0.2.2
 

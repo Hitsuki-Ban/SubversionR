@@ -509,6 +509,7 @@ $attestationPredicateGenerator = Read-RequiredDocument "scripts/release/generate
 $liveAttestationRecorder = Read-RequiredDocument "scripts/release/record-live-github-attestation.ps1"
 $liveAttestationScriptTests = Read-RequiredDocument "scripts/tests/release-live-attestation-scripts.tests.ps1"
 $projectReadme = Read-RequiredDocument "README.md"
+$publication023Evidence = Read-RequiredDocument "docs/release/0.2.3-publication-evidence.md"
 $engineeringHandoff = Read-RequiredDocument "docs/onboarding/ENGINEERING_HANDOFF.md"
 $architectureDecisions = Read-AndAssertArchitectureDecisionRecords
 $stableVsCodeApiAdr = $architectureDecisions["docs/adr/ADR-008-stable-vscode-apis.md"]
@@ -6533,6 +6534,23 @@ Assert-Terms $attestationWorkflow @(
   "scripts/release/record-live-github-attestation.ps1",
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 ) "live GitHub artifact attestation workflow coverage"
+Assert-Terms $publication023Evidence @(
+  "# 0.2.3 Beta Publication Evidence",
+  "v0.2.3-beta.1",
+  "a92b04d689bb8a624391f0f2ce5d970b9568dc02",
+  "subversionr-win32-x64-0.2.3.vsix",
+  "8292661",
+  "991199a1cd874b76e10dd8ca383edac766b169d638e0b42253022507c435b12b",
+  "aaad65fd21de301397f25cfad0a30f3ff26b7ce1a2826dac451682fac6272889",
+  "29215241333",
+  "34984195",
+  "29215282438",
+  "Microsoft.VisualStudio.Code.PreRelease=true",
+  "does not claim that the public install flow was exercised",
+  "does not claim original source-to-binary build provenance or artifact signing",
+  "public-install verification",
+  "overall public release readiness"
+) "0.2.3 publication evidence coverage"
 Assert-Terms $attestationContract @(
   "subversionr.release.github-attestation-contract.win32-x64.v1",
   "subversionr-win32-x64-0.2.0.vsix",
