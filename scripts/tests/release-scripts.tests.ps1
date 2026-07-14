@@ -1075,7 +1075,8 @@ try {
     "SVN working copy metadata",
     "SVN switched node",
     "SVN sparse depth",
-    "projects switched and sparse metadata-only nodes without counting them as committable changes",
+    "projects clean working-copy metadata into its own non-committable group",
+    "keeps changed switched sparse and needs-lock files committable instead of downgrading them",
     "adds switched and sparse depth metadata to SourceControl resource tooltips"
   ) "Release readiness should verify switched and sparse status metadata evidence."
   Assert-TextFileContainsTokens $verifyReadinessScript @(
