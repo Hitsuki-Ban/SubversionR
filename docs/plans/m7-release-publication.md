@@ -425,7 +425,7 @@ The pending 0.2.4 candidate preserves the `SVN-R` Marketplace identity while pac
 
 - root and extension versions are `0.2.4`; the extension version remains plain `major.minor.patch`, while the planned GitHub pre-release tag is `v0.2.4-beta.1`;
 - `vsce package --target win32-x64 --pre-release` bakes exactly one `Microsoft.VisualStudio.Code.PreRelease=true` property into the candidate before its bytes are hashed;
-- the provisional release subject is `subversionr-win32-x64-0.2.4.vsix`, 8,291,313 bytes, SHA256 `b21b9082e52b48d5521f988394a6aa0ce0bbf88e3ab0d2bdbafd0445a375742e`;
+- the provisional release subject is `subversionr-win32-x64-0.2.4.vsix`, 8,295,021 bytes, SHA256 `880e7937423695ca772436f01e2419498463ebd7cc25ba8a283a135530418249`;
 - `docs/release/github-attestation-candidate-contract.win32-x64.json` binds the exact pending release/attestation subject with `publicReadinessClaim=false`; and
 - `docs/release/marketplace-pre-release-owner-exception-0.2.4.md` authorizes only those exact bytes after the candidate is sealed.
 
