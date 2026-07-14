@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4
+
+- Hides deferred Merge, preview, and mergeinfo entry points until their native workflows are implemented.
+- Refines Source Control around three primary title actions, four overflow submenus, at most three resource-row actions, consistent SVN command naming, and no routine activation toast.
+- Adds runtime Source Control count policies and a dedicated working-copy metadata group while preserving Lock and Unlock workflows.
+- Strengthens installed VSIX UI evidence for command placement, accessibility, renderer output, and negative detail-accuracy cases.
+- Retains the `hitsuki-ban.subversionr` identity, `SVN-R` Marketplace display name, Windows `win32-x64` pre-release channel, and existing public-readiness non-claim.
+
 ## 0.2.3
 
 - Activates organically when VS Code opens a working-copy root or a bounded ancestor path, with installed no-command activation evidence.

@@ -451,16 +451,16 @@ function Invoke-RequirementEvidenceRuleChecks() {
     Assert-RequirementEvidenceStatus $requirementsEvidence $id "blocked"
   }
   foreach ($id in @("SEC-015", "MIG-010", "MIG-012")) {
-    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.3.md"
+    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.4.md"
   }
-  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.3.md"
+  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.4.md"
   Assert-Terms $marketplaceOwnerException @(
-    "# Marketplace 0.2.3 Pre-release Owner Exception",
+    "# Marketplace 0.2.4 Pre-release Owner Exception",
     "public issues [#14]",
-    "[#43]",
-    'release tag: `v0.2.3-beta.1`',
-    'asset name: `subversionr-win32-x64-0.2.3.vsix`',
-    "991199a1cd874b76e10dd8ca383edac766b169d638e0b42253022507c435b12b",
+    "[#56]",
+    'release tag: `v0.2.4-beta.1`',
+    'asset name: `subversionr-win32-x64-0.2.4.vsix`',
+    "b21b9082e52b48d5521f988394a6aa0ce0bbf88e3ab0d2bdbafd0445a375742e",
     '`SEC-015`, `MIG-010`, and `MIG-012`',
     "It cannot transfer to different bytes, another tag, or a later version",
     "does not claim public release readiness"
@@ -755,7 +755,8 @@ Assert-Terms $extensionManifestTests @(
   "onCommand:subversionr.commitResource",
   "command.commitResource.title",
   "subversionr.commitResource",
-  'when: "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",'
+  'resourceStateWhenMatches(entry.when ?? "", "subversionr.changedFile.baseDiffable")',
+  ').toContain("subversionr.commitResource")'
 ) "COM-002 extension manifest test coverage"
 Assert-Terms $protocolContractTests @(
   "operation_run_commit",
@@ -1900,7 +1901,7 @@ Assert-Terms $resourceStateClassifierTests @(
   "subversionr.workingCopyMetadata"
 ) "REP-007 SCM sparse metadata classifier tests"
 Assert-Terms $sourceControlResourceStoreTests @(
-  "projects switched and sparse metadata-only nodes without counting them as committable changes",
+  "projects clean working-copy metadata into its own non-committable group",
   "expect(projection.count).toBe(0)"
 ) "REP-007 SCM sparse metadata projection tests"
 Assert-Terms $vscodeSourceControlPresenterTests @(
@@ -1974,8 +1975,8 @@ Assert-Terms $resourceStateClassifierTests @(
   "subversionr.workingCopyMetadata"
 ) "REP-008 SCM switched metadata classifier tests"
 Assert-Terms $sourceControlResourceStoreTests @(
-  "projects switched and sparse metadata-only nodes without counting them as committable changes",
-  "keeps changed switched and sparse files committable instead of downgrading them to metadata-only"
+  "projects clean working-copy metadata into its own non-committable group",
+  "keeps changed switched sparse and needs-lock files committable instead of downgrading them"
 ) "REP-008 SCM switched metadata projection tests"
 Assert-Terms $vscodeSourceControlPresenterTests @(
   "adds switched and sparse depth metadata to SourceControl resource tooltips",
@@ -3501,7 +3502,8 @@ Assert-Terms $extensionManifestTests @(
   "onCommand:subversionr.openBase",
   "command.diffWithBase.title",
   "command.openBase.title",
-  'when: "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",'
+  'resourceStateWhenMatches(entry.when ?? "", "subversionr.changedFile.baseDiffable")',
+  'expect.arrayContaining(["subversionr.diffWithBase", "subversionr.openBase"])'
 ) "DIF-001 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "DIF-002" @(
   "docs/plans/m5-content-diff-history.md",
@@ -4723,8 +4725,8 @@ Assert-Terms $extensionManifestTests @(
   "onCommand:subversionr.showBlame",
   "command.showBlame.title",
   "subversionr.showBlame",
-  'scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/',
-  'scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/',
+  'for (const state of ["subversionr.conflicted", "subversionr.changedFile"])',
+  ').toContain("subversionr.showBlame")',
   "SVN Blame: {0}",
   "Merged from r{0}"
 ) "HIS-004 extension manifest tests"
@@ -5962,7 +5964,7 @@ Assert-Terms $resourceStateClassifierSource @(
   "entry.lock !== null",
   "entry.needsLock",
   "isSparseStatusDepth(entry.depth)",
-  'return classification("changes", "workingCopyMetadata");',
+  'return classification("metadata", "workingCopyMetadata");',
   'depth === "empty" || depth === "files" || depth === "immediates"'
 ) "STA-010 SCM metadata classifier"
 Assert-Terms $resourceStateClassifierTests @(
@@ -5979,8 +5981,8 @@ Assert-Terms $sourceControlResourceStoreSource @(
   'resource.contextValue !== "subversionr.workingCopyMetadata"'
 ) "STA-010 SCM projection store metadata preservation"
 Assert-Terms $sourceControlResourceStoreTests @(
-  "projects switched and sparse metadata-only nodes without counting them as committable changes",
-  "keeps changed switched and sparse files committable instead of downgrading them to metadata-only",
+  "projects clean working-copy metadata into its own non-committable group",
+  "keeps changed switched sparse and needs-lock files committable instead of downgrading them",
   "subversionr.workingCopyMetadata",
   "expect(projection.count).toBe(0)"
 ) "STA-010 SCM projection store tests"
@@ -6818,8 +6820,8 @@ $candidateSealStepCondition = "if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'cand
 if (([regex]::Matches($ciWorkflow.Content, [regex]::Escape($candidateSealStepCondition))).Count -ne 3) {
   throw "Beta-G candidate evidence CI coverage must apply the explicit candidate-seal condition exactly to manifest generation, candidate verification, and candidate upload."
 }
-if ($releaseBuildEpoch.Content.Replace("`r`n", "`n") -ne "1783852020`n") {
-  throw "native/release-build-epoch.txt: 0.2.3 release epoch must remain bound to the candidate version-bump commit timestamp 1783852020."
+if ($releaseBuildEpoch.Content.Replace("`r`n", "`n") -ne "1783993493`n") {
+  throw "native/release-build-epoch.txt: 0.2.4 release epoch must remain bound to the public release-slice base commit timestamp 1783993493."
 }
 Assert-DoesNotContain $ciWorkflow "target/release-evidence/*.json" "Beta-G candidate evidence CI coverage should not use broad release evidence JSON globs"
 Assert-Terms $releaseGates @(
@@ -6837,7 +6839,7 @@ Assert-Terms $releaseGates @(
   "subversionr-win32-x64-beta-candidate",
   "actions/upload-artifact@v7",
   "Continuous-validation runs never enter this candidate-only sequence",
-  'does not claim the `0.2.3` release or live attestation exists',
+  'does not claim the `0.2.4` release or live attestation exists',
   "coverage-guided fuzzing"
 ) "Beta-G candidate evidence release gate documentation"
 Assert-Terms $m7Plan @(
@@ -7222,7 +7224,7 @@ Assert-Terms $m7Plan @(
   "pnpm release:verify-publication-gaps:win32-x64",
   "pnpm release:test-marketplace-publication-scripts",
   "subversionr.release.marketplace-publication.win32-x64.v1",
-  "docs/release/marketplace-pre-release-owner-exception-0.2.3.md",
+  "docs/release/marketplace-pre-release-owner-exception-0.2.4.md",
   "docs/release/github-attestation-candidate-contract.win32-x64.json",
   "docs/release/marketplace-identity-bootstrap-evidence.json",
   "docs/release/marketplace-publisher-authorization-evidence.json",
