@@ -5230,7 +5230,7 @@ function isLockableProjectedResource(resource: ScmProjectedResource): boolean {
   return (
     resource.path !== "." &&
     resource.source === "local" &&
-    (isLocalChangeGroup(resource.groupId) || resource.groupId === "conflicts") &&
+    (isLocalChangeGroup(resource.groupId) || resource.groupId === "conflicts" || resource.groupId === "metadata") &&
     LOCAL_LOCKABLE_PROJECTED_CONTEXT_VALUES.has(resource.contextValue) &&
     resource.entry.kind === "file" &&
     resource.entry.localStatus !== "ignored" &&

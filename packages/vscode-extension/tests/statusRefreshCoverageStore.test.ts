@@ -28,6 +28,28 @@ describe("StatusRefreshCoverageStore", () => {
     );
   });
 
+  it("retains recent coverage so an operation refresh can be selected after a watcher refresh", () => {
+    const store = new StatusRefreshCoverageStore();
+
+    store.recordCompletedStatusRefreshCoverage(
+      coverageRecord({ generation: 11, path: "src/needs-lock.txt", reason: "operationLock" }),
+    );
+    store.recordCompletedStatusRefreshCoverage(
+      coverageRecord({ generation: 12, path: "src/needs-lock.txt", reason: "fileChanged" }),
+    );
+
+    expect(
+      store.getLastCompletedRefreshMatchingTarget("repo-uuid:C:/wc", 7, {
+        path: "src/needs-lock.txt",
+        depth: "empty",
+        reason: "operationLock",
+      }),
+    ).toEqual(coverageRecord({ generation: 11, path: "src/needs-lock.txt", reason: "operationLock" }));
+    expect(store.getLastCompletedRefresh("repo-uuid:C:/wc", 7)).toEqual(
+      coverageRecord({ generation: 12, path: "src/needs-lock.txt", reason: "fileChanged" }),
+    );
+  });
+
   it("suppresses stale epoch coverage records", () => {
     const store = new StatusRefreshCoverageStore();
 
@@ -43,18 +65,20 @@ function coverageRecord(
     epoch?: number;
     generation?: number;
     path?: string;
+    reason?: string;
   } = {},
 ): CompletedStatusRefreshCoverage {
   const repositoryId = options.repositoryId ?? "repo-uuid:C:/wc";
   const epoch = options.epoch ?? 7;
   const generation = options.generation ?? 11;
   const path = options.path ?? "load/modified-001.txt";
+  const reason = options.reason ?? "resourceRefresh";
   return {
     repositoryId,
     epoch,
     generation,
-    targets: [{ path, depth: "empty", reason: "resourceRefresh" }],
-    coverage: [{ path, depth: "empty", generation, reason: "resourceRefresh" }],
+    targets: [{ path, depth: "empty", reason }],
+    coverage: [{ path, depth: "empty", generation, reason }],
     completeness: "partial",
     timestamp: "2026-06-25T00:00:12Z",
     source: "libsvn-local",

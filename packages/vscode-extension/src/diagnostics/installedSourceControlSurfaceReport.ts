@@ -98,6 +98,20 @@ export interface InstalledSourceControlUiE2eOpenReport {
     requiredDomTokens: string[];
     requiredAccessibilityTokens: string[];
     requiredScreenshot: true;
+    viewport: {
+      width: 1440;
+      height: 900;
+    };
+    scmActionSurface: {
+      primaryActions: { label: string; codicon: string }[];
+      overflowSubmenus: { label: string; commands: string[] }[];
+      resource: {
+        pathToken: "tracked.txt";
+        inlineActions: { label: string; codicon: string }[];
+        contextActions: string[];
+      };
+      forbiddenNotificationTokens: string[];
+    };
   };
   surfaceWorkflow: {
     repositoryOpen: true;
@@ -889,6 +903,7 @@ function buildUiE2eOpenReport(options: {
   session: RepositorySession;
   sourceControl: VscodeSourceControlSnapshot;
 }): InstalledSourceControlUiE2eOpenReport {
+  const backendReadyLogToken = "SubversionR backend ready. libsvn:";
   const resourceTokens = options.sourceControl.groups.flatMap((group) =>
     group.resources.flatMap((resource) => resource.path.split(/[\\/]/u).filter((segment) => segment.length > 0)),
   );
@@ -911,9 +926,77 @@ function buildUiE2eOpenReport(options: {
     sourceControl: options.sourceControl,
     rendererCaptureExpectations: {
       viewCommand: "workbench.view.scm",
-      requiredDomTokens: uniqueTokens(["SubversionR", "Changes", "Unversioned", ...resourceTokens]),
-      requiredAccessibilityTokens: uniqueTokens(["SubversionR", "Changes", "Unversioned", ...resourceTokens]),
+      requiredDomTokens: uniqueTokens([
+        "SubversionR",
+        "Changes",
+        "Unversioned",
+        ...resourceTokens,
+        backendReadyLogToken,
+      ]),
+      requiredAccessibilityTokens: uniqueTokens([
+        "SubversionR",
+        "Changes",
+        "Unversioned",
+        ...resourceTokens,
+      ]),
       requiredScreenshot: true,
+      viewport: {
+        width: 1440,
+        height: 900,
+      },
+      scmActionSurface: {
+        primaryActions: [
+          { label: "SubversionR: Refresh", codicon: "refresh" },
+          { label: "SubversionR: Commit Changes", codicon: "check" },
+          { label: "SubversionR: Review and Commit…", codicon: "diff" },
+        ],
+        overflowSubmenus: [
+          {
+            label: "Commit",
+            commands: ["SubversionR: Pick Commit Message History…", "SubversionR: Revert All…"],
+          },
+          {
+            label: "Update",
+            commands: [
+              "SubversionR: Check Remote Changes",
+              "SubversionR: Update Working Copy",
+              "SubversionR: Update to Revision…",
+            ],
+          },
+          {
+            label: "Repository",
+            commands: [
+              "SubversionR: Create Branch or Tag…",
+              "SubversionR: Switch Working Copy…",
+              "SubversionR: Relocate Working Copy…",
+              "SubversionR: Show Repository Properties",
+              "SubversionR: Edit Repository svn:externals…",
+              "SubversionR: Full Reconcile",
+              "SubversionR: Cleanup Working Copy…",
+              "SubversionR: Upgrade Working Copy",
+              "SubversionR: Close Repository",
+            ],
+          },
+          {
+            label: "History",
+            commands: ["SubversionR: Show Repository Log"],
+          },
+        ],
+        resource: {
+          pathToken: "tracked.txt",
+          inlineActions: [
+            { label: "SubversionR: Diff with BASE", codicon: "diff" },
+            { label: "SubversionR: Revert Resource…", codicon: "discard" },
+            { label: "SubversionR: Commit Resource", codicon: "check" },
+          ],
+          contextActions: [
+            "SubversionR: Set Changelist…",
+            "SubversionR: Open BASE",
+            "SubversionR: Show Selected Properties",
+          ],
+        },
+        forbiddenNotificationTokens: [backendReadyLogToken],
+      },
     },
     surfaceWorkflow: {
       repositoryOpen: true,

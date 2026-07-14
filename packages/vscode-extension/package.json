@@ -162,6 +162,22 @@
       {
         "id": "subversionr.editorContext",
         "label": "%submenu.editorContext.label%"
+      },
+      {
+        "id": "subversionr.scm.commit",
+        "label": "%submenu.scm.commit.label%"
+      },
+      {
+        "id": "subversionr.scm.update",
+        "label": "%submenu.scm.update.label%"
+      },
+      {
+        "id": "subversionr.scm.repository",
+        "label": "%submenu.scm.repository.label%"
+      },
+      {
+        "id": "subversionr.scm.history",
+        "label": "%submenu.scm.history.label%"
       }
     ],
     "commands": [
@@ -227,7 +243,8 @@
       },
       {
         "command": "subversionr.refreshRepository",
-        "title": "%command.refreshRepository.title%"
+        "title": "%command.refreshRepository.title%",
+        "icon": "$(refresh)"
       },
       {
         "command": "subversionr.checkRemoteChanges",
@@ -239,7 +256,8 @@
       },
       {
         "command": "subversionr.addResource",
-        "title": "%command.addResource.title%"
+        "title": "%command.addResource.title%",
+        "icon": "$(add)"
       },
       {
         "command": "subversionr.addToIgnoreResource",
@@ -247,11 +265,13 @@
       },
       {
         "command": "subversionr.removeFromIgnoreResource",
-        "title": "%command.removeFromIgnoreResource.title%"
+        "title": "%command.removeFromIgnoreResource.title%",
+        "icon": "$(exclude)"
       },
       {
         "command": "subversionr.setResourceChangelist",
-        "title": "%command.setResourceChangelist.title%"
+        "title": "%command.setResourceChangelist.title%",
+        "icon": "$(list-selection)"
       },
       {
         "command": "subversionr.clearResourceChangelist",
@@ -271,15 +291,18 @@
       },
       {
         "command": "subversionr.deleteAllUnversionedResources",
-        "title": "%command.deleteAllUnversionedResources.title%"
+        "title": "%command.deleteAllUnversionedResources.title%",
+        "icon": "$(trash)"
       },
       {
         "command": "subversionr.commitResource",
-        "title": "%command.commitResource.title%"
+        "title": "%command.commitResource.title%",
+        "icon": "$(check)"
       },
       {
         "command": "subversionr.commitAll",
-        "title": "%command.commitAll.title%"
+        "title": "%command.commitAll.title%",
+        "icon": "$(check)"
       },
       {
         "command": "subversionr.pickCommitMessageHistory",
@@ -287,15 +310,18 @@
       },
       {
         "command": "subversionr.commitChangelist",
-        "title": "%command.commitChangelist.title%"
+        "title": "%command.commitChangelist.title%",
+        "icon": "$(check)"
       },
       {
         "command": "subversionr.reviewCommit",
-        "title": "%command.reviewCommit.title%"
+        "title": "%command.reviewCommit.title%",
+        "icon": "$(diff)"
       },
       {
         "command": "subversionr.revertChangelist",
-        "title": "%command.revertChangelist.title%"
+        "title": "%command.revertChangelist.title%",
+        "icon": "$(discard)"
       },
       {
         "command": "subversionr.revertAll",
@@ -315,15 +341,18 @@
       },
       {
         "command": "subversionr.resolveResource",
-        "title": "%command.resolveResource.title%"
+        "title": "%command.resolveResource.title%",
+        "icon": "$(check-all)"
       },
       {
         "command": "subversionr.resolveAll",
-        "title": "%command.resolveAll.title%"
+        "title": "%command.resolveAll.title%",
+        "icon": "$(check-all)"
       },
       {
         "command": "subversionr.revertResource",
-        "title": "%command.revertResource.title%"
+        "title": "%command.revertResource.title%",
+        "icon": "$(discard)"
       },
       {
         "command": "subversionr.cleanupRepository",
@@ -395,15 +424,18 @@
       },
       {
         "command": "subversionr.updateResource",
-        "title": "%command.updateResource.title%"
+        "title": "%command.updateResource.title%",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "subversionr.updateAllIncoming",
-        "title": "%command.updateAllIncoming.title%"
+        "title": "%command.updateAllIncoming.title%",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "subversionr.diffWithBase",
-        "title": "%command.diffWithBase.title%"
+        "title": "%command.diffWithBase.title%",
+        "icon": "$(diff)"
       },
       {
         "command": "subversionr.openBase",
@@ -411,7 +443,8 @@
       },
       {
         "command": "subversionr.diffWithHead",
-        "title": "%command.diffWithHead.title%"
+        "title": "%command.diffWithHead.title%",
+        "icon": "$(diff)"
       },
       {
         "command": "subversionr.openHead",
@@ -439,11 +472,13 @@
       },
       {
         "command": "subversionr.history.refresh",
-        "title": "%command.history.refresh.title%"
+        "title": "%command.history.refresh.title%",
+        "icon": "$(refresh)"
       },
       {
         "command": "subversionr.history.searchLoaded",
-        "title": "%command.history.searchLoaded.title%"
+        "title": "%command.history.searchLoaded.title%",
+        "icon": "$(search)"
       },
       {
         "command": "subversionr.history.loadMore",
@@ -451,19 +486,23 @@
       },
       {
         "command": "subversionr.history.openRevision",
-        "title": "%command.history.openRevision.title%"
+        "title": "%command.history.openRevision.title%",
+        "icon": "$(go-to-file)"
       },
       {
         "command": "subversionr.history.compareWithPrevious",
-        "title": "%command.history.compareWithPrevious.title%"
+        "title": "%command.history.compareWithPrevious.title%",
+        "icon": "$(diff)"
       },
       {
         "command": "subversionr.history.compareRevisions",
-        "title": "%command.history.compareRevisions.title%"
+        "title": "%command.history.compareRevisions.title%",
+        "icon": "$(diff)"
       },
       {
         "command": "subversionr.history.openRevisionDetails",
-        "title": "%command.history.openRevisionDetails.title%"
+        "title": "%command.history.openRevisionDetails.title%",
+        "icon": "$(info)"
       },
       {
         "command": "subversionr.history.copyMessage",
@@ -481,109 +520,137 @@
     "menus": {
       "scm/title": [
         {
+          "command": "subversionr.refreshRepository",
+          "when": "scmProvider == svn-r",
+          "group": "navigation@1"
+        },
+        {
           "command": "subversionr.commitAll",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "subversionr.reviewCommit",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
+          "group": "navigation@3"
         },
+        {
+          "submenu": "subversionr.scm.commit",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "subversionr@1"
+        },
+        {
+          "submenu": "subversionr.scm.update",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "subversionr@2"
+        },
+        {
+          "submenu": "subversionr.scm.repository",
+          "when": "scmProvider == svn-r",
+          "group": "subversionr@3"
+        },
+        {
+          "submenu": "subversionr.scm.history",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "subversionr@4"
+        }
+      ],
+      "subversionr.scm.commit": [
         {
           "command": "subversionr.pickCommitMessageHistory",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.refreshRepository",
-          "when": "scmProvider == svn-r",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.checkRemoteChanges",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.updateRepository",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.updateToRevision",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
+          "group": "1_message"
         },
         {
           "command": "subversionr.revertAll",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
+          "group": "2_revert"
+        }
+      ],
+      "subversionr.scm.update": [
+        {
+          "command": "subversionr.checkRemoteChanges",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "1_remote"
         },
+        {
+          "command": "subversionr.updateRepository",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "2_update"
+        },
+        {
+          "command": "subversionr.updateToRevision",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "2_update@2"
+        }
+      ],
+      "subversionr.scm.repository": [
         {
           "command": "subversionr.branchCreateRepository",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
+          "group": "1_location"
         },
         {
           "command": "subversionr.switchRepository",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
+          "group": "1_location@2"
         },
         {
           "command": "subversionr.relocateRepository",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
+          "group": "1_location@3"
         },
         {
           "command": "subversionr.showRepositoryProperties",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
+          "group": "2_properties"
         },
         {
           "command": "subversionr.editRepositoryExternals",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.showRepositoryLog",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "navigation"
-        },
-        {
-          "command": "subversionr.tortoise.openRepositoryLog",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
-          "group": "tortoise@1"
-        },
-        {
-          "command": "subversionr.tortoise.openRevisionGraph",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
-          "group": "tortoise@2"
-        },
-        {
-          "command": "subversionr.tortoise.openRepositoryBrowser",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
-          "group": "tortoise@3"
-        },
-        {
-          "command": "subversionr.closeRepository",
-          "when": "scmProvider == svn-r",
-          "group": "navigation"
+          "group": "2_properties@2"
         },
         {
           "command": "subversionr.fullReconcile",
           "when": "scmProvider == svn-r",
-          "group": "repository"
+          "group": "3_maintenance"
         },
         {
           "command": "subversionr.cleanupRepository",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "repository"
+          "group": "3_maintenance@2"
         },
         {
           "command": "subversionr.upgradeWorkingCopy",
           "when": "scmProvider == svn-r && isWorkspaceTrusted",
-          "group": "repository"
+          "group": "3_maintenance@3"
+        },
+        {
+          "command": "subversionr.closeRepository",
+          "when": "scmProvider == svn-r",
+          "group": "4_close"
+        }
+      ],
+      "subversionr.scm.history": [
+        {
+          "command": "subversionr.showRepositoryLog",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted",
+          "group": "1_native"
+        },
+        {
+          "command": "subversionr.tortoise.openRepositoryLog",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
+          "group": "2_tortoise"
+        },
+        {
+          "command": "subversionr.tortoise.openRevisionGraph",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
+          "group": "2_tortoise@2"
+        },
+        {
+          "command": "subversionr.tortoise.openRepositoryBrowser",
+          "when": "scmProvider == svn-r && isWorkspaceTrusted && subversionr.tortoiseAvailable",
+          "group": "2_tortoise@3"
         }
       ],
       "scm/resourceGroup/context": [
@@ -672,7 +739,7 @@
         {
           "command": "subversionr.diffWithBase",
           "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          "group": "navigation"
+          "group": "inline@1"
         },
         {
           "command": "subversionr.openBase",
@@ -752,182 +819,182 @@
         {
           "command": "subversionr.revertResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "subversionr.revertResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "inline@2"
         },
         {
           "command": "subversionr.commitResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "inline@2"
         },
         {
           "command": "subversionr.setResourceChangelist",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline@2"
+          "group": "inline@3"
         },
         {
           "command": "subversionr.clearResourceChangelist",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.changelisted(\\.locked)?$/",
-          "group": "inline@3"
+          "group": "changelist@1"
         },
         {
           "command": "subversionr.lockResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?$/",
-          "group": "inline@4"
+          "group": "lock@1"
         },
         {
           "command": "subversionr.unlockResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?\\.locked$/",
-          "group": "inline@5"
+          "group": "lock@2"
         },
         {
           "command": "subversionr.commitResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "inline@3"
         },
         {
           "command": "subversionr.setResourceChangelist",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline@2"
+          "group": "changelist@1"
         },
         {
           "command": "subversionr.clearResourceChangelist",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable\\.changelisted(\\.locked)?$/",
-          "group": "inline@3"
+          "group": "changelist@2"
         },
         {
           "command": "subversionr.lockResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?$/",
-          "group": "inline@4"
+          "group": "lock@1"
         },
         {
           "command": "subversionr.unlockResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?\\.locked$/",
-          "group": "inline@5"
+          "group": "lock@2"
         },
         {
           "command": "subversionr.lockResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.workingCopyMetadataFile",
-          "group": "inline@4"
+          "group": "lock@1"
         },
         {
           "command": "subversionr.unlockResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.workingCopyMetadataFile.locked",
-          "group": "inline@5"
+          "group": "lock@2"
         },
         {
           "command": "subversionr.removeResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@1"
         },
         {
           "command": "subversionr.removeResourceKeepLocal",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@2"
         },
         {
           "command": "subversionr.moveResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@3"
         },
         {
           "command": "subversionr.removeResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@1"
         },
         {
           "command": "subversionr.removeResourceKeepLocal",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@2"
         },
         {
           "command": "subversionr.moveResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@3"
         },
         {
           "command": "subversionr.revertResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "subversionr.commitResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          "group": "inline"
+          "group": "inline@2"
         },
         {
           "command": "subversionr.setResourceChangelist",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          "group": "inline@2"
+          "group": "inline@3"
         },
         {
           "command": "subversionr.clearResourceChangelist",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.changedDirectory.changelisted",
-          "group": "inline@3"
+          "group": "changelist@1"
         },
         {
           "command": "subversionr.removeResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          "group": "inline"
+          "group": "operation@1"
         },
         {
           "command": "subversionr.removeResourceKeepLocal",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          "group": "inline"
+          "group": "operation@2"
         },
         {
           "command": "subversionr.moveResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
-          "group": "inline"
+          "group": "operation@3"
         },
         {
           "command": "subversionr.revertResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "inline@2"
         },
         {
           "command": "subversionr.resolveResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "subversionr.setResourceChangelist",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline@2"
+          "group": "changelist@1"
         },
         {
           "command": "subversionr.clearResourceChangelist",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted\\.changelisted(\\.locked)?$/",
-          "group": "inline@3"
+          "group": "changelist@2"
         },
         {
           "command": "subversionr.lockResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?$/",
-          "group": "inline@4"
+          "group": "lock@1"
         },
         {
           "command": "subversionr.unlockResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?\\.locked$/",
-          "group": "inline@5"
+          "group": "lock@2"
         },
         {
           "command": "subversionr.removeResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@1"
         },
         {
           "command": "subversionr.removeResourceKeepLocal",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@2"
         },
         {
           "command": "subversionr.moveResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "operation@3"
         },
         {
           "command": "subversionr.refreshResource",
@@ -937,17 +1004,17 @@
         {
           "command": "subversionr.addResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "subversionr.addToIgnoreResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
-          "group": "inline@2"
+          "group": "ignore@1"
         },
         {
           "command": "subversionr.deleteUnversionedResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
-          "group": "inline"
+          "group": "delete@1"
         },
         {
           "command": "subversionr.refreshResource",
@@ -962,12 +1029,12 @@
         {
           "command": "subversionr.removeFromIgnoreResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.ignored",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "subversionr.updateResource",
           "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incoming(File)?(\\.locked)?$/",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "subversionr.diffWithHead",

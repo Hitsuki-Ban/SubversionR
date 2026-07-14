@@ -37,6 +37,8 @@ const cancelKey = optionalString(expectations.cancelKey, "cancelKey");
 const cancelAction = optionalString(expectations.cancelAction, "cancelAction");
 const quickPickItemText = optionalString(expectations.quickPickItemText, "quickPickItemText");
 const quickInputSubmitKey = optionalString(expectations.quickInputSubmitKey, "quickInputSubmitKey");
+const expectedViewport = optionalViewport(expectations.viewport);
+const scmActionSurface = optionalScmActionSurface(expectations.scmActionSurface);
 if ((inputText === undefined) !== (submitKey === undefined)) {
   throw new Error("inputText and submitKey must be provided together.");
 }
@@ -46,7 +48,7 @@ if (submitKey !== undefined && quickInputSubmitKey !== undefined) {
 if (cancelAction !== undefined && cancelAction !== "closeNotification") {
   throw new Error(`Unsupported cancelAction: ${cancelAction}.`);
 }
-const interactionCount = [clickButtonText, inputText, cancelKey, cancelAction, quickPickItemText, quickInputSubmitKey].filter((value) => value !== undefined).length;
+const interactionCount = [clickButtonText, inputText, cancelKey, cancelAction, quickPickItemText, quickInputSubmitKey, scmActionSurface].filter((value) => value !== undefined).length;
 if (interactionCount > 1) {
   throw new Error("Renderer expectations must use exactly one interaction kind when an interaction is requested.");
 }
@@ -66,26 +68,17 @@ try {
     await cdp.send("Runtime.enable").catch(() => undefined);
     await cdp.send("Accessibility.enable").catch(() => undefined);
     await cdp.send("Page.bringToFront").catch(() => undefined);
-    const capturedState = await captureRequiredTokenState(cdp, domTokens, accessibilityTokens);
-    const domState = capturedState.domState;
-    const domText = String(domState.innerText ?? "");
-    await writeFile(domPath, domText, "utf8");
-
-    const accessibilityTree = capturedState.accessibilityTree;
-    await writeFile(accessibilityPath, JSON.stringify(accessibilityTree, null, 2), "utf8");
-    const accessibilityText = capturedState.accessibilityText;
-
-    const screenshot = await captureScreenshotWithRetry(cdp);
-    const screenshotBytes = Buffer.from(String(screenshot.data), "base64");
-    await writeFile(screenshotPath, screenshotBytes);
-    const screenshotInfo = inspectPng(screenshotBytes);
-
-    const domMatches = matchTokens(domText, domTokens);
-    const accessibilityMatches = matchTokens(accessibilityText, accessibilityTokens);
-    const forbiddenDomMatches = matchTokens(domText, forbiddenDomTokens);
-    const forbiddenAccessibilityMatches = matchTokens(accessibilityText, forbiddenAccessibilityTokens);
-    const interaction =
-      clickButtonText !== undefined
+    if (expectedViewport) {
+      await setExpectedViewport(cdp, expectedViewport);
+    }
+    const captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined;
+    const beforeInteractionState = await captureRequiredTokenState(cdp, domTokens, accessibilityTokens);
+    const beforeInteractionScreenshot = captureBeforeInteraction
+      ? await captureScreenshotWithRetry(cdp)
+      : undefined;
+    const interaction = scmActionSurface
+      ? await inspectScmActionSurface(cdp, scmActionSurface)
+      : clickButtonText !== undefined
         ? await clickButtonByText(cdp, clickButtonText, domTokens)
         : inputText !== undefined
           ? await submitQuickInput(cdp, inputText, submitKey)
@@ -98,7 +91,29 @@ try {
                 : cancelAction !== undefined
                   ? await closeNotification(cdp, domTokens)
                   : undefined;
+    const capturedState = captureBeforeInteraction
+      ? beforeInteractionState
+      : await captureRequiredTokenState(cdp, domTokens, accessibilityTokens);
+    const domState = capturedState.domState;
+    const domText = String(domState.innerText ?? "");
+    await writeFile(domPath, domText, "utf8");
 
+    const accessibilityTree = capturedState.accessibilityTree;
+    await writeFile(accessibilityPath, JSON.stringify(accessibilityTree, null, 2), "utf8");
+    const accessibilityText = capturedState.accessibilityText;
+
+    const screenshot = beforeInteractionScreenshot ?? await captureScreenshotWithRetry(cdp);
+    const screenshotBytes = Buffer.from(String(screenshot.data), "base64");
+    await writeFile(screenshotPath, screenshotBytes);
+    const screenshotInfo = inspectPng(screenshotBytes);
+    if (scmActionSurface) {
+      await pressEscape(cdp);
+    }
+
+    const domMatches = matchTokens(domText, domTokens);
+    const accessibilityMatches = matchTokens(accessibilityText, accessibilityTokens);
+    const forbiddenDomMatches = matchTokens(domText, forbiddenDomTokens);
+    const forbiddenAccessibilityMatches = matchTokens(accessibilityText, forbiddenAccessibilityTokens);
     captureReport = {
       schemaVersion: 1,
       schema: "subversionr.release.installed-source-control-ui-renderer-capture.v1",
@@ -152,6 +167,20 @@ try {
         accessibilityForbiddenTokensAbsent: forbiddenAccessibilityMatches.matched.length === 0,
         screenshotCaptured: true,
         screenshotNonBlank: screenshotInfo.nonBlank,
+        ...(expectedViewport ? {
+          viewportMatched:
+            domState.innerWidth === expectedViewport.width &&
+            domState.innerHeight === expectedViewport.height &&
+            screenshotInfo.width === expectedViewport.width &&
+            screenshotInfo.height === expectedViewport.height,
+        } : {}),
+        ...(interaction && scmActionSurface ? {
+          scmPrimaryActionsRendered: interaction.primaryActions.every((action) => action.rendered === true),
+          scmOverflowSubmenusReachable: interaction.overflowSubmenus.every((submenu) => submenu.reachable === true),
+          scmResourceInlineActionsReachable: interaction.resource.inlineActions.every((action) => action.rendered === true),
+          scmResourceContextActionsReachable: interaction.resource.contextActions.every((action) => action.reachable === true),
+          activationReadyToastAbsent: interaction.notifications.presentForbiddenTokens.length === 0,
+        } : {}),
         ...(interaction && clickButtonText !== undefined ? { clickButtonCompleted: interaction.clicked } : {}),
         ...(interaction && inputText !== undefined ? { inputTextSubmitted: interaction.submitted === true } : {}),
         ...(interaction && quickInputSubmitKey !== undefined ? { quickInputSubmitted: interaction.submitted === true } : {}),
@@ -182,6 +211,17 @@ try {
     }
     if (!screenshotInfo.nonBlank) {
       failures.push("screenshot PNG pixel sample was blank");
+    }
+    if (
+      expectedViewport &&
+      (domState.innerWidth !== expectedViewport.width ||
+        domState.innerHeight !== expectedViewport.height ||
+        screenshotInfo.width !== expectedViewport.width ||
+        screenshotInfo.height !== expectedViewport.height)
+    ) {
+      failures.push(
+        `viewport must be ${expectedViewport.width}x${expectedViewport.height}; got DOM ${domState.innerWidth}x${domState.innerHeight} and PNG ${screenshotInfo.width}x${screenshotInfo.height}`,
+      );
     }
     if (failures.length > 0) {
       throw new Error(failures.join("; "));
@@ -227,15 +267,36 @@ async function captureRequiredTokenState(cdp, domTokens, accessibilityTokens) {
   let lastState;
   do {
     await sleep(250);
-    const domState = await evaluate(cdp, `(() => ({
-      title: document.title,
-      url: location.href,
-      innerText: document.body ? document.body.innerText : "",
-      devicePixelRatio: window.devicePixelRatio,
-      innerWidth: window.innerWidth,
-      innerHeight: window.innerHeight,
-      readyState: document.readyState
-    }))()`);
+    const domState = await evaluate(cdp, `(() => {
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const shadowTexts = [];
+      const collectOpenShadowText = root => {
+        for (const element of root.querySelectorAll("*")) {
+          if (!element.shadowRoot) continue;
+          for (const shadowElement of element.shadowRoot.querySelectorAll("*")) {
+            if (visible(shadowElement) && shadowElement.children.length === 0) {
+              const text = String(shadowElement.innerText ?? shadowElement.textContent ?? "").trim();
+              if (text) shadowTexts.push(text);
+            }
+          }
+          collectOpenShadowText(element.shadowRoot);
+        }
+      };
+      collectOpenShadowText(document);
+      return {
+        title: document.title,
+        url: location.href,
+        innerText: [document.body ? document.body.innerText : "", ...shadowTexts].join("\\n"),
+        devicePixelRatio: window.devicePixelRatio,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        readyState: document.readyState
+      };
+    })()`);
     const accessibilityTree = await cdp.send("Accessibility.getFullAXTree");
     const domText = String(domState.innerText ?? "");
     const accessibilityText = accessibilityTreeText(accessibilityTree);
@@ -319,6 +380,112 @@ function optionalString(value, name) {
     throw new Error(`${name} must be a non-empty string when provided.`);
   }
   return value;
+}
+
+function optionalViewport(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !Number.isInteger(value.width) ||
+    value.width < 320 ||
+    !Number.isInteger(value.height) ||
+    value.height < 240
+  ) {
+    throw new Error("viewport must contain integer width and height values when provided.");
+  }
+  return { width: value.width, height: value.height };
+}
+
+function optionalScmActionSurface(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object") {
+    throw new Error("scmActionSurface must be an object when provided.");
+  }
+  const primaryActions = requiredActionArray(value.primaryActions, "scmActionSurface.primaryActions", true);
+  const overflowSubmenus = requiredSubmenuArray(value.overflowSubmenus);
+  if (!value.resource || typeof value.resource !== "object") {
+    throw new Error("scmActionSurface.resource must be an object.");
+  }
+  const resourcePathToken = requiredValueString(value.resource.pathToken, "scmActionSurface.resource.pathToken");
+  const inlineActions = requiredActionArray(
+    value.resource.inlineActions,
+    "scmActionSurface.resource.inlineActions",
+    true,
+  );
+  const contextActions = requiredTokenArray(
+    value.resource.contextActions,
+    "scmActionSurface.resource.contextActions",
+  );
+  const forbiddenNotificationTokens = requiredTokenArray(
+    value.forbiddenNotificationTokens,
+    "scmActionSurface.forbiddenNotificationTokens",
+  );
+  return {
+    primaryActions,
+    overflowSubmenus,
+    resource: {
+      pathToken: resourcePathToken,
+      inlineActions,
+      contextActions,
+    },
+    forbiddenNotificationTokens,
+  };
+}
+
+function requiredActionArray(value, name, requireCodicon) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${name} must be a non-empty array.`);
+  }
+  return value.map((action, index) => {
+    if (!action || typeof action !== "object") {
+      throw new Error(`${name}[${index}] must be an object.`);
+    }
+    const label = requiredValueString(action.label, `${name}[${index}].label`);
+    const codicon = requireCodicon ? requiredValueString(action.codicon, `${name}[${index}].codicon`) : undefined;
+    return { label, ...(codicon ? { codicon } : {}) };
+  });
+}
+
+function requiredSubmenuArray(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("scmActionSurface.overflowSubmenus must be a non-empty array.");
+  }
+  return value.map((submenu, index) => {
+    if (!submenu || typeof submenu !== "object") {
+      throw new Error(`scmActionSurface.overflowSubmenus[${index}] must be an object.`);
+    }
+    return {
+      label: requiredValueString(submenu.label, `scmActionSurface.overflowSubmenus[${index}].label`),
+      commands: requiredTokenArray(
+        submenu.commands,
+        `scmActionSurface.overflowSubmenus[${index}].commands`,
+      ),
+    };
+  });
+}
+
+function requiredValueString(value, name) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${name} must be a non-empty string.`);
+  }
+  return value;
+}
+
+async function setExpectedViewport(cdp, viewport) {
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+    screenWidth: viewport.width,
+    screenHeight: viewport.height,
+  });
+  await sleep(500);
 }
 
 async function selectWorkbenchTarget(port) {
@@ -447,9 +614,390 @@ async function evaluate(cdp, expression) {
     awaitPromise: true,
   });
   if (result.exceptionDetails) {
-    throw new Error("Runtime.evaluate failed in the VS Code workbench target.");
+    const description = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text ?? "unknown exception";
+    throw new Error(`Runtime.evaluate failed in the VS Code workbench target: ${description}`);
   }
   return result.result.value;
+}
+
+async function inspectScmActionSurface(cdp, expectations) {
+  const primaryActions = await evaluate(
+    cdp,
+    `(() => {
+      const expected = ${JSON.stringify(expectations.primaryActions)};
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const elements = Array.from(document.querySelectorAll("button, a, [role='button'], [aria-label], [title]"))
+        .filter(visible);
+      return expected.map(action => {
+        const element = elements.find(candidate => {
+          const labels = [candidate.getAttribute("aria-label"), candidate.getAttribute("title"), candidate.textContent]
+            .map(normalize);
+          return labels.some(label => label === action.label || label.startsWith(action.label + " ("));
+        });
+        const iconClass = "codicon-" + action.codicon;
+        const icon = element && (
+          element.classList.contains(iconClass) ? element : element.querySelector("." + iconClass)
+        );
+        return {
+          label: action.label,
+          codicon: action.codicon,
+          rendered: Boolean(element && icon),
+          ariaLabel: element ? normalize(element.getAttribute("aria-label")) : "",
+          title: element ? normalize(element.getAttribute("title")) : "",
+          tagName: element ? element.tagName : "",
+          className: element && typeof element.className === "string" ? element.className : "",
+          iconClassName: icon && typeof icon.className === "string" ? icon.className : ""
+        };
+      });
+    })()`,
+  );
+  const missingPrimary = primaryActions.filter((action) => action.rendered !== true);
+  if (missingPrimary.length > 0) {
+    throw new Error(`SCM title actions were not rendered with expected codicons: ${missingPrimary.map((action) => `${action.label}/$(${action.codicon})`).join(", ")}`);
+  }
+
+  const moreCandidates = await evaluate(
+    cdp,
+    `(() => {
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const resourceToken = ${JSON.stringify(expectations.resource.pathToken)};
+      const panes = Array.from(document.querySelectorAll(".pane, [role='tree']")).filter(element =>
+        visible(element) && normalize(element.innerText).includes(resourceToken)
+      );
+      const roots = panes.length > 0 ? panes : [document.body];
+      const candidates = roots.flatMap(root => Array.from(root.querySelectorAll(
+        ".codicon-more, [aria-label*='More Actions'], [title*='More Actions']"
+      )));
+      return candidates
+        .map(icon => icon.closest("button, a, [role='button'], .action-label") || icon)
+        .filter((element, index, all) => all.indexOf(element) === index && visible(element))
+        .map(element => {
+          const rect = element.getBoundingClientRect();
+          return {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+            ariaLabel: normalize(element.getAttribute("aria-label")),
+            title: normalize(element.getAttribute("title")),
+            className: typeof element.className === "string" ? element.className : ""
+          };
+        });
+    })()`,
+  );
+  let overflowButton;
+  let overflowParentLabels = [];
+  let lastOverflowMenuLabels = [];
+  let lastOverflowInteractionState;
+  for (const candidate of moreCandidates) {
+    await clickAt(cdp, candidate.x, candidate.y, "left");
+    const menuLabels = await waitForVisibleMenuLabels(cdp, expectations.overflowSubmenus.map((submenu) => submenu.label));
+    lastOverflowMenuLabels = menuLabels;
+    lastOverflowInteractionState = await inspectScmOverflowInteractionState(cdp, candidate);
+    if (containsAllMenuLabels(menuLabels, expectations.overflowSubmenus.map((submenu) => submenu.label))) {
+      overflowButton = candidate;
+      overflowParentLabels = menuLabels;
+      break;
+    }
+    await pressEscape(cdp);
+  }
+  if (!overflowButton) {
+    throw new Error(`Could not open the SCM overflow menu containing ${expectations.overflowSubmenus.map((submenu) => submenu.label).join(", ")}. Candidates: ${JSON.stringify(moreCandidates)}. Observed menu labels: ${lastOverflowMenuLabels.join(" | ")}. Last interaction state: ${JSON.stringify(lastOverflowInteractionState)}`);
+  }
+
+  const overflowSubmenus = [];
+  for (const submenu of expectations.overflowSubmenus) {
+    await pressEscape(cdp);
+    await pressEscape(cdp);
+    await clickAt(cdp, overflowButton.x, overflowButton.y, "left");
+    await waitForVisibleMenuLabels(cdp, expectations.overflowSubmenus.map((item) => item.label));
+    const item = await visibleMenuItem(cdp, submenu.label);
+    if (!item) {
+      throw new Error(`SCM overflow submenu ${submenu.label} was not reachable.`);
+    }
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: item.x, y: item.y });
+    const childLabels = await waitForVisibleMenuLabels(cdp, submenu.commands);
+    const reachable = containsAllMenuLabels(childLabels, submenu.commands);
+    if (!reachable) {
+      throw new Error(`SCM overflow submenu ${submenu.label} did not expose expected commands: ${submenu.commands.join(", ")}. Observed: ${childLabels.join(" | ")}`);
+    }
+    overflowSubmenus.push({
+      label: submenu.label,
+      commands: submenu.commands,
+      reachable: true,
+      observedMenuLabels: childLabels,
+    });
+  }
+  await pressEscape(cdp);
+  await pressEscape(cdp);
+
+  const resourceRow = await findResourceRow(cdp, expectations.resource.pathToken);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: resourceRow.x, y: resourceRow.y });
+  await sleep(500);
+  const inlineActions = await inspectResourceInlineActions(
+    cdp,
+    expectations.resource.pathToken,
+    expectations.resource.inlineActions,
+  );
+  const missingInline = inlineActions.filter((action) => action.rendered !== true);
+  if (missingInline.length > 0) {
+    throw new Error(`SCM resource inline actions were not rendered with expected codicons: ${missingInline.map((action) => action.label).join(", ")}`);
+  }
+
+  await clickAt(cdp, resourceRow.x, resourceRow.y, "right");
+  const contextLabels = await waitForVisibleMenuLabels(cdp, expectations.resource.contextActions);
+  const contextActions = expectations.resource.contextActions.map((label) => ({
+    label,
+    reachable: menuLabelsContain(contextLabels, label),
+  }));
+  const missingContext = contextActions.filter((action) => action.reachable !== true);
+  if (missingContext.length > 0) {
+    throw new Error(`SCM resource context menu did not expose expected actions: ${missingContext.map((action) => action.label).join(", ")}. Observed: ${contextLabels.join(" | ")}`);
+  }
+
+  const notificationText = await evaluate(
+    cdp,
+    `(() => Array.from(document.querySelectorAll(
+      ".notifications-toasts, .notifications-list-container, .notification-toast, .notification-list-item, [role='alert']"
+    )).map(element => String(element.innerText ?? element.textContent ?? "")).join("\\n"))()`,
+  );
+  const presentForbiddenTokens = expectations.forbiddenNotificationTokens.filter((token) =>
+    String(notificationText).includes(token),
+  );
+  if (presentForbiddenTokens.length > 0) {
+    throw new Error(`Activation ready text appeared in a VS Code notification surface: ${presentForbiddenTokens.join(", ")}`);
+  }
+
+  return {
+    kind: "scmActionSurface",
+    primaryActions,
+    overflowButton,
+    overflowParentLabels,
+    overflowSubmenus,
+    resource: {
+      pathToken: expectations.resource.pathToken,
+      row: resourceRow,
+      inlineActions,
+      contextActions,
+      observedContextMenuLabels: contextLabels,
+    },
+    notifications: {
+      forbiddenTokens: expectations.forbiddenNotificationTokens,
+      presentForbiddenTokens,
+    },
+  };
+}
+
+async function inspectScmOverflowInteractionState(cdp, candidate) {
+  return evaluate(
+    cdp,
+    `(() => {
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const describe = element => element ? {
+        tagName: element.tagName,
+        role: element.getAttribute("role") ?? "",
+        ariaLabel: element.getAttribute("aria-label") ?? "",
+        title: element.getAttribute("title") ?? "",
+        className: typeof element.className === "string" ? element.className : "",
+        text: normalize(element.innerText ?? element.textContent),
+        pointerEvents: getComputedStyle(element).pointerEvents,
+      } : null;
+      const hit = document.elementFromPoint(${JSON.stringify(candidate.x)}, ${JSON.stringify(candidate.y)});
+      const ancestors = [];
+      for (let element = hit; element && ancestors.length < 5; element = element.parentElement) {
+        ancestors.push(describe(element));
+      }
+      const contextViews = Array.from(document.querySelectorAll(".context-view"))
+        .map(element => ({
+          ...describe(element),
+          display: getComputedStyle(element).display,
+          visibility: getComputedStyle(element).visibility,
+          rect: (() => {
+            const rect = element.getBoundingClientRect();
+            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          })(),
+        }));
+      return {
+        candidate: ${JSON.stringify(candidate)},
+        hit: describe(hit),
+        ancestors,
+        activeElement: describe(document.activeElement),
+        contextViews,
+      };
+    })()`,
+  );
+}
+
+async function inspectResourceInlineActions(cdp, pathToken, expectedActions) {
+  return evaluate(
+    cdp,
+    `(() => {
+      const pathToken = ${JSON.stringify(pathToken)};
+      const expected = ${JSON.stringify(expectedActions)};
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const rows = Array.from(document.querySelectorAll(".monaco-list-row"))
+        .filter(row => visible(row) && normalize(row.innerText).includes(pathToken));
+      if (rows.length !== 1) {
+        return expected.map(action => ({ ...action, rendered: false, matchingRowCount: rows.length }));
+      }
+      const elements = Array.from(rows[0].querySelectorAll("button, a, [role='button'], [aria-label], [title]"))
+        .filter(visible);
+      return expected.map(action => {
+        const element = elements.find(candidate => {
+          const labels = [candidate.getAttribute("aria-label"), candidate.getAttribute("title"), candidate.textContent]
+            .map(normalize);
+          return labels.some(label => label === action.label || label.startsWith(action.label + " ("));
+        });
+        const iconClass = "codicon-" + action.codicon;
+        const icon = element && (element.classList.contains(iconClass) ? element : element.querySelector("." + iconClass));
+        return {
+          ...action,
+          rendered: Boolean(element && icon),
+          ariaLabel: element ? normalize(element.getAttribute("aria-label")) : "",
+          title: element ? normalize(element.getAttribute("title")) : "",
+          className: element && typeof element.className === "string" ? element.className : "",
+          iconClassName: icon && typeof icon.className === "string" ? icon.className : ""
+        };
+      });
+    })()`,
+  );
+}
+
+async function findResourceRow(cdp, pathToken) {
+  const row = await evaluate(
+    cdp,
+    `(() => {
+      const token = ${JSON.stringify(pathToken)};
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const rows = Array.from(document.querySelectorAll(".monaco-list-row"))
+        .filter(element => visible(element) && normalize(element.innerText).includes(token));
+      if (rows.length !== 1) {
+        return { matchingRowCount: rows.length };
+      }
+      const rect = rows[0].getBoundingClientRect();
+      return {
+        matchingRowCount: 1,
+        text: normalize(rows[0].innerText),
+        x: rect.left + Math.max(4, rect.width / 2),
+        y: rect.top + rect.height / 2,
+        className: typeof rows[0].className === "string" ? rows[0].className : ""
+      };
+    })()`,
+  );
+  if (row.matchingRowCount !== 1) {
+    throw new Error(`Expected exactly one visible SCM resource row containing ${pathToken}; found ${row.matchingRowCount}.`);
+  }
+  return row;
+}
+
+async function visibleMenuItem(cdp, expectedLabel) {
+  return evaluate(
+    cdp,
+    `(() => {
+      const expected = ${JSON.stringify(expectedLabel)};
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const queryAllOpenRoots = (root, selector) => {
+        const matches = Array.from(root.querySelectorAll(selector));
+        for (const element of root.querySelectorAll("*")) {
+          if (element.shadowRoot) matches.push(...queryAllOpenRoots(element.shadowRoot, selector));
+        }
+        return matches;
+      };
+      const items = queryAllOpenRoots(document, ".context-view .monaco-menu .action-item, .monaco-menu .action-item")
+        .filter(visible);
+      const item = items.find(element => {
+        const label = element.querySelector(".action-label");
+        const values = [label?.textContent, label?.getAttribute("aria-label"), element.getAttribute("aria-label"), element.textContent]
+          .map(normalize);
+        return values.some(value => value === expected || value.startsWith(expected + " "));
+      });
+      if (!item) return undefined;
+      const rect = item.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, text: normalize(item.innerText) };
+    })()`,
+  );
+}
+
+async function waitForVisibleMenuLabels(cdp, expectedLabels) {
+  const deadline = Date.now() + CDP_REQUEST_TIMEOUT_MS;
+  let labels = [];
+  do {
+    labels = await evaluate(
+      cdp,
+      `(() => {
+        const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+        const visible = element => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+            rect.left < window.innerWidth && rect.top < window.innerHeight;
+        };
+        const queryAllOpenRoots = (root, selector) => {
+          const matches = Array.from(root.querySelectorAll(selector));
+          for (const element of root.querySelectorAll("*")) {
+            if (element.shadowRoot) matches.push(...queryAllOpenRoots(element.shadowRoot, selector));
+          }
+          return matches;
+        };
+        return queryAllOpenRoots(document, ".context-view .monaco-menu .action-item, .monaco-menu .action-item")
+          .filter(visible)
+          .map(element => {
+            const label = element.querySelector(".action-label");
+            return normalize(label?.textContent || label?.getAttribute("aria-label") || element.getAttribute("aria-label") || element.innerText);
+          })
+          .filter(Boolean);
+      })()`,
+    );
+    if (containsAllMenuLabels(labels, expectedLabels)) {
+      return labels;
+    }
+    await sleep(200);
+  } while (Date.now() < deadline);
+  return labels;
+}
+
+function menuLabelsContain(observedLabels, expectedLabel) {
+  return observedLabels.some((label) => label === expectedLabel || label.startsWith(`${expectedLabel} `));
+}
+
+function containsAllMenuLabels(observedLabels, expectedLabels) {
+  return expectedLabels.every((label) => menuLabelsContain(observedLabels, label));
+}
+
+async function clickAt(cdp, x, y, button) {
+  const buttons = button === "right" ? 2 : 1;
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, buttons, clickCount: 1 });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, buttons: 0, clickCount: 1 });
+  await sleep(300);
+}
+
+async function pressEscape(cdp) {
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await sleep(200);
 }
 
 async function clickButtonByText(cdp, buttonText, domTokens) {
@@ -1041,6 +1589,7 @@ async function cancelInteraction(cdp, cancelKey, domTokens) {
   const started = Date.now();
   const timeoutMs = CDP_REQUEST_TIMEOUT_MS;
   let surfaceDetails;
+  let lastSurfaceProbe;
   while (Date.now() - started < timeoutMs) {
     const result = await evaluate(
       cdp,
@@ -1060,8 +1609,15 @@ async function cancelInteraction(cdp, cancelKey, domTokens) {
           const rect = element.getBoundingClientRect();
           return rect.width > 0 && rect.height > 0;
         };
+        const queryAllOpenRoots = (selector, root = document) => {
+          const matches = Array.from(root.querySelectorAll(selector));
+          for (const element of root.querySelectorAll("*")) {
+            if (element.shadowRoot) matches.push(...queryAllOpenRoots(selector, element.shadowRoot));
+          }
+          return matches;
+        };
         const input = quickInputSelectors
-          .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+          .flatMap((selector) => queryAllOpenRoots(selector))
           .find((element) => !element.disabled && visible(element));
         if (input) {
           input.focus();
@@ -1085,7 +1641,7 @@ async function cancelInteraction(cdp, cancelKey, domTokens) {
           "[aria-label*='notification']",
           "[role='alert']"
         ]
-          .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+          .flatMap((selector) => queryAllOpenRoots(selector))
           .find((element) => visible(element) && matchesTarget(element));
         if (notification) {
           if (typeof notification.focus === "function") {
@@ -1107,10 +1663,29 @@ async function cancelInteraction(cdp, cancelKey, domTokens) {
           ".dialog-box",
           "[role='dialog']"
         ]
-          .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+          .flatMap((selector) => queryAllOpenRoots(selector))
           .find((element) => visible(element));
         if (!dialog) {
-          return { ready: false };
+          const visibleInputs = queryAllOpenRoots("input, textarea")
+            .filter((element) => visible(element))
+            .map((element) => ({
+              tagName: element.tagName,
+              className: typeof element.className === "string" ? element.className : "",
+              ariaLabel: element.getAttribute("aria-label") ?? "",
+              placeholder: element.getAttribute("placeholder") ?? "",
+              value: element.value ?? "",
+            }));
+          return {
+            ready: false,
+            visibleInputs,
+            shadowHostCount: queryAllOpenRoots("*").filter((element) => Boolean(element.shadowRoot)).length,
+            activeElement: document.activeElement ? {
+              tagName: document.activeElement.tagName,
+              className: typeof document.activeElement.className === "string" ? document.activeElement.className : "",
+              ariaLabel: document.activeElement.getAttribute("aria-label") ?? "",
+            } : null,
+            bodyTextTail: normalize(document.body?.innerText).slice(-1000),
+          };
         }
         if (typeof dialog.focus === "function") {
           dialog.focus();
@@ -1126,6 +1701,7 @@ async function cancelInteraction(cdp, cancelKey, domTokens) {
         };
       })()`,
     );
+    lastSurfaceProbe = result;
     if (result && result.ready === true) {
       surfaceDetails = result;
       break;
@@ -1133,7 +1709,7 @@ async function cancelInteraction(cdp, cancelKey, domTokens) {
     await sleep(250);
   }
   if (!surfaceDetails) {
-    throw new Error("Timed out waiting for a cancellable VS Code renderer surface.");
+    throw new Error(`Timed out waiting for a cancellable VS Code renderer surface. Last probe: ${JSON.stringify(lastSurfaceProbe)}`);
   }
 
   await cdp.send("Input.dispatchKeyEvent", {
@@ -1154,20 +1730,27 @@ async function cancelInteraction(cdp, cancelKey, domTokens) {
           const rect = element.getBoundingClientRect();
           return rect.width > 0 && rect.height > 0;
         };
+        const queryAllOpenRoots = (selector, root = document) => {
+          const matches = Array.from(root.querySelectorAll(selector));
+          for (const element of root.querySelectorAll("*")) {
+            if (element.shadowRoot) matches.push(...queryAllOpenRoots(selector, element.shadowRoot));
+          }
+          return matches;
+        };
         const quickInputSelectors = [
           ".quick-input-widget input.input",
           ".quick-input-widget input",
           ".quick-input-widget textarea"
         ];
         const input = quickInputSelectors
-          .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+          .flatMap((selector) => queryAllOpenRoots(selector))
           .find((element) => !element.disabled && visible(element));
         const dialog = [
           ".monaco-dialog-box",
           ".dialog-box",
           "[role='dialog']"
         ]
-          .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+          .flatMap((selector) => queryAllOpenRoots(selector))
           .find((element) => visible(element));
         const targetText = ${JSON.stringify(targetText)};
         const normalize = (value) => String(value ?? "").replace(/\\s+/g, " ").trim();
@@ -1185,7 +1768,7 @@ async function cancelInteraction(cdp, cancelKey, domTokens) {
           "[aria-label*='notification']",
           "[role='alert']"
         ]
-          .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+          .flatMap((selector) => queryAllOpenRoots(selector))
           .find((element) => visible(element) && matchesTarget(element));
         return {
           quickInputVisible: Boolean(input),
@@ -1424,11 +2007,16 @@ async function captureScreenshotWithRetry(cdp) {
 }
 
 function matchTokens(text, tokens) {
-  const matched = tokens.filter((token) => text.includes(token));
+  const normalizedText = normalizeTokenText(text);
+  const matched = tokens.filter((token) => normalizedText.includes(normalizeTokenText(token)));
   return {
     matched,
     missing: tokens.filter((token) => !matched.includes(token)),
   };
+}
+
+function normalizeTokenText(value) {
+  return String(value ?? "").replace(/\s+/gu, " ").trim();
 }
 
 function artifact(status, outputRoot, artifactPath, extra) {

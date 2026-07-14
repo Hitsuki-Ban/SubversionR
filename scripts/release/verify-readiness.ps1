@@ -2627,8 +2627,8 @@ Assert-Terms $extensionPackageJson @(
 Assert-Terms $extensionPackageNls @(
   "view.scm.emptyState.content",
   "No SVN working copy was found in the workspace",
-  "Scan for SVN Working Copies",
-  "Checkout Repository URL",
+  "Open SVN Working Copy…",
+  "Checkout SVN Repository…",
   "command:subversionr.openRepository",
   "command:subversionr.checkoutRepository"
 ) "UX-002 no-repository empty-state English localization evidence"
@@ -2645,21 +2645,49 @@ Assert-Terms $extensionPackageNlsZhCn @(
   "command:subversionr.checkoutRepository"
 ) "UX-002 no-repository empty-state Chinese localization evidence"
 Assert-Terms $extensionManifestTests @(
-  "contributes localized SCM empty-state scan welcome content",
+  "contributes localized SCM empty-state open and checkout welcome content",
   "viewsWelcome",
   "view.scm.emptyState.content",
   "subversionr.openRepository",
   "subversionr.checkoutRepository",
-  "Scan for SVN Working Copies",
-  "Checkout Repository URL",
+  "Open SVN Working Copy…",
+  "Checkout SVN Repository…",
   "not.toContain(`"Open Repository URL`")"
 ) "UX-002 no-repository empty-state manifest test evidence"
+Assert-Terms $extensionPackageJson @(
+  '"subversionr.scm.commit"',
+  '"subversionr.scm.update"',
+  '"subversionr.scm.repository"',
+  '"subversionr.scm.history"',
+  '"group": "navigation@1"',
+  '"group": "navigation@2"',
+  '"group": "navigation@3"',
+  '"icon": "$(refresh)"',
+  '"icon": "$(check)"',
+  '"icon": "$(diff)"'
+) "SCM title icon and overflow submenu presentation contract"
+Assert-Terms $extensionManifestTests @(
+  "keeps only Refresh, Commit, and Review as SCM title navigation icons",
+  "keeps every former SCM title action reachable through the title or one overflow submenu",
+  "limits each SCM resource state to at most three icon-backed inline actions",
+  "keeps deferred merge commands registered but hidden from every user-facing menu",
+  "uses Unicode ellipsis exactly for command titles that collect user input",
+  "logs successful backend initialization without showing an information toast"
+) "SCM action reachability, inline limit, deferred boundary, ellipsis, and activation logging tests"
+Assert-Terms $extensionEntrypoint @(
+  "operationLogChannel.info(",
+  "SubversionR backend ready. libsvn: {0}"
+) "Backend-ready success log contract"
+Assert-NoTerms $extensionPackageNls @(
+  "Scan for SVN Working Copies",
+  "Checkout Repository URL"
+) "Retired English no-repository welcome labels"
 Assert-Terms $installedSourceControlUiE2eScript @(
   "noRepositoryWelcomeRendererCapture",
   "no-repository-welcome-renderer-capture",
   "No SVN working copy was found in the workspace",
-  "Scan for SVN Working Copies",
-  "Checkout Repository URL",
+  "Open SVN Working Copy…",
+  "Checkout SVN Repository…",
   "subversionr.openRepository",
   "subversionr.checkoutRepository",
   "sourceControlUiCheckoutWorkflow",
@@ -2746,8 +2774,8 @@ Assert-Terms $installedSourceControlUiE2eScript @(
 Assert-Terms $installedSourceControlUiE2eScriptTests @(
   "noRepositoryWelcomeRendererCapture",
   "No SVN working copy was found in the workspace",
-  "Scan for SVN Working Copies",
-  "Checkout Repository URL",
+  "Open SVN Working Copy…",
+  "Checkout SVN Repository…",
   "subversionr.checkoutRepository",
   "sourceControlUiCheckoutWorkflow",
   "subversionr.installedSourceControlUiE2eCheckoutWorkflow",

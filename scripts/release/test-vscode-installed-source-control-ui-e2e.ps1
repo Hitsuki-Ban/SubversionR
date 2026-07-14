@@ -1529,6 +1529,47 @@ function isTransientSourceControlSurfaceMismatch(error) {
   return message.includes("SUBVERSIONR_INSTALLED_SOURCE_CONTROL_SURFACE_MISMATCH");
 }
 
+function isCurrentSourceControlSessionMissing(error) {
+  const message = error && typeof error.message === "string" ? error.message : String(error);
+  return message.includes("SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CURRENT_SESSION_MISSING");
+}
+
+async function waitForOrganicSourceControlSurface(workingCopyRoot, timeoutMs = 60000) {
+  const startedAt = Date.now();
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    try {
+      const report = await withTimeout(
+        vscode.commands.executeCommand(
+          "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
+          { path: workingCopyRoot }
+        ),
+        "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/organicActivationAttempt",
+        5000
+      );
+      return {
+        report,
+        readiness: {
+          attempts,
+          waitedMs: Date.now() - startedAt,
+          transientCode: "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CURRENT_SESSION_MISSING"
+        }
+      };
+    } catch (error) {
+      if (!isCurrentSourceControlSessionMissing(error)) {
+        throw error;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(
+          `Timed out waiting for the organically activated Source Control session after ${attempts} attempts: ${serializeError(error).message}`
+        );
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+}
+
 function serializeError(error) {
   if (!error || typeof error !== "object") {
     return {
@@ -1815,10 +1856,9 @@ function validateFreshnessReport(report, scenario, openReport, options = {}) {
   }
 }
 
-function validateLastCompletedRefreshCoverageSet(report, openReport, expectedTargets) {
-  const coverageReport = report && report.lastCompletedRefresh;
+function validateCompletedRefreshCoverageSet(coverageReport, openReport, expectedTargets) {
   if (!coverageReport) {
-    throw new Error("Installed Source Control UI E2E freshness report did not record completed refresh coverage.");
+    throw new Error("Installed Source Control UI E2E did not record completed refresh coverage.");
   }
   if (
     coverageReport.repositoryId !== openReport.repository.repositoryId ||
@@ -1854,8 +1894,28 @@ function validateLastCompletedRefreshCoverageSet(report, openReport, expectedTar
   return coverageReport;
 }
 
+function validateLastCompletedRefreshCoverageSet(report, openReport, expectedTargets) {
+  return validateCompletedRefreshCoverageSet(report && report.lastCompletedRefresh, openReport, expectedTargets);
+}
+
 function validateLastCompletedRefreshCoverage(report, openReport, expected) {
   return validateLastCompletedRefreshCoverageSet(report, openReport, [expected]);
+}
+
+async function collectMatchingCompletedRefreshCoverage(openReport, expected, label) {
+  const coverage = await withTimeout(
+    vscode.commands.executeCommand(
+      "subversionr.diagnostics.installedSourceControlUiE2eMatchingCompletedRefreshCoverage",
+      {
+        repositoryId: openReport.repository.repositoryId,
+        epoch: openReport.repository.epoch,
+        target: expected
+      }
+    ),
+    `subversionr.diagnostics.installedSourceControlUiE2eMatchingCompletedRefreshCoverage/${label}`,
+    30000
+  );
+  return validateCompletedRefreshCoverageSet(coverage, openReport, [expected]);
 }
 
 function freshnessRendererCaptureExpectations(report, scenario) {
@@ -1880,8 +1940,8 @@ function freshnessRendererCaptureExpectations(report, scenario) {
 function createNoRepositoryWelcomeRendererCaptureExpectations() {
   const requiredTokens = [
     "No SVN working copy was found in the workspace",
-    "Scan for SVN Working Copies",
-    "Checkout Repository URL"
+    "Open SVN Working Copy…",
+    "Checkout SVN Repository…"
   ];
   return {
     viewCommand: "workbench.view.scm",
@@ -3695,11 +3755,11 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
     if (!lockedResource) {
       throw new Error("Installed Lock workflow did not preserve the needs-lock metadata resource projection after locking.");
     }
-    const lockCoverage = validateLastCompletedRefreshCoverage(postLockFreshnessReport, openReport, {
+    const lockCoverage = await collectMatchingCompletedRefreshCoverage(openReport, {
       path: resource.path,
       depth: "empty",
       reason: "operationLock"
-    });
+    }, "lock");
 
     fs.writeFileSync(promptPaths.lockHeldOracleReady, JSON.stringify({
       ok: true,
@@ -3813,11 +3873,11 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
     if (!unlockedResource) {
       throw new Error("Installed Unlock workflow did not preserve the svn:needs-lock metadata projection after unlocking.");
     }
-    const unlockCoverage = validateLastCompletedRefreshCoverage(postUnlockFreshnessReport, openReport, {
+    const unlockCoverage = await collectMatchingCompletedRefreshCoverage(openReport, {
       path: resource.path,
       depth: "empty",
       reason: "operationUnlock"
-    });
+    }, "unlock");
 
     closeReport = await closeOpenReport(openReport);
     if (!closeReport || closeReport.kind !== "subversionr.installedSourceControlUiE2eCloseReport" || closeReport.repositoryClosed !== true) {
@@ -3863,8 +3923,10 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
         }
       },
       postLockFreshnessReport,
+      lockRefreshCoverage: lockCoverage,
       preUnlockSurfaceReport,
       postUnlockFreshnessReport,
+      unlockRefreshCoverage: unlockCoverage,
       closeReport,
       assertions: {
         needsLockProjectedBefore: true,
@@ -8472,11 +8534,8 @@ async function run() {
     }
 
     phase = "resettingOrganicallyActivatedSessionForOpenReport";
-    const organicSurfaceReport = await withTimeout(
-      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport", { path: workingCopyRoot }),
-      "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/organicActivation",
-      60000
-    );
+    const organicSurfaceReadiness = await waitForOrganicSourceControlSurface(workingCopyRoot, 60000);
+    const organicSurfaceReport = organicSurfaceReadiness.report;
     if (
       !organicSurfaceReport ||
       organicSurfaceReport.kind !== "subversionr.installedSourceControlUiE2eCurrentSurfaceReport" ||
@@ -8520,6 +8579,7 @@ async function run() {
       "subversionr.diagnostics.installedSourceControlUiE2eDirtyEvent",
       "subversionr.diagnostics.installedSourceControlUiE2eCloseReport",
       "subversionr.diagnostics.installedSourceControlUiE2eLazyExternalProviderReport",
+      "subversionr.initialize",
       "subversionr.diagnostics.installedRepositoryLifecycleReport",
       "subversionr.refreshRepository",
       "subversionr.updateRepository",
@@ -8540,6 +8600,7 @@ async function run() {
       "subversionr.branchCreateRepository",
       "subversionr.switchRepository",
       "subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage",
+      "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
       "subversionr.moveResource",
       "subversionr.removeResource",
       "subversionr.removeResourceKeepLocal",
@@ -8602,16 +8663,32 @@ async function run() {
       openReport.rendererCaptureExpectations.viewCommand,
       30000
     );
+    await withTimeout(
+      vscode.commands.executeCommand("subversionr.initialize"),
+      "subversionr.initialize/installedSourceControlUiE2eRendererCapture",
+      30000
+    );
+    await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eShowOutput"),
+      "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
+      30000
+    );
     await new Promise(resolve => setTimeout(resolve, 1500));
     fs.writeFileSync(readyPath, JSON.stringify({
       ok: true,
       phase,
       openReport,
+      organicSurfaceReadiness: organicSurfaceReadiness.readiness,
       rendererCaptureExpectations: openReport.rendererCaptureExpectations
     }, null, 2));
 
     phase = "waitingForRendererCapture";
     await waitForFile(donePath, 120000);
+    await withTimeout(
+      vscode.commands.executeCommand("workbench.action.closePanel"),
+      "workbench.action.closePanel/installedSourceControlUiE2eRendererCapture",
+      30000
+    );
 
     phase = "executingInstalledSourceControlUiE2ePartialFreshnessReport";
     partialFreshnessReport = await withTimeout(
@@ -8820,11 +8897,11 @@ async function run() {
     fs.writeFileSync(noRepositoryWelcomeRendererReadyPath, JSON.stringify({
       ok: true,
       phase,
-      claim: "UX-002 partial: localized no-repository Scan and Checkout Repository URL welcome entries",
+      claim: "UX-002 partial: localized no-repository Open SVN Working Copy… and Checkout SVN Repository… welcome entries",
       scanCommand: "subversionr.openRepository",
       checkoutCommand: "subversionr.checkoutRepository",
       nonClaims: [
-        "This installed UI evidence verifies the Checkout Repository URL no-repository welcome entry, URL prompt cancellation, local-file checkout happy path, pre-existing local directory target success path, existing-directory obstruction tree-conflict projection path, and covered local-file checkout failure/no-state-pollution flows but does not cover repository browser, remote auth/certificate, or broader checkout failure matrices."
+        "This installed UI evidence verifies the Checkout SVN Repository… no-repository welcome entry, URL prompt cancellation, local-file checkout happy path, pre-existing local directory target success path, existing-directory obstruction tree-conflict projection path, and covered local-file checkout failure/no-state-pollution flows but does not cover repository browser, remote auth/certificate, or broader checkout failure matrices."
       ],
       closeReport: {
         repositoryId: closeReport.repositoryId,
@@ -9113,6 +9190,8 @@ async function run() {
         "subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
         "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
         "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
+        "subversionr.initialize",
+        "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
       "subversionr.diagnostics.installedSourceControlUiE2eArmFullReconcileCancellation",
       "subversionr.diagnostics.installedSourceControlUiE2eFullReconcileCancellationReport",
       "subversionr.diagnostics.installedSourceControlUiE2eArmDirtyGenerationCancellation",
@@ -9547,11 +9626,11 @@ function Assert-HarnessResult(
   if (
     $Result.noRepositoryWelcomeRendererCaptureExpectations.viewCommand -ne "workbench.view.scm" -or
     @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredDomTokens | Where-Object { $_ -eq "No SVN working copy was found in the workspace" }).Count -ne 1 -or
-    @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredDomTokens | Where-Object { $_ -eq "Scan for SVN Working Copies" }).Count -ne 1 -or
-    @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredDomTokens | Where-Object { $_ -eq "Checkout Repository URL" }).Count -ne 1 -or
+    @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredDomTokens | Where-Object { $_ -eq "Open SVN Working Copy…" }).Count -ne 1 -or
+    @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredDomTokens | Where-Object { $_ -eq "Checkout SVN Repository…" }).Count -ne 1 -or
     @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredAccessibilityTokens | Where-Object { $_ -eq "No SVN working copy was found in the workspace" }).Count -ne 1 -or
-    @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredAccessibilityTokens | Where-Object { $_ -eq "Scan for SVN Working Copies" }).Count -ne 1 -or
-    @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredAccessibilityTokens | Where-Object { $_ -eq "Checkout Repository URL" }).Count -ne 1
+    @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredAccessibilityTokens | Where-Object { $_ -eq "Open SVN Working Copy…" }).Count -ne 1 -or
+    @($Result.noRepositoryWelcomeRendererCaptureExpectations.requiredAccessibilityTokens | Where-Object { $_ -eq "Checkout SVN Repository…" }).Count -ne 1
   ) {
     throw "Installed Source Control UI E2E result must include no-repository welcome renderer expectations for the localized Scan and Checkout affordances."
   }
@@ -10253,17 +10332,23 @@ function Assert-TokenListsEqual([string[]]$Expected, [object]$Actual, [string]$N
 }
 
 function Assert-TextContainsTokens([string]$Text, [string[]]$Tokens, [string]$Name) {
-  $missing = @($Tokens | Where-Object { -not $Text.Contains($_) })
+  $normalizedText = Normalize-RendererTokenText $Text
+  $missing = @($Tokens | Where-Object { -not $normalizedText.Contains((Normalize-RendererTokenText $_)) })
   if ($missing.Count -gt 0) {
     throw "$Name artifact text is missing required tokens: $($missing -join ', ')"
   }
 }
 
 function Assert-TextExcludesTokens([string]$Text, [string[]]$Tokens, [string]$Name) {
-  $present = @($Tokens | Where-Object { $Text.Contains($_) })
+  $normalizedText = Normalize-RendererTokenText $Text
+  $present = @($Tokens | Where-Object { $normalizedText.Contains((Normalize-RendererTokenText $_)) })
   if ($present.Count -gt 0) {
     throw "$Name artifact text contains forbidden tokens: $($present -join ', ')"
   }
+}
+
+function Normalize-RendererTokenText([string]$Text) {
+  ($Text -replace '\s+', ' ').Trim()
 }
 
 function Get-PngPixelEvidence([string]$Path) {
@@ -10345,7 +10430,87 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
     throw "Renderer capture screenshot dimensions must match the PNG artifact."
   }
   if ($pngEvidence.nonBlank -ne $true) {
-    throw "Renderer capture screenshot PNG must contain nonblank pixel evidence."
+    throw "Renderer capture screenshot PNG must contain nonblank pixel evidence: $screenshotPath ($($pngEvidence.width)x$($pngEvidence.height), $($pngEvidence.uniqueColorSampleCount) sampled color)."
+  }
+  if ($captureExpectations.PSObject.Properties.Name -contains "viewport") {
+    $expectedWidth = [int]$captureExpectations.viewport.width
+    $expectedHeight = [int]$captureExpectations.viewport.height
+    if ($expectedWidth -ne 1440 -or $expectedHeight -ne 900) {
+      throw "Installed Source Control UI E2E viewport contract must be exactly 1440x900."
+    }
+    if (
+      [int]$Capture.viewport.innerWidth -ne $expectedWidth -or
+      [int]$Capture.viewport.innerHeight -ne $expectedHeight -or
+      [int]$Capture.artifacts.screenshot.width -ne $expectedWidth -or
+      [int]$Capture.artifacts.screenshot.height -ne $expectedHeight -or
+      $Capture.assertions.viewportMatched -ne $true
+    ) {
+      throw "Renderer capture must prove an exact 1440x900 DOM viewport and PNG."
+    }
+  }
+  if ($captureExpectations.PSObject.Properties.Name -contains "scmActionSurface") {
+    if ($Capture.interaction.kind -ne "scmActionSurface") {
+      throw "Renderer capture must include the SCM action surface interaction."
+    }
+    $expectedPrimary = @($captureExpectations.scmActionSurface.primaryActions)
+    $actualPrimary = @($Capture.interaction.primaryActions)
+    if ($actualPrimary.Count -ne $expectedPrimary.Count) {
+      throw "Renderer capture SCM primary action count did not match expectations."
+    }
+    for ($index = 0; $index -lt $expectedPrimary.Count; $index++) {
+      if (
+        $actualPrimary[$index].label -ne $expectedPrimary[$index].label -or
+        $actualPrimary[$index].codicon -ne $expectedPrimary[$index].codicon -or
+        $actualPrimary[$index].rendered -ne $true
+      ) {
+        throw "Renderer capture SCM primary action/codicon evidence did not match expectations."
+      }
+    }
+    $expectedSubmenus = @($captureExpectations.scmActionSurface.overflowSubmenus)
+    $actualSubmenus = @($Capture.interaction.overflowSubmenus)
+    if ($actualSubmenus.Count -ne 4 -or $actualSubmenus.Count -ne $expectedSubmenus.Count) {
+      throw "Renderer capture must prove exactly four SCM overflow submenus."
+    }
+    for ($index = 0; $index -lt $expectedSubmenus.Count; $index++) {
+      if ($actualSubmenus[$index].label -ne $expectedSubmenus[$index].label -or $actualSubmenus[$index].reachable -ne $true) {
+        throw "Renderer capture SCM overflow submenu reachability did not match expectations."
+      }
+      Assert-TokenListsEqual -Expected @($expectedSubmenus[$index].commands) -Actual @($actualSubmenus[$index].commands) -Name "Renderer capture SCM submenu commands"
+    }
+    $expectedInline = @($captureExpectations.scmActionSurface.resource.inlineActions)
+    $actualInline = @($Capture.interaction.resource.inlineActions)
+    if ($actualInline.Count -ne $expectedInline.Count) {
+      throw "Renderer capture SCM resource inline action count did not match expectations."
+    }
+    for ($index = 0; $index -lt $expectedInline.Count; $index++) {
+      if (
+        $actualInline[$index].label -ne $expectedInline[$index].label -or
+        $actualInline[$index].codicon -ne $expectedInline[$index].codicon -or
+        $actualInline[$index].rendered -ne $true
+      ) {
+        throw "Renderer capture SCM resource inline action/codicon evidence did not match expectations."
+      }
+    }
+    $expectedContext = @($captureExpectations.scmActionSurface.resource.contextActions)
+    $actualContext = @($Capture.interaction.resource.contextActions)
+    if ($actualContext.Count -ne $expectedContext.Count) {
+      throw "Renderer capture SCM resource context action count did not match expectations."
+    }
+    for ($index = 0; $index -lt $expectedContext.Count; $index++) {
+      if ($actualContext[$index].label -ne $expectedContext[$index] -or $actualContext[$index].reachable -ne $true) {
+        throw "Renderer capture SCM resource context action reachability did not match expectations."
+      }
+    }
+    if (
+      @($Capture.interaction.notifications.presentForbiddenTokens).Count -ne 0 -or
+      $Capture.assertions.scmPrimaryActionsRendered -ne $true -or
+      $Capture.assertions.scmOverflowSubmenusReachable -ne $true -or
+      $Capture.assertions.scmResourceInlineActionsReachable -ne $true -or
+      $Capture.assertions.scmResourceContextActionsReachable -ne $true -or
+      $Capture.assertions.activationReadyToastAbsent -ne $true
+    ) {
+      throw "Renderer capture SCM action and activation-toast assertions must all pass."
+    }
   }
   if ($captureExpectations.PSObject.Properties.Name -contains "clickButtonText") {
     if ($Capture.interaction.clicked -ne $true -or $Capture.interaction.clickedButtonText -ne $captureExpectations.clickButtonText) {
@@ -11382,6 +11547,13 @@ try {
   $ready = Get-Content -Raw -LiteralPath $harness.ReadyPath | ConvertFrom-Json
   if ($ready.ok -ne $true -or $ready.openReport.kind -ne "subversionr.installedSourceControlUiE2eOpenReport") {
     throw "Installed Source Control UI E2E ready sentinel did not include an open report."
+  }
+  if (
+    [int]$ready.organicSurfaceReadiness.attempts -lt 1 -or
+    [int]$ready.organicSurfaceReadiness.waitedMs -lt 0 -or
+    $ready.organicSurfaceReadiness.transientCode -ne "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CURRENT_SESSION_MISSING"
+  ) {
+    throw "Installed Source Control UI E2E ready sentinel did not include the bounded organic-session readiness contract."
   }
   $ready.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $expectationsPath -Encoding utf8
 
