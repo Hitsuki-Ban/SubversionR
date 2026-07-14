@@ -423,7 +423,7 @@ try {
   Assert-Equal "tsc -p tsconfig.build.json" $extensionPackage.scripts.build "VS Code extension should expose a release build script."
 
   $rootPackage = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
-  Assert-Equal "0.2.3" $rootPackage.version "Root package should declare the current 0.2.3 candidate version."
+  Assert-Equal "0.2.4" $rootPackage.version "Root package should declare the current 0.2.4 candidate version."
   Assert-True ($null -ne $rootPackage.devDependencies."@vscode/vsce") "Root devDependencies should pin @vscode/vsce."
   Assert-True ($rootPackage.scripts."release:test-vsix-scripts".Contains("release-vsix-scripts.tests.ps1")) "Root package should expose M7g VSIX script tests."
   Assert-True ($rootPackage.scripts."release:build-vscode-extension".Contains("--filter ./packages/vscode-extension build")) "Root package should expose the extension release build."
@@ -651,7 +651,7 @@ try {
   Assert-True ($ciWorkflow.Contains("Package VS Code win32-x64 VSIX")) "CI should package the win32-x64 VSIX."
   Assert-True ($ciWorkflow.Contains("Locate VS Code CLI")) "CI should locate the VS Code CLI explicitly before install."
   Assert-True ($ciWorkflow.Contains("Test VS Code CLI VSIX install")) "CI should run the real VS Code CLI install gate."
-  Assert-True ($ciWorkflow.Contains("target/vsix/subversionr-win32-x64-0.2.3.vsix")) "CI should upload the current 0.2.3 VSIX candidate."
+  Assert-True ($ciWorkflow.Contains("target/vsix/subversionr-win32-x64-0.2.4.vsix")) "CI should upload the current 0.2.4 VSIX candidate."
 
   Write-Host "Release VSIX script tests passed."
 }

@@ -11,7 +11,7 @@ describe("extension manifest", () => {
     expect(manifest.name).toBe("subversionr");
     expect(manifest.publisher).toBe("hitsuki-ban");
     expect(manifest.displayName).toBe("SVN-R");
-    expect(manifest.version).toBe("0.2.3");
+    expect(manifest.version).toBe("0.2.4");
     expect(manifest.private).toBeUndefined();
     expect(manifest.repository).toEqual({
       type: "git",
@@ -1224,7 +1224,8 @@ describe("extension manifest", () => {
       string,
       Array<{ command?: string; group?: string; when?: string }>
     >;
-    const resourceInline = menus["scm/resourceState/context"].filter((entry) => entry.group?.startsWith("inline"));
+    const resourceContext = menus["scm/resourceState/context"];
+    const resourceInline = resourceContext.filter((entry) => entry.group?.startsWith("inline"));
     const inlineEntries = Object.entries(menus).flatMap(([menu, entries]) =>
       entries.filter((entry) =>
         entry.command !== undefined &&
@@ -1262,6 +1263,24 @@ describe("extension manifest", () => {
     for (const state of resourceStates) {
       const visibleInline = resourceInline.filter((entry) => resourceStateWhenMatches(entry.when ?? "", state));
       expect(visibleInline.length, state).toBeLessThanOrEqual(3);
+    }
+    expect(
+      resourceInline
+        .filter((entry) => resourceStateWhenMatches(entry.when ?? "", "subversionr.changedFile.baseDiffable"))
+        .map((entry) => entry.command),
+    ).toContain("subversionr.commitResource");
+    expect(
+      resourceContext
+        .filter((entry) => resourceStateWhenMatches(entry.when ?? "", "subversionr.changedFile.baseDiffable"))
+        .map((entry) => entry.command),
+    ).toEqual(expect.arrayContaining(["subversionr.diffWithBase", "subversionr.openBase"]));
+    for (const state of ["subversionr.conflicted", "subversionr.changedFile"]) {
+      expect(
+        resourceContext
+          .filter((entry) => resourceStateWhenMatches(entry.when ?? "", state))
+          .map((entry) => entry.command),
+        state,
+      ).toContain("subversionr.showBlame");
     }
     for (const entry of inlineEntries) {
       expect(commands.get(entry.command!)?.icon, entry.command).toMatch(/^\$\([^)]+\)$/);

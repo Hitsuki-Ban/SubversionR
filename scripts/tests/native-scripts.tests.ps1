@@ -732,7 +732,7 @@ try {
   Assert-True ($ciWorkflowText.Contains('LINK: /Brepro')) "CI should require reproducible MSVC linking for native release artifacts."
   Assert-True ($ciWorkflowText.IndexOf('Set reproducible source date epoch', [StringComparison]::Ordinal) -lt $ciWorkflowText.IndexOf('Build native dependency stage', [StringComparison]::Ordinal)) "CI should export the source epoch before building native dependencies."
   Assert-True ($ciWorkflowText.Contains('native/release-build-epoch.txt') -and $ciWorkflowText.Contains("-notmatch '^[1-9][0-9]*\r?\n$'") -and $ciWorkflowText.Contains('$env:GITHUB_ENV')) "CI should require one versioned positive epoch and export it through GITHUB_ENV."
-  Assert-Equal "1783852020`n" ((Get-Content -Raw -LiteralPath (Join-Path $repoRoot "native\release-build-epoch.txt")).Replace("`r`n", "`n")) "The 0.2.3 native release epoch should remain bound to the candidate version-bump commit."
+  Assert-Equal "1783993493`n" ((Get-Content -Raw -LiteralPath (Join-Path $repoRoot "native\release-build-epoch.txt")).Replace("`r`n", "`n")) "The 0.2.4 native release epoch should remain bound to the public release-slice base commit."
   Assert-True ($ciWorkflowText.Contains('https://www.nasm.us/pub/nasm/releasebuilds/$version/win64/$archiveName')) "CI NASM install should use the official NASM release archive URL."
   Assert-True ($ciWorkflowText.Contains('e0ba5157007abc7b1a65118a96657a961ddf55f7e3f632ee035366dfce039ca4')) "CI NASM install should verify the pinned win64 archive SHA256."
   Assert-True ($ciWorkflowText.Contains('Get-Command nasm -ErrorAction Stop')) "CI native prerequisite checks should fail fast when NASM is not on PATH."

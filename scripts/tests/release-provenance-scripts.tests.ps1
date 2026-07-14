@@ -54,7 +54,7 @@ function New-ProvenanceFixture([string]$Root) {
   New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
   New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
 
-  $vsixPath = Join-Path $artifactsRoot "subversionr-win32-x64-0.2.3.vsix"
+  $vsixPath = Join-Path $artifactsRoot "subversionr-win32-x64-0.2.4.vsix"
   [System.IO.File]::WriteAllBytes($vsixPath, [byte[]](0x53, 0x75, 0x62, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x52))
   $vsixSha256 = Get-Sha256 $vsixPath
   $marketplaceIconPath = Join-Path $repoRoot "packages\vscode-extension\resources\marketplace\icon.png"
@@ -70,7 +70,7 @@ function New-ProvenanceFixture([string]$Root) {
       extension = [pscustomobject]@{
         id = "hitsuki-ban.subversionr"
         displayName = "SVN-R"
-        version = "0.2.3"
+        version = "0.2.4"
         preRelease = $true
       }
       inputs = [pscustomobject]@{
@@ -83,7 +83,7 @@ function New-ProvenanceFixture([string]$Root) {
       }
       vsix = [pscustomobject]@{
         path = $vsixPath
-        relativePath = "target/tests/release-provenance-scripts/artifacts/subversionr-win32-x64-0.2.3.vsix"
+        relativePath = "target/tests/release-provenance-scripts/artifacts/subversionr-win32-x64-0.2.4.vsix"
         size = (Get-Item -LiteralPath $vsixPath).Length
         sha256 = $vsixSha256
         extensionEntrypointSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -111,7 +111,7 @@ function New-ProvenanceFixture([string]$Root) {
         [pscustomobject]@{
           type = "application"
           name = "subversionr"
-          version = "0.2.3"
+          version = "0.2.4"
         }
       )
     })
@@ -131,7 +131,7 @@ This generated evidence is not a completed legal review.
       extension = [pscustomobject]@{
         id = "subversionr"
         displayName = "SVN-R"
-        version = "0.2.3"
+        version = "0.2.4"
       }
       artifacts = @(
         [pscustomobject]@{
@@ -150,11 +150,11 @@ This generated evidence is not a completed legal review.
       publicReadinessClaim = $false
       target = "win32-x64"
       release = [pscustomobject]@{
-        tag = "v0.2.3-beta.1"
-        url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.3-beta.1"
+        tag = "v0.2.4-beta.1"
+        url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.4-beta.1"
       }
       subject = [pscustomobject]@{
-        name = "subversionr-win32-x64-0.2.3.vsix"
+        name = "subversionr-win32-x64-0.2.4.vsix"
         size = (Get-Item -LiteralPath $vsixPath).Length
         sha256 = $vsixSha256
         preReleaseProperty = $true
@@ -455,7 +455,7 @@ exit 0
   Assert-Equal "pending-release-attestation" $report.candidateAttestation.status "Current candidate attestation should remain pending before release."
   Assert-Equal "current-candidate" $report.candidateAttestation.scope "Current candidate attestation should remain scoped to the candidate."
   Assert-Equal (Get-Sha256 $fixture.vsixPath) $report.candidateAttestation.subjectSha256 "Current candidate attestation should bind the exact candidate VSIX."
-  Assert-Equal "subversionr-win32-x64-0.2.3.vsix" $report.candidateAttestation.subjectName "Current candidate attestation should bind the 0.2.3 VSIX name."
+  Assert-Equal "subversionr-win32-x64-0.2.4.vsix" $report.candidateAttestation.subjectName "Current candidate attestation should bind the 0.2.4 VSIX name."
   Assert-Equal "True" ([string]$report.candidateAttestation.preReleaseProperty) "Current candidate attestation should require the VS Code pre-release property."
   Assert-Equal "False" ([string]$report.candidateAttestation.liveEvidenceRecorded) "Current candidate attestation must not claim live evidence before release."
   Assert-Equal "verified" $report.attestation.status "Provenance preflight should record the verified live attestation."
