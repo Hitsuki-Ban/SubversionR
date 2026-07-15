@@ -727,6 +727,9 @@ Assert-Terms $installedSourceControlUiE2eScript @(
   "Get-CommitAllRepositoryOracle",
   "commitAllRepositoryOracle",
   "subversionr.installedSourceControlUiE2eCommitAllRepositoryOracle",
+  "initialCliRevisionAuthorNonEmpty",
+  "committedRevisionAuthorNonEmpty",
+  "committedRevisionAuthorMatchedInitialCliRevision",
   "inputMessageClearedAfterCommit",
   "targetedReconcileAfterCommit"
 ) "COM-001 installed Commit All E2E evidence fields"
@@ -736,6 +739,9 @@ Assert-Terms $installedSourceControlUiE2eScriptTests @(
   "hasInstalledSourceControlUiE2eSetInputMessageCommand",
   "acceptInputCommandArguments",
   "commitAllRepositoryOracle",
+  "initialCliRevisionAuthorNonEmpty",
+  "committedRevisionAuthorNonEmpty",
+  "committedRevisionAuthorMatchedInitialCliRevision",
   "unversionedScratchAbsentFromRepository",
   "inputMessageClearedAfterCommit",
   "targetedReconcileAfterCommit"

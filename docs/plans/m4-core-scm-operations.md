@@ -517,6 +517,23 @@ This slice does not add commit templates, generated messages, message aliases, b
 - Runtime localization tests cover the prompt title, prompt text, validation, invalid-message recovery, and stale-selection recovery in English, Japanese, and Chinese.
 - Installed Source Control UI E2E evidence covers prompted local commit success, prompt cancellation with unchanged bytes/state/projection, Review & Commit selection retention after cancellation and a real forced commit failure, exact reviewed-path repository state, and authoritative targeted reconcile.
 
+## M4v Implemented Slice
+
+The twenty-second M4 slice makes the `svn:author` of local `file://` commits match the current operating-system username resolved through libsvn/APR:
+
+- The native bridge resolves the commit target URL through libsvn working-copy metadata and applies the resolved username only to local `file://` authentication state before `svn_client_commit6`.
+- A missing or empty local username fails before commit with stable code `SUBVERSIONR_LOCAL_COMMIT_AUTHOR_UNAVAILABLE`; the extension supplies localized English, Japanese, and Chinese recovery text without inventing an author.
+- Remote repository protocols retain their existing credential and prompt behavior. The operating-system username is not injected into remote authentication.
+- Historical revisions with missing or empty `svn:author` remain valid read-only history input; no revprops or working-copy storage are rewritten.
+
+This slice does not add commit-as-user UI, author overrides, generated authors, remote authentication coverage, a compatibility fallback, or direct revision-property writes.
+
+## M4v Gates
+
+- Native and daemon tests cover local author installation, fail-before-mutation behavior when no username is available, and unchanged authenticated remote commit credentials.
+- Extension tests cover the stable error code, redacted diagnostics, and localized recovery text.
+- The installed Windows `win32-x64` Source Control UI E2E gate uses the source-built SVN CLI only as an oracle: it requires the new local-file commit revision's `svn:author` to be non-empty and Ordinal-equal to the fixture's initial CLI-created revision author.
+
 ## Deferred M4 Work
 
 - Batch revert, group/folder revert, and richer status-context-specific revert variants.

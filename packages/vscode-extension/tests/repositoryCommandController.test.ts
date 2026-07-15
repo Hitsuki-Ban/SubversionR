@@ -9230,6 +9230,67 @@ describe("RepositoryCommandController", () => {
     expect(ui.clearCommitMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves local commit review state when the OS username is unavailable", async () => {
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/other.c", reason: "operationCommit", revision: 8 }),
+    );
+    operationClient.commit.mockRejectedValue({
+      code: "SUBVERSIONR_LOCAL_COMMIT_AUTHOR_UNAVAILABLE",
+      category: "native",
+      messageKey: "error.native.localCommitAuthorUnavailable",
+      safeArgs: {},
+      retryable: false,
+    });
+    const refreshService = fakeRefreshService();
+    const commitMessageHistory = fakeCommitMessageHistory();
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "commit reviewed files",
+      reviewCommitSelection: ["src/other.c"],
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        refreshService,
+        commitMessageHistory,
+        sourceControlProjection: fakeSourceControlProjection({
+          targets: commitAllTargets({
+            targets: [
+              { path: "src/main.c", changelist: null },
+              { path: "src/other.c", changelist: null },
+            ],
+          }),
+        }),
+      },
+    );
+
+    await controller.reviewCommit("repo-uuid:C:/workspace");
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The local OS username is unavailable, so SubversionR cannot record an author for this local SVN commit. Check the OS account and retry.",
+      "Show Log",
+    );
+    expect(ui.clearCommitMessage).not.toHaveBeenCalled();
+    expect(commitMessageHistory.record).not.toHaveBeenCalled();
+    expect(refreshService.refreshTargets).not.toHaveBeenCalled();
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+
+    await controller.reviewCommit("repo-uuid:C:/workspace");
+
+    expect(ui.promptReviewCommitTargets).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Array),
+      new Set(["src/other.c"]),
+    );
+    expect(ui.commitMessage).toHaveBeenCalledTimes(2);
+    expect(ui.clearCommitMessage).not.toHaveBeenCalled();
+    expect(commitMessageHistory.record).not.toHaveBeenCalled();
+    expect(refreshService.refreshTargets).not.toHaveBeenCalled();
+  });
+
   it("warns and preserves the message when Review and Commit selection is empty", async () => {
     const operationClient = fakeOperationClient(
       operationResponse({ kind: "commit", path: "src/main.c", reason: "operationCommit", revision: 8 }),

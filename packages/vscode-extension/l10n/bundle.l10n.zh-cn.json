@@ -218,6 +218,7 @@
   "Enter a non-empty SVN commit message without carriage returns.": "请输入不为空且不含回车符的 SVN 提交信息。",
   "Enter a non-empty SVN commit message without carriage returns and try again.": "请输入不为空且不含回车符的 SVN 提交信息，然后重试。",
   "The selected SVN changes changed while entering the commit message. Review the current changes and try again.": "输入提交信息期间，所选 SVN 更改已发生变化。请检查当前更改后重试。",
+  "The local OS username is unavailable, so SubversionR cannot record an author for this local SVN commit. Check the OS account and retry.": "无法获取本机 OS 用户名，因此 SubversionR 无法为此次本地 SVN 提交记录作者。请检查 OS 账户后重试。",
   "No eligible SVN file changes to commit.": "没有可提交的 SVN 文件更改。",
   "Save SVN resource before committing: {0}": "提交前请保存 SVN 资源：{0}",
   "SubversionR post-commit reconcile failed after revision {0}: {1}": "SubversionR 在修订版 {0} 提交后的校准失败：{1}",

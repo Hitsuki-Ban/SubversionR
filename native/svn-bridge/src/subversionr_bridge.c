@@ -39,6 +39,7 @@
 #define BRIDGE_STATUS_CANCELLED 11
 #define BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED 11
 #define BRIDGE_OPERATION_CANCELLED 12
+#define BRIDGE_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE 13
 
 struct subversionr_bridge_runtime {
   apr_pool_t *pool;
@@ -5016,6 +5017,7 @@ static int bridge_operation_commit_impl(
   int include_file_externals,
   int include_dir_externals,
   const subversionr_bridge_cancel_callbacks *cancel_callbacks,
+  bridge_auth_prompt_baton *auth_prompt_baton,
   subversionr_bridge_operation_result *result,
   long long *result_revision
 ) {
@@ -5026,6 +5028,7 @@ static int bridge_operation_commit_impl(
     message == NULL ||
     depth == NULL ||
     cancel_callbacks == NULL ||
+    auth_prompt_baton == NULL ||
     result == NULL ||
     result_revision == NULL
   ) {
@@ -5093,6 +5096,50 @@ static int bridge_operation_commit_impl(
       return 10;
     }
     APR_ARRAY_PUSH(local_paths, const char *) = local_abspath;
+  }
+
+  const char *first_local_abspath = APR_ARRAY_IDX(local_paths, 0, const char *);
+  const char *first_target_url = NULL;
+  svn_error_t *url_err = svn_client_url_from_path2(
+    &first_target_url,
+    first_local_abspath,
+    runtime->ctx,
+    runtime->result_pool,
+    runtime->result_pool
+  );
+  if (url_err != NULL) {
+    bridge_capture_error(runtime, url_err);
+    svn_error_clear(url_err);
+    return 2;
+  }
+  if (first_target_url == NULL || first_target_url[0] == '\0') {
+    return 2;
+  }
+
+  const char *local_repository_dirent = NULL;
+  svn_error_t *file_url_err = svn_uri_get_dirent_from_file_url(
+    &local_repository_dirent,
+    first_target_url,
+    runtime->result_pool
+  );
+  if (file_url_err == NULL) {
+    if (
+      auth_prompt_baton->default_username == NULL ||
+      auth_prompt_baton->default_username[0] == '\0'
+    ) {
+      return BRIDGE_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE;
+    }
+    svn_auth_set_parameter(
+      runtime->ctx->auth_baton,
+      SVN_AUTH_PARAM_DEFAULT_USERNAME,
+      auth_prompt_baton->default_username
+    );
+  } else if (file_url_err->apr_err == SVN_ERR_RA_ILLEGAL_URL) {
+    svn_error_clear(file_url_err);
+  } else {
+    bridge_capture_error(runtime, file_url_err);
+    svn_error_clear(file_url_err);
+    return 2;
   }
 
   apr_array_header_t *touched_paths =
@@ -5254,6 +5301,7 @@ int subversionr_bridge_operation_commit_with_auth(
     include_file_externals,
     include_dir_externals,
     cancel_callbacks,
+    prompt_baton,
     result,
     result_revision
   );
