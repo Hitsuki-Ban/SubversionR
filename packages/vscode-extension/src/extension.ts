@@ -46,6 +46,7 @@ import {
   type DiagnosticsContext,
 } from "./diagnostics/diagnosticsReportService";
 import { collectInstalledRedactionReport } from "./diagnostics/installedRedactionReport";
+import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
 import {
@@ -79,6 +80,7 @@ import {
 } from "./history/historyRevisionDetailsDocument";
 import { readHistorySettings } from "./history/historySettings";
 import { HistoryTreeDataProvider } from "./history/historyTreeDataProvider";
+import { HistoryTreeViewController } from "./history/historyTreeViewController";
 import { LineHistoryCommandController } from "./history/lineHistoryCommandController";
 import { CurrentLineBlameHoverProvider } from "./lens/currentLineBlameHoverProvider";
 import { CurrentLineBlameStatusBarService } from "./lens/currentLineBlameStatusBarService";
@@ -92,6 +94,11 @@ import { RepositoryOperationScheduler } from "./operations/repositoryOperationSc
 import { BackendPropertiesClient } from "./properties/backendPropertiesClient";
 import type { PropertyEntry } from "./properties/propertiesListRpcClient";
 import { commitAllRepositoryIdArgument } from "./repository/commitAllCommandArgument";
+import {
+  repositoryHistoryCommandArgument,
+  repositoryHistoryCommandTarget,
+  type RepositoryHistoryCommandTarget,
+} from "./repository/repositoryHistoryCommandTarget";
 import { BackendRepositoryCheckoutClient } from "./repository/backendRepositoryCheckoutClient";
 import { suggestedCheckoutTargetPath } from "./repository/checkoutTargetSuggestion";
 import { validateCheckoutUrl, type CheckoutUrlValidationResult } from "./repository/checkoutUrlValidation";
@@ -273,12 +280,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const statusSnapshotStore = new StatusSnapshotStore();
   const watcherOverflowDiagnostics = new WatcherOverflowDiagnostics();
   const sourceControlRepositoryIds = new WeakMap<object, string>();
+  const sourceControlRepositoryHistoryTargets = new WeakMap<object, RepositoryHistoryCommandTarget>();
   const commitMessageHistory = new RepositoryCommitMessageHistory();
   const sourceControlPresenter = new VscodeSourceControlPresenter({
-    createSourceControl: (id, label, rootUri, repositoryId) => {
+    createSourceControl: (id, label, rootUri, repositoryId, epoch) => {
       const sourceControl = vscode.scm.createSourceControl(id, label, rootUri as vscode.Uri);
       sourceControlRepositoryIds.set(sourceControl, repositoryId);
+      sourceControlRepositoryHistoryTargets.set(
+        sourceControl,
+        repositoryHistoryCommandTarget(repositoryId, epoch),
+      );
       return sourceControl;
+    },
+    updateSourceControlRepositorySession: (sourceControl, repositoryId, epoch) => {
+      sourceControlRepositoryHistoryTargets.set(
+        sourceControl,
+        repositoryHistoryCommandTarget(repositoryId, epoch),
+      );
     },
     uriFromComponents: (components) => vscode.Uri.from(components),
     uriFile: vscode.Uri.file,
@@ -415,6 +433,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeDataProvider: historyTreeDataProvider,
     canSelectMany: true,
   });
+  const historyTreeViewController = new HistoryTreeViewController({
+    provider: historyTreeDataProvider,
+    treeView: historyTreeView,
+  });
   const statusRefreshClient = new InstalledSourceControlUiE2eStatusRefreshProbe(
     new BackendStatusRefreshClient(service),
   );
@@ -542,12 +564,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ui: {
       activeTextEditor: () => vscode.window.activeTextEditor,
       showLineHistory: async (target, entries) => {
-        historyTreeDataProvider.showLineHistory(target, entries);
-        historyTreeView.message = historyTreeDataProvider.currentSearchMessage();
-        const targetNode = historyTreeDataProvider.currentTargetNode();
-        if (targetNode) {
-          await historyTreeView.reveal(targetNode, { select: true, focus: true, expand: true });
-        }
+        await historyTreeViewController.showLineHistory(target, entries);
       },
       showErrorMessage: async (message, ...actions) =>
         await vscode.window.showErrorMessage(message, ...actions),
@@ -666,18 +683,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     backendService: service,
     sessionService,
   });
+  const repositoryRefreshService = new RepositoryRefreshService({
+    dirtyPathPipeline,
+  });
+  const remoteStatusCheckService = new RemoteStatusCheckService({
+    client: new BackendStatusRemoteCheckClient(service),
+    statusSnapshotStore,
+    sourceControlProjection,
+    refreshPipeline: dirtyPathPipeline,
+  });
+  let reconcileRequestCount = 0;
+  let remoteStatusRequestCount = 0;
   const repositoryCommandController = new RepositoryCommandController({
     discoveryService: repositoryDiscoveryService,
     sessionService,
-    refreshService: new RepositoryRefreshService({
-      dirtyPathPipeline,
-    }),
-    remoteStatusCheckService: new RemoteStatusCheckService({
-      client: new BackendStatusRemoteCheckClient(service),
-      statusSnapshotStore,
-      sourceControlProjection,
-      refreshPipeline: dirtyPathPipeline,
-    }),
+    refreshService: {
+      refreshRepository: async (repositoryId, options) => {
+        reconcileRequestCount += 1;
+        await repositoryRefreshService.refreshRepository(repositoryId, options);
+      },
+      fullReconcileRepository: async (target, options) => {
+        reconcileRequestCount += 1;
+        await repositoryRefreshService.fullReconcileRepository(target, options);
+      },
+      refreshResource: async (target) => {
+        reconcileRequestCount += 1;
+        await repositoryRefreshService.refreshResource(target);
+      },
+      refreshTargets: async (target, options) => {
+        reconcileRequestCount += 1;
+        await repositoryRefreshService.refreshTargets(target, options);
+      },
+    },
+    remoteStatusCheckService: {
+      checkRemoteChanges: async (request, options) => {
+        remoteStatusRequestCount += 1;
+        return await remoteStatusCheckService.checkRemoteChanges(request, options);
+      },
+    },
     operationClient: new BackendOperationClient(service),
     checkoutClient: new BackendRepositoryCheckoutClient(service),
     propertiesClient: new BackendPropertiesClient(service),
@@ -816,16 +859,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.commands.executeCommand("vscode.diff", left, right, title);
       },
       showHistory: async (target) => {
-        await historyTreeDataProvider.showHistory(target);
-        historyTreeView.message = historyTreeDataProvider.currentSearchMessage();
-        const targetNode = historyTreeDataProvider.currentTargetNode();
-        if (targetNode) {
-          await historyTreeView.reveal(targetNode, {
-            select: true,
-            focus: true,
-            expand: true,
-          });
-        }
+        await historyTreeViewController.showHistory(target);
       },
       showBlame: async (target) => {
         const uri = vscode.Uri.from(createBlameDocumentUriComponents(target));
@@ -1082,6 +1116,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         workspaceTrusted: () => vscode.workspace.isTrusted,
         sessionService,
         sourceControlSurface: sourceControlPresenter,
+      }),
+  );
+  const installedSourceControlUiE2eRepositoryHistoryReportCommand = vscode.commands.registerCommand(
+    "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+    (request: unknown) =>
+      collectInstalledRepositoryHistoryReport(request, {
+        generatedAt: () => new Date().toISOString(),
+        sessionService,
+        historySnapshot: () => historyTreeDataProvider.currentSnapshot(),
+        historyTreeViewSnapshot: () => {
+          const selected = historyTreeView.selection[0];
+          return {
+            visible: historyTreeView.visible,
+            selectionCount: historyTreeView.selection.length,
+            selectedTargetLabel: selected?.kind === "target"
+              ? historyTreeDataProvider.getTreeItem(selected).label
+              : null,
+          };
+        },
+        sourceControlSurface: sourceControlPresenter,
+        lastCompletedRefresh: (repositoryId, epoch) =>
+          statusRefreshCoverage.getLastCompletedRefresh(repositoryId, epoch),
+        operationDiagnostics: diagnostics,
+        activity: () => ({
+          statusRefreshRequestCount: statusRefreshClient.requestCount(),
+          reconcileRequestCount,
+          remoteStatusRequestCount,
+        }),
       }),
   );
   const installedSourceControlUiE2eFreshnessReportCommand = vscode.commands.registerCommand(
@@ -1433,7 +1495,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const showRepositoryLogCommand = vscode.commands.registerCommand("subversionr.showRepositoryLog", (commandArgument?: unknown) =>
     repositoryCommandController.showRepositoryLog(
-      commitAllRepositoryIdArgument(commandArgument, sourceControlRepositoryIds),
+      repositoryHistoryCommandArgument(commandArgument, sourceControlRepositoryHistoryTargets),
     ),
   );
   const showFileHistoryCommand = vscode.commands.registerCommand("subversionr.showFileHistory", (...resourceStates: unknown[]) =>
@@ -1549,6 +1611,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     installedSourceControlSurfaceReportCommand,
     installedSourceControlUiE2eOpenReportCommand,
     installedSourceControlUiE2eCurrentSurfaceReportCommand,
+    installedSourceControlUiE2eRepositoryHistoryReportCommand,
     installedSourceControlUiE2eFreshnessReportCommand,
     installedSourceControlUiE2eMatchingCompletedRefreshCoverageCommand,
     installedSourceControlUiE2eArmFullReconcileCancellationCommand,

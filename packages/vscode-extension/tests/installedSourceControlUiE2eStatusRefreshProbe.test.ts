@@ -63,6 +63,7 @@ describe("InstalledSourceControlUiE2eStatusRefreshProbe", () => {
     });
 
     expect(inner.refreshStatus).toHaveBeenCalledTimes(1);
+    expect(probe.requestCount()).toBe(1);
   });
 
   it("reports an observed dirty-generation refresh before completing it on scheduler cancellation", async () => {

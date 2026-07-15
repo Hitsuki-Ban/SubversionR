@@ -9,6 +9,7 @@ import type { SourceControlProjectionService } from "../scm/sourceControlProject
 import type { ScmProjectedResource, ScmProjectedResourceLookup } from "../scm/sourceControlResourceStore";
 import type { PathCasePolicy } from "../status/types";
 import type { LensSettings } from "./lensSettings";
+import { repositoryHistoryCommandTarget } from "../repository/repositoryHistoryCommandTarget";
 
 export interface FileHeaderCodeLensProviderOptions<TCodeLens extends FileHeaderCodeLens> {
   settings(): LensSettings;
@@ -65,6 +66,7 @@ interface FileHeaderLensData {
 
 interface FileHeaderLensTarget {
   repositoryId: string;
+  epoch: number;
   generation: number;
   contextValue: string;
   resourceUri: FileHeaderUri;
@@ -147,6 +149,7 @@ export class FileHeaderCodeLensProvider<TCodeLens extends FileHeaderCodeLens = F
     }
     return {
       repositoryId: match.session.repositoryId,
+      epoch: match.session.epoch,
       generation: match.lookup.generation,
       contextValue: resource.contextValue,
       resourceUri: document.uri,
@@ -239,7 +242,7 @@ function commandForAction(
       return {
         command: "subversionr.showRepositoryLog",
         title: localize("Open Log"),
-        arguments: [data.target.repositoryId],
+        arguments: [repositoryHistoryCommandTarget(data.target.repositoryId, data.target.epoch)],
       };
   }
 }

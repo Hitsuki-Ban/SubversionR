@@ -138,6 +138,7 @@ export class InstalledSourceControlUiE2eStatusRefreshProbe implements StatusRefr
   private fullReconcileReports = new Map<string, InstalledSourceControlUiE2eFullReconcileCancellationReport>();
   private dirtyGenerationReports = new Map<string, InstalledSourceControlUiE2eDirtyGenerationCancellationReport>();
   private sequence = 0;
+  private refreshRequestCount = 0;
   private readonly runtime: ProbeRuntime;
 
   public constructor(
@@ -244,6 +245,7 @@ export class InstalledSourceControlUiE2eStatusRefreshProbe implements StatusRefr
     request: StatusRefreshRequest,
     options?: StatusRefreshClientOptions,
   ): Promise<StatusDelta> {
+    this.refreshRequestCount += 1;
     const hold = this.activeHold;
     if (!hold || !matchesHold(hold, request)) {
       return await this.inner.refreshStatus(request, options);
@@ -319,6 +321,10 @@ export class InstalledSourceControlUiE2eStatusRefreshProbe implements StatusRefr
         signal.addEventListener("abort", cancel, { once: true });
       }
     });
+  }
+
+  public requestCount(): number {
+    return this.refreshRequestCount;
   }
 
   private requireNoActiveHold(code: string, messageKey: string): void {

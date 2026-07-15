@@ -26,6 +26,7 @@ describe("VscodeSourceControlPresenter", () => {
       "SubversionR",
       { fsPath: "C:/wc" },
       "repo-uuid:C:/wc",
+      7,
     );
     expect(api.createdGroups.map((group) => group.id)).toEqual([
       "conflicts",
@@ -67,6 +68,25 @@ describe("VscodeSourceControlPresenter", () => {
       },
     ]);
     expect(api.sourceControl.count).toBe(1);
+  });
+
+  it("updates the reused SourceControl repository target when a reopened session advances epoch", () => {
+    const api = fakeVscodeScmApi();
+    const presenter = new VscodeSourceControlPresenter(api);
+    presenter.registerRepository({
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      workingCopyRoot: "C:/wc",
+    });
+
+    presenter.updateRepository(projection({ epoch: 8 }));
+
+    expect(api.updateSourceControlRepositorySession).toHaveBeenCalledWith(
+      api.sourceControl,
+      "repo-uuid:C:/wc",
+      8,
+    );
+    expect(presenter.snapshotRepository("repo-uuid:C:/wc")?.epoch).toBe(8);
   });
 
   it("omits changed metadata tooltip lines when SVN changed revision is unknown", () => {
@@ -1176,6 +1196,7 @@ function fakeVscodeScmApi(options: { workspaceTrusted?: boolean } = {}): VscodeS
     },
     createGroup,
     createSourceControl: vi.fn(() => sourceControl),
+    updateSourceControlRepositorySession: vi.fn(),
     uriFromComponents: (components) => components,
     uriFile: (fsPath: string) => ({ fsPath }),
     uriFsPath: (uri: unknown) => (isUriWithFsPath(uri) ? uri.fsPath : undefined),
@@ -1211,11 +1232,11 @@ interface FakeResourceGroup {
 }
 
 function projection(
-  overrides: Partial<Pick<ScmRepositoryProjection, "freshness">> = {},
+  overrides: Partial<Pick<ScmRepositoryProjection, "epoch" | "freshness">> = {},
 ): ScmRepositoryProjection {
   return {
     repositoryId: "repo-uuid:C:/wc",
-    epoch: 7,
+    epoch: overrides.epoch ?? 7,
     workingCopyRoot: "C:/wc",
     generation: 11,
     freshness: overrides.freshness ?? {

@@ -18,7 +18,12 @@ import {
 } from "./resourceStateClassifier";
 
 export interface VscodeSourceControlPresenterApi {
-  createSourceControl(id: string, label: string, rootUri: unknown, repositoryId: string): VscodeSourceControl;
+  createSourceControl(id: string, label: string, rootUri: unknown, repositoryId: string, epoch: number): VscodeSourceControl;
+  updateSourceControlRepositorySession(
+    sourceControl: VscodeSourceControl,
+    repositoryId: string,
+    epoch: number,
+  ): void;
   uriFile(fsPath: string): unknown;
   uriFromComponents(components: BaseContentUriComponents): unknown;
   uriFsPath(uri: unknown): string | undefined;
@@ -174,6 +179,7 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
       "SubversionR",
       this.api.uriFile(repository.workingCopyRoot),
       repository.repositoryId,
+      repository.epoch,
     );
     this.updateCommitInput(sourceControl, repository.repositoryId);
     setQuickDiffProvider(sourceControl, {
@@ -228,6 +234,14 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
     const registered = this.repositories.get(projection.repositoryId);
     if (!registered) {
       throw new Error(`Source control repository is not registered: ${projection.repositoryId}`);
+    }
+    if (registered.epoch !== projection.epoch) {
+      this.api.updateSourceControlRepositorySession(
+        registered.sourceControl,
+        projection.repositoryId,
+        projection.epoch,
+      );
+      registered.epoch = projection.epoch;
     }
     registered.sourceControl.count = projection.count;
     registered.sourceControl.statusBarCommands = freshnessStatusBarCommands(

@@ -4640,13 +4640,20 @@ describe("RepositoryCommandController", () => {
   it("opens repository history for the selected open repository", async () => {
     const session = repositorySession();
     const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const refreshService = fakeRefreshService();
+    const remoteStatusCheckService = fakeRemoteStatusCheckService(0);
     const controller = commandController(
       fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
       fakeSessionService({ sessions: [session] }),
       ui,
+      { refreshService, remoteStatusCheckService },
     );
 
-    await controller.showRepositoryLog("repo-uuid:C:/workspace");
+    await controller.showRepositoryLog({
+      kind: "subversionr.repositoryHistoryTarget",
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+    });
 
     expect(ui.showHistory).toHaveBeenCalledWith({
       kind: "repository",
@@ -4655,6 +4662,184 @@ describe("RepositoryCommandController", () => {
       path: ".",
       label: "C:\\workspace",
     });
+    expect(refreshService.refreshRepository).not.toHaveBeenCalled();
+    expect(refreshService.fullReconcileRepository).not.toHaveBeenCalled();
+    expect(refreshService.refreshResource).not.toHaveBeenCalled();
+    expect(refreshService.refreshTargets).not.toHaveBeenCalled();
+    expect(remoteStatusCheckService.checkRemoteChanges).not.toHaveBeenCalled();
+  });
+
+  it("opens repository history for the repository selected from the current session snapshot", async () => {
+    const first = repositorySession();
+    const second = repositorySession({
+      repositoryId: "repo-uuid:D:/other-wc",
+      workingCopyRoot: "D:\\other-wc",
+    });
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"], pickedSession: second });
+    const sessionService = fakeSessionService({ sessions: [first, second] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      sessionService,
+      ui,
+    );
+
+    await controller.showRepositoryLog();
+
+    expect(ui.pickOpenRepository).toHaveBeenCalledWith([first, second]);
+    expect(sessionService.listOpenSessions).toHaveBeenCalledTimes(2);
+    expect(ui.showHistory).toHaveBeenCalledWith(expect.objectContaining({
+      repositoryId: "repo-uuid:D:/other-wc",
+      epoch: 7,
+      label: "D:\\other-wc",
+    }));
+  });
+
+  it("does not open history when repository selection is cancelled", async () => {
+    const sessions = [
+      repositorySession(),
+      repositorySession({ repositoryId: "repo-uuid:D:/other-wc", workingCopyRoot: "D:\\other-wc" }),
+    ];
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions }),
+      ui,
+    );
+
+    await controller.showRepositoryLog();
+
+    expect(ui.showHistory).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "repo-uuid:C:/workspace",
+    {},
+    { kind: "subversionr.repositoryHistoryTarget", repositoryId: "repo-uuid:C:/workspace", epoch: 7, extra: true },
+    { kind: "subversionr.repositoryHistoryTarget", repositoryId: " repo-uuid:C:/workspace", epoch: 7 },
+    { kind: "subversionr.repositoryHistoryTarget", repositoryId: "repo-uuid:C:/workspace", epoch: -1 },
+  ])("rejects an invalid repository history command target without fallback", async (target) => {
+    const diagnostics = { recordFailure: vi.fn(), show: vi.fn() };
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { diagnostics },
+    );
+
+    await controller.showRepositoryLog(target);
+
+    expect(ui.showHistory).not.toHaveBeenCalled();
+    expect(diagnostics.recordFailure).toHaveBeenCalledWith("History", expect.objectContaining({
+      code: "SUBVERSIONR_HISTORY_REPOSITORY_ID_INVALID",
+    }));
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "Select an open SVN repository and try Show Repository Log again.",
+      "Show Log",
+    );
+  });
+
+  it("rejects an unknown repository history target instead of selecting another repository", async () => {
+    const diagnostics = { recordFailure: vi.fn(), show: vi.fn() };
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { diagnostics },
+    );
+
+    await controller.showRepositoryLog({
+      kind: "subversionr.repositoryHistoryTarget",
+      repositoryId: "repo-uuid:D:/closed",
+      epoch: 7,
+    });
+
+    expect(ui.showHistory).not.toHaveBeenCalled();
+    expect(diagnostics.recordFailure).toHaveBeenCalledWith("History", expect.objectContaining({
+      code: "SUBVERSIONR_HISTORY_REPOSITORY_NOT_OPEN",
+      safeArgs: { repositoryId: "repo-uuid:D:/closed" },
+    }));
+  });
+
+  it("rejects a stale explicit repository history epoch without upgrading it by id", async () => {
+    const diagnostics = { recordFailure: vi.fn(), show: vi.fn() };
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { diagnostics },
+    );
+
+    await controller.showRepositoryLog({
+      kind: "subversionr.repositoryHistoryTarget",
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 6,
+    });
+
+    expect(ui.showHistory).not.toHaveBeenCalled();
+    expect(diagnostics.recordFailure).toHaveBeenCalledWith("History", expect.objectContaining({
+      code: "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE",
+      safeArgs: { repositoryId: "repo-uuid:C:/workspace", expectedEpoch: 6, actualEpoch: 7 },
+    }));
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The selected SVN repository session is no longer open. Select the current repository and try Show Repository Log again.",
+      "Show Log",
+    );
+  });
+
+  it("rejects a repository session that changes while the picker is open", async () => {
+    const first = repositorySession();
+    const selected = repositorySession({ repositoryId: "repo-uuid:D:/other-wc", workingCopyRoot: "D:\\other-wc" });
+    const reopened = {
+      ...selected,
+      epoch: 8,
+      watchScope: { ...selected.watchScope, epoch: 8 },
+    };
+    const sessionService = fakeSessionService({ sessions: [first, selected] });
+    sessionService.listOpenSessions
+      .mockReturnValueOnce([first, selected])
+      .mockReturnValue([first, reopened]);
+    const diagnostics = { recordFailure: vi.fn(), show: vi.fn() };
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"], pickedSession: selected });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      sessionService,
+      ui,
+      { diagnostics },
+    );
+
+    await controller.showRepositoryLog();
+
+    expect(ui.showHistory).not.toHaveBeenCalled();
+    expect(diagnostics.recordFailure).toHaveBeenCalledWith("History", expect.objectContaining({
+      code: "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE",
+      safeArgs: { repositoryId: "repo-uuid:D:/other-wc", expectedEpoch: 7, actualEpoch: 8 },
+    }));
+  });
+
+  it("rejects a repository session returned by the picker outside its initial candidates", async () => {
+    const first = repositorySession();
+    const second = repositorySession({ repositoryId: "repo-uuid:D:/other-wc", workingCopyRoot: "D:\\other-wc" });
+    const foreign = repositorySession({ repositoryId: "repo-uuid:E:/foreign", workingCopyRoot: "E:\\foreign" });
+    const diagnostics = { recordFailure: vi.fn(), show: vi.fn() };
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"], pickedSession: foreign });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [first, second] }),
+      ui,
+      { diagnostics },
+    );
+
+    await controller.showRepositoryLog();
+
+    expect(ui.showHistory).not.toHaveBeenCalled();
+    expect(diagnostics.recordFailure).toHaveBeenCalledWith("History", expect.objectContaining({
+      code: "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE",
+      safeArgs: { repositoryId: "repo-uuid:E:/foreign", expectedEpoch: 7 },
+    }));
   });
 
   it("opens file history for a selected versioned SVN file using the projection canonical path", async () => {

@@ -4181,6 +4181,7 @@ Assert-Terms $historyTreeDataProviderSource @(
   "export class HistoryTreeDataProvider",
   "public async showHistory",
   "public async loadMore",
+  "public getParent",
   "createRequest",
   "nextStartRevision",
   'path: target.path',
@@ -4189,7 +4190,8 @@ Assert-Terms $historyTreeDataProviderSource @(
   "discoverChangedPaths: true",
   "strictNodeHistory: false",
   "includeMergedRevisions: this.settings.includeMergedRevisions",
-  'localize("Repository: {0}", target.label)',
+  'case "repository":',
+  "return target.label;",
   '"subversionr.history.repositoryRevision"'
 ) "HIS-001 native History TreeView implementation"
 Assert-Terms $historyTreeDataProviderTests @(
@@ -4201,27 +4203,35 @@ Assert-Terms $historyTreeDataProviderTests @(
   "discoverChangedPaths: true",
   "strictNodeHistory: false",
   "includeMergedRevisions: true",
-  "l10n:Repository: C:/wc",
+  'label: "C:/wc"',
+  'not.toHaveProperty("description")',
+  "provides the exact parent chain required by the VS Code reveal API",
   "subversionr.history.repositoryRevision",
   "subversionr.history.loadMore"
 ) "HIS-001 native History TreeView tests"
 Assert-Terms $repositoryCommandControllerSource @(
   "public async showRepositoryLog",
-  "selectOpenSessionForRepository",
+  "selectHistoryRepositorySession",
+  "requireRepositoryHistoryCommandTarget",
+  "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE",
   'kind: "repository"',
   'path: "."',
   "session.identity.workingCopyRoot"
 ) "HIS-001 repository command implementation"
 Assert-Terms $repositoryCommandControllerTests @(
   "opens repository history for the selected open repository",
-  "showRepositoryLog(`"repo-uuid:C:/workspace`")",
+  'kind: "subversionr.repositoryHistoryTarget"',
+  'repositoryId: "repo-uuid:C:/workspace"',
+  "rejects a stale explicit repository history epoch without upgrading it by id",
   "kind: `"repository`"",
   "path: `".`""
 ) "HIS-001 repository command tests"
 Assert-Terms $extensionEntrypoint @(
   "new HistoryTreeDataProvider",
+  "new HistoryTreeViewController",
   'vscode.window.createTreeView("subversionr.history"',
-  "historyTreeDataProvider.showHistory(target)",
+  "historyTreeViewController.showHistory(target)",
+  "repositoryHistoryCommandArgument(commandArgument, sourceControlRepositoryHistoryTargets)",
   'vscode.commands.registerCommand("subversionr.showRepositoryLog"',
   'vscode.commands.registerCommand("subversionr.history.loadMore"'
 ) "HIS-001 extension activation"
@@ -4260,17 +4270,14 @@ Assert-Terms $extensionPackageNlsZhCn @(
   '"configuration.history.includeMergedRevisions.description"'
 ) "HIS-001 Chinese package localization"
 Assert-Terms $extensionBundleL10n @(
-  '"Repository: {0}"',
   '"Load More"',
   '"Open an SVN file or repository history."',
   '"No SVN history entries found."'
 ) "HIS-001 English runtime localization"
 Assert-Terms $extensionBundleL10nJa @(
-  '"Repository: {0}"',
   '"Load More"'
 ) "HIS-001 Japanese runtime localization"
 Assert-Terms $extensionBundleL10nZhCn @(
-  '"Repository: {0}"',
   '"Load More"'
 ) "HIS-001 Chinese runtime localization"
 Assert-Terms $extensionManifestTests @(
@@ -4283,7 +4290,7 @@ Assert-Terms $extensionManifestTests @(
   'name: "%view.history.name%"',
   "subversionr.history.pageSize",
   "subversionr.history.includeMergedRevisions",
-  "Repository: {0}",
+  "localizes runtime extension strings in %s",
   "Load More"
 ) "HIS-001 extension manifest tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-002" @(
@@ -4611,7 +4618,7 @@ Assert-Terms $historyRevisionDetailsDocumentTests @(
 Assert-Terms $extensionEntrypoint @(
   "new LineHistoryCommandController",
   "showLineHistory: async (target, entries)",
-  "historyTreeDataProvider.showLineHistory(target, entries)",
+  "historyTreeViewController.showLineHistory(target, entries)",
   'vscode.commands.registerCommand("subversionr.showLineHistory"',
   "lineHistoryCommandController.showLineHistory()"
 ) "HIS-003 extension activation"

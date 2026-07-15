@@ -1024,8 +1024,12 @@ try {
     "The seventh M5 slice turns the backend-only ``history/log`` foundation into a native VS Code history surface",
     "HistoryLogRpcClient",
     "HistoryTreeDataProvider",
+    "HistoryTreeViewController",
     "loads repository history through bounded explicit history/log parameters",
     "opens repository history for the selected open repository",
+    "provides the exact parent chain required by the VS Code reveal API",
+    "selectHistoryRepositorySession",
+    "repositoryHistoryCommandArgument",
     "history_log_returns_entries_for_open_repository",
     "history_log_response_serializes_stable_wire_fields",
     "subversionr.history.pageSize",
@@ -1033,7 +1037,6 @@ try {
     "subversionr.showRepositoryLog",
     "subversionr.history.loadMore",
     "command.showRepositoryLog.title",
-    "Repository: {0}",
     "Load More"
   ) "Release readiness should verify Repository Log evidence."
   Assert-TextFileContainsTokens $verifyReadinessScript @(

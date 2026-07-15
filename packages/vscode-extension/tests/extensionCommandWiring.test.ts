@@ -70,6 +70,9 @@ describe("extension command wiring", () => {
       /registerCommand\("subversionr\.showRepositoryProperties",\s*\(commandArgument\?: unknown\) =>\s*repositoryCommandController\.showRepositoryProperties\(\s*commitAllRepositoryIdArgument\(commandArgument, sourceControlRepositoryIds\),\s*\),\s*\)/su,
     );
     expect(extensionSource).toMatch(
+      /registerCommand\("subversionr\.showRepositoryLog",\s*\(commandArgument\?: unknown\) =>\s*repositoryCommandController\.showRepositoryLog\(\s*repositoryHistoryCommandArgument\(commandArgument, sourceControlRepositoryHistoryTargets\),\s*\),\s*\)/su,
+    );
+    expect(extensionSource).toMatch(
       /registerCommand\(\s*"subversionr\.tortoise\.openRepositoryLog",\s*\(commandArgument\?: unknown\) =>\s*tortoiseCommandController\.openRepositoryLog\(\s*commitAllRepositoryIdArgument\(commandArgument, sourceControlRepositoryIds\),\s*\),\s*\)/su,
     );
     expect(extensionSource).toMatch(
@@ -85,6 +88,14 @@ describe("extension command wiring", () => {
 
     expect(extensionSource).toMatch(
       /new SymbolHistoryCodeLensProvider<vscode\.CodeLens>\(\{\s*settings: \(\) => lensSettings,\s*includeMergedRevisions: \(\) => historySettings\.includeMergedRevisions,\s*historyClient,/su,
+    );
+  });
+
+  it("refreshes the SCM Repository Log target when a repository session advances epoch", () => {
+    const extensionSource = readExtensionSource();
+
+    expect(extensionSource).toMatch(
+      /updateSourceControlRepositorySession:\s*\(sourceControl, repositoryId, epoch\) => \{\s*sourceControlRepositoryHistoryTargets\.set\(\s*sourceControl,\s*repositoryHistoryCommandTarget\(repositoryId, epoch\),\s*\);\s*\}/su,
     );
   });
 

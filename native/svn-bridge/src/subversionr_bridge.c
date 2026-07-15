@@ -753,7 +753,9 @@ static svn_error_t *bridge_log_receiver(
     : NULL;
 
   entry->revision = bridge_revision_to_i64(log_entry->revision);
-  entry->author = author != NULL ? apr_pstrmemdup(result_pool, author->data, author->len) : NULL;
+  entry->author = author != NULL && author->len > 0
+    ? apr_pstrmemdup(result_pool, author->data, author->len)
+    : NULL;
   entry->date = date != NULL ? apr_pstrmemdup(result_pool, date->data, date->len) : NULL;
   entry->message =
     message != NULL ? apr_pstrmemdup(result_pool, message->data, message->len) : NULL;

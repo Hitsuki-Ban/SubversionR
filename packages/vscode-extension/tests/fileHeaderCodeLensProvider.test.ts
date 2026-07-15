@@ -122,7 +122,13 @@ describe("FileHeaderCodeLensProvider", () => {
       {
         command: "subversionr.showRepositoryLog",
         title: "Open Log",
-        arguments: ["repo-uuid:C:/workspace"],
+        arguments: [
+          {
+            kind: "subversionr.repositoryHistoryTarget",
+            repositoryId: "repo-uuid:C:/workspace",
+            epoch: 7,
+          },
+        ],
       },
     ]);
   });
@@ -240,7 +246,13 @@ describe("FileHeaderCodeLensProvider", () => {
       {
         command: "subversionr.showRepositoryLog",
         title: "Open Log",
-        arguments: ["repo-uuid:C:/workspace"],
+        arguments: [
+          {
+            kind: "subversionr.repositoryHistoryTarget",
+            repositoryId: "repo-uuid:C:/workspace",
+            epoch: 7,
+          },
+        ],
       },
     ]);
   });
