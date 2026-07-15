@@ -848,6 +848,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       promptPropertyDeleteName: promptPropertyDeleteName,
       promptExternalsPropertyValue: promptExternalsPropertyValue,
       promptReviewCommitTargets: promptReviewCommitTargets,
+      promptCommitMessage: promptCommitMessage,
       promptCommitMessageHistory: promptCommitMessageHistory,
       runOperationWithProgress: async (title, task) => await runOperationWithProgress(title, task),
       workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -2841,6 +2842,23 @@ async function promptReviewCommitTargets(
     ignoreFocusOut: true,
   });
   return selected?.map((item) => item.target);
+}
+
+async function promptCommitMessage(pathSummary: string): Promise<string | undefined> {
+  return await vscode.window.showInputBox({
+    title: vscode.l10n.t("Commit SVN changes"),
+    prompt: vscode.l10n.t("Enter an SVN commit message for {0}.", pathSummary),
+    placeHolder: vscode.l10n.t("SVN commit message"),
+    ignoreFocusOut: true,
+    validateInput: validateCommitMessageInput,
+  });
+}
+
+function validateCommitMessageInput(value: string): string | undefined {
+  if (value.trim().length === 0 || value.includes("\0") || value.includes("\r")) {
+    return vscode.l10n.t("Enter a non-empty SVN commit message without carriage returns.");
+  }
+  return undefined;
 }
 
 async function promptCommitMessageHistory(messages: readonly string[]): Promise<string | undefined> {

@@ -114,6 +114,7 @@ export interface RepositoryCommandUi {
   commitMessage(repositoryId: string): string;
   setCommitMessage(repositoryId: string, message: string): void;
   clearCommitMessage(repositoryId: string): void;
+  promptCommitMessage(pathSummary: string): Promise<string | undefined>;
   promptCommitMessageHistory(messages: readonly string[]): Promise<string | undefined>;
   uriFile(fsPath: string): unknown;
   uriFromComponents(components: BaseContentUriComponents | HeadContentUriComponents | RevisionContentUriComponents): unknown;
@@ -2946,7 +2947,8 @@ export class RepositoryCommandController {
           throw invalidResourceCommitTarget();
         }
       }
-      await this.commitTargets(targets);
+      const selection = this.captureProjectedCommitSelection(targets, invalidResourceCommitTarget);
+      await this.commitTargets(targets, selection);
     } catch (error) {
       await this.showCommandError(error);
     }
@@ -2970,7 +2972,9 @@ export class RepositoryCommandController {
         throw commitAllConflictsPresent();
       }
 
-      const targets = projection.targets.map((target) => commitAllResourceTarget(session, target.path));
+      const targets = projection.targets.map((target) =>
+        commitAllResourceTarget(session, target.path, projection.generation),
+      );
       if (targets.length === 0) {
         await this.options.ui.showWarningMessage(
           this.options.localize("No eligible SVN file changes to commit."),
@@ -2985,7 +2989,7 @@ export class RepositoryCommandController {
           throw commitAllTargetsInvalid();
         }
       }
-      await this.commitTargets(targets);
+      await this.commitTargets(targets, commitAllSelectionSnapshot(session, projection, projection.targets, true));
     } catch (error) {
       await this.showCommandError(error);
     }
@@ -3080,7 +3084,7 @@ export class RepositoryCommandController {
         if (!candidate || candidate.changelist !== selectedTarget.changelist) {
           throw commitAllTargetsInvalid();
         }
-        return commitAllResourceTarget(session, candidate.path);
+        return commitAllResourceTarget(session, candidate.path, projection.generation);
       });
       if (!targetsShareRepository(targets) || hasDuplicateResourcePaths(targets)) {
         throw commitAllTargetsInvalid();
@@ -3090,8 +3094,13 @@ export class RepositoryCommandController {
           throw commitAllTargetsInvalid();
         }
       }
-      await this.commitTargets(targets);
-      this.reviewCommitSelections.delete(session.repositoryId);
+      const committed = await this.commitTargets(
+        targets,
+        commitAllSelectionSnapshot(session, projection, selectedReviewTargets, false),
+      );
+      if (committed) {
+        this.reviewCommitSelections.delete(session.repositoryId);
+      }
     } catch (error) {
       await this.showCommandError(error);
     }
@@ -3126,7 +3135,11 @@ export class RepositoryCommandController {
       if (!targetsShareRepository(targets) || hasDuplicateResourcePaths(targets)) {
         throw invalidChangelistGroupTarget();
       }
-      await this.commitTargets(targets, [changelistTarget.changelist]);
+      await this.commitTargets(
+        targets,
+        this.captureProjectedCommitSelection(targets, invalidChangelistGroupTarget, true),
+        [changelistTarget.changelist],
+      );
     } catch (error) {
       await this.showCommandError(error);
     }
@@ -3996,12 +4009,156 @@ export class RepositoryCommandController {
     }
   }
 
-  private async commitTargets(targets: RepositoryCommandResourceTarget[], changelists: string[] = []): Promise<void> {
+  private captureProjectedCommitSelection(
+    targets: RepositoryCommandResourceTarget[],
+    invalid: () => RepositoryCommandError,
+    requireExactChangelist = false,
+  ): ProjectedCommitSelectionSnapshot {
+    if (!targetsShareRepository(targets) || hasDuplicateResourcePaths(targets)) {
+      throw invalid();
+    }
+    const target = targets[0];
+    if (!target) {
+      throw invalid();
+    }
+    const projection = this.options.sourceControlProjection.getProjection(target.repositoryId);
+    if (!projection || projection.repositoryId !== target.repositoryId || projection.epoch !== target.epoch) {
+      throw invalid();
+    }
+    const selected = targets.map((selectedTarget) => {
+      if (
+        selectedTarget.projectionGeneration !== undefined &&
+        selectedTarget.projectionGeneration !== projection.generation
+      ) {
+        throw invalid();
+      }
+      const resource = findProjectionResource(projection, selectedTarget);
+      if (
+        !resource ||
+        !isCommittableProjectedResource(resource) ||
+        (selectedTarget.resourceKind !== undefined && resource.entry.kind !== selectedTarget.resourceKind)
+      ) {
+        throw invalid();
+      }
+      return commitSelectionTarget(resource.path, resource.entry.kind, resource.entry.changelist);
+    });
+    return {
+      source: "projection",
+      repositoryId: target.repositoryId,
+      epoch: target.epoch,
+      generation: projection.generation,
+      pathCase: target.pathCase,
+      targets: selected,
+      requireExactChangelist,
+    };
+  }
+
+  private assertCommitSelectionCurrent(selection: CommitSelectionSnapshot): void {
+    const session = this.options.sessionService
+      .listOpenSessions()
+      .find((candidate) => candidate.repositoryId === selection.repositoryId);
+    if (!session || session.epoch !== selection.epoch) {
+      throw commitSelectionStale(selection.repositoryId);
+    }
+
+    if (selection.source === "commitAll") {
+      const current = this.options.sourceControlProjection.getCommitAllTargets(selection.repositoryId);
+      if (
+        !current ||
+        current.repositoryId !== selection.repositoryId ||
+        current.epoch !== selection.epoch ||
+        current.generation !== selection.generation ||
+        current.hasConflicts
+      ) {
+        throw commitSelectionStale(selection.repositoryId);
+      }
+      if (selection.requireExactTargets && current.targets.length !== selection.targets.length) {
+        throw commitSelectionStale(selection.repositoryId);
+      }
+      for (const expected of selection.targets) {
+        const actual = current.targets.find(
+          (candidate) => comparisonKey(selection.pathCase, candidate.path) === comparisonKey(selection.pathCase, expected.path),
+        );
+        if (!actual || actual.changelist !== expected.changelist) {
+          throw commitSelectionStale(selection.repositoryId);
+        }
+      }
+      return;
+    }
+
+    const projection = this.options.sourceControlProjection.getProjection(selection.repositoryId);
+    if (
+      !projection ||
+      projection.repositoryId !== selection.repositoryId ||
+      projection.epoch !== selection.epoch ||
+      projection.generation !== selection.generation
+    ) {
+      throw commitSelectionStale(selection.repositoryId);
+    }
+    for (const expected of selection.targets) {
+      const actual = findProjectionResourceByPath(projection, expected.path, selection.pathCase);
+      if (
+        !actual ||
+        !isCommittableProjectedResource(actual) ||
+        actual.entry.kind !== expected.kind ||
+        actual.entry.changelist !== expected.changelist
+      ) {
+        throw commitSelectionStale(selection.repositoryId);
+      }
+    }
+    if (selection.requireExactChangelist) {
+      const changelists = new Set(selection.targets.map((target) => target.changelist));
+      const changelist = changelists.size === 1 ? selection.targets[0]?.changelist : null;
+      if (changelist === null || changelist === undefined) {
+        throw commitSelectionStale(selection.repositoryId);
+      }
+      const currentTargets = projection.groups
+        .flatMap((group) => group.resources)
+        .filter(
+          (resource) =>
+            resource.entry.changelist === changelist && isChangelistCommitProjectedResource(resource),
+        );
+      if (currentTargets.length !== selection.targets.length) {
+        throw commitSelectionStale(selection.repositoryId);
+      }
+    }
+  }
+
+  private async commitTargets(
+    targets: RepositoryCommandResourceTarget[],
+    selection: CommitSelectionSnapshot,
+    changelists: string[] = [],
+  ): Promise<boolean> {
     const target = targets[0];
     if (!target) {
       throw invalidResourceCommitTarget();
     }
+    for (const selectedTarget of targets) {
+      if (this.options.ui.hasUnsavedTextDocument(selectedTarget.fsPath)) {
+        await this.options.ui.showWarningMessage(
+          this.options.localize("Save SVN resource before committing: {0}", selectedTarget.path),
+        );
+        return false;
+      }
+    }
+
+    const paths = targets.map((selectedTarget) => selectedTarget.path);
+    const pathSummary = commitPathSummary(paths);
+    let message = this.options.ui.commitMessage(target.repositoryId);
+    if (message.trim().length === 0) {
+      const promptedMessage = await this.options.ui.promptCommitMessage(pathSummary);
+      if (promptedMessage === undefined) {
+        return false;
+      }
+      message = promptedMessage;
+      validateCommitMessage(message);
+      this.options.ui.setCommitMessage(target.repositoryId, message);
+    } else {
+      validateCommitMessage(message);
+    }
+
     const commit = await this.options.operationScheduler.run(target.repositoryId, async () => {
+      this.assertCommitSelectionCurrent(selection);
       for (const selectedTarget of targets) {
         if (this.options.ui.hasUnsavedTextDocument(selectedTarget.fsPath)) {
           await this.options.ui.showWarningMessage(
@@ -4011,25 +4168,13 @@ export class RepositoryCommandController {
         }
       }
 
-      const paths = targets.map((selectedTarget) => selectedTarget.path);
-      const pathSummary = commitPathSummary(paths);
-      const message = this.options.ui.commitMessage(target.repositoryId);
-      if (message.trim().length === 0) {
-        await this.options.ui.showWarningMessage(
-          this.options.localize("Enter an SVN commit message before committing {0}.", pathSummary),
-        );
-        return undefined;
-      }
-      if (message.includes("\0") || message.includes("\r")) {
-        throw invalidResourceCommitMessage();
-      }
-
       const result = await this.runJournaledOperation(
         "commit",
         this.options.localize("Committing SVN changes"),
         target.repositoryId,
         paths.length,
         (operationOptions) => {
+          this.assertCommitSelectionCurrent(selection);
           const request = {
             repositoryId: target.repositoryId,
             epoch: target.epoch,
@@ -4062,7 +4207,7 @@ export class RepositoryCommandController {
     });
 
     if (!commit) {
-      return;
+      return false;
     }
     this.showCommandInformation(
       this.options.localize(
@@ -4073,6 +4218,7 @@ export class RepositoryCommandController {
         commit.pathSummary,
       ),
     );
+    return true;
   }
 
   private async showCommandError(error: unknown): Promise<void> {
@@ -4204,6 +4350,12 @@ function repositoryFailureMessage(
     case "SUBVERSIONR_DIAGNOSTICS_DOCUMENT_URI_INVALID":
     case "SUBVERSIONR_DIAGNOSTICS_REPORT_DOCUMENT_INVALID":
       return localize("SubversionR could not open the SVN report because its document address is invalid.");
+    case "SUBVERSIONR_RESOURCE_COMMIT_MESSAGE_INVALID":
+      return localize("Enter a non-empty SVN commit message without carriage returns and try again.");
+    case "SUBVERSIONR_COMMIT_SELECTION_STALE":
+      return localize(
+        "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
+      );
   }
   const cause = operationFailureCause(error);
   switch (cause) {
@@ -4365,6 +4517,32 @@ interface RepositoryCommandResourceTarget extends RepositoryResourceRefreshTarge
   pathCase: PathCasePolicy;
 }
 
+interface CommitSelectionTarget {
+  path: string;
+  kind: "file" | "dir";
+  changelist: string | null;
+}
+
+interface CommitSelectionSnapshotBase {
+  repositoryId: string;
+  epoch: number;
+  generation: number;
+  pathCase: PathCasePolicy;
+  targets: CommitSelectionTarget[];
+}
+
+interface ProjectedCommitSelectionSnapshot extends CommitSelectionSnapshotBase {
+  source: "projection";
+  requireExactChangelist: boolean;
+}
+
+interface CommitAllSelectionSnapshot extends CommitSelectionSnapshotBase {
+  source: "commitAll";
+  requireExactTargets: boolean;
+}
+
+type CommitSelectionSnapshot = ProjectedCommitSelectionSnapshot | CommitAllSelectionSnapshot;
+
 interface ValidatedOperationResource {
   path: string;
   kind: ScmProjectedResource["entry"]["kind"];
@@ -4499,7 +4677,11 @@ function sameStringArray(left: readonly string[] | undefined, right: readonly st
   return left.every((value, index) => value === right[index]);
 }
 
-function commitAllResourceTarget(session: RepositorySession, path: string): RepositoryCommandResourceTarget {
+function commitAllResourceTarget(
+  session: RepositorySession,
+  path: string,
+  projectionGeneration: number,
+): RepositoryCommandResourceTarget {
   return {
     repositoryId: session.repositoryId,
     epoch: session.epoch,
@@ -4508,9 +4690,41 @@ function commitAllResourceTarget(session: RepositorySession, path: string): Repo
     source: "resource",
     contextValue: "subversionr.changedFile",
     resourceKind: "file",
-    projectionGeneration: undefined,
+    projectionGeneration,
     pathCase: session.watchScope.pathCase,
   };
+}
+
+function commitAllSelectionSnapshot(
+  session: RepositorySession,
+  projection: {
+    repositoryId: string;
+    epoch: number;
+    generation: number;
+  },
+  targets: readonly RepositoryReviewCommitTarget[],
+  requireExactTargets: boolean,
+): CommitAllSelectionSnapshot {
+  return {
+    source: "commitAll",
+    repositoryId: projection.repositoryId,
+    epoch: projection.epoch,
+    generation: projection.generation,
+    pathCase: session.watchScope.pathCase,
+    targets: targets.map((target) => commitSelectionTarget(target.path, "file", target.changelist)),
+    requireExactTargets,
+  };
+}
+
+function commitSelectionTarget(
+  path: string,
+  kind: ScmProjectedResource["entry"]["kind"],
+  changelist: string | null,
+): CommitSelectionTarget {
+  if (kind !== "file" && kind !== "dir") {
+    throw invalidResourceCommitTarget();
+  }
+  return { path, kind, changelist };
 }
 
 function projectionResourceTarget(
@@ -4723,12 +4937,20 @@ function findProjectionResource(
   projection: ScmRepositoryProjection,
   target: RepositoryCommandResourceTarget,
 ): ScmProjectedResource | undefined {
-  const targetPathKey = comparisonKey(target.pathCase, target.path);
+  return findProjectionResourceByPath(projection, target.path, target.pathCase);
+}
+
+function findProjectionResourceByPath(
+  projection: ScmRepositoryProjection,
+  path: string,
+  pathCase: PathCasePolicy,
+): ScmProjectedResource | undefined {
+  const targetPathKey = comparisonKey(pathCase, path);
   for (const group of projection.groups) {
     for (const resource of group.resources) {
       if (
-        resource.repositoryId === target.repositoryId &&
-        comparisonKey(target.pathCase, resource.path) === targetPathKey
+        resource.repositoryId === projection.repositoryId &&
+        comparisonKey(pathCase, resource.path) === targetPathKey
       ) {
         return resource;
       }
@@ -5395,6 +5617,16 @@ function isChangelistCommitProjectedResource(resource: ScmProjectedResource): bo
   );
 }
 
+function isCommittableProjectedResource(resource: ScmProjectedResource): boolean {
+  return (
+    resource.source === "local" &&
+    LOCAL_COMMITTABLE_CONTEXT_VALUES.has(resource.contextValue) &&
+    (resource.entry.kind === "file" || resource.entry.kind === "dir") &&
+    resource.entry.localStatus !== "ignored" &&
+    !resource.entry.external
+  );
+}
+
 function isCommittableResourceTarget(target: RepositoryCommandResourceTarget): boolean {
   if (target.contextValue === undefined) {
     return false;
@@ -5948,6 +6180,12 @@ function commitPathSummary(paths: readonly string[]): string {
   return paths.join(", ");
 }
 
+function validateCommitMessage(message: string): void {
+  if (message.trim().length === 0 || message.includes("\0") || message.includes("\r")) {
+    throw invalidResourceCommitMessage();
+  }
+}
+
 const UPDATE_CONFLICT_PATH_DISPLAY_LIMIT = 3;
 
 function updateConflictPaths(
@@ -6239,6 +6477,15 @@ function invalidResourceCommitRevision(): RepositoryCommandError {
     "SUBVERSIONR_RESOURCE_COMMIT_REVISION_MISSING",
     "lifecycle",
     "error.repository.resourceCommitRevisionMissing",
+  );
+}
+
+function commitSelectionStale(repositoryId: string): RepositoryCommandError {
+  return repositoryCommandError(
+    "SUBVERSIONR_COMMIT_SELECTION_STALE",
+    "lifecycle",
+    "error.repository.commitSelectionStale",
+    { repositoryId },
   );
 }
 

@@ -250,7 +250,7 @@ The tenth M4 slice connects the single-file commit foundation to the first VS Co
 - Known local changes are split into `subversionr.changedFile` and `subversionr.changedDirectory` SCM resource states so file-only command surfaces can fail fast without guessing node kind.
 - The command is visible only on `subversionr.changedFile` SCM resource states and is hidden from the Command Palette because it requires an explicit SCM resource argument.
 - The command reads the message from the repository's VS Code `SourceControl.inputBox`, matching VS Code's source-control input contract.
-- Empty commit messages are blocked before backend dispatch, CR/NUL messages fail fast with a stable command error code, and the input message is preserved unless commit succeeds.
+- Empty or whitespace-only Source Control messages open one explicit localized prompt before backend dispatch. Cancellation performs no operation, CR/NUL messages fail fast with a stable command error code, and the input message is preserved unless commit succeeds.
 - The command is disabled in untrusted workspaces and warns without dispatch when the selected resource has unsaved editor contents.
 - The command sends the first-slice commit request exactly: one non-root repository-relative path, `depth = "empty"`, empty `changelists`, and all deferred lock/changelist/externals/commit-as-operation flags set to `false`.
 - Successful commit clears the repository input box, shows the committed revision and path through localized text, and then applies the backend reconcile hint. If post-commit reconcile fails, the commit is still reported as successful and the reconcile failure is shown as a separate warning.
@@ -499,11 +499,29 @@ This slice does not implement automatic conflict resolution, conflict editor han
 - Runtime localization checks cover the warning and truncated-path summary in English, Japanese, and Chinese.
 - The installed Source Control UI E2E gate creates a real text conflict through the installed `subversionr.updateRepository` command, captures the warning notification through renderer DOM and accessibility evidence, verifies the conflict count and path, rejects the ordinary success-only notification, and then reuses the projected conflict in the existing Resolve workflow.
 
+## M4u Implemented Slice
+
+The twenty-first M4 slice completes explicit missing-message handling for Commit Selected, Commit All, Review & Commit, and Commit Changelist:
+
+- An empty or whitespace-only Source Control message opens one localized commit-message InputBox. The extension never synthesizes a default message and the daemon/native non-empty-message contract remains unchanged.
+- Prompt cancellation returns before repository scheduling, the operation journal, backend/native dispatch, commit-message history, input mutation, or reconcile.
+- A valid prompted message is retained in the matching Source Control input until commit succeeds, so a native failure leaves both the message and Review & Commit selection available for retry.
+- After the prompt resolves and immediately before RPC dispatch, the controller revalidates the open repository epoch, Source Control projection generation, selected paths, resource kinds, and changelist identities. Changed state fails with a stable localized stale-selection error instead of committing an obsolete selection.
+- Review & Commit clears its remembered selection only after a commit returns a concrete revision. Selection survives message prompting, cancellation, stale-state rejection, and commit failure.
+
+This slice does not add commit templates, generated messages, message aliases, blank commits, project-property commit policy, or a compatibility fallback.
+
+## M4u Gates
+
+- Repository command tests cover all four commit entry points, whitespace-only input, valid prompted input, prompt cancellation with no journal/history/reconcile/backend side effects, invalid prompt characters, epoch/generation/path/changelist changes after prompting, commit failure, and successful Review & Commit selection clearing.
+- Runtime localization tests cover the prompt title, prompt text, validation, invalid-message recovery, and stale-selection recovery in English, Japanese, and Chinese.
+- Installed Source Control UI E2E evidence covers prompted local commit success, prompt cancellation with unchanged bytes/state/projection, Review & Commit selection retention after cancellation and a real forced commit failure, exact reviewed-path repository state, and authoritative targeted reconcile.
+
 ## Deferred M4 Work
 
 - Batch revert, group/folder revert, and richer status-context-specific revert variants.
 - Cross-session operation persistence, telemetry, progress percentages, and user-visible operation queue diagnostics.
-- Recursive/ignored variants of `add`; group/force variants of `remove`; batch/directory unversioned cleanup; richer resolve choices and conflict editor flows; update-to-revision surfaces; plus changelist commit, Review & Commit, message history/templates, project-property commit policy, and non-file commit scopes.
+- Recursive/ignored variants of `add`; group/force variants of `remove`; batch/directory unversioned cleanup; richer resolve choices and conflict editor flows; plus commit message templates/history breadth, project-property commit policy, and broader non-file commit scopes.
 - Rich cleanup recovery diagnostics, automatic cleanup-required actions, cancellation/progress, externals cleanup UI, and vacuum/unversioned cleanup workflows.
 - Operation suppression windows that prevent watcher-triggered duplicate refresh bursts.
 - Auth, certificate, workspace trust, and diagnostics integration for operations that require network access.

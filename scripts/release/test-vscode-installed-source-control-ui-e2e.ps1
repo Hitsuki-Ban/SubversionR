@@ -1101,6 +1101,67 @@ function Get-LockUnlockWorkingCopyOracle(
   }
 }
 
+function Get-ReviewCommitPromptRepositoryOracle(
+  [string]$SvnExe,
+  [pscustomobject]$Fixture,
+  [string]$ExpectedCommitMessage,
+  [string]$ExpectedTrackedContent,
+  [string]$ExpectedLoadContent,
+  [string]$ExpectedUnselectedRepositoryContent
+) {
+  $trackedFileUrl = "$($Fixture.repoUrl)/trunk/src/tracked.txt"
+  $loadFileUrl = "$($Fixture.repoUrl)/trunk/load/modified-001.txt"
+  $unselectedFileUrl = "$($Fixture.repoUrl)/trunk/load/modified-002.txt"
+  $commonArguments = @(
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $Fixture.svnCliConfigRoot
+  )
+
+  $trackedContent = (Invoke-CheckedTool -Path $SvnExe -Arguments (@("cat", $trackedFileUrl) + $commonArguments) -Description "svn cat Commit Selected multi-selection committed tracked file") -join "`n"
+  if ($trackedContent -ne $ExpectedTrackedContent) {
+    throw "Commit Selected multi-selection repository oracle expected '$ExpectedTrackedContent' at $trackedFileUrl, got '$trackedContent'."
+  }
+
+  $loadContent = (Invoke-CheckedTool -Path $SvnExe -Arguments (@("cat", $loadFileUrl) + $commonArguments) -Description "svn cat Commit Selected multi-selection committed load file") -join "`n"
+  if ($loadContent -ne $ExpectedLoadContent) {
+    throw "Commit Selected multi-selection repository oracle expected '$ExpectedLoadContent' at $loadFileUrl, got '$loadContent'."
+  }
+
+  $unselectedContent = (Invoke-CheckedTool -Path $SvnExe -Arguments (@("cat", $unselectedFileUrl) + $commonArguments) -Description "svn cat Review & Commit unselected retained-probe file") -join "`n"
+  if ($unselectedContent -ne $ExpectedUnselectedRepositoryContent) {
+    throw "Review & Commit repository oracle expected unselected repository baseline '$ExpectedUnselectedRepositoryContent' at $unselectedFileUrl, got '$unselectedContent'."
+  }
+
+  $latestLog = (Invoke-CheckedTool -Path $SvnExe -Arguments (@("log", "-v", "-l", "1", $trackedFileUrl) + $commonArguments) -Description "svn log Review & Commit committed tracked file") -join "`n"
+  if (-not $latestLog.Contains($ExpectedCommitMessage)) {
+    throw "Commit Selected multi-selection repository oracle did not find the expected commit message in the latest repository log for $trackedFileUrl."
+  }
+  $changedPaths = @($latestLog -split "`r?`n" | Where-Object { $_ -match '^\s+[AMDR]\s+' })
+  if ($changedPaths.Count -ne 2 -or
+    @($changedPaths | Where-Object { $_ -match '/trunk/src/tracked\.txt$' }).Count -ne 1 -or
+    @($changedPaths | Where-Object { $_ -match '/trunk/load/modified-001\.txt$' }).Count -ne 1 -or
+    @($changedPaths | Where-Object { $_ -match '/trunk/load/modified-002\.txt$' }).Count -ne 0) {
+    throw "Review & Commit repository oracle expected exactly the two reviewed paths in the latest changed-path log: $($changedPaths -join '; ')."
+  }
+
+  [pscustomobject]@{
+    kind = "subversionr.installedSourceControlUiE2eReviewCommitPromptRepositoryOracle"
+    trackedFileUrl = $trackedFileUrl
+    trackedFileContent = $trackedContent
+    loadFileUrl = $loadFileUrl
+    loadFileContent = $loadContent
+    unselectedFileUrl = $unselectedFileUrl
+    unselectedFileRepositoryContent = $unselectedContent
+    changedPaths = $changedPaths
+    latestLogContainsCommitMessage = $true
+    allSelectedFilesCommitted = $true
+    exactlyReviewedPathsCommitted = $true
+    unselectedProbeRemainedUncommitted = $true
+  }
+}
+
 function Get-CommitSelectedMultiSelectionRepositoryOracle(
   [string]$SvnExe,
   [pscustomobject]$Fixture,
@@ -1354,6 +1415,8 @@ function Write-HarnessPackage(
   [string]$RemoveKeepLocalPromptReadyPath,
   [string]$MovePromptReadyPath,
   [string]$MoveCancellationPromptReadyPath,
+  [string]$CommitPromptReadyPath,
+  [string]$CommitPromptDonePath,
   [string]$CheckoutCancellationPromptReadyPath,
   [string]$CheckoutCancellationPromptDonePath,
   [string]$CheckoutExistingTargetFailureUrlPromptReadyPath,
@@ -1482,6 +1545,7 @@ function Write-HarnessPackage(
   [string]$CommitAllWorkingCopyRoot,
   [string]$CommitSelectedWorkingCopyRoot,
   [string]$CommitSelectedMultiSelectionWorkingCopyRoot,
+  [string]$ReviewCommitPromptWorkingCopyRoot,
   [string]$CheckoutRepositoryUrl,
   [string]$CheckoutCancellationTargetWorkingCopyRoot,
   [string]$CheckoutExistingTargetFailureTargetPath,
@@ -1655,6 +1719,32 @@ function serializeError(error) {
 
 function sha256File(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function sha256DirectoryTree(rootPath) {
+  const hash = crypto.createHash("sha256");
+  const visit = (directoryPath, relativeDirectory) => {
+    const entries = fs.readdirSync(directoryPath, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      const absolutePath = path.join(directoryPath, entry.name);
+      hash.update(relativePath, "utf8");
+      hash.update("\0", "utf8");
+      if (entry.isDirectory()) {
+        hash.update("dir\0", "utf8");
+        visit(absolutePath, relativePath);
+      } else if (entry.isFile()) {
+        hash.update("file\0", "utf8");
+        hash.update(fs.readFileSync(absolutePath));
+      } else {
+        throw new Error(`Installed commit evidence does not support non-file fixture entry: ${relativePath}`);
+      }
+      hash.update("\0", "utf8");
+    }
+  };
+  visit(rootPath, "");
+  return hash.digest("hex");
 }
 
 function directoryEntries(directoryPath) {
@@ -3086,7 +3176,93 @@ async function runDeleteUnversionedWorkflow(openReport, workingCopyRoot, deleteP
   };
 }
 
-async function runCommitAllWorkflow(commitAllWorkingCopyRoot) {
+function commitMessagePromptCaptureExpectations(message, interaction) {
+  return {
+    requiredDomTokens: ["Commit SVN changes", "Enter an SVN commit message for", "SVN commit message"],
+    requiredAccessibilityTokens: ["Commit SVN changes", "SVN commit message"],
+    requiredScreenshot: true,
+    ...(interaction === "cancel"
+      ? { cancelKey: "Escape" }
+      : { inputText: message, submitKey: "Enter" })
+  };
+}
+
+function reviewCommitSelectionCaptureExpectations(requiredPaths) {
+  return {
+    requiredDomTokens: ["Review SVN commit", ...requiredPaths],
+    requiredAccessibilityTokens: ["Review SVN commit", ...requiredPaths],
+    requiredScreenshot: true,
+    quickInputSubmitKey: "Enter"
+  };
+}
+
+async function publishCommitPromptReadyAndWait(readyPath, donePath, phase, payload) {
+  if (typeof readyPath !== "string" || readyPath.length === 0 || typeof donePath !== "string" || donePath.length === 0) {
+    throw new Error(`Installed commit prompt coordination paths are required for phase ${phase}.`);
+  }
+  fs.rmSync(donePath, { force: true });
+  fs.writeFileSync(readyPath, JSON.stringify({ ok: true, phase, ...payload }, null, 2));
+  await waitForFile(donePath, 120000);
+  fs.rmSync(readyPath, { force: true });
+}
+
+async function collectCommitDiagnostics(diagnosticsToken, label) {
+  if (typeof diagnosticsToken !== "string" || diagnosticsToken.length === 0) {
+    throw new Error(`Installed commit diagnostics token is required for ${label}.`);
+  }
+  const report = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedRedactionReport", { token: diagnosticsToken }),
+    `subversionr.diagnostics.installedRedactionReport/${label}`,
+    30000
+  );
+  if (!report || report.kind !== "subversionr.installedRedactionReport" || !report.diagnosticsBundle?.operationJournal) {
+    throw new Error(`Installed commit diagnostics ${label} did not expose the redacted operation journal.`);
+  }
+  return report;
+}
+
+async function probeEmptyCommitMessageHistory(repositoryId, label) {
+  let settled = false;
+  let result;
+  let commandError;
+  const commandPromise = vscode.commands.executeCommand("subversionr.pickCommitMessageHistory", repositoryId).then(
+    value => {
+      result = value;
+      settled = true;
+    },
+    error => {
+      commandError = error;
+      settled = true;
+    }
+  );
+  const deadline = Date.now() + 5000;
+  let notificationClearAttempts = 0;
+  while (!settled && Date.now() < deadline) {
+    await Promise.race([
+      commandPromise,
+      new Promise(resolve => setTimeout(resolve, 100))
+    ]);
+    if (!settled) {
+      await clearWorkbenchNotificationsBeforePrompt(`commitMessageHistory/${label}/${notificationClearAttempts + 1}`);
+      notificationClearAttempts += 1;
+    }
+  }
+  if (!settled) {
+    throw new Error(`subversionr.pickCommitMessageHistory/${label} did not settle after clearing notifications; message history may not be empty.`);
+  }
+  if (commandError) {
+    throw commandError;
+  }
+  return {
+    command: "subversionr.pickCommitMessageHistory",
+    completedWithoutQuickPickInteraction: true,
+    returnedUndefined: result === undefined,
+    historyEmpty: result === undefined,
+    notificationClearAttempts
+  };
+}
+
+async function runCommitAllWorkflow(commitAllWorkingCopyRoot, commitPromptReadyPath, commitPromptDonePath) {
   let commitAllOpenReport;
   try {
     commitAllOpenReport = await withTimeout(
@@ -3122,31 +3298,18 @@ async function runCommitAllWorkflow(commitAllWorkingCopyRoot) {
       throw new Error("Installed Commit All workflow could not find the excluded unversioned resource.");
     }
 
-    const commitMessage = "commit all eligible changed file resources for the repository input message";
-    const setInputReport = await withTimeout(
-      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage", {
-        repositoryId: commitAllOpenReport.repository.repositoryId,
-        message: commitMessage
-      }),
-      "subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage/commitAll",
-      30000
-    );
-    if (
-      !setInputReport ||
-      setInputReport.kind !== "subversionr.installedSourceControlUiE2eSetInputMessageReport" ||
-      setInputReport.repositoryId !== commitAllOpenReport.repository.repositoryId ||
-      setInputReport.previousMessageLength !== 0 ||
-      setInputReport.messageLength !== commitMessage.length ||
-      setInputReport.inputMessageSet !== true
-    ) {
-      throw new Error("Installed Commit All workflow did not set the repository SourceControl input message.");
-    }
-
-    await withTimeout(
+    const commitMessage = "commit all eligible changed file resources from the explicit message prompt";
+    const commitCommand = withTimeout(
       vscode.commands.executeCommand(acceptInputCommand, ...acceptInputCommandArguments),
       "subversionr.commitAll",
       60000
     );
+    const promptExpectations = commitMessagePromptCaptureExpectations(commitMessage, "submit");
+    await publishCommitPromptReadyAndWait(commitPromptReadyPath, commitPromptDonePath, "commitAllMessagePrompt", {
+      command: "subversionr.commitAll",
+      rendererCaptureExpectations: promptExpectations
+    });
+    await commitCommand;
 
     const postCommitFreshnessReport = await collectFreshnessReportWithSurfaceRetry(
       {
@@ -3205,7 +3368,10 @@ async function runCommitAllWorkflow(commitAllWorkingCopyRoot) {
       },
       input: {
         messageLength: commitMessage.length,
-        setInputReport,
+        prompt: {
+          startedFromEmptyInput: true,
+          rendererCaptureExpectations: promptExpectations
+        },
         postCommitProbePreviousMessageLength: inputProbeAfterCommit.previousMessageLength
       },
       targets: {
@@ -3216,7 +3382,8 @@ async function runCommitAllWorkflow(commitAllWorkingCopyRoot) {
       closeReport: commitAllCloseReport,
       assertions: {
         commandExecuted: true,
-        inputMessageWasSet: setInputReport.inputMessageSet === true,
+        emptyInputPrompted: promptExpectations.inputText === commitMessage,
+        inputMessageWasSet: false,
         inputMessageClearedAfterCommit: inputProbeAfterCommit.previousMessageLength === 0,
         trackedFileCommitted: !trackedResourceAfter,
         unversionedPathRemainedUnversioned: Boolean(unversionedResourceAfter) && scratchFileExistsAfter,
@@ -3388,6 +3555,113 @@ async function runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelect
       "subversionr.diagnostics.installedSourceControlUiE2eOpenReport/commitSelectedMultiSelection",
       60000
     );
+    const firstSelected = findResource(commitSelectedMultiSelectionOpenReport, "changes", "src/tracked.txt", "subversionr.changedFile.baseDiffable");
+    const secondSelected = findResource(commitSelectedMultiSelectionOpenReport, "changes", "load/modified-001.txt", "subversionr.changedFile.baseDiffable");
+    if (!firstSelected || !secondSelected) {
+      throw new Error("Installed Commit Selected multi-selection workflow could not find both selected resources.");
+    }
+    const commitMessage = "commit selected SCM resources from a Source Control multi-selection";
+    const setInputReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage", {
+        repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
+        message: commitMessage
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage/commitSelectedMultiSelection",
+      30000
+    );
+    const commandArguments = [
+      resourceStateArgument(commitSelectedMultiSelectionWorkingCopyRoot, firstSelected),
+      resourceStateArgument(commitSelectedMultiSelectionWorkingCopyRoot, secondSelected)
+    ];
+    await withTimeout(vscode.commands.executeCommand("subversionr.commitResource", commandArguments), "subversionr.commitResource/multiSelection", 60000);
+    const expectedRefreshTargets = [firstSelected, secondSelected].map(resource => ({
+      path: resource.path,
+      depth: "empty",
+      reason: "operationCommit"
+    }));
+    const postCommitObservation = await collectFreshnessReportUntilPathsAbsent(
+      {
+        repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
+        epoch: commitSelectedMultiSelectionOpenReport.repository.epoch,
+        scenario: "partial"
+      },
+      "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport/commitSelectedMultiSelection",
+      [firstSelected.path, secondSelected.path],
+      commitSelectedMultiSelectionOpenReport,
+      expectedRefreshTargets,
+      30000
+    );
+    const postCommitFreshnessReport = postCommitObservation.report;
+    const firstSelectedResourceAfter = findAnyResource(postCommitFreshnessReport, firstSelected.path);
+    const secondSelectedResourceAfter = findAnyResource(postCommitFreshnessReport, secondSelected.path);
+    const coverageReport = postCommitObservation.coverageReport;
+    const inputProbeAfterCommit = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage", {
+        repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
+        message: "post-commit-selected-multi-selection input clear probe"
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage/postCommitSelectedMultiSelectionProbe",
+      30000
+    );
+    const closeReport = await closeOpenReport(commitSelectedMultiSelectionOpenReport);
+    const selectedPathsCleared = !firstSelectedResourceAfter && !secondSelectedResourceAfter;
+    const targetedReconcileMatched = coverageReport.targets[0].path === firstSelected.path &&
+      coverageReport.targets[0].reason === "operationCommit" &&
+      coverageReport.coverage[0].path === firstSelected.path &&
+      coverageReport.targets[1].path === secondSelected.path &&
+      coverageReport.targets[1].reason === "operationCommit" &&
+      coverageReport.coverage[1].path === secondSelected.path;
+    return {
+      kind: "subversionr.installedSourceControlUiE2eCommitSelectedMultiSelectionWorkflow",
+      generatedAt: new Date().toISOString(),
+      command: {
+        command: "subversionr.commitResource",
+        argumentShape: "resourceStateArray",
+        arguments: [firstSelected, secondSelected].map(resource => ({
+          path: resource.path,
+          contextValue: resource.contextValue,
+          kind: resource.kind,
+          generation: resource.generation
+        }))
+      },
+      repository: {
+        repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
+        epoch: commitSelectedMultiSelectionOpenReport.repository.epoch,
+        workingCopyRoot: commitSelectedMultiSelectionOpenReport.repository.identity.workingCopyRoot
+      },
+      input: {
+        messageLength: commitMessage.length,
+        setInputReport,
+        postCommitProbePreviousMessageLength: inputProbeAfterCommit.previousMessageLength
+      },
+      targets: { selectedPaths: [firstSelected.path, secondSelected.path] },
+      postCommitFreshnessReport,
+      closeReport,
+      assertions: {
+        commandExecuted: true,
+        inputMessageWasSet: setInputReport.inputMessageSet === true,
+        inputMessageClearedAfterCommit: inputProbeAfterCommit.previousMessageLength === 0,
+        allSelectedFilesCommitted: selectedPathsCleared,
+        sourceControlProjectionClearedSelectedPaths: selectedPathsCleared,
+        targetedReconcileAfterCommit: targetedReconcileMatched
+      }
+    };
+  } catch (error) {
+    if (commitSelectedMultiSelectionOpenReport) {
+      try { await closeOpenReport(commitSelectedMultiSelectionOpenReport); } catch {}
+    }
+    throw error;
+  }
+}
+
+async function runReviewCommitPromptWorkflow(commitSelectedMultiSelectionWorkingCopyRoot, commitPromptReadyPath, commitPromptDonePath, commitDiagnosticsToken) {
+  let commitSelectedMultiSelectionOpenReport;
+  try {
+    commitSelectedMultiSelectionOpenReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eOpenReport", { path: commitSelectedMultiSelectionWorkingCopyRoot }),
+      "subversionr.diagnostics.installedSourceControlUiE2eOpenReport/commitSelectedMultiSelection",
+      60000
+    );
     if (!commitSelectedMultiSelectionOpenReport || commitSelectedMultiSelectionOpenReport.kind !== "subversionr.installedSourceControlUiE2eOpenReport") {
       throw new Error(`Unexpected installed Source Control UI E2E Commit Selected multi-selection open report kind: ${commitSelectedMultiSelectionOpenReport && commitSelectedMultiSelectionOpenReport.kind}`);
     }
@@ -3404,48 +3678,197 @@ async function runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelect
       throw new Error("Installed Commit Selected multi-selection workflow could not find the second selected modified tracked resource.");
     }
 
-    const commitMessage = "commit selected SCM resources from a Source Control multi-selection";
-    const setInputReport = await withTimeout(
-      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage", {
-        repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
-        message: commitMessage
-      }),
-      "subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage/commitSelectedMultiSelection",
-      30000
-    );
-    if (
-      !setInputReport ||
-      setInputReport.kind !== "subversionr.installedSourceControlUiE2eSetInputMessageReport" ||
-      setInputReport.repositoryId !== commitSelectedMultiSelectionOpenReport.repository.repositoryId ||
-      setInputReport.previousMessageLength !== 0 ||
-      setInputReport.messageLength !== commitMessage.length ||
-      setInputReport.inputMessageSet !== true
-    ) {
-      throw new Error("Installed Commit Selected multi-selection workflow did not set the repository SourceControl input message.");
-    }
+    const reviewedPaths = [firstSelected.path, secondSelected.path];
+    const repositoryId = commitSelectedMultiSelectionOpenReport.repository.repositoryId;
+    const svnMetadataRoot = path.join(commitSelectedMultiSelectionWorkingCopyRoot, ".svn");
+    const firstSelectedFsPath = resourceFsPath(commitSelectedMultiSelectionWorkingCopyRoot, firstSelected.path);
+    const secondSelectedFsPath = resourceFsPath(commitSelectedMultiSelectionWorkingCopyRoot, secondSelected.path);
+    const cancellationBytesBefore = {
+      svnTreeSha256: sha256DirectoryTree(svnMetadataRoot),
+      firstSelectedSha256: sha256File(firstSelectedFsPath),
+      secondSelectedSha256: sha256File(secondSelectedFsPath)
+    };
+    const cancellationDiagnosticsBefore = await collectCommitDiagnostics(commitDiagnosticsToken, "reviewCommitCancellationBefore");
+    const cancellationHistoryBefore = await probeEmptyCommitMessageHistory(repositoryId, "beforeReviewCommitCancellation");
 
-    const commandArguments = [
-      resourceStateArgument(commitSelectedMultiSelectionWorkingCopyRoot, firstSelected),
-      resourceStateArgument(commitSelectedMultiSelectionWorkingCopyRoot, secondSelected)
-    ];
-    await withTimeout(
-      vscode.commands.executeCommand("subversionr.commitResource", commandArguments),
-      "subversionr.commitResource/multiSelection",
+    const cancelledReviewCommand = withTimeout(
+      vscode.commands.executeCommand("subversionr.reviewCommit", repositoryId),
+      "subversionr.reviewCommit/cancelledMessagePrompt",
       60000
     );
+    const initialSelectionExpectations = reviewCommitSelectionCaptureExpectations(reviewedPaths);
+    await publishCommitPromptReadyAndWait(commitPromptReadyPath, commitPromptDonePath, "reviewCommitInitialSelection", {
+      command: "subversionr.reviewCommit",
+      rendererCaptureExpectations: initialSelectionExpectations
+    });
+    const cancellationPromptExpectations = commitMessagePromptCaptureExpectations("", "cancel");
+    await publishCommitPromptReadyAndWait(commitPromptReadyPath, commitPromptDonePath, "reviewCommitMessageCancellation", {
+      command: "subversionr.reviewCommit",
+      rendererCaptureExpectations: cancellationPromptExpectations
+    });
+    await cancelledReviewCommand;
 
-    const expectedRefreshTargets = [
-      {
-        path: firstSelected.path,
-        depth: "empty",
-        reason: "operationCommit"
-      },
-      {
-        path: secondSelected.path,
-        depth: "empty",
-        reason: "operationCommit"
+    const cancellationSurfaceReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport", {
+        path: commitSelectedMultiSelectionWorkingCopyRoot
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/reviewCommitCancellation",
+      30000
+    );
+    const cancellationDiagnosticsAfter = await collectCommitDiagnostics(commitDiagnosticsToken, "reviewCommitCancellationAfter");
+    const cancellationBytesAfter = {
+      svnTreeSha256: sha256DirectoryTree(svnMetadataRoot),
+      firstSelectedSha256: sha256File(firstSelectedFsPath),
+      secondSelectedSha256: sha256File(secondSelectedFsPath)
+    };
+    const cancellationProjectionUnchanged = sourceControlProjectionMatches(
+      cancellationSurfaceReport,
+      commitSelectedMultiSelectionOpenReport
+    );
+    const cancellationRefreshUnchanged = JSON.stringify(cancellationSurfaceReport.lastCompletedRefresh ?? null) ===
+      JSON.stringify(commitSelectedMultiSelectionOpenReport.lastCompletedRefresh ?? null);
+    const cancellationJournalUnchanged = JSON.stringify(cancellationDiagnosticsAfter.diagnosticsBundle.operationJournal) ===
+      JSON.stringify(cancellationDiagnosticsBefore.diagnosticsBundle.operationJournal);
+    const cancellationBytesUnchanged = JSON.stringify(cancellationBytesAfter) === JSON.stringify(cancellationBytesBefore);
+    if (!cancellationProjectionUnchanged || !cancellationRefreshUnchanged || !cancellationJournalUnchanged || !cancellationBytesUnchanged) {
+      throw new Error("Installed Review & Commit message cancellation changed working-copy bytes, Source Control projection, refresh coverage, or the operation journal.");
+    }
+    const cancellationHistoryAfter = await probeEmptyCommitMessageHistory(repositoryId, "afterReviewCommitCancellation");
+    const cancellationHistoryUnchanged = cancellationHistoryBefore.completedWithoutQuickPickInteraction === true &&
+      cancellationHistoryBefore.returnedUndefined === true &&
+      cancellationHistoryAfter.completedWithoutQuickPickInteraction === true &&
+      cancellationHistoryAfter.returnedUndefined === true;
+    if (!cancellationHistoryUnchanged) {
+      throw new Error("Installed Review & Commit cancellation changed the empty commit-message history contract.");
+    }
+
+    const retainedProbePath = "load/modified-002.txt";
+    const retainedProbeFsPath = resourceFsPath(commitSelectedMultiSelectionWorkingCopyRoot, retainedProbePath);
+    fs.writeFileSync(retainedProbeFsPath, "modified after review message cancellation by M7j3\n", "utf8");
+    const retainedProbeDirtyEvent = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eDirtyEvent", {
+        repositoryId,
+        fsPath: retainedProbeFsPath,
+        kind: "changed",
+        timestamp: Date.now()
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eDirtyEvent/reviewCommitRetainedProbe",
+      30000
+    );
+    if (!retainedProbeDirtyEvent || retainedProbeDirtyEvent.accepted !== true) {
+      throw new Error("Installed Review & Commit retained-selection probe dirty event was not accepted.");
+    }
+    let retainedProbeSurfaceReport;
+    const retainedProbeDeadline = Date.now() + 30000;
+    while (Date.now() < retainedProbeDeadline) {
+      retainedProbeSurfaceReport = await withTimeout(
+        vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport", {
+          path: commitSelectedMultiSelectionWorkingCopyRoot
+        }),
+        "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/reviewCommitRetainedProbe",
+        5000
+      );
+      if (findResource(retainedProbeSurfaceReport, "changes", retainedProbePath, "subversionr.changedFile.baseDiffable")) {
+        break;
       }
-    ];
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    const retainedProbe = findResource(
+      retainedProbeSurfaceReport,
+      "changes",
+      retainedProbePath,
+      "subversionr.changedFile.baseDiffable"
+    );
+    if (!retainedProbe) {
+      throw new Error("Installed Review & Commit retained-selection probe was not projected before the forced failure.");
+    }
+
+    const failedCommitMessage = "force installed Review & Commit hook rejection";
+    const failedReviewCommand = withTimeout(
+      vscode.commands.executeCommand("subversionr.reviewCommit", repositoryId),
+      "subversionr.reviewCommit/forcedFailure",
+      60000
+    );
+    const failureSelectionExpectations = reviewCommitSelectionCaptureExpectations([...reviewedPaths, retainedProbePath]);
+    await publishCommitPromptReadyAndWait(commitPromptReadyPath, commitPromptDonePath, "reviewCommitFailureSelection", {
+      command: "subversionr.reviewCommit",
+      rendererCaptureExpectations: failureSelectionExpectations
+    });
+    const failureMessageExpectations = commitMessagePromptCaptureExpectations(failedCommitMessage, "submit");
+    await publishCommitPromptReadyAndWait(commitPromptReadyPath, commitPromptDonePath, "reviewCommitFailureMessage", {
+      command: "subversionr.reviewCommit",
+      rendererCaptureExpectations: failureMessageExpectations
+    });
+    await failedReviewCommand;
+    await clearWorkbenchNotificationsBeforePrompt("reviewCommitForcedFailure");
+
+    const failedSurfaceReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport", {
+        path: commitSelectedMultiSelectionWorkingCopyRoot
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/reviewCommitForcedFailure",
+      30000
+    );
+    const failedResourcesRemain = [firstSelected, secondSelected, retainedProbe].every(resource =>
+      Boolean(findResource(failedSurfaceReport, "changes", resource.path, "subversionr.changedFile.baseDiffable"))
+    );
+    const failureDiagnostics = await collectCommitDiagnostics(commitDiagnosticsToken, "reviewCommitForcedFailure");
+    const failureEntries = failureDiagnostics.diagnosticsBundle.operationJournal.entries;
+    const forcedFailureJournalEntry = Array.isArray(failureEntries) ? failureEntries.find(entry =>
+      entry.kind === "commit" && entry.resultCategory === "failed" && entry.touchedCount === reviewedPaths.length
+    ) : undefined;
+    const forcedFailureJournaled = Boolean(forcedFailureJournalEntry);
+    if (!failedResourcesRemain || !forcedFailureJournaled) {
+      throw new Error("Installed forced Review & Commit failure did not preserve all changed resources or journal the exact reviewed target count.");
+    }
+    const failureHistoryAfter = await probeEmptyCommitMessageHistory(repositoryId, "afterReviewCommitFailure");
+    if (!failureHistoryAfter.completedWithoutQuickPickInteraction || !failureHistoryAfter.returnedUndefined) {
+      throw new Error("Installed forced Review & Commit failure wrote commit-message history before success.");
+    }
+    const commitMessage = "commit exactly the retained Review & Commit selection";
+    const successMessageReplacementReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage", {
+        repositoryId,
+        message: commitMessage
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage/reviewCommitSuccessMessageReplacement",
+      30000
+    );
+    const failedMessageRetained = Boolean(
+      successMessageReplacementReport &&
+      successMessageReplacementReport.kind === "subversionr.installedSourceControlUiE2eSetInputMessageReport" &&
+      successMessageReplacementReport.repositoryId === repositoryId &&
+      successMessageReplacementReport.previousMessageLength === failedCommitMessage.length &&
+      successMessageReplacementReport.messageLength === commitMessage.length &&
+      successMessageReplacementReport.inputMessageSet === true
+    );
+    if (!failedMessageRetained) {
+      throw new Error("Installed forced Review & Commit failure did not retain the exact failed message before the explicit success-message replacement.");
+    }
+    await publishCommitPromptReadyAndWait(commitPromptReadyPath, commitPromptDonePath, "reviewCommitFailureObserved", {
+      command: "subversionr.reviewCommit",
+      reviewedPaths,
+      retainedProbePath
+    });
+
+    const successfulReviewCommand = withTimeout(
+      vscode.commands.executeCommand("subversionr.reviewCommit", repositoryId),
+      "subversionr.reviewCommit/success",
+      60000
+    );
+    const successSelectionExpectations = reviewCommitSelectionCaptureExpectations([...reviewedPaths, retainedProbePath]);
+    await publishCommitPromptReadyAndWait(commitPromptReadyPath, commitPromptDonePath, "reviewCommitSuccessSelection", {
+      command: "subversionr.reviewCommit",
+      rendererCaptureExpectations: successSelectionExpectations
+    });
+    await successfulReviewCommand;
+
+    const canonicalReviewedPaths = [...reviewedPaths].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+    const expectedRefreshTargets = canonicalReviewedPaths.map(reviewedPath => ({
+      path: reviewedPath,
+      depth: "empty",
+      reason: "operationCommit"
+    }));
     const postCommitObservation = await collectFreshnessReportUntilPathsAbsent(
       {
         repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
@@ -3453,7 +3876,7 @@ async function runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelect
         scenario: "partial"
       },
       "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport/commitSelectedMultiSelection",
-      [firstSelected.path, secondSelected.path],
+      reviewedPaths,
       commitSelectedMultiSelectionOpenReport,
       expectedRefreshTargets,
       30000
@@ -3464,6 +3887,12 @@ async function runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelect
     }
     const firstSelectedResourceAfter = findAnyResource(postCommitFreshnessReport, firstSelected.path);
     const secondSelectedResourceAfter = findAnyResource(postCommitFreshnessReport, secondSelected.path);
+    const retainedProbeResourceAfter = findResource(
+      postCommitFreshnessReport,
+      "changes",
+      retainedProbePath,
+      "subversionr.changedFile.baseDiffable"
+    );
     const coverageReport = postCommitObservation.coverageReport;
 
     const inputProbeAfterCommit = await withTimeout(
@@ -3488,25 +3917,27 @@ async function runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelect
     }
 
     const selectedPathsCleared = !firstSelectedResourceAfter && !secondSelectedResourceAfter;
-    const targetedReconcileMatched = coverageReport.targets[0].path === firstSelected.path &&
-      coverageReport.targets[0].reason === "operationCommit" &&
-      coverageReport.coverage[0].path === firstSelected.path &&
-      coverageReport.targets[1].path === secondSelected.path &&
-      coverageReport.targets[1].reason === "operationCommit" &&
-      coverageReport.coverage[1].path === secondSelected.path;
+    const targetedReconcileMatched = coverageReport.targets.length === expectedRefreshTargets.length &&
+      coverageReport.coverage.length === expectedRefreshTargets.length &&
+      expectedRefreshTargets.every((expectedTarget, index) => {
+        const target = coverageReport.targets[index];
+        const coverage = coverageReport.coverage[index];
+        return target.path === expectedTarget.path &&
+          target.depth === expectedTarget.depth &&
+          target.reason === expectedTarget.reason &&
+          coverage.path === expectedTarget.path &&
+          coverage.depth === expectedTarget.depth &&
+          coverage.reason === expectedTarget.reason &&
+          coverage.generation === coverageReport.generation;
+      });
 
     return {
-      kind: "subversionr.installedSourceControlUiE2eCommitSelectedMultiSelectionWorkflow",
+      kind: "subversionr.installedSourceControlUiE2eReviewCommitPromptWorkflow",
       generatedAt: new Date().toISOString(),
       command: {
-        command: "subversionr.commitResource",
-        argumentShape: "resourceStateArray",
-        arguments: [firstSelected, secondSelected].map(resource => ({
-          path: resource.path,
-          contextValue: resource.contextValue,
-          kind: resource.kind,
-          generation: resource.generation
-        }))
+        command: "subversionr.reviewCommit",
+        argumentShape: "repositoryId",
+        arguments: [repositoryId]
       },
       repository: {
         repositoryId: commitSelectedMultiSelectionOpenReport.repository.repositoryId,
@@ -3515,19 +3946,51 @@ async function runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelect
       },
       input: {
         messageLength: commitMessage.length,
-        setInputReport,
+        startedFromEmptyInput: true,
+        cancellationPrompt: cancellationPromptExpectations,
+        failurePrompt: failureMessageExpectations,
+        successMessageReplacementReport,
         postCommitProbePreviousMessageLength: inputProbeAfterCommit.previousMessageLength
       },
       targets: {
-        selectedPaths: [firstSelected.path, secondSelected.path]
+        selectedPaths: reviewedPaths,
+        retainedProbePath
+      },
+      cancellation: {
+        bytesBefore: cancellationBytesBefore,
+        bytesAfter: cancellationBytesAfter,
+        diagnosticsBefore: cancellationDiagnosticsBefore,
+        diagnosticsAfter: cancellationDiagnosticsAfter,
+        historyBefore: cancellationHistoryBefore,
+        historyAfter: cancellationHistoryAfter,
+        surfaceAfter: cancellationSurfaceReport
+      },
+      forcedFailure: {
+        messageLength: failedCommitMessage.length,
+        surfaceAfter: failedSurfaceReport,
+        diagnostics: failureDiagnostics,
+        journalEntry: forcedFailureJournalEntry,
+        historyAfter: failureHistoryAfter,
+        successMessageReplacementReport,
+        failedMessageRetained
       },
       postCommitFreshnessReport,
       closeReport: commitSelectedMultiSelectionCloseReport,
       assertions: {
         commandExecuted: true,
-        inputMessageWasSet: setInputReport.inputMessageSet === true,
+        emptyInputPrompted: true,
+        promptCancellationBytesUnchanged: cancellationBytesUnchanged,
+        promptCancellationProjectionUnchanged: cancellationProjectionUnchanged,
+        promptCancellationRefreshUnchanged: cancellationRefreshUnchanged,
+        promptCancellationJournalUnchanged: cancellationJournalUnchanged,
+        promptCancellationHistoryUnchanged: cancellationHistoryUnchanged,
+        reviewedSelectionRetainedAfterCancellation: forcedFailureJournaled && Boolean(retainedProbeResourceAfter),
+        reviewedSelectionRetainedAfterFailure: selectedPathsCleared && Boolean(retainedProbeResourceAfter),
+        forcedCommitFailureObserved: forcedFailureJournaled,
+        failedMessageRetained,
         inputMessageClearedAfterCommit: inputProbeAfterCommit.previousMessageLength === 0,
         allSelectedFilesCommitted: selectedPathsCleared,
+        unselectedProbeStillModified: Boolean(retainedProbeResourceAfter),
         sourceControlProjectionClearedSelectedPaths: selectedPathsCleared,
         targetedReconcileAfterCommit: targetedReconcileMatched
       }
@@ -8752,6 +9215,9 @@ async function run() {
   const removeKeepLocalPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REMOVE_KEEP_LOCAL_PROMPT_READY;
   const movePromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_PROMPT_READY;
   const moveCancellationPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_CANCELLATION_PROMPT_READY;
+  const commitPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_READY;
+  const commitPromptDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_DONE;
+  const commitDiagnosticsToken = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_DIAGNOSTICS_TOKEN;
   const checkoutCancellationPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_READY;
   const checkoutCancellationPromptDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_DONE;
   const checkoutExistingTargetFailureUrlPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_URL_PROMPT_READY;
@@ -8880,6 +9346,7 @@ async function run() {
   const commitAllWorkingCopyRoot = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_ALL_WORKING_COPY;
   const commitSelectedWorkingCopyRoot = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_WORKING_COPY;
   const commitSelectedMultiSelectionWorkingCopyRoot = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_MULTI_SELECTION_WORKING_COPY;
+  const reviewCommitPromptWorkingCopyRoot = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVIEW_COMMIT_PROMPT_WORKING_COPY;
   const checkoutRepositoryUrl = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_URL;
   const checkoutCancellationTargetWorkingCopyRoot = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_TARGET_WORKING_COPY;
   const checkoutExistingTargetFailureTargetPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_TARGET_PATH;
@@ -8935,6 +9402,9 @@ async function run() {
     !removeKeepLocalPromptReadyPath ||
     !movePromptReadyPath ||
     !moveCancellationPromptReadyPath ||
+    !commitPromptReadyPath ||
+    !commitPromptDonePath ||
+    !commitDiagnosticsToken ||
     !checkoutCancellationPromptReadyPath ||
     !checkoutCancellationPromptDonePath ||
     !checkoutExistingTargetFailureUrlPromptReadyPath ||
@@ -9065,6 +9535,7 @@ async function run() {
     !commitAllWorkingCopyRoot ||
     !commitSelectedWorkingCopyRoot ||
     !commitSelectedMultiSelectionWorkingCopyRoot ||
+    !reviewCommitPromptWorkingCopyRoot ||
     !checkoutRepositoryUrl ||
     !checkoutCancellationTargetWorkingCopyRoot ||
     !checkoutExistingTargetFailureTargetPath ||
@@ -9133,6 +9604,7 @@ async function run() {
   let commitAllReport;
   let commitSelectedReport;
   let commitSelectedMultiSelectionReport;
+  let reviewCommitPromptReport;
   let addToIgnoreReport;
   let readonlyPropertyReportWorkflow;
   let lockUnlockReport;
@@ -9194,6 +9666,7 @@ async function run() {
       commitAllReport,
       commitSelectedReport,
       commitSelectedMultiSelectionReport,
+      reviewCommitPromptReport,
       addToIgnoreReport,
       readonlyPropertyReportWorkflow,
       lockUnlockReport,
@@ -9501,7 +9974,7 @@ async function run() {
     writeResult(partialResult());
 
     phase = "executingCommitAll";
-    commitAllReport = await runCommitAllWorkflow(commitAllWorkingCopyRoot);
+    commitAllReport = await runCommitAllWorkflow(commitAllWorkingCopyRoot, commitPromptReadyPath, commitPromptDonePath);
     writeResult(partialResult());
 
     phase = "executingCommitSelected";
@@ -9510,6 +9983,10 @@ async function run() {
 
     phase = "executingCommitSelectedMultiSelection";
     commitSelectedMultiSelectionReport = await runCommitSelectedMultiSelectionWorkflow(commitSelectedMultiSelectionWorkingCopyRoot);
+    writeResult(partialResult());
+
+    phase = "executingReviewCommitPromptWorkflow";
+    reviewCommitPromptReport = await runReviewCommitPromptWorkflow(reviewCommitPromptWorkingCopyRoot, commitPromptReadyPath, commitPromptDonePath, commitDiagnosticsToken);
     writeResult(partialResult());
 
     phase = "executingAddToIgnore";
@@ -10023,6 +10500,7 @@ async function run() {
       commitAllReport,
       commitSelectedReport,
       commitSelectedMultiSelectionReport,
+      reviewCommitPromptReport,
       addToIgnoreReport,
       readonlyPropertyReportWorkflow,
       lockUnlockReport,
@@ -10103,6 +10581,8 @@ exports.run = run;
     RemoveKeepLocalPromptReadyPath = $RemoveKeepLocalPromptReadyPath
     MovePromptReadyPath = $MovePromptReadyPath
     MoveCancellationPromptReadyPath = $MoveCancellationPromptReadyPath
+    CommitPromptReadyPath = $CommitPromptReadyPath
+    CommitPromptDonePath = $CommitPromptDonePath
     CheckoutCancellationPromptReadyPath = $CheckoutCancellationPromptReadyPath
     CheckoutCancellationPromptDonePath = $CheckoutCancellationPromptDonePath
     CheckoutExistingTargetFailureUrlPromptReadyPath = $CheckoutExistingTargetFailureUrlPromptReadyPath
@@ -10231,6 +10711,7 @@ exports.run = run;
     CommitAllWorkingCopyRoot = $CommitAllWorkingCopyRoot
     CommitSelectedWorkingCopyRoot = $CommitSelectedWorkingCopyRoot
     CommitSelectedMultiSelectionWorkingCopyRoot = $CommitSelectedMultiSelectionWorkingCopyRoot
+    ReviewCommitPromptWorkingCopyRoot = $ReviewCommitPromptWorkingCopyRoot
     CheckoutRepositoryUrl = $CheckoutRepositoryUrl
     CheckoutCancellationTargetWorkingCopyRoot = $CheckoutCancellationTargetWorkingCopyRoot
     CheckoutExistingTargetFailureTargetPath = $CheckoutExistingTargetFailureTargetPath
@@ -10277,6 +10758,28 @@ function Wait-File([string]$Path, [int]$TimeoutSeconds, [string]$Description) {
     Start-Sleep -Milliseconds 250
   }
   throw "$Description timed out after $TimeoutSeconds seconds."
+}
+
+function Wait-FilePhaseAdvanced([string]$Path, [string]$CompletedPhase, [int]$TimeoutSeconds, [string]$Description) {
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+  while ($true) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+      return
+    }
+    try {
+      $readyPhase = [string]((Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json).phase)
+      if (-not [string]::IsNullOrWhiteSpace($readyPhase) -and $readyPhase -ne $CompletedPhase) {
+        return
+      }
+    }
+    catch {
+      # The writer may be replacing the phase sentinel; retry until a complete document is visible.
+    }
+    if ([DateTimeOffset]::UtcNow -gt $deadline) {
+      throw "$Description did not advance after phase $CompletedPhase."
+    }
+    Start-Sleep -Milliseconds 100
+  }
 }
 
 function Assert-ResourcePresent([object]$OpenReport, [string]$GroupId, [string]$Path, [string]$ContextValue) {
@@ -10554,7 +11057,7 @@ function Assert-HarnessResult(
     @($Result.commitAllReport.command.arguments)[0] -ne $Result.commitAllReport.repository.repositoryId -or
     @($Result.commitAllReport.targets.eligiblePaths)[0] -ne "src/tracked.txt" -or
     @($Result.commitAllReport.targets.excludedUnversionedPaths)[0] -ne "scratch.txt" -or
-    $Result.commitAllReport.assertions.inputMessageWasSet -ne $true -or
+    $Result.commitAllReport.assertions.emptyInputPrompted -ne $true -or
     $Result.commitAllReport.assertions.inputMessageClearedAfterCommit -ne $true -or
     $Result.commitAllReport.assertions.trackedFileCommitted -ne $true -or
     $Result.commitAllReport.assertions.unversionedPathRemainedUnversioned -ne $true -or
@@ -10587,6 +11090,40 @@ function Assert-HarnessResult(
     $Result.commitSelectedMultiSelectionReport.assertions.targetedReconcileAfterCommit -ne $true) {
     $commitSelectedMultiSelectionSummary = $Result.commitSelectedMultiSelectionReport | ConvertTo-Json -Depth 8 -Compress
     throw "Installed Source Control UI E2E result must include a Commit Selected multi-selection workflow proving SCM resource array execution, input clearing, selected-path commit, and targeted post-commit reconcile. Report: $commitSelectedMultiSelectionSummary"
+  }
+  if ($Result.reviewCommitPromptReport.kind -ne "subversionr.installedSourceControlUiE2eReviewCommitPromptWorkflow" -or
+    $Result.reviewCommitPromptReport.command.command -ne "subversionr.reviewCommit" -or
+    $Result.reviewCommitPromptReport.command.argumentShape -ne "repositoryId" -or
+    @($Result.reviewCommitPromptReport.command.arguments).Count -ne 1 -or
+    @($Result.reviewCommitPromptReport.command.arguments)[0] -ne $Result.reviewCommitPromptReport.repository.repositoryId -or
+    @($Result.reviewCommitPromptReport.targets.selectedPaths).Count -ne 2 -or
+    $Result.reviewCommitPromptReport.targets.retainedProbePath -ne "load/modified-002.txt" -or
+    $Result.reviewCommitPromptReport.assertions.emptyInputPrompted -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.promptCancellationBytesUnchanged -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.promptCancellationProjectionUnchanged -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.promptCancellationRefreshUnchanged -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.promptCancellationJournalUnchanged -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.promptCancellationHistoryUnchanged -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.reviewedSelectionRetainedAfterCancellation -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.reviewedSelectionRetainedAfterFailure -ne $true -or
+    $Result.reviewCommitPromptReport.forcedFailure.journalEntry.touchedCount -ne 2 -or
+    $Result.reviewCommitPromptReport.forcedFailure.failedMessageRetained -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.failedMessageRetained -ne $true -or
+    $Result.reviewCommitPromptReport.forcedFailure.successMessageReplacementReport.previousMessageLength -ne ("force installed Review & Commit hook rejection").Length -or
+    $Result.reviewCommitPromptReport.forcedFailure.successMessageReplacementReport.messageLength -ne ("commit exactly the retained Review & Commit selection").Length -or
+    $Result.reviewCommitPromptReport.input.successMessageReplacementReport.previousMessageLength -ne ("force installed Review & Commit hook rejection").Length -or
+    @($Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.targets).Count -ne 2 -or
+    @($Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.targets)[0].path -ne "load/modified-001.txt" -or
+    @($Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.targets)[0].depth -ne "empty" -or
+    @($Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.targets)[0].reason -ne "operationCommit" -or
+    @($Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.targets)[1].path -ne "src/tracked.txt" -or
+    @($Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.coverage).Count -ne 2 -or
+    @($Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.coverage)[0].generation -ne $Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.generation -or
+    @($Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.coverage)[1].generation -ne $Result.reviewCommitPromptReport.postCommitFreshnessReport.lastCompletedRefresh.generation -or
+    $Result.reviewCommitPromptReport.assertions.unselectedProbeStillModified -ne $true -or
+    $Result.reviewCommitPromptReport.assertions.targetedReconcileAfterCommit -ne $true) {
+    $reviewCommitPromptSummary = $Result.reviewCommitPromptReport | ConvertTo-Json -Depth 8 -Compress
+    throw "Installed Source Control UI E2E result must include the Review & Commit prompt cancellation, failure retention, exact reviewed paths, and targeted reconcile evidence. Report: $reviewCommitPromptSummary"
   }
   if ($Result.addToIgnoreReport.kind -ne "subversionr.installedSourceControlUiE2eAddToIgnoreWorkflow" -or
     $Result.addToIgnoreReport.command.command -ne "subversionr.addToIgnoreResource" -or
@@ -11479,7 +12016,7 @@ if ([string]::IsNullOrWhiteSpace($extensionVersion)) {
 
 $codeCliVersion = Get-CodeCliVersion $codeCliResolved
 $codeCliSha256 = (Get-FileHash -LiteralPath $codeCliResolved -Algorithm SHA256).Hash.ToLowerInvariant()
-$commitAllCommitMessage = "commit all eligible changed file resources for the repository input message"
+$commitAllCommitMessage = "commit all eligible changed file resources from the explicit message prompt"
 $commitAllExpectedTrackedContent = "modified by M7j3"
 $commitSelectedCommitMessage = "commit selected SCM resource from the repository input message"
 $commitSelectedExpectedTrackedContent = "modified by M7j3"
@@ -11487,6 +12024,10 @@ $commitSelectedExpectedUnselectedContent = "initial load item 1"
 $commitSelectedMultiSelectionCommitMessage = "commit selected SCM resources from a Source Control multi-selection"
 $commitSelectedMultiSelectionExpectedTrackedContent = "modified by M7j3"
 $commitSelectedMultiSelectionExpectedLoadContent = "modified load item load/modified-001.txt by M7j3"
+$reviewCommitPromptCommitMessage = "commit exactly the retained Review & Commit selection"
+$reviewCommitPromptExpectedTrackedContent = "modified by M7j3"
+$reviewCommitPromptExpectedLoadContent = "modified load item load/modified-001.txt by M7j3"
+$reviewCommitPromptExpectedUnselectedRepositoryContent = "initial load item 2"
 $commitChangelistCommitMessage = "commit selected SVN changelist from the repository input message"
 $commitChangelistExpectedTrackedContent = "modified by M7j3"
 $deleteUnversionedLoadItemCount = 64
@@ -11502,6 +12043,15 @@ $loadFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved 
 $commitAllFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "commit-all-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
 $commitSelectedFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "commit-selected-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved -ModifiedLoadItemCount 1
 $commitSelectedMultiSelectionFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "commit-selected-multi-selection-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved -ModifiedLoadItemCount 1
+$reviewCommitPromptFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "review-commit-prompt-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved -ModifiedLoadItemCount 2
+Set-Content -LiteralPath (Join-Path $reviewCommitPromptFixture.workingCopyRoot "load\modified-002.txt") -Value "initial load item 2`n" -NoNewline -Encoding utf8
+$reviewCommitPromptPreCommitHookPath = Join-Path $reviewCommitPromptFixture.repoPath "hooks\pre-commit.bat"
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $reviewCommitPromptPreCommitHookPath) | Out-Null
+@'
+@echo off
+echo forced installed Review ^& Commit failure 1>&2
+exit /b 1
+'@ | Set-Content -LiteralPath $reviewCommitPromptPreCommitHookPath -NoNewline -Encoding ascii
 $addToIgnoreFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "add-to-ignore-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
 $lockFixture = New-SourceControlUiLockFixture -Root (Join-Path $fixtureRootResolved "lock-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
 $changelistSetClearFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "changelist-set-clear-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
@@ -11615,6 +12165,8 @@ $harnessRemoveCancellationPromptDonePath = Join-Path $fixtureRootResolved "insta
 $harnessRemoveKeepLocalPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-remove-keep-local-prompt-ready.json"
 $harnessMovePromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-move-prompt-ready.json"
 $harnessMoveCancellationPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-move-cancellation-prompt-ready.json"
+$harnessCommitPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-commit-prompt-ready.json"
+$harnessCommitPromptDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-commit-prompt-done.json"
 $harnessCheckoutCancellationPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-checkout-cancellation-prompt-ready.json"
 $harnessCheckoutCancellationPromptDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-checkout-cancellation-prompt-done.json"
 $harnessCheckoutExistingTargetFailureUrlPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-checkout-existing-target-failure-url-prompt-ready.json"
@@ -11761,6 +12313,14 @@ $movePromptCaptureRoot = Join-Path $fixtureRootResolved "move-prompt-capture"
 $movePromptExpectationsPath = Join-Path $fixtureRootResolved "move-prompt-capture-expectations.json"
 $moveCancellationPromptCaptureRoot = Join-Path $fixtureRootResolved "move-cancellation-prompt-capture"
 $moveCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "move-cancellation-prompt-capture-expectations.json"
+$commitPromptCaptureSpecs = @(
+  [pscustomobject]@{ phase = "commitAllMessagePrompt"; root = Join-Path $fixtureRootResolved "commit-all-message-prompt-capture"; expectations = Join-Path $fixtureRootResolved "commit-all-message-prompt-expectations.json" },
+  [pscustomobject]@{ phase = "reviewCommitInitialSelection"; root = Join-Path $fixtureRootResolved "review-commit-initial-selection-capture"; expectations = Join-Path $fixtureRootResolved "review-commit-initial-selection-expectations.json" },
+  [pscustomobject]@{ phase = "reviewCommitMessageCancellation"; root = Join-Path $fixtureRootResolved "review-commit-message-cancellation-capture"; expectations = Join-Path $fixtureRootResolved "review-commit-message-cancellation-expectations.json" },
+  [pscustomobject]@{ phase = "reviewCommitFailureSelection"; root = Join-Path $fixtureRootResolved "review-commit-failure-selection-capture"; expectations = Join-Path $fixtureRootResolved "review-commit-failure-selection-expectations.json" },
+  [pscustomobject]@{ phase = "reviewCommitFailureMessage"; root = Join-Path $fixtureRootResolved "review-commit-failure-message-capture"; expectations = Join-Path $fixtureRootResolved "review-commit-failure-message-expectations.json" },
+  [pscustomobject]@{ phase = "reviewCommitSuccessSelection"; root = Join-Path $fixtureRootResolved "review-commit-success-selection-capture"; expectations = Join-Path $fixtureRootResolved "review-commit-success-selection-expectations.json" }
+)
 $checkoutCancellationPromptCaptureRoot = Join-Path $fixtureRootResolved "checkout-cancellation-prompt-capture"
 $checkoutCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "checkout-cancellation-prompt-capture-expectations.json"
 $checkoutExistingTargetFailureUrlPromptCaptureRoot = Join-Path $fixtureRootResolved "checkout-existing-target-failure-url-prompt-capture"
@@ -11880,6 +12440,7 @@ $resolveCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "res
 $cleanupPromptCaptureRoot = Join-Path $fixtureRootResolved "cleanup-prompt-capture"
 $cleanupPromptExpectationsPath = Join-Path $fixtureRootResolved "cleanup-prompt-capture-expectations.json"
 New-Item -ItemType Directory -Force -Path $userDataRoot, $extensionsRoot, $captureRoot, $noRepositoryWelcomeRendererCaptureRoot, $partialFreshnessRendererCaptureRoot, $staleFreshnessRendererCaptureRoot, $fullReconcileCancellationCaptureRoot, $multiRepositoryRefreshPromptCaptureRoot, $deletePromptCaptureRoot, $deleteLoadPromptCaptureRoot, $removePromptCaptureRoot, $removeCancellationPromptCaptureRoot, $removeKeepLocalPromptCaptureRoot, $movePromptCaptureRoot, $moveCancellationPromptCaptureRoot, $checkoutCancellationPromptCaptureRoot, $checkoutExistingTargetFailureUrlPromptCaptureRoot, $checkoutExistingTargetFailureTargetPromptCaptureRoot, $checkoutExistingTargetFailureRevisionPromptCaptureRoot, $checkoutExistingTargetFailureDepthPromptCaptureRoot, $checkoutExistingTargetFailureExternalsPromptCaptureRoot, $checkoutExistingTargetFailureNotificationCaptureRoot, $checkoutInvalidUrlFailureUrlPromptCaptureRoot, $checkoutInvalidUrlFailureTargetPromptCaptureRoot, $checkoutInvalidUrlFailureRevisionPromptCaptureRoot, $checkoutInvalidUrlFailureDepthPromptCaptureRoot, $checkoutInvalidUrlFailureExternalsPromptCaptureRoot, $checkoutInvalidUrlFailureNotificationCaptureRoot, $checkoutExistingDirectoryUrlPromptCaptureRoot, $checkoutExistingDirectoryTargetPromptCaptureRoot, $checkoutExistingDirectoryRevisionPromptCaptureRoot, $checkoutExistingDirectoryDepthPromptCaptureRoot, $checkoutExistingDirectoryExternalsPromptCaptureRoot, $checkoutExistingDirectoryObstructionUrlPromptCaptureRoot, $checkoutExistingDirectoryObstructionTargetPromptCaptureRoot, $checkoutExistingDirectoryObstructionRevisionPromptCaptureRoot, $checkoutExistingDirectoryObstructionDepthPromptCaptureRoot, $checkoutExistingDirectoryObstructionExternalsPromptCaptureRoot, $checkoutUrlPromptCaptureRoot, $checkoutTargetPromptCaptureRoot, $checkoutRevisionPromptCaptureRoot, $checkoutDepthPromptCaptureRoot, $checkoutExternalsPromptCaptureRoot, $updateRevisionPromptCaptureRoot, $updateCancellationRevisionPromptCaptureRoot, $updateDepthPromptCaptureRoot, $updateStickyDepthPromptCaptureRoot, $updateExternalsPromptCaptureRoot, $branchCreateSourcePromptCaptureRoot, $branchCreateDestinationPromptCaptureRoot, $branchCreateRevisionPromptCaptureRoot, $branchCreateMessagePromptCaptureRoot, $branchCreateParentsPromptCaptureRoot, $branchCreateExternalsPromptCaptureRoot, $branchCreateSwitchPromptCaptureRoot, $switchUrlPromptCaptureRoot, $switchRevisionPromptCaptureRoot, $switchDepthPromptCaptureRoot, $switchStickyDepthPromptCaptureRoot, $switchExternalsPromptCaptureRoot, $switchAncestryPromptCaptureRoot, $lockMessageCancellationPromptCaptureRoot, $lockMessagePromptCaptureRoot, $lockModePromptCaptureRoot, $unlockModeCancellationPromptCaptureRoot, $unlockModePromptCaptureRoot, $changelistSetPromptCaptureRoot, $changelistRevertPromptCaptureRoot, $revertPromptCaptureRoot, $revertCancellationPromptCaptureRoot, $resolveUpdateWarningCaptureRoot, $resolvePromptCaptureRoot, $resolveCancellationPromptCaptureRoot, $cleanupPromptCaptureRoot, (Join-Path $userDataRoot "User") | Out-Null
+New-Item -ItemType Directory -Force -Path @($commitPromptCaptureSpecs | ForEach-Object { $_.root }) | Out-Null
 New-Item -ItemType Directory -Force -Path $repositoryHistoryInitialCaptureRoot, $repositoryHistoryLoadedCaptureRoot, $repositoryHistoryStaleCaptureRoot | Out-Null
 @'
 {
@@ -11930,6 +12491,8 @@ $harness = Write-HarnessPackage `
   -RemoveKeepLocalPromptReadyPath $harnessRemoveKeepLocalPromptReadyPath `
   -MovePromptReadyPath $harnessMovePromptReadyPath `
   -MoveCancellationPromptReadyPath $harnessMoveCancellationPromptReadyPath `
+  -CommitPromptReadyPath $harnessCommitPromptReadyPath `
+  -CommitPromptDonePath $harnessCommitPromptDonePath `
   -CheckoutCancellationPromptReadyPath $harnessCheckoutCancellationPromptReadyPath `
   -CheckoutCancellationPromptDonePath $harnessCheckoutCancellationPromptDonePath `
   -CheckoutExistingTargetFailureUrlPromptReadyPath $harnessCheckoutExistingTargetFailureUrlPromptReadyPath `
@@ -12058,6 +12621,7 @@ $harness = Write-HarnessPackage `
   -CommitAllWorkingCopyRoot $commitAllFixture.workingCopyRoot `
   -CommitSelectedWorkingCopyRoot $commitSelectedFixture.workingCopyRoot `
   -CommitSelectedMultiSelectionWorkingCopyRoot $commitSelectedMultiSelectionFixture.workingCopyRoot `
+  -ReviewCommitPromptWorkingCopyRoot $reviewCommitPromptFixture.workingCopyRoot `
   -CheckoutRepositoryUrl $checkoutRepositoryUrl `
   -CheckoutCancellationTargetWorkingCopyRoot $checkoutCancellationTargetRoot `
   -CheckoutExistingTargetFailureTargetPath $checkoutExistingTargetFailureTargetPath `
@@ -12113,6 +12677,11 @@ $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REMOVE_CANCELLATION_PROMPT_DONE
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REMOVE_KEEP_LOCAL_PROMPT_READY = $harness.RemoveKeepLocalPromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_PROMPT_READY = $harness.MovePromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_CANCELLATION_PROMPT_READY = $harness.MoveCancellationPromptReadyPath
+$commitDiagnosticsToken = [Guid]::NewGuid().ToString("N")
+$env:SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN = $commitDiagnosticsToken
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_DIAGNOSTICS_TOKEN = $commitDiagnosticsToken
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_READY = $harness.CommitPromptReadyPath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_DONE = $harness.CommitPromptDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_READY = $harness.CheckoutCancellationPromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_DONE = $harness.CheckoutCancellationPromptDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_URL_PROMPT_READY = $harness.CheckoutExistingTargetFailureUrlPromptReadyPath
@@ -12241,6 +12810,7 @@ $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOAD_ITEM_COUNT = [string]$harn
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_ALL_WORKING_COPY = $harness.CommitAllWorkingCopyRoot
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_WORKING_COPY = $harness.CommitSelectedWorkingCopyRoot
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_MULTI_SELECTION_WORKING_COPY = $harness.CommitSelectedMultiSelectionWorkingCopyRoot
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVIEW_COMMIT_PROMPT_WORKING_COPY = $harness.ReviewCommitPromptWorkingCopyRoot
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_URL = $harness.CheckoutRepositoryUrl
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_TARGET_WORKING_COPY = $harness.CheckoutCancellationTargetWorkingCopyRoot
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_TARGET_PATH = $harness.CheckoutExistingTargetFailureTargetPath
@@ -12639,6 +13209,58 @@ try {
   }
   catch {
     $deleteLoadPromptDriverError = $_
+  }
+
+  $commitPromptPhases = @(
+    "commitAllMessagePrompt",
+    "reviewCommitInitialSelection",
+    "reviewCommitMessageCancellation",
+    "reviewCommitFailureSelection",
+    "reviewCommitFailureMessage",
+    "reviewCommitFailureObserved",
+    "reviewCommitSuccessSelection"
+  )
+  foreach ($commitPromptPhase in $commitPromptPhases) {
+    Wait-File -Path $harness.CommitPromptReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E $commitPromptPhase sentinel"
+    $commitPromptReady = Get-Content -Raw -LiteralPath $harness.CommitPromptReadyPath | ConvertFrom-Json
+    if ($commitPromptReady.ok -ne $true -or $commitPromptReady.command -notin @("subversionr.reviewCommit", "subversionr.commitAll") -or $commitPromptReady.phase -ne $commitPromptPhase) {
+      throw "Installed Source Control UI E2E commit prompt sentinel did not match phase $commitPromptPhase."
+    }
+
+    $commitPromptDriverError = $null
+    if ($commitPromptPhase -eq "reviewCommitFailureObserved") {
+      if (-not (Test-Path -LiteralPath $reviewCommitPromptPreCommitHookPath -PathType Leaf)) {
+        throw "Installed Review & Commit forced-failure hook was missing before the failure observation handshake."
+      }
+      Remove-Item -LiteralPath $reviewCommitPromptPreCommitHookPath -Force
+    }
+    else {
+      $captureSpec = @($commitPromptCaptureSpecs | Where-Object { $_.phase -eq $commitPromptPhase })
+      if ($captureSpec.Count -ne 1) {
+        throw "Installed Source Control UI E2E commit prompt capture spec was not unique for phase $commitPromptPhase."
+      }
+      $commitPromptReady.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $captureSpec[0].expectations -Encoding utf8
+      try {
+        Invoke-RendererCaptureDriver `
+          -DriverPath $rendererCaptureDriverResolved `
+          -Port $RemoteDebuggingPort `
+          -CaptureRoot $captureSpec[0].root `
+          -ExpectationsPath $captureSpec[0].expectations `
+          -Target $Target
+      }
+      catch {
+        $commitPromptDriverError = $_
+      }
+    }
+    [pscustomobject]@{
+      ok = $null -eq $commitPromptDriverError
+      phase = $commitPromptPhase
+      completedAt = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $harness.CommitPromptDonePath -Encoding utf8
+    if ($null -ne $commitPromptDriverError) {
+      throw $commitPromptDriverError
+    }
+    Wait-FilePhaseAdvanced -Path $harness.CommitPromptReadyPath -CompletedPhase $commitPromptPhase -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E commit prompt sentinel"
   }
 
   Invoke-HarnessPromptCapture `
@@ -13556,6 +14178,10 @@ finally {
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REMOVE_KEEP_LOCAL_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_CANCELLATION_PROMPT_READY -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_DIAGNOSTICS_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_READY -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_DONE -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_DONE -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_URL_PROMPT_READY -ErrorAction SilentlyContinue
@@ -13684,6 +14310,7 @@ finally {
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_ALL_WORKING_COPY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_WORKING_COPY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_MULTI_SELECTION_WORKING_COPY -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVIEW_COMMIT_PROMPT_WORKING_COPY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_URL -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_TARGET_WORKING_COPY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_TARGET_PATH -ErrorAction SilentlyContinue
@@ -13919,8 +14546,24 @@ if (-not (Test-Path -LiteralPath (Join-Path $resolveCancellationPromptCaptureRoo
 if (-not (Test-Path -LiteralPath (Join-Path $cleanupPromptCaptureRoot "renderer-capture.json") -PathType Leaf)) {
   throw "Cleanup prompt renderer capture driver did not write the expected capture report."
 }
+foreach ($commitPromptCaptureSpec in $commitPromptCaptureSpecs) {
+  if (-not (Test-Path -LiteralPath (Join-Path $commitPromptCaptureSpec.root "renderer-capture.json") -PathType Leaf)) {
+    throw "Commit prompt phase $($commitPromptCaptureSpec.phase) renderer capture driver did not write the expected capture report."
+  }
+}
 $harnessResult = Get-Content -Raw -LiteralPath $harnessResultPath | ConvertFrom-Json
 Assert-HarnessResult -Result $harnessResult -ExpectedVersion $extensionVersion -ExtensionsRoot $extensionsRoot -InstalledPackageRoot $installedPackageRoot -WorkingCopyRoot $fixture.workingCopyRoot
+$commitPromptCaptures = @($commitPromptCaptureSpecs | ForEach-Object {
+  $capture = Get-Content -Raw -LiteralPath (Join-Path $_.root "renderer-capture.json") | ConvertFrom-Json
+  $expectations = Get-Content -Raw -LiteralPath $_.expectations | ConvertFrom-Json
+  Assert-RendererCaptureReport -Capture $capture -CaptureRoot $_.root -Target $Target -OpenReport ([pscustomobject]@{
+    rendererCaptureExpectations = $expectations
+  })
+  [pscustomobject]@{
+    phase = $_.phase
+    capture = $capture
+  }
+})
 $rendererCapture = Get-Content -Raw -LiteralPath (Join-Path $captureRoot "renderer-capture.json") | ConvertFrom-Json
 Assert-RendererCaptureReport -Capture $rendererCapture -CaptureRoot $captureRoot -Target $Target -OpenReport $harnessResult.openReport
 $noRepositoryWelcomeRendererCapture = Get-Content -Raw -LiteralPath (Join-Path $noRepositoryWelcomeRendererCaptureRoot "renderer-capture.json") | ConvertFrom-Json
@@ -14236,6 +14879,13 @@ $commitSelectedMultiSelectionRepositoryOracle = Get-CommitSelectedMultiSelection
   -ExpectedCommitMessage $commitSelectedMultiSelectionCommitMessage `
   -ExpectedTrackedContent $commitSelectedMultiSelectionExpectedTrackedContent `
   -ExpectedLoadContent $commitSelectedMultiSelectionExpectedLoadContent
+$reviewCommitPromptRepositoryOracle = Get-ReviewCommitPromptRepositoryOracle `
+  -SvnExe $svnExeResolved `
+  -Fixture $reviewCommitPromptFixture `
+  -ExpectedCommitMessage $reviewCommitPromptCommitMessage `
+  -ExpectedTrackedContent $reviewCommitPromptExpectedTrackedContent `
+  -ExpectedLoadContent $reviewCommitPromptExpectedLoadContent `
+  -ExpectedUnselectedRepositoryContent $reviewCommitPromptExpectedUnselectedRepositoryContent
 $checkoutRepositoryOracle = Get-CheckoutRepositoryOracle `
   -SvnExe $svnExeResolved `
   -Fixture $checkoutSourceFixture `
@@ -14354,10 +15004,13 @@ $report = [pscustomObject]@{
   sourceControlUiDeleteUnversionedLoadWorkflow = $harnessResult.deleteUnversionedLoadReport
   sourceControlUiCommitAllWorkflow = $harnessResult.commitAllReport
   commitAllRepositoryOracle = $commitAllRepositoryOracle
+  commitPromptRendererCaptures = $commitPromptCaptures
   sourceControlUiCommitSelectedWorkflow = $harnessResult.commitSelectedReport
   commitSelectedRepositoryOracle = $commitSelectedRepositoryOracle
   sourceControlUiCommitSelectedMultiSelectionWorkflow = $harnessResult.commitSelectedMultiSelectionReport
   commitSelectedMultiSelectionRepositoryOracle = $commitSelectedMultiSelectionRepositoryOracle
+  sourceControlUiReviewCommitPromptWorkflow = $harnessResult.reviewCommitPromptReport
+  reviewCommitPromptRepositoryOracle = $reviewCommitPromptRepositoryOracle
   sourceControlUiAddToIgnoreWorkflow = $harnessResult.addToIgnoreReport
   sourceControlUiReadonlyPropertyReportWorkflow = $harnessResult.readonlyPropertyReportWorkflow
   addToIgnoreWorkingCopyOracle = $addToIgnoreWorkingCopyOracle
@@ -14513,8 +15166,10 @@ $report = [pscustomObject]@{
     lazyExternalProviderFixture = Get-RepoRelativePath $lazyExternalProviderFixture.workingCopyRoot
     deleteUnversionedLoadFixture = Get-RepoRelativePath $loadFixture.workingCopyRoot
     commitAllFixture = Get-RepoRelativePath $commitAllFixture.workingCopyRoot
+    commitPromptCaptures = @($commitPromptCaptureSpecs | ForEach-Object { Get-RepoRelativePath $_.root })
     commitSelectedFixture = Get-RepoRelativePath $commitSelectedFixture.workingCopyRoot
     commitSelectedMultiSelectionFixture = Get-RepoRelativePath $commitSelectedMultiSelectionFixture.workingCopyRoot
+    reviewCommitPromptFixture = Get-RepoRelativePath $reviewCommitPromptFixture.workingCopyRoot
     checkoutSourceFixture = Get-RepoRelativePath $checkoutSourceFixture.workingCopyRoot
     checkoutCancellationTargetFixture = Get-RepoRelativePath $checkoutCancellationTargetRoot
     checkoutExistingTargetFailureTargetFixture = Get-RepoRelativePath $checkoutExistingTargetFailureTargetPath
@@ -14701,6 +15356,14 @@ $report = [pscustomObject]@{
     workflow = $harnessResult.commitSelectedMultiSelectionReport
     repositoryOracle = $commitSelectedMultiSelectionRepositoryOracle
   }
+  reviewCommitPromptWorkingCopy = [pscustomobject]@{
+    root = Get-RepoRelativePath $reviewCommitPromptFixture.workingCopyRoot
+    repositoryUrl = $reviewCommitPromptFixture.repoUrl
+    selectedPaths = @("src/tracked.txt", "load/modified-001.txt")
+    unselectedChangedPaths = @("load/modified-002.txt")
+    workflow = $harnessResult.reviewCommitPromptReport
+    repositoryOracle = $reviewCommitPromptRepositoryOracle
+  }
   addToIgnoreWorkingCopy = [pscustomobject]@{
     root = Get-RepoRelativePath $addToIgnoreFixture.workingCopyRoot
     repositoryUrl = $addToIgnoreFixture.repoUrl
@@ -14870,7 +15533,8 @@ $report = [pscustomObject]@{
     "SubversionR executed the installed Delete All Unversioned Items command against a 64-item unversioned load fixture",
     "VS Code renderer DOM, accessibility, screenshot, and click evidence confirmed the Delete All Unversioned Items modal",
     "SubversionR cleared SourceControl unversioned projection after Delete All Unversioned Items removed every load fixture file",
-    "SubversionR executed the installed Commit All command from the SourceControl input accept command against an independent changed fixture",
+    "SubversionR prompted once for an empty SourceControl Commit All message and committed the entered non-empty message against an independent changed fixture",
+    "VS Code renderer DOM, accessibility, screenshot, and QuickInput submission evidence confirmed the Commit All message prompt",
     "SubversionR cleared the matching repository input message and applied targeted post-commit reconcile after Commit All",
     "SubversionR excluded unversioned resources from Commit All while committing eligible changed file resources",
     "Source-built SVN repository oracle confirmed Commit All persisted tracked content and did not add the unversioned scratch resource",
@@ -14878,6 +15542,10 @@ $report = [pscustomObject]@{
     "SubversionR cleared the matching repository input message and applied targeted post-commit reconcile after Commit Selected",
     "SubversionR committed only the selected changed file while preserving an unselected changed file in SourceControl",
     "Source-built SVN repository oracle confirmed Commit Selected persisted selected tracked content while leaving the unselected file at repository baseline",
+    "SubversionR preserved Review & Commit selection across explicit message cancellation and a real pre-commit hook rejection",
+    "Review & Commit message cancellation left working-copy bytes, SourceControl projection, completed refresh coverage, operation journal, and commit-message history unchanged",
+    "Source-built SVN repository oracle confirmed Review & Commit persisted exactly the retained reviewed paths while leaving a later unselected changed path at repository baseline",
+    "Targeted post-commit reconciliation cleared exactly the reviewed paths while preserving the unselected changed path in SourceControl",
     "SubversionR executed the installed Add to Ignore command against an independent unversioned fixture resource",
     "SubversionR read the parent svn:ignore property, wrote scratch.txt, and refreshed SourceControl projection",
     "Source-built SVN working-copy oracle confirmed svn:ignore contains scratch.txt and status reports the file as ignored",

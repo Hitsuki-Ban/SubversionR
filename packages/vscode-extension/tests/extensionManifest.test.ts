@@ -1881,7 +1881,13 @@ describe("extension manifest", () => {
       expect(bundle).toHaveProperty("Enter the repository-relative destination path for {0}.");
       expect(bundle).toHaveProperty("Delete unversioned SVN item {0}? This cannot be undone.");
       expect(bundle).toHaveProperty("Delete {0} unversioned SVN items? This cannot be undone.");
-      expect(bundle).toHaveProperty("Enter an SVN commit message before committing {0}.");
+      expect(bundle).toHaveProperty("Commit SVN changes");
+      expect(bundle).toHaveProperty("Enter an SVN commit message for {0}.");
+      expect(bundle).toHaveProperty("Enter a non-empty SVN commit message without carriage returns.");
+      expect(bundle).toHaveProperty("Enter a non-empty SVN commit message without carriage returns and try again.");
+      expect(bundle).toHaveProperty(
+        "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
+      );
       expect(bundle).toHaveProperty("No eligible SVN file changes to commit.");
       expect(bundle).toHaveProperty("Save SVN resource before committing: {0}");
       expect(bundle).toHaveProperty("SubversionR post-commit reconcile failed after revision {0}: {1}");
@@ -2066,6 +2072,7 @@ function runtimeLocalizationKeys(): string[] {
     "Enter the svn:externals value for {0}. Leave empty to clear it.",
     "Move",
     "Commit",
+    "Commit SVN changes",
     "Show Log",
     "Retry",
     "Update",
@@ -2466,7 +2473,10 @@ function runtimeLocalizationKeys(): string[] {
     "Unparsed svn:mergeinfo line",
     "Raw svn:mergeinfo",
     "Enter a repository-relative SVN path.",
-    "Enter an SVN commit message before committing {0}.",
+    "Enter an SVN commit message for {0}.",
+    "Enter a non-empty SVN commit message without carriage returns.",
+    "Enter a non-empty SVN commit message without carriage returns and try again.",
+    "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
     "No eligible SVN file changes to commit.",
     "Save SVN resource before committing: {0}",
     "SubversionR post-commit reconcile failed after revision {0}: {1}",
