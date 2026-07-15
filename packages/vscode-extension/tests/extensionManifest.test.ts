@@ -1412,6 +1412,7 @@ describe("extension manifest", () => {
         {
           id: "subversionr.history",
           name: "%view.history.name%",
+          visibility: "collapsed",
         },
       ],
     });
@@ -1800,7 +1801,6 @@ describe("extension manifest", () => {
       );
       expect(bundle).toHaveProperty("Loaded SVN history search is limited to 200 characters.");
       expect(bundle).toHaveProperty("Filtering loaded SVN history: {0}");
-      expect(bundle).toHaveProperty("Repository: {0}");
       expect(bundle).toHaveProperty("File: {0}");
       expect(bundle).toHaveProperty("Line History: {0}");
       expect(bundle).toHaveProperty("Load More");
@@ -2206,7 +2206,6 @@ function runtimeLocalizationKeys(): string[] {
     "Enter text, author, path, date, or revision to filter loaded SVN history. Leave empty to clear.",
     "Loaded SVN history search is limited to 200 characters.",
     "Filtering loaded SVN history: {0}",
-    "Repository: {0}",
     "File: {0}",
     "Line History: {0}",
     "Load More",
@@ -2459,6 +2458,8 @@ function runtimeLocalizationKeys(): string[] {
     "SubversionR backend ready. libsvn: {0}",
     "Select an SVN working copy",
     "Select an SVN repository",
+    "Select an open SVN repository and try Show Repository Log again.",
+    "The selected SVN repository session is no longer open. Select the current repository and try Show Repository Log again.",
     "SubversionR backend setting is required: {0}",
     "SubversionR packaged backend does not support this host: {0}/{1}.",
     "SubversionR packaged backend resource is missing: {0} for {1}.",

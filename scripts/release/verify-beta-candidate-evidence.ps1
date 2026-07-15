@@ -533,7 +533,8 @@ function Assert-InstalledSourceControlUiE2eSemantics([object]$Record) {
     "STA-014",
     "TST-018",
     "TST-024",
-    "UX-002"
+    "UX-002",
+    "HIS-001"
   )) {
     Assert-StringArrayContains $Record.traceIds $traceId "$context traceIds"
   }
@@ -548,7 +549,8 @@ function Assert-InstalledSourceControlUiE2eSemantics([object]$Record) {
     "*Add to Ignore*",
     "*Lock and Unlock*",
     "*changelist set/clear*",
-    "*Branch/Tag create and Switch*"
+    "*Branch/Tag create and Switch*",
+    "*Repository Log targeting*"
   )) {
     Assert-StringArrayContainsLike $Record.nonClaims $nonClaimPattern "$context nonClaims"
   }
@@ -565,10 +567,77 @@ function Assert-InstalledSourceControlUiE2eSemantics([object]$Record) {
     "hasCommitChangelistCommand",
     "hasRevertChangelistCommand",
     "hasBranchCreateRepositoryCommand",
-    "hasSwitchRepositoryCommand"
+    "hasSwitchRepositoryCommand",
+    "hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand",
+    "hasShowRepositoryLogCommand"
   )) {
     Assert-TrueProperty $extension $capability "$context.extension"
   }
+
+  $repositoryHistory = Assert-WorkflowKind $Record "sourceControlUiRepositoryHistoryWorkflow" "subversionr.installedSourceControlUiE2eRepositoryHistoryWorkflow" $context
+  Assert-NestedEqual $repositoryHistory "command.command" "subversionr.showRepositoryLog" "$context.sourceControlUiRepositoryHistoryWorkflow" "$context Repository Log command must be showRepositoryLog."
+  Assert-NestedEqual $repositoryHistory "command.target.kind" "subversionr.repositoryHistoryTarget" "$context.sourceControlUiRepositoryHistoryWorkflow" "$context Repository Log target must use the strict target discriminant."
+  Assert-NestedEqual $repositoryHistory "fixture.missingAuthorRevision" 2 "$context.sourceControlUiRepositoryHistoryWorkflow" "$context missing-author fixture revision must be r2."
+  Assert-NestedEqual $repositoryHistory "fixture.emptyAuthorRevision" 3 "$context.sourceControlUiRepositoryHistoryWorkflow" "$context empty-author fixture revision must be r3."
+  Assert-NestedEqual $repositoryHistory "staleReport.diagnostics.latestHistoryTargetingError.code" "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE" "$context.sourceControlUiRepositoryHistoryWorkflow" "$context stale Repository Log target must expose the stable lifecycle error code."
+  foreach ($path in @(
+    "assertions.exactRepositorySessionTargeted",
+    "assertions.missingAuthorRenderedAsUnknown",
+    "assertions.emptyAuthorRenderedAsUnknown",
+    "assertions.historyViewInitiallyCollapsed",
+    "assertions.historyViewVisibleExpandedFocusedSelected",
+    "assertions.workingCopyRootLabelVisible",
+    "assertions.internalRepositoryIdHiddenFromRenderer",
+    "assertions.staleTargetRejectedWithStableCode",
+    "assertions.staleNotificationLocalizedAndActionable",
+    "assertions.diagnosticsBoundedAndRedacted",
+    "assertions.sourceControlProjectionUnchanged",
+    "assertions.lastCompletedRefreshUnchanged",
+    "assertions.statusRefreshNotRequested",
+    "assertions.reconcileNotRequested",
+    "assertions.remoteStatusPollingNotRequested"
+  )) {
+    Assert-NestedTrue $repositoryHistory $path "$context.sourceControlUiRepositoryHistoryWorkflow" "$context Repository Log must prove $path."
+  }
+  foreach ($captureName in @(
+    "repositoryHistoryInitialRendererCapture",
+    "repositoryHistoryLoadedRendererCapture",
+    "repositoryHistoryStaleNotificationRendererCapture"
+  )) {
+    $capture = Get-RequiredProperty $Record $captureName $context
+    Assert-Equal "subversionr.release.installed-source-control-ui-renderer-capture.v1" (Get-RequiredString $capture "schema" "$context.$captureName") "$context $captureName schema must match the renderer evidence contract."
+    Assert-NestedTrue $capture "assertions.domRequiredTokensPresent" "$context.$captureName" "$context $captureName must prove required DOM tokens."
+    Assert-NestedTrue $capture "assertions.accessibilityRequiredTokensPresent" "$context.$captureName" "$context $captureName must prove required accessibility tokens."
+    Assert-NestedTrue $capture "assertions.screenshotNonBlank" "$context.$captureName" "$context $captureName must prove a nonblank screenshot."
+  }
+  $initialHistoryCapture = Get-RequiredProperty $Record "repositoryHistoryInitialRendererCapture" $context
+  Assert-NestedTrue $initialHistoryCapture "assertions.treeViewExpanded" "$context.repositoryHistoryInitialRendererCapture" "$context initial History capture must match collapsed state."
+  $initialHistoryInteraction = Get-RequiredProperty $initialHistoryCapture "interaction" "$context.repositoryHistoryInitialRendererCapture"
+  Assert-Equal "treeViewState" (Get-RequiredString $initialHistoryInteraction "kind" "$context.repositoryHistoryInitialRendererCapture.interaction") "$context initial History capture must contain a TreeView state interaction."
+  Assert-RequiredBooleanTrue $initialHistoryInteraction "found" "$context.repositoryHistoryInitialRendererCapture.interaction"
+  Assert-RequiredBooleanTrue $initialHistoryInteraction "visible" "$context.repositoryHistoryInitialRendererCapture.interaction"
+  Assert-RequiredBooleanFalse $initialHistoryInteraction "expanded" "$context.repositoryHistoryInitialRendererCapture.interaction"
+  $initialHistorySelectionProperty = $initialHistoryInteraction.PSObject.Properties["selectedRowTexts"]
+  Assert-True ($null -ne $initialHistorySelectionProperty -and $initialHistorySelectionProperty.Value -is [System.Array] -and $initialHistorySelectionProperty.Value.Count -eq 0) "$context initial History capture must contain an empty selectedRowTexts array."
+  $loadedHistoryCapture = Get-RequiredProperty $Record "repositoryHistoryLoadedRendererCapture" $context
+  foreach ($path in @("assertions.treeViewVisible", "assertions.treeViewExpanded", "assertions.treeViewFocused", "assertions.treeViewSelectionMatched")) {
+    Assert-NestedTrue $loadedHistoryCapture $path "$context.repositoryHistoryLoadedRendererCapture" "$context loaded History capture must prove $path."
+  }
+  $loadedHistoryInteraction = Get-RequiredProperty $loadedHistoryCapture "interaction" "$context.repositoryHistoryLoadedRendererCapture"
+  Assert-Equal "treeViewState" (Get-RequiredString $loadedHistoryInteraction "kind" "$context.repositoryHistoryLoadedRendererCapture.interaction") "$context loaded History capture must contain a TreeView state interaction."
+  foreach ($name in @("found", "visible", "expanded", "focused")) {
+    Assert-RequiredBooleanTrue $loadedHistoryInteraction $name "$context.repositoryHistoryLoadedRendererCapture.interaction"
+  }
+  $loadedHistorySelectionProperty = $loadedHistoryInteraction.PSObject.Properties["selectedRowTexts"]
+  $loadedHistorySelection = if ($null -eq $loadedHistorySelectionProperty) { $null } else { $loadedHistorySelectionProperty.Value }
+  $loadedHistorySelectionType = if ($null -eq $loadedHistorySelection) { "<null>" } else { $loadedHistorySelection.GetType().FullName }
+  $loadedHistorySelectionCount = @($loadedHistorySelection).Count
+  $loadedHistorySelectionInvalidCount = @($loadedHistorySelection | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count
+  Assert-True (
+    $loadedHistorySelectionCount -gt 0 -and
+    $loadedHistorySelectionInvalidCount -eq 0
+  ) "$context loaded History capture must contain non-empty selectedRowTexts string values (type=$loadedHistorySelectionType, count=$loadedHistorySelectionCount, invalid=$loadedHistorySelectionInvalidCount)."
+  Assert-NestedTrue (Get-RequiredProperty $Record "repositoryHistoryStaleNotificationRendererCapture" $context) "assertions.notificationCancelled" "$context.repositoryHistoryStaleNotificationRendererCapture" "$context stale-target notification capture must close the captured notification."
 
   $checkoutCancellation = Assert-WorkflowKind $Record "sourceControlUiCheckoutCancellationWorkflow" "subversionr.installedSourceControlUiE2eCheckoutCancellationWorkflow" $context
   Assert-NestedEqual $checkoutCancellation "command.command" "subversionr.checkoutRepository" "$context.sourceControlUiCheckoutCancellationWorkflow" "$context Checkout cancellation command must be checkoutRepository."

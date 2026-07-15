@@ -1399,7 +1399,8 @@
       "scm": [
         {
           "id": "subversionr.history",
-          "name": "%view.history.name%"
+          "name": "%view.history.name%",
+          "visibility": "collapsed"
         }
       ]
     },

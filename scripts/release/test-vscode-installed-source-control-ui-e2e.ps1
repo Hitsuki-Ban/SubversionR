@@ -369,6 +369,69 @@ store-auth-creds = no
     $svnCliConfigRoot
   ) -Description "svn checkout fixture working copy" | Out-Null
 
+  $missingAuthorRelativePath = "src/h-na.txt"
+  $missingAuthorWorkingCopyPath = Join-Path $wcRoot $missingAuthorRelativePath.Replace("/", "\")
+  Set-Content -LiteralPath $missingAuthorWorkingCopyPath -Value "history revision without svn:author`n" -NoNewline -Encoding utf8
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "add",
+    $missingAuthorWorkingCopyPath,
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $svnCliConfigRoot
+  ) -Description "svn add missing-author history fixture" | Out-Null
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "commit",
+    $missingAuthorWorkingCopyPath,
+    "-m",
+    "history revision without author",
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $svnCliConfigRoot
+  ) -Description "svn commit missing-author history fixture" | Out-Null
+  $missingAuthorRevision = 2
+  Invoke-CheckedTool -Path $SvnAdminExe -Arguments @(
+    "delrevprop",
+    $repoPath,
+    "-r",
+    [string]$missingAuthorRevision,
+    "svn:author"
+  ) -Description "svnadmin remove svn:author from history fixture revision" | Out-Null
+
+  $emptyAuthorRelativePath = "src/h-ea.txt"
+  $emptyAuthorWorkingCopyPath = Join-Path $wcRoot $emptyAuthorRelativePath.Replace("/", "\")
+  Set-Content -LiteralPath $emptyAuthorWorkingCopyPath -Value "history revision with empty svn:author`n" -NoNewline -Encoding utf8
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "add",
+    $emptyAuthorWorkingCopyPath,
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $svnCliConfigRoot
+  ) -Description "svn add empty-author history fixture" | Out-Null
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "commit",
+    $emptyAuthorWorkingCopyPath,
+    "-m",
+    "history revision with empty author",
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $svnCliConfigRoot
+  ) -Description "svn commit empty-author history fixture" | Out-Null
+  $emptyAuthorRevision = 3
+  $emptyAuthorValuePath = Join-Path $Root "ea.txt"
+  Set-Content -LiteralPath $emptyAuthorValuePath -Value "" -NoNewline -Encoding utf8
+  Invoke-CheckedTool -Path $SvnAdminExe -Arguments @(
+    "setrevprop",
+    $repoPath,
+    "-r",
+    [string]$emptyAuthorRevision,
+    "svn:author",
+    $emptyAuthorValuePath
+  ) -Description "svnadmin set empty svn:author on history fixture revision" | Out-Null
+
   Set-Content -LiteralPath (Join-Path $wcRoot "src\tracked.txt") -Value "modified by M7j3`n" -NoNewline -Encoding utf8
   foreach ($relativePath in $modifiedLoadPaths) {
     Set-Content -LiteralPath (Join-Path $wcRoot $relativePath.Replace("/", "\")) -Value "modified load item $relativePath by M7j3`n" -NoNewline -Encoding utf8
@@ -400,6 +463,10 @@ store-auth-creds = no
     unversionedPaths = $unversionedPaths
     modifiedLoadItemCount = $ModifiedLoadItemCount
     modifiedLoadPaths = $modifiedLoadPaths
+    missingAuthorRevision = $missingAuthorRevision
+    missingAuthorRelativePath = $missingAuthorRelativePath
+    emptyAuthorRevision = $emptyAuthorRevision
+    emptyAuthorRelativePath = $emptyAuthorRelativePath
     svnTreeBeforeSha256 = Get-DirectoryTreeSha256 $svnRoot
   }
 }
@@ -8012,6 +8079,263 @@ async function runSwitchWorkflow(switchWorkingCopyRoot, targetUrl, promptPaths) 
   }
 }
 
+function repositoryHistoryInitialRendererExpectations() {
+  return {
+    requiredDomTokens: ["SVN HISTORY"],
+    requiredAccessibilityTokens: ["SVN History"],
+    requiredScreenshot: true,
+    treeViewState: {
+      viewLabel: "SVN History",
+      expectedVisible: true,
+      expectedExpanded: false,
+      selectedTokens: []
+    }
+  };
+}
+
+function repositoryHistoryLoadedRendererExpectations(workingCopyRoot, repositoryId) {
+  return {
+    requiredDomTokens: ["SVN HISTORY", workingCopyRoot, "Unknown author", "history revision without author", "history revision with empty author"],
+    requiredAccessibilityTokens: ["SVN History", "Unknown author"],
+    forbiddenDomTokens: [repositoryId],
+    forbiddenAccessibilityTokens: [repositoryId],
+    requiredScreenshot: true,
+    treeViewState: {
+      viewLabel: "SVN History",
+      expectedVisible: true,
+      expectedExpanded: true,
+      expectedFocused: true,
+      selectedTokens: [workingCopyRoot]
+    }
+  };
+}
+
+function repositoryHistoryStaleNotificationExpectations(repositoryId) {
+  return {
+    requiredDomTokens: ["selected SVN repository session is no longer open", "Show Log"],
+    requiredAccessibilityTokens: ["selected SVN repository session is no longer open", "Show Log"],
+    forbiddenDomTokens: [repositoryId],
+    forbiddenAccessibilityTokens: [repositoryId],
+    requiredScreenshot: true,
+    cancelSurface: "notification",
+    cancelAction: "closeNotification"
+  };
+}
+
+function validateRepositoryHistorySnapshot(report, openReport) {
+  if (!report || report.kind !== "subversionr.installedSourceControlUiE2eRepositoryHistoryReport") {
+    throw new Error(`Unexpected installed Repository Log report kind: ${report && report.kind}`);
+  }
+  if (
+    report.repository.repositoryId !== openReport.repository.repositoryId ||
+    report.repository.epoch !== openReport.repository.epoch ||
+    path.resolve(report.repository.identity.workingCopyRoot).toLowerCase() !== path.resolve(openReport.repository.identity.workingCopyRoot).toLowerCase()
+  ) {
+    throw new Error("Installed Repository Log report did not preserve the requested repository session identity.");
+  }
+  if (
+    !report.history ||
+    !report.history.target ||
+    report.history.target.kind !== "repository" ||
+    report.history.target.repositoryId !== openReport.repository.repositoryId ||
+    report.history.target.epoch !== openReport.repository.epoch ||
+    report.history.target.path !== "." ||
+    path.resolve(report.history.target.label).toLowerCase() !== path.resolve(openReport.repository.identity.workingCopyRoot).toLowerCase()
+  ) {
+    throw new Error("Installed Repository Log report target was not the exact working-copy-root repository session.");
+  }
+  if (!Array.isArray(report.history.entries) || report.history.entryCount !== report.history.entries.length) {
+    throw new Error("Installed Repository Log report must expose the exact loaded history entry count.");
+  }
+  const missingAuthorEntry = report.history.entries.find(entry => entry.revision === 2);
+  const emptyAuthorEntry = report.history.entries.find(entry => entry.revision === 3);
+  if (!missingAuthorEntry || missingAuthorEntry.author !== null) {
+    throw new Error("Installed Repository Log report did not preserve the missing svn:author fixture revision.");
+  }
+  if (!emptyAuthorEntry || emptyAuthorEntry.author !== null) {
+    throw new Error("Installed Repository Log report did not preserve the empty svn:author fixture revision.");
+  }
+  if (
+    !report.history.treeView ||
+    report.history.treeView.visible !== true ||
+    report.history.treeView.selectionCount !== 1 ||
+    typeof report.history.treeView.selectedTargetLabel !== "string" ||
+    path.resolve(report.history.treeView.selectedTargetLabel).toLowerCase() !== path.resolve(openReport.repository.identity.workingCopyRoot).toLowerCase()
+  ) {
+    const treeView = report.history.treeView ?? {};
+    const selectedTargetMatches = typeof treeView.selectedTargetLabel === "string" &&
+      path.resolve(treeView.selectedTargetLabel).toLowerCase() === path.resolve(openReport.repository.identity.workingCopyRoot).toLowerCase();
+    throw new Error(
+      `Installed Repository Log report did not expose the visible, singly-selected working-copy-root history target ` +
+      `(visible=${treeView.visible === true}, selectionCount=${String(treeView.selectionCount)}, selectedTargetMatches=${selectedTargetMatches}).`
+    );
+  }
+}
+
+function repositoryHistoryActivity(report, label) {
+  if (!report || report.kind !== "subversionr.installedSourceControlUiE2eRepositoryHistoryReport" || !report.activity) {
+    throw new Error(`Installed Repository Log ${label} report did not expose operation activity counters.`);
+  }
+  for (const name of ["statusRefreshRequestCount", "reconcileRequestCount", "remoteStatusRequestCount"]) {
+    if (!Number.isSafeInteger(report.activity[name]) || report.activity[name] < 0) {
+      throw new Error(`Installed Repository Log ${label} report activity.${name} must be a non-negative safe integer.`);
+    }
+  }
+  return report.activity;
+}
+
+async function runRepositoryHistoryWorkflow(openReport, readyPath, donePath) {
+  const beforeSurfaceReport = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport", {
+      path: openReport.repository.identity.workingCopyRoot
+    }),
+    "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/repositoryHistoryBefore",
+    30000
+  );
+  await withTimeout(vscode.commands.executeCommand("workbench.view.scm"), "workbench.view.scm/repositoryHistoryInitial", 30000);
+  const initialRendererCaptureExpectations = repositoryHistoryInitialRendererExpectations();
+  await publishCheckoutPromptReadyAndWait(`${readyPath}.history-initial`, `${donePath}.history-initial`, {
+    ok: true,
+    phase: "repositoryHistoryInitialCollapsed",
+    rendererCaptureExpectations: initialRendererCaptureExpectations
+  });
+  const beforeHistoryReport = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport", {
+      repositoryId: openReport.repository.repositoryId,
+      epoch: openReport.repository.epoch
+    }),
+    "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport/before",
+    30000
+  );
+  const activityBefore = repositoryHistoryActivity(beforeHistoryReport, "before");
+
+  const target = {
+    kind: "subversionr.repositoryHistoryTarget",
+    repositoryId: openReport.repository.repositoryId,
+    epoch: openReport.repository.epoch
+  };
+  await withTimeout(
+    vscode.commands.executeCommand("subversionr.showRepositoryLog", target),
+    "subversionr.showRepositoryLog/repositoryHistory",
+    60000
+  );
+  const loadedReport = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport", {
+      repositoryId: openReport.repository.repositoryId,
+      epoch: openReport.repository.epoch
+    }),
+    "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport/loaded",
+    30000
+  );
+  validateRepositoryHistorySnapshot(loadedReport, openReport);
+  const activityAfterLoad = repositoryHistoryActivity(loadedReport, "loaded");
+  const loadedRendererCaptureExpectations = repositoryHistoryLoadedRendererExpectations(
+    openReport.repository.identity.workingCopyRoot,
+    openReport.repository.repositoryId
+  );
+  await publishCheckoutPromptReadyAndWait(`${readyPath}.history-loaded`, `${donePath}.history-loaded`, {
+    ok: true,
+    phase: "repositoryHistoryLoaded",
+    rendererCaptureExpectations: loadedRendererCaptureExpectations
+  });
+
+  await clearWorkbenchNotificationsBeforePrompt("repositoryHistoryStaleTarget");
+  const staleTarget = { ...target, epoch: target.epoch + 1 };
+  await withTimeout(
+    vscode.commands.executeCommand("subversionr.showRepositoryLog", staleTarget),
+    "subversionr.showRepositoryLog/repositoryHistoryStaleTarget",
+    30000
+  );
+  const staleReport = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport", {
+      repositoryId: openReport.repository.repositoryId,
+      epoch: openReport.repository.epoch
+    }),
+    "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport/stale",
+    30000
+  );
+  validateRepositoryHistorySnapshot(staleReport, openReport);
+  const activityAfterStale = repositoryHistoryActivity(staleReport, "stale");
+  if (
+    !staleReport.diagnostics ||
+    !staleReport.diagnostics.latestHistoryTargetingError ||
+    staleReport.diagnostics.latestHistoryTargetingError.code !== "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE" ||
+    !Array.isArray(staleReport.diagnostics.lines) ||
+    staleReport.diagnostics.lines.length < 1 ||
+    staleReport.diagnostics.lines.length > 200
+  ) {
+    throw new Error("Installed stale Repository Log target did not expose the bounded stable diagnostic error contract.");
+  }
+  if (JSON.stringify(staleReport.diagnostics).includes(openReport.repository.identity.workingCopyRoot)) {
+    throw new Error("Installed stale Repository Log diagnostics leaked the raw working-copy root.");
+  }
+  const staleNotificationRendererCaptureExpectations = repositoryHistoryStaleNotificationExpectations(
+    openReport.repository.repositoryId
+  );
+  await publishCheckoutPromptReadyAndWait(`${readyPath}.history-stale`, `${donePath}.history-stale`, {
+    ok: true,
+    phase: "repositoryHistoryStaleNotification",
+    rendererCaptureExpectations: staleNotificationRendererCaptureExpectations
+  });
+
+  const afterSurfaceReport = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport", {
+      path: openReport.repository.identity.workingCopyRoot
+    }),
+    "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/repositoryHistoryAfter",
+    30000
+  );
+  const sourceControlProjectionUnchanged = sourceControlProjectionMatches(afterSurfaceReport, beforeSurfaceReport);
+  const lastCompletedRefreshUnchanged = JSON.stringify(loadedReport.lastCompletedRefresh ?? null) ===
+    JSON.stringify(beforeHistoryReport.lastCompletedRefresh ?? null) &&
+    JSON.stringify(staleReport.lastCompletedRefresh ?? null) ===
+    JSON.stringify(beforeHistoryReport.lastCompletedRefresh ?? null);
+  const operationActivityUnchanged = JSON.stringify(activityAfterLoad) === JSON.stringify(activityBefore) &&
+    JSON.stringify(activityAfterStale) === JSON.stringify(activityBefore);
+  if (!sourceControlProjectionUnchanged || !lastCompletedRefreshUnchanged || !operationActivityUnchanged) {
+    throw new Error("Installed Repository Log workflow changed Source Control projection, status scheduling, or completed refresh coverage.");
+  }
+
+  return {
+    kind: "subversionr.installedSourceControlUiE2eRepositoryHistoryWorkflow",
+    generatedAt: new Date().toISOString(),
+    command: {
+      command: "subversionr.showRepositoryLog",
+      target,
+      staleTarget
+    },
+    fixture: {
+      missingAuthorRevision: 2,
+      emptyAuthorRevision: 3
+    },
+    initialRendererCaptureExpectations,
+    loadedRendererCaptureExpectations,
+    staleNotificationRendererCaptureExpectations,
+    beforeSurfaceReport,
+    beforeHistoryReport,
+    loadedReport,
+    staleReport,
+    afterSurfaceReport,
+    assertions: {
+      exactRepositorySessionTargeted: true,
+      missingAuthorRenderedAsUnknown: true,
+      emptyAuthorRenderedAsUnknown: true,
+      historyViewInitiallyCollapsed: true,
+      historyViewVisibleExpandedFocusedSelected: true,
+      workingCopyRootLabelVisible: true,
+      internalRepositoryIdHiddenFromRenderer: true,
+      staleTargetRejectedWithStableCode: true,
+      staleNotificationLocalizedAndActionable: true,
+      diagnosticsBoundedAndRedacted: true,
+      sourceControlProjectionUnchanged,
+      lastCompletedRefreshUnchanged,
+      statusRefreshNotRequested: operationActivityUnchanged,
+      reconcileNotRequested: operationActivityUnchanged,
+      remoteStatusPollingNotRequested: operationActivityUnchanged
+    }
+  };
+}
+
 async function closeOpenReport(openReport) {
   if (!openReport) {
     return undefined;
@@ -8414,6 +8738,7 @@ async function run() {
   let noRepositoryWelcomeRendererCaptureExpectations;
   let partialFreshnessRendererCaptureExpectations;
   let staleFreshnessRendererCaptureExpectations;
+  let repositoryHistoryReport;
   let fullReconcileCancellationReport;
   let refreshReport;
   let multiRepositoryRefreshReport;
@@ -8470,6 +8795,7 @@ async function run() {
       openReport,
       partialFreshnessReport,
       staleFreshnessReport,
+      repositoryHistoryReport,
       noRepositoryWelcomeRendererCaptureExpectations,
       partialFreshnessRendererCaptureExpectations,
       staleFreshnessRendererCaptureExpectations,
@@ -8574,6 +8900,7 @@ async function run() {
       "subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
       "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
       "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
+      "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
       "subversionr.diagnostics.installedSourceControlUiE2eArmDirtyGenerationCancellation",
       "subversionr.diagnostics.installedSourceControlUiE2eDirtyGenerationCancellationReport",
       "subversionr.diagnostics.installedSourceControlUiE2eDirtyEvent",
@@ -8689,6 +9016,10 @@ async function run() {
       "workbench.action.closePanel/installedSourceControlUiE2eRendererCapture",
       30000
     );
+
+    phase = "executingInstalledRepositoryHistoryWorkflow";
+    repositoryHistoryReport = await runRepositoryHistoryWorkflow(openReport, readyPath, donePath);
+    writeResult(partialResult());
 
     phase = "executingInstalledSourceControlUiE2ePartialFreshnessReport";
     partialFreshnessReport = await withTimeout(
@@ -9190,6 +9521,8 @@ async function run() {
         "subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
         "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
         "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
+        "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+        "subversionr.showRepositoryLog",
         "subversionr.initialize",
         "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
       "subversionr.diagnostics.installedSourceControlUiE2eArmFullReconcileCancellation",
@@ -9233,6 +9566,8 @@ async function run() {
       hasInstalledSourceControlUiE2eOpenReportCommand: true,
       hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand: true,
       hasInstalledSourceControlUiE2eFreshnessReportCommand: true,
+      hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand: true,
+      hasShowRepositoryLogCommand: true,
       hasInstalledSourceControlUiE2eArmFullReconcileCancellationCommand: true,
       hasInstalledSourceControlUiE2eFullReconcileCancellationReportCommand: true,
       hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand: true,
@@ -9269,6 +9604,7 @@ async function run() {
       openReport,
       partialFreshnessReport,
       staleFreshnessReport,
+      repositoryHistoryReport,
       noRepositoryWelcomeRendererCaptureExpectations,
       partialFreshnessRendererCaptureExpectations,
       staleFreshnessRendererCaptureExpectations,
@@ -10938,6 +11274,12 @@ $harnessResolveCancellationPromptReadyPath = Join-Path $fixtureRootResolved "ins
 $harnessCleanupPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-cleanup-prompt-ready.json"
 $captureRoot = Join-Path $fixtureRootResolved "renderer-capture"
 $expectationsPath = Join-Path $fixtureRootResolved "renderer-capture-expectations.json"
+$repositoryHistoryInitialCaptureRoot = Join-Path $fixtureRootResolved "repository-history-initial-capture"
+$repositoryHistoryInitialExpectationsPath = Join-Path $fixtureRootResolved "repository-history-initial-capture-expectations.json"
+$repositoryHistoryLoadedCaptureRoot = Join-Path $fixtureRootResolved "repository-history-loaded-capture"
+$repositoryHistoryLoadedExpectationsPath = Join-Path $fixtureRootResolved "repository-history-loaded-capture-expectations.json"
+$repositoryHistoryStaleCaptureRoot = Join-Path $fixtureRootResolved "repository-history-stale-notification-capture"
+$repositoryHistoryStaleExpectationsPath = Join-Path $fixtureRootResolved "repository-history-stale-notification-capture-expectations.json"
 $noRepositoryWelcomeRendererCaptureRoot = Join-Path $fixtureRootResolved "no-repository-welcome-renderer-capture"
 $noRepositoryWelcomeRendererExpectationsPath = Join-Path $fixtureRootResolved "no-repository-welcome-renderer-capture-expectations.json"
 $partialFreshnessRendererCaptureRoot = Join-Path $fixtureRootResolved "partial-freshness-renderer-capture"
@@ -11081,6 +11423,7 @@ $resolveCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "res
 $cleanupPromptCaptureRoot = Join-Path $fixtureRootResolved "cleanup-prompt-capture"
 $cleanupPromptExpectationsPath = Join-Path $fixtureRootResolved "cleanup-prompt-capture-expectations.json"
 New-Item -ItemType Directory -Force -Path $userDataRoot, $extensionsRoot, $captureRoot, $noRepositoryWelcomeRendererCaptureRoot, $partialFreshnessRendererCaptureRoot, $staleFreshnessRendererCaptureRoot, $fullReconcileCancellationCaptureRoot, $multiRepositoryRefreshPromptCaptureRoot, $deletePromptCaptureRoot, $deleteLoadPromptCaptureRoot, $removePromptCaptureRoot, $removeCancellationPromptCaptureRoot, $removeKeepLocalPromptCaptureRoot, $movePromptCaptureRoot, $moveCancellationPromptCaptureRoot, $checkoutCancellationPromptCaptureRoot, $checkoutExistingTargetFailureUrlPromptCaptureRoot, $checkoutExistingTargetFailureTargetPromptCaptureRoot, $checkoutExistingTargetFailureRevisionPromptCaptureRoot, $checkoutExistingTargetFailureDepthPromptCaptureRoot, $checkoutExistingTargetFailureExternalsPromptCaptureRoot, $checkoutExistingTargetFailureNotificationCaptureRoot, $checkoutInvalidUrlFailureUrlPromptCaptureRoot, $checkoutInvalidUrlFailureTargetPromptCaptureRoot, $checkoutInvalidUrlFailureRevisionPromptCaptureRoot, $checkoutInvalidUrlFailureDepthPromptCaptureRoot, $checkoutInvalidUrlFailureExternalsPromptCaptureRoot, $checkoutInvalidUrlFailureNotificationCaptureRoot, $checkoutExistingDirectoryUrlPromptCaptureRoot, $checkoutExistingDirectoryTargetPromptCaptureRoot, $checkoutExistingDirectoryRevisionPromptCaptureRoot, $checkoutExistingDirectoryDepthPromptCaptureRoot, $checkoutExistingDirectoryExternalsPromptCaptureRoot, $checkoutExistingDirectoryObstructionUrlPromptCaptureRoot, $checkoutExistingDirectoryObstructionTargetPromptCaptureRoot, $checkoutExistingDirectoryObstructionRevisionPromptCaptureRoot, $checkoutExistingDirectoryObstructionDepthPromptCaptureRoot, $checkoutExistingDirectoryObstructionExternalsPromptCaptureRoot, $checkoutUrlPromptCaptureRoot, $checkoutTargetPromptCaptureRoot, $checkoutRevisionPromptCaptureRoot, $checkoutDepthPromptCaptureRoot, $checkoutExternalsPromptCaptureRoot, $updateRevisionPromptCaptureRoot, $updateCancellationRevisionPromptCaptureRoot, $updateDepthPromptCaptureRoot, $updateStickyDepthPromptCaptureRoot, $updateExternalsPromptCaptureRoot, $branchCreateSourcePromptCaptureRoot, $branchCreateDestinationPromptCaptureRoot, $branchCreateRevisionPromptCaptureRoot, $branchCreateMessagePromptCaptureRoot, $branchCreateParentsPromptCaptureRoot, $branchCreateExternalsPromptCaptureRoot, $branchCreateSwitchPromptCaptureRoot, $switchUrlPromptCaptureRoot, $switchRevisionPromptCaptureRoot, $switchDepthPromptCaptureRoot, $switchStickyDepthPromptCaptureRoot, $switchExternalsPromptCaptureRoot, $switchAncestryPromptCaptureRoot, $lockMessageCancellationPromptCaptureRoot, $lockMessagePromptCaptureRoot, $lockModePromptCaptureRoot, $unlockModeCancellationPromptCaptureRoot, $unlockModePromptCaptureRoot, $changelistSetPromptCaptureRoot, $changelistRevertPromptCaptureRoot, $revertPromptCaptureRoot, $revertCancellationPromptCaptureRoot, $resolveUpdateWarningCaptureRoot, $resolvePromptCaptureRoot, $resolveCancellationPromptCaptureRoot, $cleanupPromptCaptureRoot, (Join-Path $userDataRoot "User") | Out-Null
+New-Item -ItemType Directory -Force -Path $repositoryHistoryInitialCaptureRoot, $repositoryHistoryLoadedCaptureRoot, $repositoryHistoryStaleCaptureRoot | Out-Null
 @'
 {
   "workbench.startupEditor": "none",
@@ -11520,6 +11863,9 @@ $revertCancellationPromptDriverError = $null
 $resolvePromptDriverError = $null
 $resolveCancellationPromptDriverError = $null
 $cleanupPromptDriverError = $null
+$repositoryHistoryInitialDriverError = $null
+$repositoryHistoryLoadedDriverError = $null
+$repositoryHistoryStaleDriverError = $null
 try {
   $codeProcess = Start-CodeCliProcess -Path $codeCliResolved -Arguments @(
     "--user-data-dir",
@@ -11579,6 +11925,138 @@ try {
   }
   $rendererCapture = Get-Content -Raw -LiteralPath (Join-Path $captureRoot "renderer-capture.json") | ConvertFrom-Json
   Assert-RendererCaptureReport -Capture $rendererCapture -CaptureRoot $captureRoot -Target $Target -OpenReport $ready.openReport
+
+  $repositoryHistoryInitialReadyPath = "$($harness.ReadyPath).history-initial"
+  $repositoryHistoryInitialDonePath = "$($harness.DonePath).history-initial"
+  Wait-File -Path $repositoryHistoryInitialReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Repository Log initial collapsed renderer ready sentinel"
+  $repositoryHistoryInitialReady = Get-Content -Raw -LiteralPath $repositoryHistoryInitialReadyPath | ConvertFrom-Json
+  if ($repositoryHistoryInitialReady.ok -ne $true -or $repositoryHistoryInitialReady.phase -ne "repositoryHistoryInitialCollapsed") {
+    throw "Installed Repository Log initial renderer sentinel did not request the collapsed History state."
+  }
+  $repositoryHistoryInitialReady.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $repositoryHistoryInitialExpectationsPath -Encoding utf8
+  try {
+    Invoke-RendererCaptureDriver `
+      -DriverPath $rendererCaptureDriverResolved `
+      -Port $RemoteDebuggingPort `
+      -CaptureRoot $repositoryHistoryInitialCaptureRoot `
+      -ExpectationsPath $repositoryHistoryInitialExpectationsPath `
+      -Target $Target
+  }
+  catch {
+    $repositoryHistoryInitialDriverError = $_
+  }
+  finally {
+    [pscustomobject]@{
+      ok = $null -eq $repositoryHistoryInitialDriverError
+      completedAt = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $repositoryHistoryInitialDonePath -Encoding utf8
+  }
+  if ($null -ne $repositoryHistoryInitialDriverError) {
+    throw $repositoryHistoryInitialDriverError
+  }
+  $repositoryHistoryInitialCapture = Get-Content -Raw -LiteralPath (Join-Path $repositoryHistoryInitialCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+  Assert-RendererCaptureReport -Capture $repositoryHistoryInitialCapture -CaptureRoot $repositoryHistoryInitialCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+    rendererCaptureExpectations = $repositoryHistoryInitialReady.rendererCaptureExpectations
+  })
+  if (
+    $repositoryHistoryInitialCapture.assertions.treeViewVisible -ne $true -or
+    $repositoryHistoryInitialCapture.assertions.treeViewExpanded -ne $true -or
+    $repositoryHistoryInitialCapture.interaction.kind -cne "treeViewState" -or
+    $repositoryHistoryInitialCapture.interaction.found -ne $true -or
+    $repositoryHistoryInitialCapture.interaction.visible -ne $true -or
+    $repositoryHistoryInitialCapture.interaction.expanded -ne $false -or
+    @($repositoryHistoryInitialCapture.interaction.selectedRowTexts).Count -ne 0
+  ) {
+    throw "Installed Repository Log initial renderer capture did not prove a visible collapsed SVN History view."
+  }
+
+  $repositoryHistoryLoadedReadyPath = "$($harness.ReadyPath).history-loaded"
+  $repositoryHistoryLoadedDonePath = "$($harness.DonePath).history-loaded"
+  Wait-File -Path $repositoryHistoryLoadedReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Repository Log loaded renderer ready sentinel"
+  $repositoryHistoryLoadedReady = Get-Content -Raw -LiteralPath $repositoryHistoryLoadedReadyPath | ConvertFrom-Json
+  if ($repositoryHistoryLoadedReady.ok -ne $true -or $repositoryHistoryLoadedReady.phase -ne "repositoryHistoryLoaded") {
+    throw "Installed Repository Log loaded renderer sentinel did not request the loaded History state."
+  }
+  $repositoryHistoryLoadedReady.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $repositoryHistoryLoadedExpectationsPath -Encoding utf8
+  try {
+    Invoke-RendererCaptureDriver `
+      -DriverPath $rendererCaptureDriverResolved `
+      -Port $RemoteDebuggingPort `
+      -CaptureRoot $repositoryHistoryLoadedCaptureRoot `
+      -ExpectationsPath $repositoryHistoryLoadedExpectationsPath `
+      -Target $Target
+  }
+  catch {
+    $repositoryHistoryLoadedDriverError = $_
+  }
+  finally {
+    [pscustomobject]@{
+      ok = $null -eq $repositoryHistoryLoadedDriverError
+      completedAt = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $repositoryHistoryLoadedDonePath -Encoding utf8
+  }
+  if ($null -ne $repositoryHistoryLoadedDriverError) {
+    throw $repositoryHistoryLoadedDriverError
+  }
+  $repositoryHistoryLoadedCapture = Get-Content -Raw -LiteralPath (Join-Path $repositoryHistoryLoadedCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+  Assert-RendererCaptureReport -Capture $repositoryHistoryLoadedCapture -CaptureRoot $repositoryHistoryLoadedCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+    rendererCaptureExpectations = $repositoryHistoryLoadedReady.rendererCaptureExpectations
+  })
+  if (
+    $repositoryHistoryLoadedCapture.assertions.treeViewVisible -ne $true -or
+    $repositoryHistoryLoadedCapture.assertions.treeViewExpanded -ne $true -or
+    $repositoryHistoryLoadedCapture.assertions.treeViewFocused -ne $true -or
+    $repositoryHistoryLoadedCapture.assertions.treeViewSelectionMatched -ne $true -or
+    $repositoryHistoryLoadedCapture.interaction.kind -cne "treeViewState" -or
+    $repositoryHistoryLoadedCapture.interaction.found -ne $true -or
+    $repositoryHistoryLoadedCapture.interaction.visible -ne $true -or
+    $repositoryHistoryLoadedCapture.interaction.expanded -ne $true -or
+    $repositoryHistoryLoadedCapture.interaction.focused -ne $true -or
+    @($repositoryHistoryLoadedCapture.interaction.selectedRowTexts).Count -eq 0
+  ) {
+    throw "Installed Repository Log loaded renderer capture did not prove visible, expanded, focused, selected History state."
+  }
+  foreach ($expectedSelectionToken in @($repositoryHistoryLoadedReady.rendererCaptureExpectations.treeViewState.selectedTokens)) {
+    if (@($repositoryHistoryLoadedCapture.interaction.selectedRowTexts).Where({ $_.Contains($expectedSelectionToken) }).Count -eq 0) {
+      throw "Installed Repository Log loaded renderer capture selected rows did not contain the expected working-copy root."
+    }
+  }
+
+  $repositoryHistoryStaleReadyPath = "$($harness.ReadyPath).history-stale"
+  $repositoryHistoryStaleDonePath = "$($harness.DonePath).history-stale"
+  Wait-File -Path $repositoryHistoryStaleReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Repository Log stale-target notification ready sentinel"
+  $repositoryHistoryStaleReady = Get-Content -Raw -LiteralPath $repositoryHistoryStaleReadyPath | ConvertFrom-Json
+  if ($repositoryHistoryStaleReady.ok -ne $true -or $repositoryHistoryStaleReady.phase -ne "repositoryHistoryStaleNotification") {
+    throw "Installed Repository Log stale-target sentinel did not request localized notification evidence."
+  }
+  $repositoryHistoryStaleReady.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $repositoryHistoryStaleExpectationsPath -Encoding utf8
+  try {
+    Invoke-RendererCaptureDriver `
+      -DriverPath $rendererCaptureDriverResolved `
+      -Port $RemoteDebuggingPort `
+      -CaptureRoot $repositoryHistoryStaleCaptureRoot `
+      -ExpectationsPath $repositoryHistoryStaleExpectationsPath `
+      -Target $Target
+  }
+  catch {
+    $repositoryHistoryStaleDriverError = $_
+  }
+  finally {
+    [pscustomobject]@{
+      ok = $null -eq $repositoryHistoryStaleDriverError
+      completedAt = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $repositoryHistoryStaleDonePath -Encoding utf8
+  }
+  if ($null -ne $repositoryHistoryStaleDriverError) {
+    throw $repositoryHistoryStaleDriverError
+  }
+  $repositoryHistoryStaleCapture = Get-Content -Raw -LiteralPath (Join-Path $repositoryHistoryStaleCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+  Assert-RendererCaptureReport -Capture $repositoryHistoryStaleCapture -CaptureRoot $repositoryHistoryStaleCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+    rendererCaptureExpectations = $repositoryHistoryStaleReady.rendererCaptureExpectations
+  })
+  if ($repositoryHistoryStaleCapture.assertions.notificationCancelled -ne $true) {
+    throw "Installed Repository Log stale-target renderer capture did not close the captured actionable notification."
+  }
 
   Wait-File -Path $harness.PartialFreshnessRendererReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E partial freshness renderer ready sentinel"
   $partialFreshnessRendererReady = Get-Content -Raw -LiteralPath $harness.PartialFreshnessRendererReadyPath | ConvertFrom-Json
@@ -13335,7 +13813,7 @@ $report = [pscustomObject]@{
   schema = "subversionr.release.installed-source-control-ui-e2e.win32-x64.v1"
   publicReadinessClaim = $false
   target = $Target
-  traceIds = @("BRM-001", "BRM-005", "COM-001", "COM-002", "COM-003", "DIR-003", "DIR-009", "DIR-010", "DIR-012", "DIR-013", "REP-002", "REP-004", "MIG-009", "OPS-001", "OPS-002", "OPS-003", "OPS-004", "OPS-005", "OPS-006", "OPS-007", "OPS-008", "OPS-010", "OPS-011", "OPS-013", "OPS-014", "OPS-015", "STA-003", "STA-009", "STA-013", "STA-014", "STA-016", "SYN-003", "SYN-004", "SYN-005", "TST-018", "TST-024", "UX-001", "UX-002", "UX-007")
+  traceIds = @("BRM-001", "BRM-005", "COM-001", "COM-002", "COM-003", "DIR-003", "DIR-009", "DIR-010", "DIR-012", "DIR-013", "HIS-001", "REP-002", "REP-004", "MIG-009", "OPS-001", "OPS-002", "OPS-003", "OPS-004", "OPS-005", "OPS-006", "OPS-007", "OPS-008", "OPS-010", "OPS-011", "OPS-013", "OPS-014", "OPS-015", "STA-003", "STA-009", "STA-013", "STA-014", "STA-016", "SYN-003", "SYN-004", "SYN-005", "TST-018", "TST-024", "UX-001", "UX-002", "UX-007")
   nonClaims = @(
     "This gate does not prove Marketplace publication.",
     "This gate does not prove VSIX signing or supply-chain provenance publication.",
@@ -13346,7 +13824,8 @@ $report = [pscustomObject]@{
     "This gate proves installed Add to Ignore through svn:ignore property update but does not prove a full property editor, svn:externals editing, remote/auth/certificate property flows, property cancellation UX, or property load behavior.",
     "This gate proves installed Lock and Unlock plus Lock message and Unlock mode prompt cancellation for a local file-backed svn:needs-lock working copy item but does not prove broad remote lock-server matrices, auth/certificate lock prompts, break-lock policy, steal-lock policy, or lock load behavior.",
     "This gate proves installed changelist set/clear plus commit/revert by changelist happy paths but does not prove changelist load behavior, cancellation UX for all changelist commands, project-wide changelist policy UX, or commit template/message-history behavior.",
-    "This gate proves installed Branch/Tag create and Switch local file-backed happy paths but does not prove switch-after-copy, target browsing, broad remote/auth/certificate matrices, repository-browser integration, merge workflows, or switched working-copy edge/load behavior."
+    "This gate proves installed Branch/Tag create and Switch local file-backed happy paths but does not prove switch-after-copy, target browsing, broad remote/auth/certificate matrices, repository-browser integration, merge workflows, or switched working-copy edge/load behavior.",
+    "This gate proves installed local file-backed Repository Log targeting, history view reveal/focus, and missing-author presentation but does not prove remote history, repository browsing, merge history, or broad history load behavior."
   )
   extension = [pscustomobject]@{
     id = "hitsuki-ban.subversionr"
@@ -13361,6 +13840,8 @@ $report = [pscustomObject]@{
     hasInstalledSourceControlUiE2eOpenReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eOpenReportCommand
     hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand
     hasInstalledSourceControlUiE2eFreshnessReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eFreshnessReportCommand
+    hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand
+    hasShowRepositoryLogCommand = [bool]$harnessResult.hasShowRepositoryLogCommand
     hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand
     hasInstalledSourceControlUiE2eDirtyGenerationCancellationReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eDirtyGenerationCancellationReportCommand
     hasInstalledSourceControlUiE2eDirtyEventCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eDirtyEventCommand
@@ -13402,6 +13883,7 @@ $report = [pscustomObject]@{
   fullReconcileCancellationProgressCapture = $fullReconcileCancellationCapture
   sourceControlUiDirtyGenerationCancellationLoadWorkflow = $harnessResult.dirtyGenerationCancellationLoadReport
   sourceControlUiRefreshWorkflow = $harnessResult.refreshReport
+  sourceControlUiRepositoryHistoryWorkflow = $harnessResult.repositoryHistoryReport
   sourceControlUiRefreshLoadWorkflow = $harnessResult.refreshLoadReport
   sourceControlUiBoundaryLoadWorkflow = $harnessResult.boundaryLoadReport
   sourceControlUiMultiRepositoryRefreshWorkflow = $harnessResult.multiRepositoryRefreshReport
@@ -13459,6 +13941,9 @@ $report = [pscustomObject]@{
   repositoryLifecycleMoveReport = $harnessResult.repositoryLifecycleMoveReport
   versionReport = $harnessResult.versionReport
   rendererCapture = $rendererCapture
+  repositoryHistoryInitialRendererCapture = $repositoryHistoryInitialCapture
+  repositoryHistoryLoadedRendererCapture = $repositoryHistoryLoadedCapture
+  repositoryHistoryStaleNotificationRendererCapture = $repositoryHistoryStaleCapture
   noRepositoryWelcomeRendererCapture = $noRepositoryWelcomeRendererCapture
   multiRepositoryRefreshPromptCapture = $multiRepositoryRefreshPromptCapture
   deleteUnversionedPromptCapture = $deletePromptCapture
@@ -13675,6 +14160,10 @@ $report = [pscustomObject]@{
   workingCopy = [pscustomobject]@{
     root = Get-RepoRelativePath $fixture.workingCopyRoot
     repositoryUrl = $fixture.repoUrl
+    missingAuthorRevision = $fixture.missingAuthorRevision
+    missingAuthorRelativePath = $fixture.missingAuthorRelativePath
+    emptyAuthorRevision = $fixture.emptyAuthorRevision
+    emptyAuthorRelativePath = $fixture.emptyAuthorRelativePath
     svnTreeBeforeSha256 = $fixture.svnTreeBeforeSha256
     svnTreeAfterSha256 = $svnTreeAfterSha256
     svnMetadataMutation = $(if ($svnTreeAfterSha256 -eq $fixture.svnTreeBeforeSha256) { "none" } else { "metadata-refreshed" })
@@ -13899,6 +14388,15 @@ $report = [pscustomObject]@{
     "SubversionR recovered the installed SourceControl surface after Full Reconcile cancellation",
     "SubversionR executed the installed Refresh command against the single open fixture repository",
     "SubversionR kept the SourceControl surface available after installed Refresh command execution",
+    "SubversionR executed Repository Log against an exact repositoryId plus epoch session target",
+    "The source-built local repository fixture included separate missing and empty svn:author revisions",
+    "Fresh-profile renderer evidence proved SVN History started collapsed before Repository Log execution",
+    "Repository Log renderer evidence proved SVN History became visible, expanded, focused, and selected on the working-copy-root target",
+    "Repository Log rendered missing and empty svn:author revisions as Unknown author",
+    "Repository Log renderer evidence exposed the working-copy-root label without the internal repository id",
+    "A stale repository epoch was rejected with SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE and a localized actionable notification",
+    "Repository Log diagnostics remained bounded and redacted",
+    "Repository Log and stale-target rejection did not change SourceControl projection, request status refresh or reconcile, or start remote status polling",
     "SubversionR executed the installed Refresh command against a 64-item modified source-built load fixture",
     "SubversionR preserved SourceControl projection for every modified load fixture resource after installed Refresh command execution",
     "SubversionR projected 128 parent modified resources while excluding 128 modified resources below an external boundary",

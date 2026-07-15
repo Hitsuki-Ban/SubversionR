@@ -64,6 +64,16 @@ export interface HistorySearchResult {
   message?: string;
 }
 
+export interface LoadedHistorySnapshot {
+  target: HistoryViewTarget;
+  entryCount: number;
+  entries: Array<{
+    revision: number;
+    author: string | null;
+    message: string | null;
+  }>;
+}
+
 export interface HistoryCopyTarget {
   revision: number;
   message: string | null;
@@ -122,7 +132,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
   private readonly emitter: HistoryTreeEventEmitter;
   private settings: HistorySettings;
   private state: HistoryState | undefined;
-  private currentRevisionNodes: WeakSet<object> = new WeakSet();
+  private currentRevisionNodes = new Map<HistoryLogEntry, HistoryRevisionNode>();
   private requestGeneration = 0;
   private searchQuery = "";
 
@@ -146,7 +156,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
       entries: [],
       nextStartRevision: "head",
     };
-    this.currentRevisionNodes = new WeakSet();
+    this.currentRevisionNodes = new Map();
     await this.reload(requestGeneration);
   }
 
@@ -159,12 +169,27 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
       entries: [...entries],
       nextStartRevision: undefined,
     };
-    this.currentRevisionNodes = new WeakSet();
+    this.currentRevisionNodes = new Map();
     this.emitter.fire(undefined);
   }
 
   public currentTargetNode(): HistoryTreeNode | undefined {
     return this.state?.targetNode;
+  }
+
+  public currentSnapshot(): LoadedHistorySnapshot | undefined {
+    if (!this.state) {
+      return undefined;
+    }
+    return {
+      target: { ...this.state.target },
+      entryCount: this.state.entries.length,
+      entries: this.state.entries.map((entry) => ({
+        revision: entry.revision,
+        author: entry.author?.trim() || null,
+        message: entry.message,
+      })),
+    };
   }
 
   public ensureSearchableTarget(): void {
@@ -193,7 +218,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
 
   public async updateSettings(settings: HistorySettings): Promise<void> {
     this.settings = settings;
-    this.currentRevisionNodes = new WeakSet();
+    this.currentRevisionNodes = new Map();
     const state = this.state;
     if (!state || state.target.kind === "line" || !this.options.workspaceTrusted()) {
       this.emitter.fire(undefined);
@@ -212,7 +237,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
       throw invalidSearchQuery();
     }
     this.searchQuery = normalizedQuery;
-    this.currentRevisionNodes = new WeakSet();
+    this.currentRevisionNodes = new Map();
     this.emitter.fire(undefined);
     return {
       query: normalizedQuery,
@@ -336,7 +361,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
       entries: [...state.entries, ...log.entries],
       nextStartRevision: nextStartRevision(log.entries, this.settings.pageSize),
     };
-    this.currentRevisionNodes = new WeakSet();
+    this.currentRevisionNodes = new Map();
     this.emitter.fire(undefined);
   }
 
@@ -363,7 +388,6 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
       case "target":
         return {
           label: targetLabel(element.target, this.options.localize),
-          description: element.target.repositoryId,
           collapsibleState: this.options.api.collapsibleState.expanded,
           contextValue: "subversionr.history.target",
         };
@@ -411,6 +435,28 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
     }
   }
 
+  public getParent(element: HistoryTreeNode): HistoryTreeNode | undefined {
+    const state = this.state;
+    if (!state) {
+      return undefined;
+    }
+    switch (element.kind) {
+      case "target":
+      case "placeholder":
+        return undefined;
+      case "revision":
+        return this.currentRevisionNodes.get(element.entry) === element
+          ? state.targetNode
+          : undefined;
+      case "changedPath":
+        return this.currentRevisionNodes.get(element.entry);
+      case "empty":
+      case "searchEmpty":
+      case "loadMore":
+        return state.targetNode;
+    }
+  }
+
   public async getChildren(element?: HistoryTreeNode): Promise<HistoryTreeNode[]> {
     const state = this.state;
     if (!element) {
@@ -435,7 +481,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
             previousRevision: state.target.kind === "file" ? state.entries[index + 1]?.revision : undefined,
           }));
           for (const revisionNode of revisionNodes) {
-            this.currentRevisionNodes.add(revisionNode);
+            this.currentRevisionNodes.set(revisionNode.entry, revisionNode);
           }
           children.push(...revisionNodes);
         }
@@ -474,7 +520,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
       entries: log.entries,
       nextStartRevision: nextStartRevision(log.entries, this.settings.pageSize),
     };
-    this.currentRevisionNodes = new WeakSet();
+    this.currentRevisionNodes = new Map();
     this.emitter.fire(undefined);
   }
 
@@ -565,7 +611,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
     if (candidate.kind !== "revision") {
       throw invalid();
     }
-    if (!this.currentRevisionNodes.has(candidate)) {
+    if (!candidate.entry || this.currentRevisionNodes.get(candidate.entry) !== candidate) {
       throw invalid();
     }
     if (typeof candidate.target !== "object" || candidate.target === null) {
@@ -690,7 +736,7 @@ function targetLabel(
 ): string {
   switch (target.kind) {
     case "repository":
-      return localize("Repository: {0}", target.label);
+      return target.label;
     case "file":
       return localize("File: {0}", target.label);
     case "line":
@@ -791,7 +837,7 @@ function revisionDescription(
   localize: (message: string, ...args: unknown[]) => string,
 ): string {
   return [
-    entry.author ?? localize("Unknown author"),
+    entry.author?.trim() || localize("Unknown author"),
     dateSummary(entry.date, localize),
     messageSummary(entry.message, localize),
   ].join(" ");

@@ -232,13 +232,41 @@ function New-CloseReport() {
   }
 }
 
+function New-HistoryRendererCapture([switch]$Loaded, [switch]$Notification) {
+  $selectedRowTexts = [System.Collections.Generic.List[string]]::new()
+  if ($Loaded) {
+    $selectedRowTexts.Add("C:/wc")
+  }
+  [pscustomobject]@{
+    schema = "subversionr.release.installed-source-control-ui-renderer-capture.v1"
+    assertions = [pscustomobject]@{
+      domRequiredTokensPresent = $true
+      accessibilityRequiredTokensPresent = $true
+      screenshotNonBlank = $true
+      treeViewVisible = $true
+      treeViewExpanded = $true
+      treeViewFocused = [bool]$Loaded
+      treeViewSelectionMatched = [bool]$Loaded
+      notificationCancelled = [bool]$Notification
+    }
+    interaction = [pscustomobject]@{
+      kind = "treeViewState"
+      found = $true
+      visible = $true
+      expanded = [bool]$Loaded
+      focused = [bool]$Loaded
+      selectedRowTexts = $selectedRowTexts
+    }
+  }
+}
+
 function Write-InstalledSourceControlUiE2eEvidence([string]$EvidenceRoot, [object]$Vsix) {
   Write-Json (New-EvidencePath $EvidenceRoot "installed-source-control-ui-e2e") ([pscustomobject]@{
     schemaVersion = 1
     schema = "subversionr.release.installed-source-control-ui-e2e.win32-x64.v1"
     publicReadinessClaim = $false
     target = "win32-x64"
-    traceIds = @("BRM-001", "BRM-005", "OPS-010", "OPS-011", "OPS-013", "STA-014", "TST-018", "TST-024", "UX-002")
+    traceIds = @("BRM-001", "BRM-005", "HIS-001", "OPS-010", "OPS-011", "OPS-013", "STA-014", "TST-018", "TST-024", "UX-002")
     nonClaims = @(
       "This gate does not prove Marketplace publication.",
       "This gate does not prove VSIX signing or supply-chain provenance publication.",
@@ -249,7 +277,8 @@ function Write-InstalledSourceControlUiE2eEvidence([string]$EvidenceRoot, [objec
       "This gate proves installed Add to Ignore through svn:ignore property update but does not prove a full property editor, svn:externals editing, remote/auth/certificate property flows, property cancellation UX, or property load behavior.",
       "This gate proves installed Lock and Unlock plus Lock message and Unlock mode prompt cancellation for a local file-backed svn:needs-lock working copy item but does not prove broad remote lock-server matrices, auth/certificate lock prompts, break-lock policy, steal-lock policy, or lock load behavior.",
       "This gate proves installed changelist set/clear plus commit/revert by changelist happy paths but does not prove changelist load behavior, cancellation UX for all changelist commands, project-wide changelist policy UX, or commit template/message-history behavior.",
-      "This gate proves installed Branch/Tag create and Switch local file-backed happy paths but does not prove switch-after-copy, target browsing, broad remote/auth/certificate matrices, repository-browser integration, merge workflows, or switched working-copy edge/load behavior."
+      "This gate proves installed Branch/Tag create and Switch local file-backed happy paths but does not prove switch-after-copy, target browsing, broad remote/auth/certificate matrices, repository-browser integration, merge workflows, or switched working-copy edge/load behavior.",
+      "This gate proves installed local file-backed Repository Log targeting, history view reveal/focus, and missing-author presentation but does not prove remote history, repository browsing, merge history, or broad history load behavior."
     )
     extension = [pscustomobject]@{
       id = "hitsuki-ban.subversionr"
@@ -266,6 +295,8 @@ function Write-InstalledSourceControlUiE2eEvidence([string]$EvidenceRoot, [objec
       hasRevertChangelistCommand = $true
       hasBranchCreateRepositoryCommand = $true
       hasSwitchRepositoryCommand = $true
+      hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand = $true
+      hasShowRepositoryLogCommand = $true
     }
     installedExtensions = @("hitsuki-ban.subversionr@0.2.4")
     vsix = [pscustomobject]@{
@@ -287,6 +318,39 @@ function Write-InstalledSourceControlUiE2eEvidence([string]$EvidenceRoot, [objec
         sourceControlProjectionUnchanged = $true
       }
     }
+    sourceControlUiRepositoryHistoryWorkflow = [pscustomobject]@{
+      kind = "subversionr.installedSourceControlUiE2eRepositoryHistoryWorkflow"
+      command = [pscustomobject]@{
+        command = "subversionr.showRepositoryLog"
+        target = [pscustomobject]@{ kind = "subversionr.repositoryHistoryTarget"; repositoryId = "repo-1"; epoch = 1 }
+      }
+      fixture = [pscustomobject]@{ missingAuthorRevision = 2; emptyAuthorRevision = 3 }
+      staleReport = [pscustomobject]@{
+        diagnostics = [pscustomobject]@{
+          latestHistoryTargetingError = [pscustomobject]@{ code = "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE" }
+        }
+      }
+      assertions = [pscustomobject]@{
+        exactRepositorySessionTargeted = $true
+        missingAuthorRenderedAsUnknown = $true
+        emptyAuthorRenderedAsUnknown = $true
+        historyViewInitiallyCollapsed = $true
+        historyViewVisibleExpandedFocusedSelected = $true
+        workingCopyRootLabelVisible = $true
+        internalRepositoryIdHiddenFromRenderer = $true
+        staleTargetRejectedWithStableCode = $true
+        staleNotificationLocalizedAndActionable = $true
+        diagnosticsBoundedAndRedacted = $true
+        sourceControlProjectionUnchanged = $true
+        lastCompletedRefreshUnchanged = $true
+        statusRefreshNotRequested = $true
+        reconcileNotRequested = $true
+        remoteStatusPollingNotRequested = $true
+      }
+    }
+    repositoryHistoryInitialRendererCapture = New-HistoryRendererCapture
+    repositoryHistoryLoadedRendererCapture = New-HistoryRendererCapture -Loaded
+    repositoryHistoryStaleNotificationRendererCapture = New-HistoryRendererCapture -Notification
     sourceControlUiCheckoutExistingTargetFailureWorkflow = [pscustomobject]@{
       kind = "subversionr.installedSourceControlUiE2eCheckoutExistingTargetFailureWorkflow"
       command = [pscustomobject]@{ command = "subversionr.checkoutRepository" }
@@ -1064,6 +1128,51 @@ try {
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $checkoutFailureCodeDriftFixture
   } "SVN_REPOSITORY_CHECKOUT_FAILED" "Beta candidate consistency should reject Checkout failure evidence with a stale failure code."
+
+  $historyStaleCodeDriftFixture = New-BetaCandidateFixture (Join-Path $tempRoot "history-stale-code-drift")
+  $historyStaleCodeDriftPath = New-EvidencePath $historyStaleCodeDriftFixture.evidenceRoot "installed-source-control-ui-e2e"
+  $historyStaleCodeDrift = Get-Content -Raw -LiteralPath $historyStaleCodeDriftPath | ConvertFrom-Json
+  $historyStaleCodeDrift.sourceControlUiRepositoryHistoryWorkflow.staleReport.diagnostics.latestHistoryTargetingError.code = "SUBVERSIONR_UNKNOWN"
+  Write-Json $historyStaleCodeDriftPath $historyStaleCodeDrift
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $historyStaleCodeDriftFixture
+  } "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE" "Beta candidate consistency should reject Repository Log evidence with a stale targeting error code."
+
+  $historyFocusDriftFixture = New-BetaCandidateFixture (Join-Path $tempRoot "history-focus-drift")
+  $historyFocusDriftPath = New-EvidencePath $historyFocusDriftFixture.evidenceRoot "installed-source-control-ui-e2e"
+  $historyFocusDrift = Get-Content -Raw -LiteralPath $historyFocusDriftPath | ConvertFrom-Json
+  $historyFocusDrift.repositoryHistoryLoadedRendererCapture.assertions.treeViewFocused = $false
+  Write-Json $historyFocusDriftPath $historyFocusDrift
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $historyFocusDriftFixture
+  } "treeViewFocused" "Beta candidate consistency should reject Repository Log renderer evidence without History view focus."
+
+  $historyInitialExpandedDriftFixture = New-BetaCandidateFixture (Join-Path $tempRoot "history-initial-expanded-drift")
+  $historyInitialExpandedDriftPath = New-EvidencePath $historyInitialExpandedDriftFixture.evidenceRoot "installed-source-control-ui-e2e"
+  $historyInitialExpandedDrift = Get-Content -Raw -LiteralPath $historyInitialExpandedDriftPath | ConvertFrom-Json
+  $historyInitialExpandedDrift.repositoryHistoryInitialRendererCapture.interaction.expanded = $true
+  Write-Json $historyInitialExpandedDriftPath $historyInitialExpandedDrift
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $historyInitialExpandedDriftFixture
+  } "expanded must remain false" "Beta candidate consistency should reject a derived initial-collapse assertion backed by an expanded TreeView interaction."
+
+  $historyLoadedSelectionDriftFixture = New-BetaCandidateFixture (Join-Path $tempRoot "history-loaded-selection-drift")
+  $historyLoadedSelectionDriftPath = New-EvidencePath $historyLoadedSelectionDriftFixture.evidenceRoot "installed-source-control-ui-e2e"
+  $historyLoadedSelectionDrift = Get-Content -Raw -LiteralPath $historyLoadedSelectionDriftPath | ConvertFrom-Json
+  $historyLoadedSelectionDrift.repositoryHistoryLoadedRendererCapture.interaction.selectedRowTexts = @()
+  Write-Json $historyLoadedSelectionDriftPath $historyLoadedSelectionDrift
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $historyLoadedSelectionDriftFixture
+  } "non-empty selectedRowTexts string values" "Beta candidate consistency should reject a derived loaded-selection assertion without an actual selected row."
+
+  $historyRemotePollDriftFixture = New-BetaCandidateFixture (Join-Path $tempRoot "history-remote-poll-drift")
+  $historyRemotePollDriftPath = New-EvidencePath $historyRemotePollDriftFixture.evidenceRoot "installed-source-control-ui-e2e"
+  $historyRemotePollDrift = Get-Content -Raw -LiteralPath $historyRemotePollDriftPath | ConvertFrom-Json
+  $historyRemotePollDrift.sourceControlUiRepositoryHistoryWorkflow.assertions.remoteStatusPollingNotRequested = $false
+  Write-Json $historyRemotePollDriftPath $historyRemotePollDrift
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $historyRemotePollDriftFixture
+  } "remoteStatusPollingNotRequested" "Beta candidate consistency should reject Repository Log evidence that no longer proves remote polling stayed idle."
 
   $updateCancellationDriftFixture = New-BetaCandidateFixture (Join-Path $tempRoot "update-cancellation-drift")
   $updateCancellationDriftPath = New-EvidencePath $updateCancellationDriftFixture.evidenceRoot "installed-source-control-ui-e2e"

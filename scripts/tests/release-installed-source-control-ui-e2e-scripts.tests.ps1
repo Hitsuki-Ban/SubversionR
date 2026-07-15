@@ -474,6 +474,136 @@ function Wait-FakeRendererDone([string]$Path, [string]$Description) {
     Start-Sleep -Milliseconds 100
   }
 }
+$historyInitialExpectations = [pscustomobject]@{
+  requiredDomTokens = @("SVN History")
+  requiredAccessibilityTokens = @("SVN History")
+  requiredScreenshot = $true
+  treeViewState = [pscustomobject]@{
+    viewLabel = "SVN History"
+    expectedVisible = $true
+    expectedExpanded = $false
+    selectedTokens = @()
+  }
+}
+[pscustomobject]@{
+  ok = $true
+  phase = "repositoryHistoryInitialCollapsed"
+  rendererCaptureExpectations = $historyInitialExpectations
+} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.history-initial" -Encoding utf8
+Wait-FakeRendererDone -Path "$donePath.history-initial" -Description "Repository Log initial"
+
+$historyLoadedExpectations = [pscustomobject]@{
+  requiredDomTokens = @("SVN History", $workingCopyRoot, "Unknown author", "history revision without author", "history revision with empty author")
+  requiredAccessibilityTokens = @("SVN History", "Unknown author")
+  forbiddenDomTokens = @($openReport.repository.repositoryId)
+  forbiddenAccessibilityTokens = @($openReport.repository.repositoryId)
+  requiredScreenshot = $true
+  treeViewState = [pscustomobject]@{
+    viewLabel = "SVN History"
+    expectedVisible = $true
+    expectedExpanded = $true
+    expectedFocused = $true
+    selectedTokens = @($workingCopyRoot)
+  }
+}
+[pscustomobject]@{
+  ok = $true
+  phase = "repositoryHistoryLoaded"
+  rendererCaptureExpectations = $historyLoadedExpectations
+} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.history-loaded" -Encoding utf8
+Wait-FakeRendererDone -Path "$donePath.history-loaded" -Description "Repository Log loaded"
+
+$historyStaleExpectations = [pscustomobject]@{
+  requiredDomTokens = @("selected SVN repository session is no longer open", "Show Log")
+  requiredAccessibilityTokens = @("selected SVN repository session is no longer open", "Show Log")
+  forbiddenDomTokens = @($openReport.repository.repositoryId)
+  forbiddenAccessibilityTokens = @($openReport.repository.repositoryId)
+  requiredScreenshot = $true
+  cancelSurface = "notification"
+  cancelAction = "closeNotification"
+}
+[pscustomobject]@{
+  ok = $true
+  phase = "repositoryHistoryStaleNotification"
+  rendererCaptureExpectations = $historyStaleExpectations
+} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.history-stale" -Encoding utf8
+Wait-FakeRendererDone -Path "$donePath.history-stale" -Description "Repository Log stale notification"
+
+$historyActivity = [pscustomobject]@{
+  statusRefreshRequestCount = 1
+  reconcileRequestCount = 0
+  remoteStatusRequestCount = 0
+}
+$historyEntries = @(
+  [pscustomobject]@{ revision = 3; author = $null; message = "history revision with empty author" },
+  [pscustomobject]@{ revision = 2; author = $null; message = "history revision without author" },
+  [pscustomobject]@{ revision = 1; author = "fixture"; message = "seed M7j3 fixture" }
+)
+$historyLoadedReport = [pscustomobject]@{
+  kind = "subversionr.installedSourceControlUiE2eRepositoryHistoryReport"
+  repository = $openReport.repository
+  activity = $historyActivity
+  history = [pscustomobject]@{
+    target = [pscustomobject]@{
+      kind = "repository"
+      repositoryId = $openReport.repository.repositoryId
+      epoch = $openReport.repository.epoch
+      path = "."
+      label = $workingCopyRoot
+    }
+    entryCount = 3
+    entries = $historyEntries
+    treeView = [pscustomobject]@{
+      visible = $true
+      selectionCount = 1
+      selectedTargetLabel = $workingCopyRoot
+    }
+  }
+  diagnostics = [pscustomobject]@{ lines = @() }
+}
+$historyStaleReport = $historyLoadedReport | Select-Object *
+$historyStaleReport.diagnostics = [pscustomobject]@{
+  latestHistoryTargetingError = [pscustomobject]@{
+    code = "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE"
+    messageKey = "error.history.repositorySessionStale"
+    safeArgs = [pscustomobject]@{ repositoryId = $openReport.repository.repositoryId; expectedEpoch = 2; actualEpoch = 1 }
+  }
+  lines = @("history targeting failed: code=SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE")
+}
+$repositoryHistoryReport = [pscustomobject]@{
+  kind = "subversionr.installedSourceControlUiE2eRepositoryHistoryWorkflow"
+  command = [pscustomobject]@{
+    command = "subversionr.showRepositoryLog"
+    target = [pscustomobject]@{ kind = "subversionr.repositoryHistoryTarget"; repositoryId = $openReport.repository.repositoryId; epoch = $openReport.repository.epoch }
+    staleTarget = [pscustomobject]@{ kind = "subversionr.repositoryHistoryTarget"; repositoryId = $openReport.repository.repositoryId; epoch = $openReport.repository.epoch + 1 }
+  }
+  fixture = [pscustomobject]@{ missingAuthorRevision = 2; emptyAuthorRevision = 3 }
+  initialRendererCaptureExpectations = $historyInitialExpectations
+  loadedRendererCaptureExpectations = $historyLoadedExpectations
+  staleNotificationRendererCaptureExpectations = $historyStaleExpectations
+  beforeSurfaceReport = $openReport
+  beforeHistoryReport = [pscustomobject]@{ kind = "subversionr.installedSourceControlUiE2eRepositoryHistoryReport"; repository = $openReport.repository; activity = $historyActivity }
+  loadedReport = $historyLoadedReport
+  staleReport = $historyStaleReport
+  afterSurfaceReport = $openReport
+  assertions = [pscustomobject]@{
+    exactRepositorySessionTargeted = $true
+    missingAuthorRenderedAsUnknown = $true
+    emptyAuthorRenderedAsUnknown = $true
+    historyViewInitiallyCollapsed = $true
+    historyViewVisibleExpandedFocusedSelected = $true
+    workingCopyRootLabelVisible = $true
+    internalRepositoryIdHiddenFromRenderer = $true
+    staleTargetRejectedWithStableCode = $true
+    staleNotificationLocalizedAndActionable = $true
+    diagnosticsBoundedAndRedacted = $true
+    sourceControlProjectionUnchanged = $true
+    lastCompletedRefreshUnchanged = $true
+    statusRefreshNotRequested = $true
+    reconcileNotRequested = $true
+    remoteStatusPollingNotRequested = $true
+  }
+}
 $partialFreshnessReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eFreshnessReport"
   generatedAt = "2026-06-25T00:00:02Z"
@@ -6379,6 +6509,8 @@ $lifecycleMoveReport = [pscustomobject]@{
     "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
     "workbench.view.scm",
     "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
+    "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+    "subversionr.showRepositoryLog",
     "subversionr.initialize",
     "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
     "subversionr.diagnostics.installedSourceControlUiE2eArmDirtyGenerationCancellation",
@@ -6418,6 +6550,8 @@ $lifecycleMoveReport = [pscustomobject]@{
   hasInstalledSourceControlUiE2eOpenReportCommand = $true
   hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand = $true
   hasInstalledSourceControlUiE2eFreshnessReportCommand = $true
+  hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand = $true
+  hasShowRepositoryLogCommand = $true
   hasInstalledSourceControlUiE2eArmFullReconcileCancellationCommand = $true
   hasInstalledSourceControlUiE2eFullReconcileCancellationReportCommand = $true
   hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand = $true
@@ -6454,6 +6588,7 @@ $lifecycleMoveReport = [pscustomobject]@{
   openReport = $openReport
   partialFreshnessReport = $partialFreshnessReport
   staleFreshnessReport = $staleFreshnessReport
+  repositoryHistoryReport = $repositoryHistoryReport
   noRepositoryWelcomeRendererCaptureExpectations = $noRepositoryWelcomeRendererExpectations
   partialFreshnessRendererCaptureExpectations = $partialFreshnessRendererExpectations
   staleFreshnessRendererCaptureExpectations = $staleFreshnessRendererExpectations
@@ -6639,6 +6774,12 @@ const report = {
       scmResourceContextActionsReachable: true,
       activationReadyToastAbsent: true
     } : {}),
+    ...(expectations.treeViewState ? {
+      treeViewVisible: true,
+      treeViewExpanded: true,
+      ...(expectations.treeViewState.expectedFocused === undefined ? {} : { treeViewFocused: true }),
+      treeViewSelectionMatched: true
+    } : {}),
     ...(expectations.clickButtonText ? { clickButtonCompleted: true } : {}),
     ...(expectations.inputText ? { inputTextSubmitted: true } : {}),
     ...(expectations.quickInputSubmitKey ? { quickInputSubmitted: true } : {}),
@@ -6670,6 +6811,16 @@ const report = {
         forbiddenTokens: expectations.scmActionSurface.forbiddenNotificationTokens,
         presentForbiddenTokens: mode === "activation-toast-lie" ? expectations.scmActionSurface.forbiddenNotificationTokens : []
       }
+    }
+  } : expectations.treeViewState ? {
+    interaction: {
+      kind: "treeViewState",
+      viewLabel: expectations.treeViewState.viewLabel,
+      found: true,
+      visible: expectations.treeViewState.expectedVisible,
+      expanded: expectations.treeViewState.expectedExpanded,
+      focused: expectations.treeViewState.expectedFocused === true,
+      selectedRowTexts: expectations.treeViewState.selectedTokens
     }
   } : expectations.clickButtonText ? {
     interaction: {
@@ -6818,6 +6969,9 @@ public static class Program {
       if (exe == "svnadmin.exe" && args.Length >= 2 && args[0] == "create") {
         Directory.CreateDirectory(args[1]);
         File.WriteAllText(Path.Combine(args[1], "format"), "SubversionR fake fixture repository");
+        return 0;
+      }
+      if (exe == "svnadmin.exe" && args.Length >= 1 && (args[0] == "delrevprop" || args[0] == "setrevprop")) {
         return 0;
       }
       if (exe == "svn.exe" && args.Length >= 3 && args[0] == "import") {
@@ -7176,10 +7330,17 @@ try {
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.unlockResource" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Unlock command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.branchCreateRepository" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Branch/Tag create command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.switchRepository" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Switch command invocation."
+  Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.showRepositoryLog" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Repository Log command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.diagnostics.installedSourceControlUiE2eShowOutput" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the command that exposes the SubversionR output channel."
   Assert-Equal "True" ([string]$report.extension.afterActive) "Installed Source Control UI E2E evidence should prove SubversionR was active before UI validation."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eOpenReportCommand) "Installed Source Control UI E2E evidence should prove hidden open command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eFreshnessReportCommand) "Installed Source Control UI E2E evidence should prove hidden freshness command registration."
+  Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand) "Installed Source Control UI E2E evidence should prove hidden Repository Log report command registration."
+  Assert-Equal "True" ([string]$report.extension.hasShowRepositoryLogCommand) "Installed Source Control UI E2E evidence should prove Repository Log command registration."
+  Assert-Equal "subversionr.installedSourceControlUiE2eRepositoryHistoryWorkflow" $report.sourceControlUiRepositoryHistoryWorkflow.kind "Installed Source Control UI E2E evidence should publish the Repository Log workflow."
+  Assert-Equal "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE" $report.sourceControlUiRepositoryHistoryWorkflow.staleReport.diagnostics.latestHistoryTargetingError.code "Installed Repository Log stale-target evidence should preserve the stable lifecycle code."
+  Assert-Equal "True" ([string]$report.sourceControlUiRepositoryHistoryWorkflow.assertions.remoteStatusPollingNotRequested) "Installed Repository Log evidence should prove remote polling stayed idle."
+  Assert-Equal "True" ([string]$report.repositoryHistoryLoadedRendererCapture.assertions.treeViewFocused) "Installed Repository Log renderer evidence should prove History view focus."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand) "Installed Source Control UI E2E evidence should prove hidden dirty-generation cancellation arm command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eDirtyGenerationCancellationReportCommand) "Installed Source Control UI E2E evidence should prove hidden dirty-generation cancellation report command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eDirtyEventCommand) "Installed Source Control UI E2E evidence should prove hidden dirty-event diagnostic command registration."
@@ -8181,6 +8342,13 @@ try {
   Assert-True ($driverContent -match '(?s)captureRequiredTokenState.*?collectOpenShadowText.*?element\.shadowRoot') "Renderer capture driver should include visible open Shadow DOM text in DOM artifacts."
   Assert-True ($driverContent -match '(?s)async function cancelInteraction.*?queryAllOpenRoots.*?quickInputSelectors.*?queryAllOpenRoots') "Renderer cancellation should locate QuickInput, notification, and dialog surfaces across open Shadow DOM roots."
   Assert-True ($driverContent -match "captureRequiredTokenState") "Renderer capture driver should retry DOM/accessibility token capture before writing artifacts."
+  Assert-True ($driverContent -match "optionalTreeViewState") "Renderer capture driver should validate the dedicated History tree-view state contract."
+  $historyTreeViewInspector = [regex]::Match($driverContent, '(?s)async function inspectTreeViewState.*?\r?\n\}').Value
+  Assert-True (-not [string]::IsNullOrEmpty($historyTreeViewInspector)) "Renderer capture driver should define the History tree-view inspector."
+  Assert-True ($historyTreeViewInspector -notmatch 'collapseBeforeCapture|header\.click\(\)') "Renderer capture driver should observe the initial History state without mutating it."
+  Assert-True ($historyTreeViewInspector -match 'document\.activeElement') "Renderer capture driver should inspect History focus through the real renderer DOM."
+  Assert-True ($historyTreeViewInspector -match 'selectedRowTexts') "Renderer capture driver should inspect selected History rows through the real renderer DOM."
+  Assert-True ($historyTreeViewInspector -match 'toLocaleLowerCase') "Renderer capture driver should compare the History pane label independently of VS Code presentation casing."
   Assert-True ($driverContent -match "REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS") "Renderer capture driver should use a bounded token capture retry timeout."
   Assert-True ($driverContent -match "clickNotificationAction") "Renderer capture driver should click notification actions when VS Code hides action button text from DOM snapshots."
   Assert-True ($driverContent -match "notificationMatchedByTokens") "Renderer capture driver notification action fallback should be anchored to the captured notification tokens."
@@ -8192,7 +8360,7 @@ try {
   Assert-True ($driverContent -match "selectedItemStillVisible") "Renderer capture driver should treat a multi-step QuickPick item as selected once the original item disappears."
   Assert-True ($driverContent -match "nextQuickInputVisible") "Renderer capture driver should record when a follow-up QuickInput remains visible after a QuickPick selection."
   Assert-True ($driverContent -match "targetTokens\.every") "Renderer capture driver should anchor notification cancellation to every required DOM token."
-  Assert-True ($driverContent -match '(?s)async function closeNotification.*?deleteKeyEvent = \{ key: "Delete".*?Input\.dispatchKeyEvent') "Renderer capture driver should close notifications through the matched notification clear keybinding."
+  Assert-True ($driverContent -match '(?s)async function closeNotification.*?Input\.dispatchMouseEvent.*?type: "mousePressed".*?closeButtonDetails\.x.*?type: "mouseReleased"') "Renderer capture driver should click the matched notification clear affordance through real mouse input."
   $notificationCleanupHelper = [regex]::Match($workflowContent, '(?s)async function clearWorkbenchNotificationsBeforePrompt\(label\) \{.*?\r?\n\}\r?\n\r?\nfunction isTransientSourceControlSurfaceMismatch').Value
   Assert-True ($notificationCleanupHelper -ne "") "Installed Source Control UI E2E harness should define an explicit notification cleanup helper."
   Assert-True ($workflowContent -match 'const NOTIFICATION_CLEAR_COMMAND = "notifications\.clearAll";') "Installed Source Control UI E2E notification cleanup should name the explicit VS Code notification clear-all command."
@@ -8269,6 +8437,11 @@ try {
   Assert-True ($workflowContent -match "Get-BranchCreateRepositoryOracle") "Installed Source Control UI E2E evidence should verify Branch/Tag create using an SVN repository oracle."
   Assert-True ($workflowContent -match '(?s)async function runBranchCreateWorkflow.*?phase: "branchCreateSwitchPromptReady".*?selected: "Stay on the current SVN URL"') "Installed Source Control UI E2E Branch/Tag create workflow should capture the stay-on-current-URL QuickPick before waiting for the branch create command to finish."
   Assert-True ($workflowContent -match "sourceControlUiSwitchWorkflow") "Installed Source Control UI E2E evidence should publish the Switch workflow report."
+  Assert-True ($workflowContent -match "sourceControlUiRepositoryHistoryWorkflow") "Installed Source Control UI E2E evidence should publish the Repository Log workflow report."
+  Assert-True ($workflowContent -match '(?s)async function runRepositoryHistoryWorkflow.*?subversionr\.repositoryHistoryTarget.*?executeCommand\("subversionr\.showRepositoryLog", target\).*?SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE') "Installed Repository Log harness should execute the strict repository session target and reject a stale epoch with the stable lifecycle code."
+  Assert-True ($workflowContent -match '(?s)repositoryHistoryInitialRendererExpectations.*?expectedExpanded: false.*?repositoryHistoryLoadedRendererExpectations.*?expectedFocused: true.*?selectedTokens: \[workingCopyRoot\]') "Installed Repository Log renderer evidence should observe the initial collapsed state and end focused on the selected working-copy-root target."
+  Assert-True ($workflowContent -match '(?s)svnadmin remove svn:author.*?svnadmin set empty svn:author') "Installed Repository Log fixture should include distinct missing and empty svn:author revisions."
+  Assert-True ($workflowContent -match '(?s)operationActivityUnchanged.*?statusRefreshNotRequested.*?reconcileNotRequested.*?remoteStatusPollingNotRequested') "Installed Repository Log evidence should prove no status refresh, reconcile, or remote status polling request was added."
   Assert-True ($workflowContent -match "Get-SwitchWorkingCopyOracle") "Installed Source Control UI E2E evidence should verify Switch using an SVN working-copy oracle."
   Assert-True ($workflowContent -match "sourceControlUiCheckoutCancellationWorkflow") "Installed Source Control UI E2E evidence should publish the Checkout cancellation workflow report."
   Assert-True ($workflowContent -match "checkoutCancellationPromptCapture") "Installed Source Control UI E2E evidence should publish Checkout cancellation prompt renderer capture evidence."
@@ -8291,7 +8464,7 @@ try {
   Assert-True ($driverContent -match "async function closeNotification") "Renderer cancellation evidence should model notification close as an explicit cancellation action."
   Assert-True ($driverContent -match 'cancelledAction: "closeNotification"') "Renderer notification close evidence should not be reported as a keyboard cancellation."
   Assert-True ($driverContent -match "isTopRightCloseAffordance") "Renderer notification close evidence should constrain close-button clicks to the notification top-right affordance instead of matching action buttons."
-  Assert-True ($driverContent -match '(?s)async function closeNotification.*?key: "Delete".*?windowsVirtualKeyCode: 46') "Renderer notification close evidence should activate the notification clear affordance through its Delete keybinding."
+  Assert-True ($driverContent -match '(?s)async function closeNotification.*?type: "mousePressed".*?closeButtonDetails\.x.*?type: "mouseReleased"') "Renderer notification close evidence should activate the matched clear affordance through real mouse input."
   Assert-True ($driverContent -match "captureScreenshotWithRetry") "Renderer capture should retry transient CDP Page.captureScreenshot timeouts before failing the evidence capture."
   Assert-True ($workflowContent -match "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MISSING_WORKING_COPY_ROOT") "Installed Source Control UI E2E harness should use an explicit E2E-only missing working-copy override for lifecycle deletion."
   Assert-True ($workflowContent -match "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_EXTRA_WORKSPACE_ROOT") "Installed Source Control UI E2E harness should use an explicit E2E-only extra workspace root for lifecycle move recovery."

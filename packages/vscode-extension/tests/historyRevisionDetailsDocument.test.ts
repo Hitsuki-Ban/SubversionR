@@ -90,6 +90,20 @@ describe("HistoryRevisionDetailsDocumentProvider", () => {
     await expect(provider.provideTextDocumentContent(uri)).resolves.toContain("l10n:No changed paths reported.");
   });
 
+  it("renders the unknown-author placeholder for empty SVN author metadata", async () => {
+    const store = new HistoryRevisionDetailsDocumentStore();
+    const uri = store.createDocumentUri({
+      ...revisionDetailsTarget(),
+      author: "   ",
+    });
+    const provider = new HistoryRevisionDetailsDocumentProvider({
+      store,
+      localize: localizeForTest,
+    });
+
+    await expect(provider.provideTextDocumentContent(uri)).resolves.toContain("l10n:Author: l10n:Unknown author");
+  });
+
   it("renders malicious log messages as escaped text without synthetic section breaks", async () => {
     const store = new HistoryRevisionDetailsDocumentStore();
     const uri = store.createDocumentUri({

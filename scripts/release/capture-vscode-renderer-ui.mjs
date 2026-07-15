@@ -39,6 +39,7 @@ const quickPickItemText = optionalString(expectations.quickPickItemText, "quickP
 const quickInputSubmitKey = optionalString(expectations.quickInputSubmitKey, "quickInputSubmitKey");
 const expectedViewport = optionalViewport(expectations.viewport);
 const scmActionSurface = optionalScmActionSurface(expectations.scmActionSurface);
+const treeViewState = optionalTreeViewState(expectations.treeViewState);
 if ((inputText === undefined) !== (submitKey === undefined)) {
   throw new Error("inputText and submitKey must be provided together.");
 }
@@ -48,7 +49,7 @@ if (submitKey !== undefined && quickInputSubmitKey !== undefined) {
 if (cancelAction !== undefined && cancelAction !== "closeNotification") {
   throw new Error(`Unsupported cancelAction: ${cancelAction}.`);
 }
-const interactionCount = [clickButtonText, inputText, cancelKey, cancelAction, quickPickItemText, quickInputSubmitKey, scmActionSurface].filter((value) => value !== undefined).length;
+const interactionCount = [clickButtonText, inputText, cancelKey, cancelAction, quickPickItemText, quickInputSubmitKey, scmActionSurface, treeViewState].filter((value) => value !== undefined).length;
 if (interactionCount > 1) {
   throw new Error("Renderer expectations must use exactly one interaction kind when an interaction is requested.");
 }
@@ -71,12 +72,14 @@ try {
     if (expectedViewport) {
       await setExpectedViewport(cdp, expectedViewport);
     }
-    const captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined;
+    const captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined && treeViewState === undefined;
     const beforeInteractionState = await captureRequiredTokenState(cdp, domTokens, accessibilityTokens);
     const beforeInteractionScreenshot = captureBeforeInteraction
       ? await captureScreenshotWithRetry(cdp)
       : undefined;
-    const interaction = scmActionSurface
+    const interaction = treeViewState
+      ? await inspectTreeViewState(cdp, treeViewState)
+      : scmActionSurface
       ? await inspectScmActionSurface(cdp, scmActionSurface)
       : clickButtonText !== undefined
         ? await clickButtonByText(cdp, clickButtonText, domTokens)
@@ -181,6 +184,16 @@ try {
           scmResourceContextActionsReachable: interaction.resource.contextActions.every((action) => action.reachable === true),
           activationReadyToastAbsent: interaction.notifications.presentForbiddenTokens.length === 0,
         } : {}),
+        ...(interaction && treeViewState ? {
+          treeViewVisible: interaction.visible === treeViewState.expectedVisible,
+          treeViewExpanded: interaction.expanded === treeViewState.expectedExpanded,
+          ...(treeViewState.expectedFocused === undefined ? {} : {
+            treeViewFocused: interaction.focused === treeViewState.expectedFocused,
+          }),
+          treeViewSelectionMatched: treeViewState.selectedTokens.every((token) =>
+            interaction.selectedRowTexts.some((text) => text.includes(token)),
+          ),
+        } : {}),
         ...(interaction && clickButtonText !== undefined ? { clickButtonCompleted: interaction.clicked } : {}),
         ...(interaction && inputText !== undefined ? { inputTextSubmitted: interaction.submitted === true } : {}),
         ...(interaction && quickInputSubmitKey !== undefined ? { quickInputSubmitted: interaction.submitted === true } : {}),
@@ -211,6 +224,23 @@ try {
     }
     if (!screenshotInfo.nonBlank) {
       failures.push("screenshot PNG pixel sample was blank");
+    }
+    if (interaction && treeViewState) {
+      if (interaction.visible !== treeViewState.expectedVisible) {
+        failures.push(`tree view ${treeViewState.viewLabel} visible state must be ${treeViewState.expectedVisible}`);
+      }
+      if (interaction.expanded !== treeViewState.expectedExpanded) {
+        failures.push(`tree view ${treeViewState.viewLabel} expanded state must be ${treeViewState.expectedExpanded}`);
+      }
+      if (treeViewState.expectedFocused !== undefined && interaction.focused !== treeViewState.expectedFocused) {
+        failures.push(`tree view ${treeViewState.viewLabel} focused state must be ${treeViewState.expectedFocused}`);
+      }
+      const missingSelectedTokens = treeViewState.selectedTokens.filter((token) =>
+        !interaction.selectedRowTexts.some((text) => text.includes(token)),
+      );
+      if (missingSelectedTokens.length > 0) {
+        failures.push(`tree view ${treeViewState.viewLabel} selected rows missing tokens: ${missingSelectedTokens.join(", ")}`);
+      }
     }
     if (
       expectedViewport &&
@@ -437,6 +467,30 @@ function optionalScmActionSurface(value) {
   };
 }
 
+function optionalTreeViewState(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object") {
+    throw new Error("treeViewState must be an object when provided.");
+  }
+  const viewLabel = requiredValueString(value.viewLabel, "treeViewState.viewLabel");
+  if (typeof value.expectedVisible !== "boolean" || typeof value.expectedExpanded !== "boolean") {
+    throw new Error("treeViewState expectedVisible and expectedExpanded must be booleans.");
+  }
+  if (value.expectedFocused !== undefined && typeof value.expectedFocused !== "boolean") {
+    throw new Error("treeViewState.expectedFocused must be a boolean when provided.");
+  }
+  const selectedTokens = optionalTokenArray(value.selectedTokens, "treeViewState.selectedTokens");
+  return {
+    viewLabel,
+    expectedVisible: value.expectedVisible,
+    expectedExpanded: value.expectedExpanded,
+    ...(value.expectedFocused === undefined ? {} : { expectedFocused: value.expectedFocused }),
+    selectedTokens,
+  };
+}
+
 function requiredActionArray(value, name, requireCodicon) {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${name} must be a non-empty array.`);
@@ -618,6 +672,85 @@ async function evaluate(cdp, expression) {
     throw new Error(`Runtime.evaluate failed in the VS Code workbench target: ${description}`);
   }
   return result.result.value;
+}
+
+async function inspectTreeViewState(cdp, expectations) {
+  const inspect = () => evaluate(
+    cdp,
+    `(() => {
+      const viewLabel = ${JSON.stringify(expectations.viewLabel)};
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const comparable = value => normalize(value).toLocaleLowerCase("en-US");
+      const visible = element => {
+        if (!element) return false;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" &&
+          rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const headers = Array.from(document.querySelectorAll(".pane-header, [role='heading']"));
+      const header = headers.find(candidate =>
+        visible(candidate) && comparable(candidate.innerText ?? candidate.textContent).includes(comparable(viewLabel))
+      );
+      const pane = header ? header.closest(".pane") : undefined;
+      if (!header || !pane) {
+        return {
+          found: false,
+          visible: false,
+          expanded: false,
+          focused: false,
+          selectedRowTexts: [],
+          activeElement: document.activeElement ? normalize(document.activeElement.getAttribute("aria-label") ?? document.activeElement.textContent) : "",
+        };
+      }
+      const paneBody = pane.querySelector(".pane-body");
+      const ariaExpanded = header.getAttribute("aria-expanded") ?? pane.getAttribute("aria-expanded");
+      const expanded = ariaExpanded === "true" || (ariaExpanded === null && visible(paneBody));
+      const selectedRows = Array.from(pane.querySelectorAll(".monaco-list-row.selected, [role='treeitem'][aria-selected='true']"))
+        .filter(visible)
+        .map(row => normalize(row.innerText ?? row.textContent));
+      return {
+        found: true,
+        visible: visible(pane),
+        expanded,
+        focused: pane.contains(document.activeElement),
+        selectedRowTexts: selectedRows,
+        headerText: normalize(header.innerText ?? header.textContent),
+        activeElement: document.activeElement ? normalize(document.activeElement.getAttribute("aria-label") ?? document.activeElement.textContent) : "",
+      };
+    })()`,
+  );
+
+  let state = await inspect();
+  const deadline = Date.now() + REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS;
+  for (;;) {
+    state = await inspect();
+    const selectionMatched = expectations.selectedTokens.every((token) =>
+      state.selectedRowTexts.some((text) => text.includes(token)),
+    );
+    const focusMatched = expectations.expectedFocused === undefined || state.focused === expectations.expectedFocused;
+    if (
+      state.visible === expectations.expectedVisible &&
+      state.expanded === expectations.expectedExpanded &&
+      focusMatched &&
+      selectionMatched
+    ) {
+      return {
+        kind: "treeViewState",
+        viewLabel: expectations.viewLabel,
+        ...state,
+      };
+    }
+    if (Date.now() >= deadline) {
+      return {
+        kind: "treeViewState",
+        viewLabel: expectations.viewLabel,
+        ...state,
+      };
+    }
+    await sleep(REQUIRED_TOKEN_CAPTURE_INTERVAL_MS);
+  }
 }
 
 async function inspectScmActionSurface(cdp, expectations) {
@@ -1935,14 +2068,19 @@ async function closeNotification(cdp, domTokens) {
   if (closeButtonDetails.focused !== true) {
     throw new Error(`VS Code notification close affordance was found but not focused. Close attempt: ${JSON.stringify(closeButtonDetails)}`);
   }
-  const deleteKeyEvent = { key: "Delete", code: "Delete", windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 };
-  await cdp.send("Input.dispatchKeyEvent", {
-    type: "keyDown",
-    ...deleteKeyEvent,
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: closeButtonDetails.x,
+    y: closeButtonDetails.y,
+    button: "left",
+    clickCount: 1,
   });
-  await cdp.send("Input.dispatchKeyEvent", {
-    type: "keyUp",
-    ...deleteKeyEvent,
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: closeButtonDetails.x,
+    y: closeButtonDetails.y,
+    button: "left",
+    clickCount: 1,
   });
 
   const closedStarted = Date.now();

@@ -3155,6 +3155,58 @@ fn native_bridge_history_log_returns_repository_root_history_for_dot_path() {
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
+fn native_bridge_history_log_normalizes_missing_and_empty_revision_authors() {
+    let _guard = native_test_guard();
+    let bridge_path = native_bridge_path();
+    let tool_dir = bridge_tool_dir(&bridge_path);
+    let svnadmin = tool_dir.join("svnadmin.exe");
+    let svn = tool_dir.join("svn.exe");
+    let fixture = WorkingCopyFixture::create(&svnadmin, &svn);
+    fixture.add_committed_file(&svn, "tracked.txt", "author metadata fixture\n");
+    fixture.delete_revision_author(&svnadmin, 1);
+    fixture.set_empty_revision_author(&svnadmin, 2);
+
+    let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
+    let identity = bridge
+        .open_working_copy(&fixture.wc_path())
+        .expect("native bridge should open the fixture working copy");
+    let mut auth = UnavailableAuthRequestBroker;
+    let log = bridge
+        .history_log(
+            &identity,
+            &HistoryLogRequest {
+                path: ".".to_string(),
+                start_revision: "head".to_string(),
+                end_revision: "r0".to_string(),
+                limit: 10,
+                discover_changed_paths: true,
+                strict_node_history: false,
+                include_merged_revisions: false,
+            },
+            &mut auth,
+        )
+        .expect("native bridge should return history with nullable author metadata");
+
+    assert_eq!(
+        log.entries
+            .iter()
+            .find(|entry| entry.revision == 1)
+            .expect("trunk creation revision should be present")
+            .author,
+        None
+    );
+    assert_eq!(
+        log.entries
+            .iter()
+            .find(|entry| entry.revision == 2)
+            .expect("file addition revision should be present")
+            .author,
+        None
+    );
+}
+
+#[test]
+#[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
 fn native_bridge_history_blame_returns_line_revision_entries() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
@@ -4500,6 +4552,39 @@ impl WorkingCopyFixture {
 
     fn wc_path(&self) -> String {
         self.wc.to_string_lossy().to_string()
+    }
+
+    fn delete_revision_author(&self, svnadmin: &PathBuf, revision: u64) {
+        let repo = self._temp.path.join("repo");
+        let revision = revision.to_string();
+        run_tool(
+            svnadmin,
+            [
+                "delrevprop".as_ref(),
+                repo.as_os_str(),
+                "-r".as_ref(),
+                revision.as_ref(),
+                "svn:author".as_ref(),
+            ],
+        );
+    }
+
+    fn set_empty_revision_author(&self, svnadmin: &PathBuf, revision: u64) {
+        let repo = self._temp.path.join("repo");
+        let empty = self._temp.path.join("empty-author.txt");
+        fs::write(&empty, "").expect("empty author fixture should be written");
+        let revision = revision.to_string();
+        run_tool(
+            svnadmin,
+            [
+                "setrevprop".as_ref(),
+                repo.as_os_str(),
+                "-r".as_ref(),
+                revision.as_ref(),
+                "svn:author".as_ref(),
+                empty.as_os_str(),
+            ],
+        );
     }
 
     fn add_committed_file(&self, svn: &PathBuf, relative_path: &str, contents: &str) {

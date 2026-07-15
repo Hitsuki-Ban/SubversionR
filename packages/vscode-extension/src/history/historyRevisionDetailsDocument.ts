@@ -150,7 +150,7 @@ function renderRevisionDetails(
     "",
     localize("Repository ID: {0}", details.repositoryId),
     historyTargetSummary(details, localize),
-    localize("Author: {0}", details.author ?? localize("Unknown author")),
+    localize("Author: {0}", details.author?.trim() || localize("Unknown author")),
     localize("Date: {0}", details.date ?? localize("Unknown date")),
     localize("Merged Revision Child: {0}", localizeBoolean(details.hasChildren, localize)),
     localize("Non-inheritable Merge: {0}", localizeBoolean(details.nonInheritable, localize)),

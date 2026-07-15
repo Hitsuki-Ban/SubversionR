@@ -40,9 +40,10 @@ describe("HistoryTreeDataProvider", () => {
     });
     const roots = await provider.getChildren();
     expect(provider.getTreeItem(roots[0])).toMatchObject({
-      label: "l10n:Repository: C:/wc",
+      label: "C:/wc",
       collapsibleState: 2,
     });
+    expect(provider.getTreeItem(roots[0])).not.toHaveProperty("description");
     const children = await provider.getChildren(roots[0]);
     const treeItems = children.map((child) => provider.getTreeItem(child));
     expect(treeItems).toMatchObject([
@@ -70,6 +71,45 @@ describe("HistoryTreeDataProvider", () => {
       command: "subversionr.history.openRevisionDetails",
       title: "l10n:Open Revision Details",
     });
+  });
+
+  it.each([null, "", "   "])("renders an unknown author for missing or empty SVN author metadata", async (author) => {
+    const provider = historyProvider(
+      fakeHistoryClient(historyLog({
+        path: ".",
+        entries: [historyEntry({ author })],
+      })),
+      { pageSize: 25, includeMergedRevisions: false },
+    );
+
+    await provider.showHistory({
+      kind: "repository",
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      path: ".",
+      label: "C:/wc",
+    });
+
+    const [target] = await provider.getChildren();
+    const [revision] = await provider.getChildren(target);
+    expect(provider.getTreeItem(revision).description).toContain("l10n:Unknown author");
+  });
+
+  it("provides the exact parent chain required by the VS Code reveal API", async () => {
+    const provider = historyProvider(
+      fakeHistoryClient(historyLog({ path: ".", limit: 1 })),
+      { pageSize: 1, includeMergedRevisions: false },
+    );
+    await provider.showHistory(historyTarget());
+
+    const [target] = await provider.getChildren();
+    const [revision, loadMore] = await provider.getChildren(target);
+    const [changedPath] = await provider.getChildren(revision);
+
+    expect(provider.getParent(target)).toBeUndefined();
+    expect(provider.getParent(revision)).toBe(target);
+    expect(provider.getParent(changedPath)).toBe(revision);
+    expect(provider.getParent(loadMore)).toBe(target);
   });
 
   it("loads file history with copy-following SVN semantics and appends older pages", async () => {
@@ -341,10 +381,10 @@ describe("HistoryTreeDataProvider", () => {
     const [target] = await provider.getChildren();
     expect(provider.getTreeItem(target)).toMatchObject({
       label: "l10n:Line History: src/main.c:3-5",
-      description: "repo-uuid:C:/wc",
       collapsibleState: 2,
       contextValue: "subversionr.history.target",
     });
+    expect(provider.getTreeItem(target)).not.toHaveProperty("description");
     const revisions = await provider.getChildren(target);
     expect(revisions.map((revision) => provider.getTreeItem(revision))).toMatchObject([
       {
@@ -1174,7 +1214,7 @@ function historyLog(overrides: Partial<HistoryLog> = {}): HistoryLog {
 function historyEntry(overrides: Partial<HistoryLog["entries"][number]> = {}): HistoryLog["entries"][number] {
   return {
     revision: overrides.revision ?? 8,
-    author: overrides.author ?? "alice",
+    author: "author" in overrides ? (overrides.author ?? null) : "alice",
     date: overrides.date ?? "2026-06-23T00:00:00.000000Z",
     message: "message" in overrides ? (overrides.message ?? null) : "edit file",
     changedPaths: overrides.changedPaths ?? [historyChangedPath()],

@@ -6,6 +6,10 @@ import type {
 import type { RepositoryCommitMessageHistory } from "./repositoryCommitMessageHistory";
 import type { RepositorySession, RepositorySessionService } from "./repositorySessionService";
 import {
+  REPOSITORY_HISTORY_COMMAND_TARGET_KIND,
+  type RepositoryHistoryCommandTarget,
+} from "./repositoryHistoryCommandTarget";
+import {
   discoveryBoundaryRoots,
   REPOSITORY_DISCOVERY_DEPTH,
   unopenedDiscoveryCandidates,
@@ -2163,14 +2167,10 @@ export class RepositoryCommandController {
     }
   }
 
-  public async showRepositoryLog(repositoryId?: unknown): Promise<void> {
+  public async showRepositoryLog(commandTarget?: unknown): Promise<void> {
     try {
       this.requireTrustedWorkspace();
-      const session = await this.selectOpenSessionForRepository(
-        repositoryId,
-        historyRepositoryIdInvalid,
-        historyRepositoryNotOpen,
-      );
+      const session = await this.selectHistoryRepositorySession(commandTarget);
       if (!session) {
         return;
       }
@@ -3567,6 +3567,44 @@ export class RepositoryCommandController {
     return await this.options.ui.pickOpenRepository(sessions);
   }
 
+  private async selectHistoryRepositorySession(commandTarget: unknown): Promise<RepositorySession | undefined> {
+    if (commandTarget !== undefined) {
+      const target = requireRepositoryHistoryCommandTarget(commandTarget);
+      const sessions = this.options.sessionService.listOpenSessions();
+      const match = sessions.find((session) => session.repositoryId === target.repositoryId);
+      if (!match) {
+        throw historyRepositoryNotOpen(target.repositoryId);
+      }
+      if (match.epoch !== target.epoch) {
+        throw historyRepositorySessionStale(target.repositoryId, target.epoch, match.epoch);
+      }
+      return match;
+    }
+
+    const initialSessions = this.options.sessionService.listOpenSessions();
+    if (initialSessions.length === 0) {
+      await this.options.ui.showWarningMessage(this.options.localize("No SVN repository is open."));
+      return undefined;
+    }
+    const selected =
+      initialSessions.length === 1
+        ? initialSessions[0]
+        : await this.options.ui.pickOpenRepository(initialSessions);
+    if (!selected) {
+      return undefined;
+    }
+    if (!initialSessions.some((session) => sameRepositorySessionSnapshot(session, selected))) {
+      throw historyRepositorySessionStale(selected.repositoryId, selected.epoch);
+    }
+
+    const latestSessions = this.options.sessionService.listOpenSessions();
+    const latest = latestSessions.find((session) => session.repositoryId === selected.repositoryId);
+    if (!latest || !sameRepositorySessionSnapshot(selected, latest)) {
+      throw historyRepositorySessionStale(selected.repositoryId, selected.epoch, latest?.epoch);
+    }
+    return latest;
+  }
+
   private selectOpenSessionForRepository(
     repositoryId: unknown,
     invalidRepositoryId: () => RepositoryCommandError = commitAllRepositoryIdInvalid,
@@ -4121,6 +4159,15 @@ function repositoryFailureMessage(
   error: unknown,
   localize: RepositoryErrorLocalize,
 ): string {
+  switch (errorCode(error)) {
+    case "SUBVERSIONR_HISTORY_REPOSITORY_ID_INVALID":
+      return localize("Select an open SVN repository and try Show Repository Log again.");
+    case "SUBVERSIONR_HISTORY_REPOSITORY_NOT_OPEN":
+    case "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE":
+      return localize(
+        "The selected SVN repository session is no longer open. Select the current repository and try Show Repository Log again.",
+      );
+  }
   const cause = operationFailureCause(error);
   switch (cause) {
     case "outOfDate":
@@ -4321,6 +4368,9 @@ interface EditorUriLike {
 type RepositoryCommandErrorCategory = "input" | "lifecycle";
 
 class RepositoryCommandError extends Error {
+  public readonly retryable = false;
+  public readonly diagnostics = null;
+
   public constructor(
     public readonly code: string,
     public readonly category: RepositoryCommandErrorCategory,
@@ -4357,6 +4407,59 @@ function requireEditorUriFsPath(uri: EditorUriLike, invalid: () => RepositoryCom
     throw invalid();
   }
   return normalized;
+}
+
+function requireRepositoryHistoryCommandTarget(argument: unknown): RepositoryHistoryCommandTarget {
+  if (!isRecord(argument)) {
+    throw historyRepositoryIdInvalid();
+  }
+  const keys = Object.keys(argument).sort();
+  if (
+    keys.length !== 3 ||
+    keys[0] !== "epoch" ||
+    keys[1] !== "kind" ||
+    keys[2] !== "repositoryId" ||
+    argument.kind !== REPOSITORY_HISTORY_COMMAND_TARGET_KIND ||
+    typeof argument.repositoryId !== "string" ||
+    argument.repositoryId.length === 0 ||
+    argument.repositoryId !== argument.repositoryId.trim() ||
+    !Number.isSafeInteger(argument.epoch) ||
+    (argument.epoch as number) < 0
+  ) {
+    throw historyRepositoryIdInvalid();
+  }
+  return {
+    kind: REPOSITORY_HISTORY_COMMAND_TARGET_KIND,
+    repositoryId: argument.repositoryId,
+    epoch: argument.epoch as number,
+  };
+}
+
+function sameRepositorySessionSnapshot(left: RepositorySession, right: RepositorySession): boolean {
+  return (
+    left.repositoryId === right.repositoryId &&
+    left.epoch === right.epoch &&
+    left.identity.repositoryUuid === right.identity.repositoryUuid &&
+    left.identity.repositoryRootUrl === right.identity.repositoryRootUrl &&
+    left.identity.workingCopyRoot === right.identity.workingCopyRoot &&
+    left.identity.workspaceScopeRoot === right.identity.workspaceScopeRoot &&
+    left.identity.format === right.identity.format &&
+    left.watchScope.repositoryId === right.watchScope.repositoryId &&
+    left.watchScope.epoch === right.watchScope.epoch &&
+    left.watchScope.workingCopyRoot === right.watchScope.workingCopyRoot &&
+    left.watchScope.pathCase === right.watchScope.pathCase &&
+    sameStringArray(left.watchScope.boundaryRoots, right.watchScope.boundaryRoots)
+  );
+}
+
+function sameStringArray(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  return left.every((value, index) => value === right[index]);
 }
 
 function commitAllResourceTarget(session: RepositorySession, path: string): RepositoryCommandResourceTarget {
@@ -6849,6 +6952,21 @@ function historyRepositoryNotOpen(repositoryId: string): RepositoryCommandError 
     "lifecycle",
     "error.repository.historyRepositoryNotOpen",
     { repositoryId },
+  );
+}
+
+function historyRepositorySessionStale(
+  repositoryId: string,
+  expectedEpoch: number,
+  actualEpoch?: number,
+): RepositoryCommandError {
+  return repositoryCommandError(
+    "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE",
+    "lifecycle",
+    "error.repository.historyRepositorySessionStale",
+    actualEpoch === undefined
+      ? { repositoryId, expectedEpoch }
+      : { repositoryId, expectedEpoch, actualEpoch },
   );
 }
 
