@@ -78,6 +78,7 @@ export interface BackendServiceLifecycleSubscription {
 
 export class BackendService {
   private startup: Promise<BackendConnection> | undefined;
+  private startupCancellation: BackendStartupCancellation | undefined;
   private connection: BackendConnection | undefined;
   private connectionTerminationSubscription: BackendConnectionTerminationSubscription | undefined;
   private shutdownPromise: Promise<void> | undefined;
@@ -130,11 +131,27 @@ export class BackendService {
       return this.startup;
     }
 
-    this.startup = this.initializeConnection()
-      .then((connection) => {
-        if (this.disposed) {
+    const startupAttempt = this.initializeConnection();
+    const startupCancellation = createBackendStartupCancellation();
+    this.startupCancellation = startupCancellation;
+    void startupAttempt.then(
+      (connection) => {
+        if (startupCancellation.cancelled) {
           connection.dispose();
-          throw new Error("backend service disposed");
+        }
+      },
+      () => undefined,
+    );
+    const startup = Promise.race([startupAttempt, startupCancellation.promise])
+      .then((connection) => {
+        if (this.disposed || startupCancellation.cancelled) {
+          connection.dispose();
+          throw new BackendStartupCancellationError(
+            this.disposed ? "backend service disposed" : "backend service startup cancelled",
+          );
+        }
+        if (this.startupCancellation === startupCancellation) {
+          this.startupCancellation = undefined;
         }
         this.connection = connection;
         this.connectionTerminationSubscription = connection.onDidTerminate((event) => {
@@ -155,12 +172,18 @@ export class BackendService {
         return connection;
       })
       .catch((error: unknown) => {
-        this.startup = undefined;
-        if (!this.disposed) {
+        if (this.startup === startup) {
+          this.startup = undefined;
+        }
+        if (this.startupCancellation === startupCancellation) {
+          this.startupCancellation = undefined;
+        }
+        if (!this.disposed && !(error instanceof BackendStartupCancellationError)) {
           this.markDegraded("startupFailed", errorCode(error, "SUBVERSIONR_BACKEND_STARTUP_FAILED"));
         }
         throw error;
       });
+    this.startup = startup;
 
     return this.startup;
   }
@@ -168,6 +191,15 @@ export class BackendService {
   public async shutdown(): Promise<void> {
     if (this.shutdownPromise) {
       return this.shutdownPromise;
+    }
+    if (!this.connection && this.startup) {
+      const pendingStartup = this.startup;
+      this.startupCancellation?.cancel("backend service shutdown during startup");
+      this.startupCancellation = undefined;
+      this.startup = undefined;
+      this.lifecycleState = { status: "idle" };
+      void pendingStartup.catch(() => undefined);
+      return;
     }
     if (!this.connection && !this.startup) {
       return;
@@ -179,6 +211,8 @@ export class BackendService {
 
   public dispose(): void {
     this.disposed = true;
+    this.startupCancellation?.cancel("backend service disposed");
+    this.startupCancellation = undefined;
     this.stopHeartbeat();
     this.clearConnectionTerminationSubscription();
     this.connection?.dispose();
@@ -364,6 +398,40 @@ export class BackendService {
     };
     this.fireLifecycle(this.getLifecycleState());
   }
+}
+
+class BackendStartupCancellationError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "BackendStartupCancellationError";
+  }
+}
+
+interface BackendStartupCancellation {
+  readonly promise: Promise<never>;
+  readonly cancelled: boolean;
+  cancel(message: string): void;
+}
+
+function createBackendStartupCancellation(): BackendStartupCancellation {
+  let cancelled = false;
+  let rejectCancellation: (error: BackendStartupCancellationError) => void = () => undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    rejectCancellation = reject;
+  });
+  return {
+    promise,
+    get cancelled() {
+      return cancelled;
+    },
+    cancel: (message: string) => {
+      if (cancelled) {
+        return;
+      }
+      cancelled = true;
+      rejectCancellation(new BackendStartupCancellationError(message));
+    },
+  };
 }
 
 function degradationFromTermination(event: BackendConnectionTermination): {

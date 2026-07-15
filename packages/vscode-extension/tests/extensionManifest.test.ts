@@ -700,7 +700,7 @@ describe("extension manifest", () => {
 
   it("logs successful backend initialization without showing an information toast", () => {
     const source = readFileSync(join(extensionRoot, "src/extension.ts"), "utf8");
-    const start = source.indexOf('const initializeCommand = vscode.commands.registerCommand("subversionr.initialize"');
+    const start = source.indexOf("const initializeCommandHandler = createInitializeCommandHandler({");
     const end = source.indexOf("const collectDiagnosticsCommand", start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
@@ -709,6 +709,13 @@ describe("extension manifest", () => {
     expect(initializeCommand).toContain("operationLogChannel.info(");
     expect(initializeCommand).toContain('vscode.l10n.t("SubversionR backend ready. libsvn: {0}"');
     expect(initializeCommand).not.toContain("showInformationMessage");
+    expect(initializeCommand).toContain(
+      'vscode.commands.registerCommand("subversionr.initialize", initializeCommandHandler)',
+    );
+
+    const handlerSource = readFileSync(join(extensionRoot, "src/backend/initializeCommandHandler.ts"), "utf8");
+    expect(handlerSource).toContain("void Promise.resolve()");
+    expect(handlerSource).not.toMatch(/await\s+options\.showErrorMessage/u);
   });
 
   it("contributes localized SubversionR editor and SCM action submenus", () => {
@@ -2090,6 +2097,10 @@ function runtimeLocalizationKeys(): string[] {
     "SVN {0} failed because the SubversionR backend is unavailable. Retry the operation.",
     "SVN {0} failed. Open the SubversionR log for details.",
     "SubversionR backend startup failed. Open the SubversionR log for details.",
+    "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.",
+    "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.",
+    "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.",
+    "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.",
     "SVN commit message",
     "SVN commit message history",
     "Choose an SVN commit message to reuse",

@@ -8,6 +8,16 @@ import type { StatusDelta } from "../src/status/statusRefreshRpcClient";
 import type { StatusEntry, StatusSnapshot } from "../src/status/statusSnapshotRpcClient";
 
 describe("SourceControlProjectionService", () => {
+  it("requires the presenter current-resource identity decision", () => {
+    const presenter = fakePresenter();
+    const resourceState = {};
+    presenter.isCurrentResourceState.mockReturnValueOnce(true);
+    const service = new SourceControlProjectionService(sourceControlResourceStore(), presenter);
+
+    expect(service.isCurrentResourceState(resourceState)).toBe(true);
+    expect(presenter.isCurrentResourceState).toHaveBeenCalledWith(resourceState);
+  });
+
   it("registers a repository and publishes projection updates for snapshots and deltas", () => {
     const presenter = fakePresenter();
     const service = new SourceControlProjectionService(sourceControlResourceStore(), presenter);
@@ -223,11 +233,13 @@ function fakePresenter(): SourceControlProjectionPresenter & {
   registerRepository: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["registerRepository"]>>;
   updateRepository: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["updateRepository"]>>;
   unregisterRepository: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["unregisterRepository"]>>;
+  isCurrentResourceState: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["isCurrentResourceState"]>>;
 } {
   return {
     registerRepository: vi.fn<SourceControlProjectionPresenter["registerRepository"]>(),
     updateRepository: vi.fn<SourceControlProjectionPresenter["updateRepository"]>(),
     unregisterRepository: vi.fn<SourceControlProjectionPresenter["unregisterRepository"]>(),
+    isCurrentResourceState: vi.fn<SourceControlProjectionPresenter["isCurrentResourceState"]>(() => false),
   };
 }
 

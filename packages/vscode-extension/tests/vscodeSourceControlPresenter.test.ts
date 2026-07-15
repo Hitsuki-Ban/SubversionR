@@ -10,6 +10,33 @@ import type { ScmRepositoryProjection } from "../src/scm/sourceControlResourceSt
 import type { StatusEntry } from "../src/status/statusSnapshotRpcClient";
 
 describe("VscodeSourceControlPresenter", () => {
+  it("recognizes only current resource object identities and resolves an exact installed-E2E target", () => {
+    const api = fakeVscodeScmApi();
+    const presenter = new VscodeSourceControlPresenter(api);
+    presenter.registerRepository({
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      workingCopyRoot: "C:/wc",
+    });
+    presenter.updateRepository(projection());
+    const first = api.group("changes").resourceStates[0];
+
+    expect(presenter.isCurrentResourceState(first)).toBe(true);
+    expect(presenter.isCurrentResourceState({ ...first })).toBe(false);
+    expect(presenter.currentResourceState("repo-uuid:C:/wc", 7, "changes", "src/main.c")).toBe(first);
+    expect(presenter.currentResourceState("repo-uuid:C:/wc", 8, "changes", "src/main.c")).toBeUndefined();
+    expect(presenter.currentResourceState("repo-uuid:C:/wc", 7, "incoming", "src/main.c")).toBeUndefined();
+
+    presenter.updateRepository(projection({ generation: 12 }));
+    const second = api.group("changes").resourceStates[0];
+    expect(second).not.toBe(first);
+    expect(presenter.isCurrentResourceState(first)).toBe(false);
+    expect(presenter.isCurrentResourceState(second)).toBe(true);
+
+    presenter.unregisterRepository("repo-uuid:C:/wc");
+    expect(presenter.isCurrentResourceState(second)).toBe(false);
+  });
+
   it("creates fixed SCM groups and assigns projected resource states", () => {
     const api = fakeVscodeScmApi();
     const presenter = new VscodeSourceControlPresenter(api);
@@ -1232,13 +1259,13 @@ interface FakeResourceGroup {
 }
 
 function projection(
-  overrides: Partial<Pick<ScmRepositoryProjection, "epoch" | "freshness">> = {},
+  overrides: Partial<Pick<ScmRepositoryProjection, "epoch" | "generation" | "freshness">> = {},
 ): ScmRepositoryProjection {
   return {
     repositoryId: "repo-uuid:C:/wc",
     epoch: overrides.epoch ?? 7,
     workingCopyRoot: "C:/wc",
-    generation: 11,
+    generation: overrides.generation ?? 11,
     freshness: overrides.freshness ?? {
       repositoryCompleteness: "complete",
       lastRefreshCompleteness: "complete",

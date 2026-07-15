@@ -47,6 +47,9 @@ const RAW_STATUS_CANCELLED: c_int = 11;
 const RAW_OPERATION_CANCEL_CALLBACK_FAILED: c_int = 11;
 const RAW_OPERATION_CANCELLED: c_int = 12;
 const RAW_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE: c_int = 13;
+const RAW_OPERATION_PARTIAL_FAILURE: c_int = 14;
+const RAW_OPERATION_PARTIAL_CANCEL_CALLBACK_FAILED: c_int = 15;
+const RAW_OPERATION_PARTIAL_CANCELLED: c_int = 16;
 const NATIVE_AUTH_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const RAW_CERT_FAILURE_NOT_YET_VALID: u32 = 0x0000_0001;
 const RAW_CERT_FAILURE_EXPIRED: u32 = 0x0000_0002;
@@ -4085,27 +4088,40 @@ fn history_blame_failure(status: c_int, path: &str) -> BridgeFailure {
 }
 
 fn operation_cancellation_failure(status: c_int, path: &str) -> Option<BridgeFailure> {
-    let (code, category, message_key) = match status {
+    let (code, category, message_key, may_have_mutated) = match status {
         RAW_OPERATION_CANCEL_CALLBACK_FAILED => (
             "SVN_OPERATION_CANCEL_CALLBACK_FAILED",
             "native",
             "error.native.operationCancelCallbackFailed",
+            false,
         ),
         RAW_OPERATION_CANCELLED => (
             "SVN_OPERATION_CANCELLED",
             "cancelled",
             "error.native.operationCancelled",
+            false,
+        ),
+        RAW_OPERATION_PARTIAL_CANCEL_CALLBACK_FAILED => (
+            "SVN_OPERATION_CANCEL_CALLBACK_FAILED",
+            "native",
+            "error.native.operationCancelCallbackFailed",
+            true,
+        ),
+        RAW_OPERATION_PARTIAL_CANCELLED => (
+            "SVN_OPERATION_CANCELLED",
+            "cancelled",
+            "error.native.operationCancelled",
+            true,
         ),
         _ => return None,
     };
 
-    Some(BridgeFailure::new(
-        code,
-        category,
-        message_key,
-        json!({ "path": path, "status": status }),
-        false,
-    ))
+    let args = if may_have_mutated {
+        json!({ "path": path, "status": status, "mayHaveMutated": true })
+    } else {
+        json!({ "path": path, "status": status })
+    };
+    Some(BridgeFailure::new(code, category, message_key, args, false))
 }
 
 fn operation_revert_failure(status: c_int, path: &str) -> BridgeFailure {
@@ -4505,7 +4521,7 @@ fn operation_lock_failure(status: c_int, path: &str) -> BridgeFailure {
             "SVN_BRIDGE_INVALID_ARGUMENT",
             "error.native.bridgeInvalidArgument",
         ),
-        2 => (
+        2 | RAW_OPERATION_PARTIAL_FAILURE => (
             "SVN_OPERATION_LOCK_FAILED",
             "error.native.operationLockFailed",
         ),
@@ -4523,7 +4539,11 @@ fn operation_lock_failure(status: c_int, path: &str) -> BridgeFailure {
         code,
         "native",
         message_key,
-        json!({ "path": path, "status": status }),
+        json!({
+            "path": path,
+            "status": status,
+            "mayHaveMutated": status == RAW_OPERATION_PARTIAL_FAILURE,
+        }),
         false,
     )
 }
@@ -4538,7 +4558,7 @@ fn operation_unlock_failure(status: c_int, path: &str) -> BridgeFailure {
             "SVN_BRIDGE_INVALID_ARGUMENT",
             "error.native.bridgeInvalidArgument",
         ),
-        2 => (
+        2 | RAW_OPERATION_PARTIAL_FAILURE => (
             "SVN_OPERATION_UNLOCK_FAILED",
             "error.native.operationUnlockFailed",
         ),
@@ -4556,7 +4576,11 @@ fn operation_unlock_failure(status: c_int, path: &str) -> BridgeFailure {
         code,
         "native",
         message_key,
-        json!({ "path": path, "status": status }),
+        json!({
+            "path": path,
+            "status": status,
+            "mayHaveMutated": status == RAW_OPERATION_PARTIAL_FAILURE,
+        }),
         false,
     )
 }
@@ -5844,6 +5868,59 @@ mod tests {
         assert_eq!(cancelled.code, "SVN_OPERATION_CANCELLED");
         assert_eq!(cancelled.category, "cancelled");
         assert_eq!(cancelled.message_key, "error.native.operationCancelled");
+    }
+
+    #[test]
+    fn lock_and_unlock_partial_failures_preserve_stable_codes_and_mutation_signal() {
+        let lock_failure =
+            operation_lock_failure(RAW_OPERATION_PARTIAL_FAILURE, "C:/workspace/wc/first.txt");
+        assert_eq!(lock_failure.code, "SVN_OPERATION_LOCK_FAILED");
+        assert_eq!(lock_failure.message_key, "error.native.operationLockFailed");
+        assert_eq!(lock_failure.args["status"], RAW_OPERATION_PARTIAL_FAILURE);
+        assert_eq!(lock_failure.args["mayHaveMutated"].as_bool(), Some(true));
+
+        let unlock_failure =
+            operation_unlock_failure(RAW_OPERATION_PARTIAL_FAILURE, "C:/workspace/wc/first.txt");
+        assert_eq!(unlock_failure.code, "SVN_OPERATION_UNLOCK_FAILED");
+        assert_eq!(
+            unlock_failure.message_key,
+            "error.native.operationUnlockFailed"
+        );
+        assert_eq!(unlock_failure.args["status"], RAW_OPERATION_PARTIAL_FAILURE);
+        assert_eq!(unlock_failure.args["mayHaveMutated"].as_bool(), Some(true));
+
+        let ordinary_lock_failure = operation_lock_failure(2, "C:/workspace/wc/first.txt");
+        assert_eq!(
+            ordinary_lock_failure.args["mayHaveMutated"].as_bool(),
+            Some(false)
+        );
+        let ordinary_unlock_failure = operation_unlock_failure(2, "C:/workspace/wc/first.txt");
+        assert_eq!(
+            ordinary_unlock_failure.args["mayHaveMutated"].as_bool(),
+            Some(false)
+        );
+
+        let cancelled_after_mutation =
+            operation_lock_failure(RAW_OPERATION_PARTIAL_CANCELLED, "C:/workspace/wc/first.txt");
+        assert_eq!(cancelled_after_mutation.code, "SVN_OPERATION_CANCELLED");
+        assert_eq!(cancelled_after_mutation.category, "cancelled");
+        assert_eq!(
+            cancelled_after_mutation.args["mayHaveMutated"].as_bool(),
+            Some(true)
+        );
+
+        let callback_failed_after_mutation = operation_unlock_failure(
+            RAW_OPERATION_PARTIAL_CANCEL_CALLBACK_FAILED,
+            "C:/workspace/wc/first.txt",
+        );
+        assert_eq!(
+            callback_failed_after_mutation.code,
+            "SVN_OPERATION_CANCEL_CALLBACK_FAILED"
+        );
+        assert_eq!(
+            callback_failed_after_mutation.args["mayHaveMutated"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]

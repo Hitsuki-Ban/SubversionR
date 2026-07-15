@@ -2646,6 +2646,17 @@ fn native_bridge_lock_unlock_and_needs_lock_status_use_libsvn() {
     );
     let fixture = SvnserveFixture::create(&svnadmin, &svn, &svnserve);
     let locked_path = fixture.seed_wc.join("tracked.txt");
+    let partial_path = fixture.seed_wc.join("partial-first.txt");
+    fs::write(&partial_path, "partial lock fixture\n")
+        .expect("partial lock fixture file should be written");
+    run_tool(
+        &svn,
+        [
+            "add".as_ref(),
+            partial_path.as_os_str(),
+            "--non-interactive".as_ref(),
+        ],
+    );
     run_tool(
         &svn,
         [
@@ -2659,10 +2670,20 @@ fn native_bridge_lock_unlock_and_needs_lock_status_use_libsvn() {
     run_tool(
         &svn,
         [
+            "propset".as_ref(),
+            "svn:needs-lock".as_ref(),
+            "yes".as_ref(),
+            partial_path.as_os_str(),
+            "--non-interactive".as_ref(),
+        ],
+    );
+    run_tool(
+        &svn,
+        [
             "commit".as_ref(),
-            locked_path.as_os_str(),
+            fixture.seed_wc.as_os_str(),
             "-m".as_ref(),
-            "add needs-lock metadata".as_ref(),
+            "add needs-lock fixtures".as_ref(),
             "--non-interactive".as_ref(),
         ],
     );
@@ -2759,6 +2780,131 @@ fn native_bridge_lock_unlock_and_needs_lock_status_use_libsvn() {
         .expect("needs-lock file should remain projected after unlock");
     assert!(unlocked_entry.needs_lock);
     assert_eq!(unlocked_entry.lock, None);
+
+    let contender_checkout = fixture.temp.path.join("lock-contender-wc");
+    let contender_config = fixture.temp.path.join("lock-contender-config");
+    run_tool(
+        &svn,
+        [
+            "checkout".as_ref(),
+            checkout_url.as_ref(),
+            contender_checkout.as_os_str(),
+            "--username".as_ref(),
+            "alice".as_ref(),
+            "--password".as_ref(),
+            "secret".as_ref(),
+            "--no-auth-cache".as_ref(),
+            "--non-interactive".as_ref(),
+            "--config-dir".as_ref(),
+            contender_config.as_os_str(),
+        ],
+    );
+    let contender_path = contender_checkout.join("tracked.txt");
+    run_tool(
+        &svn,
+        [
+            "lock".as_ref(),
+            contender_path.as_os_str(),
+            "-m".as_ref(),
+            "competing native lock test".as_ref(),
+            "--username".as_ref(),
+            "alice".as_ref(),
+            "--password".as_ref(),
+            "secret".as_ref(),
+            "--no-auth-cache".as_ref(),
+            "--non-interactive".as_ref(),
+            "--config-dir".as_ref(),
+            contender_config.as_os_str(),
+        ],
+    );
+
+    let partial_lock_failure = bridge
+        .operation_lock(
+            &identity,
+            &subversionr_daemon::LockOperationRequest {
+                paths: vec!["partial-first.txt".to_string(), "tracked.txt".to_string()],
+                comment: Some("partial native lock test".to_string()),
+                steal_lock: false,
+            },
+            &mut auth,
+        )
+        .expect_err("a partial per-path libsvn lock failure must fail the bridge operation");
+    assert_eq!(partial_lock_failure.code(), "SVN_OPERATION_LOCK_FAILED");
+    assert_eq!(
+        partial_lock_failure.safe_args()["mayHaveMutated"].as_bool(),
+        Some(true),
+        "a real per-path failure after a successful lock must expose partial mutation"
+    );
+    assert!(
+        partial_lock_failure
+            .diagnostics()
+            .is_some_and(|diagnostics| !diagnostics.svn.entries.is_empty()),
+        "the partial lock error must retain safe libsvn diagnostics"
+    );
+    let partially_locked_snapshot = bridge
+        .status_scan(&identity, "partial-first.txt", "empty", 94)
+        .expect("the successful target from a partial lock must remain inspectable");
+    assert!(
+        partially_locked_snapshot
+            .local_entries
+            .first()
+            .and_then(|entry| entry.lock.as_ref())
+            .is_some_and(|lock| !lock.is_remote),
+        "the first target must remain locally locked when the second target fails"
+    );
+
+    let unlock_failure_after_partial_lock = bridge
+        .operation_unlock(
+            &identity,
+            &subversionr_daemon::UnlockOperationRequest {
+                paths: vec!["partial-first.txt".to_string(), "tracked.txt".to_string()],
+                break_lock: false,
+            },
+            &mut auth,
+        )
+        .expect_err("a per-path libsvn unlock failure must fail the bridge operation");
+    assert_eq!(
+        unlock_failure_after_partial_lock.code(),
+        "SVN_OPERATION_UNLOCK_FAILED"
+    );
+    assert_eq!(
+        unlock_failure_after_partial_lock.safe_args()["mayHaveMutated"].as_bool(),
+        Some(false),
+        "a failed unlock with no successful notification must not claim mutation"
+    );
+    assert!(
+        unlock_failure_after_partial_lock
+            .diagnostics()
+            .is_some_and(|diagnostics| !diagnostics.svn.entries.is_empty()),
+        "the unlock error must retain safe libsvn diagnostics"
+    );
+    let failed_unlock_snapshot = bridge
+        .status_scan(&identity, "partial-first.txt", "empty", 95)
+        .expect("the failed unlock target must remain inspectable");
+    assert!(
+        failed_unlock_snapshot
+            .local_entries
+            .first()
+            .and_then(|entry| entry.lock.as_ref())
+            .is_some(),
+        "a batch with no successful unlock notification must not be treated as mutated"
+    );
+
+    run_tool(
+        &svn,
+        [
+            "unlock".as_ref(),
+            contender_path.as_os_str(),
+            "--username".as_ref(),
+            "alice".as_ref(),
+            "--password".as_ref(),
+            "secret".as_ref(),
+            "--no-auth-cache".as_ref(),
+            "--non-interactive".as_ref(),
+            "--config-dir".as_ref(),
+            contender_config.as_os_str(),
+        ],
+    );
 }
 
 #[test]

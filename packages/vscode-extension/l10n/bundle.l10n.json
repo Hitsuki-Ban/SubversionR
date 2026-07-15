@@ -591,5 +591,9 @@
   "SVN {0} failed because the selected target is not a working copy.": "SVN {0} failed because the selected target is not a working copy.",
   "SVN {0} failed because the SubversionR backend is unavailable. Retry the operation.": "SVN {0} failed because the SubversionR backend is unavailable. Retry the operation.",
   "SVN {0} failed. Open the SubversionR log for details.": "SVN {0} failed. Open the SubversionR log for details.",
-  "SubversionR backend startup failed. Open the SubversionR log for details.": "SubversionR backend startup failed. Open the SubversionR log for details."
+  "SubversionR backend startup failed. Open the SubversionR log for details.": "SubversionR backend startup failed. Open the SubversionR log for details.",
+  "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.": "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.",
+  "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.": "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.",
+  "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.": "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.",
+  "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.": "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again."
 }

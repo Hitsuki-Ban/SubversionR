@@ -18,6 +18,7 @@
 #include <svn_config.h>
 #include <svn_diff.h>
 #include <svn_dirent_uri.h>
+#include <svn_error.h>
 #include <svn_error_codes.h>
 #include <svn_hash.h>
 #include <svn_io.h>
@@ -40,6 +41,9 @@
 #define BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED 11
 #define BRIDGE_OPERATION_CANCELLED 12
 #define BRIDGE_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE 13
+#define BRIDGE_OPERATION_PARTIAL_FAILURE 14
+#define BRIDGE_OPERATION_PARTIAL_CANCEL_CALLBACK_FAILED 15
+#define BRIDGE_OPERATION_PARTIAL_CANCELLED 16
 
 struct subversionr_bridge_runtime {
   apr_pool_t *pool;
@@ -110,6 +114,7 @@ typedef struct bridge_operation_notify_baton {
   apr_array_header_t *touched_paths;
   apr_array_header_t *skipped_paths;
   apr_pool_t *result_pool;
+  svn_error_t *first_failure;
 } bridge_operation_notify_baton;
 
 typedef struct bridge_property_entry_sort_key {
@@ -921,11 +926,23 @@ static void bridge_operation_notify(
   apr_pool_t *scratch_pool
 ) {
   (void)scratch_pool;
-  if (baton == NULL || notify == NULL || notify->path == NULL) {
+  if (baton == NULL || notify == NULL) {
     return;
   }
 
   bridge_operation_notify_baton *notify_baton = (bridge_operation_notify_baton *)baton;
+  if (
+    notify_baton->first_failure == NULL &&
+    notify->err != NULL &&
+    (notify->action == svn_wc_notify_failed_lock ||
+     notify->action == svn_wc_notify_failed_unlock)
+  ) {
+    notify_baton->first_failure = svn_error_dup(notify->err);
+  }
+  if (notify->path == NULL) {
+    return;
+  }
+
   apr_array_header_t *target = NULL;
   if (
     notify->action == svn_wc_notify_skip ||
@@ -1627,6 +1644,25 @@ static int bridge_error_status_with_cancellation(
     return cancelled_status;
   }
   return 2;
+}
+
+static int bridge_operation_status_with_partial_mutation(
+  int failure_status,
+  int touched_path_count
+) {
+  if (touched_path_count <= 0) {
+    return failure_status;
+  }
+  switch (failure_status) {
+    case 2:
+      return BRIDGE_OPERATION_PARTIAL_FAILURE;
+    case BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED:
+      return BRIDGE_OPERATION_PARTIAL_CANCEL_CALLBACK_FAILED;
+    case BRIDGE_OPERATION_CANCELLED:
+      return BRIDGE_OPERATION_PARTIAL_CANCELLED;
+    default:
+      return failure_status;
+  }
 }
 
 static int bridge_error_is_auth_failure(const svn_error_t *err) {
@@ -3937,13 +3973,25 @@ static int bridge_operation_lock_impl(
   runtime->ctx->cancel_baton = previous_cancel_baton;
 
   if (err != NULL) {
-    return bridge_error_status_with_cancellation(
+    svn_error_clear(notify_baton.first_failure);
+    int failure_status = bridge_error_status_with_cancellation(
       runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
       BRIDGE_OPERATION_CANCELLED
     );
+    return bridge_operation_status_with_partial_mutation(failure_status, touched_paths->nelts);
+  }
+  if (notify_baton.first_failure != NULL) {
+    int failure_status = bridge_error_status_with_cancellation(
+      runtime,
+      notify_baton.first_failure,
+      &cancel_baton,
+      BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
+      BRIDGE_OPERATION_CANCELLED
+    );
+    return bridge_operation_status_with_partial_mutation(failure_status, touched_paths->nelts);
   }
 
   result->touched_paths = (const char *const *)touched_paths->elts;
@@ -4099,13 +4147,25 @@ static int bridge_operation_unlock_impl(
   runtime->ctx->cancel_baton = previous_cancel_baton;
 
   if (err != NULL) {
-    return bridge_error_status_with_cancellation(
+    svn_error_clear(notify_baton.first_failure);
+    int failure_status = bridge_error_status_with_cancellation(
       runtime,
       err,
       &cancel_baton,
       BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
       BRIDGE_OPERATION_CANCELLED
     );
+    return bridge_operation_status_with_partial_mutation(failure_status, touched_paths->nelts);
+  }
+  if (notify_baton.first_failure != NULL) {
+    int failure_status = bridge_error_status_with_cancellation(
+      runtime,
+      notify_baton.first_failure,
+      &cancel_baton,
+      BRIDGE_OPERATION_CANCEL_CALLBACK_FAILED,
+      BRIDGE_OPERATION_CANCELLED
+    );
+    return bridge_operation_status_with_partial_mutation(failure_status, touched_paths->nelts);
   }
 
   result->touched_paths = (const char *const *)touched_paths->elts;
