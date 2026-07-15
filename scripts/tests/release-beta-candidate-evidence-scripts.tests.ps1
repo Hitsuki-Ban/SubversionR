@@ -154,7 +154,7 @@ function New-BetaArtifactBundleManifest([object]$Fixture) {
 }
 
 function Write-InstalledEvidence([string]$EvidenceRoot, [string]$Name, [string]$SchemaName, [object]$Vsix, [int]$SchemaVersion = 1) {
-  Write-Json (New-EvidencePath $EvidenceRoot $Name) ([pscustomobject]@{
+  $evidence = [pscustomobject]@{
     schemaVersion = $SchemaVersion
     schema = "subversionr.release.$SchemaName.win32-x64.v$SchemaVersion"
     publicReadinessClaim = $false
@@ -171,7 +171,22 @@ function Write-InstalledEvidence([string]$EvidenceRoot, [string]$Name, [string]$
       targetPlatform = "win32-x64"
       sha256 = $Vsix.sha256
     }
-  })
+  }
+  if ($Name -eq "installed-core-workflow") {
+    $evidence | Add-Member -NotePropertyName versionReport -NotePropertyValue ([pscustomobject]@{
+      kind = "subversionr.versionReport"
+      extension = [pscustomobject]@{
+        version = "0.2.4"
+      }
+      backend = [pscustomobject]@{
+        status = "initialized"
+        backendVersion = "0.2.4"
+        bridgeVersion = "subversionr-svn-bridge/0.2.4"
+        libsvnVersion = "1.14.5"
+      }
+    })
+  }
+  Write-Json (New-EvidencePath $EvidenceRoot $Name) $evidence
 }
 
 function New-Workflow([string]$Kind) {
@@ -406,6 +421,17 @@ function New-BetaCandidateFixture([string]$Root) {
       displayName = "SVN-R"
       version = "0.2.4"
       preRelease = $true
+    }
+    nativeCompatibility = [pscustomobject]@{
+      schema = "subversionr.release.packaged-native-version-evidence.v1"
+      expectedProductVersion = "0.2.4"
+      backendVersion = "0.2.4"
+      bridgeVersion = "subversionr-svn-bridge/0.2.4"
+      libsvnVersion = "1.14.5"
+      protocol = [pscustomobject]@{
+        major = 1
+        minor = 29
+      }
     }
     inputs = [pscustomobject]@{
       packageRoot = Convert-ToRepoRelativePath $packageRoot
@@ -948,6 +974,36 @@ try {
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $staleVsixFixture
   } "installedCoreWorkflow VSIX SHA256 must match current VSIX" "Beta candidate consistency should reject stale installed VSIX evidence."
+
+  foreach ($case in @(
+    @{ Name = "stale-packaged-backend-version"; Property = "backendVersion"; Value = "0.2.3"; Expected = "vsixPackage native compatibility backendVersion must match current VSIX package.json" },
+    @{ Name = "stale-packaged-bridge-version"; Property = "bridgeVersion"; Value = "subversionr-svn-bridge/0.2.3"; Expected = "vsixPackage native compatibility bridgeVersion must match current VSIX package.json" },
+    @{ Name = "case-drift-packaged-bridge-version"; Property = "bridgeVersion"; Value = "SubversionR-svn-bridge/0.2.4"; Expected = "vsixPackage native compatibility bridgeVersion must match current VSIX package.json" }
+  )) {
+    $fixture = New-BetaCandidateFixture (Join-Path $tempRoot $case.Name)
+    $path = New-EvidencePath $fixture.evidenceRoot "vsix-package"
+    $evidence = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+    $evidence.nativeCompatibility.($case.Property) = $case.Value
+    Write-Json $path $evidence
+    Assert-NativeCommandFailsContaining {
+      Invoke-BetaCandidateVerifier $fixture
+    } $case.Expected "Beta candidate consistency should reject stale packaged native $($case.Property) evidence."
+  }
+
+  foreach ($case in @(
+    @{ Name = "stale-installed-backend-version"; Property = "backendVersion"; Value = "0.2.3"; Expected = "installedCoreWorkflow version report backendVersion must match current VSIX package.json" },
+    @{ Name = "stale-installed-bridge-version"; Property = "bridgeVersion"; Value = "subversionr-svn-bridge/0.2.3"; Expected = "installedCoreWorkflow version report bridgeVersion must match current VSIX package.json" },
+    @{ Name = "case-drift-installed-bridge-version"; Property = "bridgeVersion"; Value = "SubversionR-svn-bridge/0.2.4"; Expected = "installedCoreWorkflow version report bridgeVersion must match current VSIX package.json" }
+  )) {
+    $fixture = New-BetaCandidateFixture (Join-Path $tempRoot $case.Name)
+    $path = New-EvidencePath $fixture.evidenceRoot "installed-core-workflow"
+    $evidence = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+    $evidence.versionReport.backend.($case.Property) = $case.Value
+    Write-Json $path $evidence
+    Assert-NativeCommandFailsContaining {
+      Invoke-BetaCandidateVerifier $fixture
+    } $case.Expected "Beta candidate consistency should reject stale installed native $($case.Property) evidence."
+  }
 
   $staleCliVsixFixture = New-BetaCandidateFixture (Join-Path $tempRoot "stale-cli-vsix")
   $cliInstallPath = New-EvidencePath $staleCliVsixFixture.evidenceRoot "vsix-cli-install"

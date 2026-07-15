@@ -183,7 +183,7 @@ try {
   }
   Assert-True ($buildDaemonText.Contains('host: x86_64-pc-windows-msvc')) "Release daemon build should require the exact Windows MSVC Rust host."
   Assert-True ($buildDaemonText.Contains('release: 1.96.0')) "Release daemon build should require the repository-pinned Rust release."
-  Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release --target-dir $targetRoot')) "Release daemon build should invoke the exact Cargo package, profile, and repository output directory."
+  Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release --locked --target-dir $targetRoot')) "Release daemon build should invoke the exact Cargo package, locked resolution, profile, and repository output directory."
   Assert-True ($buildDaemonText.Contains('$legacyRepositoryCargoConfig')) "Release daemon build should reject a legacy repository Cargo config that would override config.toml."
   Assert-True ($buildDaemonText.Contains('[Environment]::GetEnvironmentVariable("CARGO_HOME")')) "Release daemon build should inspect Cargo's configured home directory."
   Assert-True ($buildDaemonText.Contains('[Environment]::GetEnvironmentVariable("USERPROFILE")')) "Release daemon build should use Cargo's Windows default home resolution."

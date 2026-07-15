@@ -3,6 +3,7 @@ name = "packaged-native-probe-fixture"
 version = "0.0.0"
 edition = "2024"
 publish = false
+build = "build.rs"
 
 [workspace]
 
@@ -16,6 +17,14 @@ path = "src/bin/current_protocol_daemon.rs"
 [[bin]]
 name = "stale-protocol-daemon"
 path = "src/bin/stale_protocol_daemon.rs"
+
+[[bin]]
+name = "mismatched-backend-version-daemon"
+path = "src/bin/mismatched_backend_version_daemon.rs"
+
+[[bin]]
+name = "mismatched-bridge-version-daemon"
+path = "src/bin/mismatched_bridge_version_daemon.rs"
 
 [dependencies]
 serde_json = "1"

@@ -14,6 +14,8 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).ProviderPath
+
 $svnCliTools = @(
   "svn.exe",
   "svnadmin.exe",
@@ -222,6 +224,10 @@ function Assert-RequiredNativeDependencyPattern([object[]]$Artifacts, [string]$P
 
 $packageRootResolved = Assert-Directory $PackageRoot "PackageRoot"
 $backendModulePathResolved = Assert-File $BackendModulePath "BackendModulePath"
+& (Join-Path $PSScriptRoot "verify-product-version-consistency.ps1") `
+  -RootPackagePath (Join-Path $repoRoot "package.json") `
+  -ExtensionPackagePath (Join-Path $packageRootResolved "package.json") `
+  -CargoWorkspaceManifestPath (Join-Path $repoRoot "Cargo.toml")
 $resourceRoot = Join-Path $packageRootResolved "resources\backend\$Target"
 Assert-Directory $resourceRoot "Backend resource root" | Out-Null
 
@@ -255,6 +261,9 @@ Assert-Equal "Release" $manifest.configuration "Manifest configuration should be
 Assert-Equal "resources/backend/$Target" $manifest.resourceRoot "Manifest resourceRoot should match the resolver layout."
 Assert-Equal "subversionr" $manifest.extension.id "Manifest extension id should be subversionr."
 Assert-Equal "SVN-R" $manifest.extension.displayName "Manifest extension displayName should match the Marketplace listing."
+if ([string]$packageJson.version -cne [string]$manifest.extension.version) {
+  throw "Manifest extension version should exactly match staged package.json. Expected '$($packageJson.version)', got '$($manifest.extension.version)'."
+}
 
 Assert-NoSvnCliToolsInPackage $packageRootResolved
 
@@ -333,9 +342,11 @@ foreach ($artifact in $artifacts) {
 Assert-File (Join-Path $resourceRoot "subversionr-daemon.exe") "Staged sidecar" | Out-Null
 Assert-File (Join-Path $resourceRoot "subversionr_svn_bridge.dll") "Staged bridge" | Out-Null
 
-& (Join-Path $PSScriptRoot "verify-packaged-native-compatibility.ps1") `
+$nativeCompatibility = & (Join-Path $PSScriptRoot "verify-packaged-native-compatibility.ps1") `
   -Target $Target `
   -PackageRoot $packageRootResolved `
-  -BackendModulePath $backendModulePathResolved
+  -BackendModulePath $backendModulePathResolved `
+  -ExpectedProductVersion ([string]$packageJson.version)
 
 Write-Host "Verified SubversionR VS Code package layout for $Target at $packageRootResolved."
+$nativeCompatibility

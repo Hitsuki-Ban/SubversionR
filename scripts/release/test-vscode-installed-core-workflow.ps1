@@ -239,7 +239,7 @@ function Find-InstalledPackage([string]$ExtensionsRoot, [string]$Publisher, [str
     Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "package.json") -PathType Leaf } |
     ForEach-Object {
       $packageJson = Get-Content -Raw -LiteralPath (Join-Path $_.FullName "package.json") | ConvertFrom-Json
-      if ($packageJson.publisher -eq $Publisher -and $packageJson.name -eq $Name -and $packageJson.version -eq $Version) {
+      if ($packageJson.publisher -eq $Publisher -and $packageJson.name -eq $Name -and [string]$packageJson.version -ceq $Version) {
         $_.FullName
       }
     })
@@ -553,7 +553,7 @@ function Assert-HarnessResult(
   if ($Result.id -ne "hitsuki-ban.subversionr") {
     throw "Installed core workflow result extension id must be hitsuki-ban.subversionr."
   }
-  if ($Result.version -ne $ExpectedVersion) {
+  if ([string]$Result.version -cne $ExpectedVersion) {
     throw "Installed core workflow result extension version must be $ExpectedVersion."
   }
   if ($Result.source -ne "installed-vsix") {
@@ -599,6 +599,11 @@ function Assert-HarnessResult(
   }
   if ($Result.versionReport.backend.status -ne "initialized") {
     throw "Installed core workflow version report backend status must be initialized."
+  }
+  if ([string]$Result.versionReport.extension.version -cne $ExpectedVersion -or
+    [string]$Result.versionReport.backend.backendVersion -cne $ExpectedVersion -or
+    [string]$Result.versionReport.backend.bridgeVersion -cne "subversionr-svn-bridge/$ExpectedVersion") {
+    throw "Installed core workflow extension, backend, and bridge versions must exactly match $ExpectedVersion."
   }
   if (-not ([string]$Result.versionReport.backend.libsvnVersion).StartsWith("1.14.5", [System.StringComparison]::Ordinal)) {
     throw "Installed core workflow version report libsvnVersion must start with 1.14.5."
@@ -833,6 +838,7 @@ $report = [pscustomobject]@{
     "SubversionR produced exactly the expected non-empty SCM projection groups for this local-only cold-start fixture",
     "SubversionR reused and preserved the organically activated repository session",
     "SubversionR version report backend status was initialized with libsvn 1.14.5",
+    "SubversionR extension, backend, and bridge versions matched exactly",
     "publicReadinessClaim remains false"
   )
 }

@@ -240,6 +240,10 @@ function Copy-IconvModules([string]$SourceRoot, [string]$DestinationRoot) {
 
 $extensionRootResolved = Assert-Directory $ExtensionRoot "ExtensionRoot"
 $backendModulePath = Assert-File (Join-Path $extensionRootResolved "dist\backend\backendProcess.js") "Extension backend contract module"
+& (Join-Path $PSScriptRoot "verify-product-version-consistency.ps1") `
+  -RootPackagePath (Join-Path $repoRoot "package.json") `
+  -ExtensionPackagePath (Join-Path $extensionRootResolved "package.json") `
+  -CargoWorkspaceManifestPath (Join-Path $repoRoot "Cargo.toml")
 $daemonExeResolved = Assert-File $DaemonExe "DaemonExe"
 $bridgeRuntimeResolved = Assert-Directory $BridgeRuntimeDirectory "BridgeRuntimeDirectory"
 $sourceLockResolved = Assert-File $SourceLockPath "SourceLockPath"
@@ -299,10 +303,11 @@ Copy-IconvModules -SourceRoot $bridgeRuntimeResolved -DestinationRoot $resourceR
 
 Assert-NoSvnCliToolsInPackage $packageRoot
 
-& (Join-Path $PSScriptRoot "verify-packaged-native-compatibility.ps1") `
+$null = & (Join-Path $PSScriptRoot "verify-packaged-native-compatibility.ps1") `
   -Target $Target `
   -PackageRoot $packageRoot `
-  -BackendModulePath $backendModulePath
+  -BackendModulePath $backendModulePath `
+  -ExpectedProductVersion ([string]$extensionPackageJson.version)
 
 $artifactRecords = @()
 $artifactRecords += Get-ArtifactRecord -PackageRoot $packageRoot -Path (Join-Path $resourceRoot "subversionr-daemon.exe") -Role "sidecar"

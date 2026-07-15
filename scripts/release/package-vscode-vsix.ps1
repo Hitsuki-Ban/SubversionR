@@ -390,7 +390,7 @@ function Assert-VsixContents([string]$VsixPath, [string]$Target) {
   $expectedExtensionId = "$($packageJson.publisher).$($packageJson.name)"
   if ($manifestMetadata.id -ne $packageJson.name -or
     $manifestMetadata.publisher -ne $packageJson.publisher -or
-    $manifestMetadata.version -ne $packageJson.version -or
+    $manifestMetadata.version -cne $packageJson.version -or
     $manifestMetadata.targetPlatform -ne $Target) {
     throw "VSIX manifest identity must compose to $expectedExtensionId $($packageJson.version) for $Target."
   }
@@ -440,7 +440,7 @@ $extensionEntrypointSha256 = (Get-FileHash -LiteralPath $extensionEntrypointPath
 $readmeSha256 = (Get-FileHash -LiteralPath $readmeResolved -Algorithm SHA256).Hash.ToLowerInvariant()
 Assert-NoCompiledTestArtifacts $distRootResolved
 
-& $verifyLayoutScript `
+$nativeCompatibility = & $verifyLayoutScript `
   -Target $Target `
   -PackageRoot $packageRootResolved `
   -BackendModulePath $backendModulePath
@@ -538,6 +538,7 @@ $report = [pscustomobject]@{
     version = [string]$vsixPackageJson.version
     preRelease = [bool]$vsixMetadata.manifestMetadata.preRelease
   }
+  nativeCompatibility = $nativeCompatibility
   inputs = [pscustomobject]@{
     packageRoot = Get-RepoRelativePath $packageRootResolved
     distRoot = Get-RepoRelativePath $distRootResolved
@@ -570,6 +571,7 @@ $report = [pscustomobject]@{
     "Marketplace listing README is present and hash-bound to the explicit ReadmePath input",
     "Marketplace icon is present and hash-bound in the VSIX",
     "packaged backend sidecar, bridge, and manifest are present",
+    "packaged daemon and bridge versions exactly match the authoritative product version",
     "TypeScript source, tests, node_modules, and SVN CLI fixture tools are absent",
     "publicReadinessClaim remains false"
   )

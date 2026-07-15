@@ -125,18 +125,47 @@ function Assert-SemVer([string]$Version, [string]$Name) {
 
 function Invoke-LayoutVerification([string]$PackageRoot) {
   Assert-File $verifyLayoutScript "VS Code package layout verifier" | Out-Null
-  & $verifyLayoutScript -Target $Target -PackageRoot $PackageRoot -BackendModulePath $backendModulePathResolved
+  $null = & $verifyLayoutScript -Target $Target -PackageRoot $PackageRoot -BackendModulePath $backendModulePathResolved
 }
 
-function Read-PackageContract([string]$PackageRoot, [string]$Name) {
+function Assert-ManifestArtifactIntegrity([string]$PackageRoot, [object]$Manifest, [string]$Name) {
+  $artifacts = @($Manifest.artifacts)
+  if ($artifacts.Count -eq 0) {
+    throw "$Name backend manifest must contain artifacts."
+  }
+  foreach ($artifact in $artifacts) {
+    $relativePath = [string]$artifact.path
+    if ([string]::IsNullOrWhiteSpace($relativePath) -or [System.IO.Path]::IsPathRooted($relativePath) -or $relativePath.Split("/") -contains "..") {
+      throw "$Name backend manifest artifact path must be repository-relative: $relativePath"
+    }
+    $artifactPath = Assert-ChildPath `
+      -Root $PackageRoot `
+      -Path (Join-Path $PackageRoot $relativePath.Replace("/", "\")) `
+      -Name "$Name backend manifest artifact"
+    $artifactPath = Assert-File $artifactPath "$Name backend manifest artifact"
+    $file = Get-Item -LiteralPath $artifactPath
+    if ([int64]$artifact.size -ne $file.Length) {
+      throw "$Name backend manifest artifact size must match $relativePath."
+    }
+    $sha256 = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([string]$artifact.sha256 -ne $sha256) {
+      throw "$Name backend manifest artifact sha256 must match $relativePath."
+    }
+  }
+}
+
+function Read-PackageContract([string]$PackageRoot, [string]$Name, [bool]$VerifyCurrentProductLayout) {
   $packageRootResolved = Assert-Directory $PackageRoot $Name
-  Invoke-LayoutVerification $packageRootResolved
+  if ($VerifyCurrentProductLayout) {
+    Invoke-LayoutVerification $packageRootResolved
+  }
 
   $packageJsonPath = Assert-File (Join-Path $packageRootResolved "package.json") "$Name package.json"
   $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   $resourceRoot = Join-Path $packageRootResolved "resources\backend\$Target"
   $manifestPath = Assert-File (Join-Path $resourceRoot "subversionr-backend-package-manifest.json") "$Name backend package manifest"
   $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+  Assert-ManifestArtifactIntegrity -PackageRoot $packageRootResolved -Manifest $manifest -Name $Name
 
   if ($packageJson.name -ne "subversionr") {
     throw "Extension package id must be subversionr."
@@ -170,6 +199,7 @@ function Read-PackageContract([string]$PackageRoot, [string]$Name) {
     displayName = [string]$packageJson.displayName
     version = [string]$packageJson.version
     manifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    verifyCurrentProductLayout = $VerifyCurrentProductLayout
   }
 }
 
@@ -198,7 +228,10 @@ function Install-ExtensionPackage([object]$Contract, [string]$ExtensionsRoot) {
   New-Item -ItemType Directory -Force -Path $ExtensionsRoot | Out-Null
   $destination = Assert-ChildPath -Root $ExtensionsRoot -Path (Join-Path $ExtensionsRoot $Contract.extensionDirectoryName) -Name "Installed extension directory"
   Copy-PackageDirectory -SourceRoot $Contract.packageRoot -DestinationRoot $destination
-  Read-PackageContract -PackageRoot $destination -Name "Installed $($Contract.extensionDirectoryName)" | Out-Null
+  Read-PackageContract `
+    -PackageRoot $destination `
+    -Name "Installed $($Contract.extensionDirectoryName)" `
+    -VerifyCurrentProductLayout ([bool]$Contract.verifyCurrentProductLayout) | Out-Null
   $destination
 }
 
@@ -261,7 +294,10 @@ New-Item -ItemType Directory -Force -Path $fixtureRootResolved | Out-Null
 
 $workingCopySentinel = New-WorkingCopySentinel -Root $fixtureRootResolved
 
-$currentContract = Read-PackageContract -PackageRoot $currentPackageRootResolved -Name "CurrentPackageRoot"
+$currentContract = Read-PackageContract `
+  -PackageRoot $currentPackageRootResolved `
+  -Name "CurrentPackageRoot" `
+  -VerifyCurrentProductLayout $true
 if ($SyntheticPreviousVersion -eq $currentContract.version) {
   throw "SyntheticPreviousVersion must differ from the current package version."
 }
@@ -269,7 +305,10 @@ if ($SyntheticPreviousVersion -eq $currentContract.version) {
 $syntheticPreviousRoot = Assert-ChildPath -Root $fixtureRootResolved -Path (Join-Path $fixtureRootResolved "packages\synthetic-previous") -Name "Synthetic previous package root"
 Copy-PackageDirectory -SourceRoot $currentContract.packageRoot -DestinationRoot $syntheticPreviousRoot
 Set-PackageVersion -PackageRoot $syntheticPreviousRoot -Version $SyntheticPreviousVersion
-$previousContract = Read-PackageContract -PackageRoot $syntheticPreviousRoot -Name "SyntheticPreviousPackage"
+$previousContract = Read-PackageContract `
+  -PackageRoot $syntheticPreviousRoot `
+  -Name "SyntheticPreviousPackage" `
+  -VerifyCurrentProductLayout $false
 
 if ($previousContract.extensionId -ne $currentContract.extensionId) {
   throw "Synthetic previous package identity must match the current package identity."
@@ -299,7 +338,10 @@ Assert-InstalledOnly -ExtensionsRoot $upgradeExtensionsRoot -ExpectedDirectoryNa
 $currentInstalledForUpgrade = Assert-ChildPath -Root $upgradeExtensionsRoot -Path $currentInstalledForUpgrade -Name "Current installed extension directory"
 Remove-Item -LiteralPath $currentInstalledForUpgrade -Recurse -Force
 Move-Item -LiteralPath $rollbackBackup -Destination $previousInstalled
-Read-PackageContract -PackageRoot $previousInstalled -Name "Rolled back extension" | Out-Null
+Read-PackageContract `
+  -PackageRoot $previousInstalled `
+  -Name "Rolled back extension" `
+  -VerifyCurrentProductLayout $false | Out-Null
 Assert-InstalledOnly -ExtensionsRoot $upgradeExtensionsRoot -ExpectedDirectoryName $previousContract.extensionDirectoryName
 $workingCopyAfterSha256 = Assert-WorkingCopySentinelUnchanged -Sentinel $workingCopySentinel
 

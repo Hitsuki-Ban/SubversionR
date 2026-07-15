@@ -213,6 +213,8 @@ if ($null -eq $installedPackage) {
     }
     backend = [pscustomobject]@{
       status = "initialized"
+      backendVersion = "0.2.0"
+      bridgeVersion = "subversionr-svn-bridge/0.2.0"
       libsvnVersion = "1.14.5"
       capabilities = [pscustomobject]@{
         repositoryOpen = $true
@@ -342,6 +344,8 @@ try {
   Assert-Equal "subversionr.installedCoreWorkflowReport" $report.workflowReport.kind "Installed core workflow evidence should include the workflow report."
   Assert-Equal "subversionr.versionReport" $report.versionReport.kind "Installed core workflow evidence should include a version report."
   Assert-Equal "initialized" $report.versionReport.backend.status "Installed core workflow evidence should require an initialized backend."
+  Assert-Equal "0.2.0" $report.versionReport.backend.backendVersion "Installed core workflow evidence should bind the backend version to the extension."
+  Assert-Equal "subversionr-svn-bridge/0.2.0" $report.versionReport.backend.bridgeVersion "Installed core workflow evidence should bind the bridge version to the extension."
   Assert-Equal "1.14.5" $report.versionReport.backend.libsvnVersion "Installed core workflow evidence should require libsvn 1.14.5."
   Assert-Equal "organic-activation" $report.workflowReport.backendWorkflow.sessionSource "Installed core workflow evidence should prove organic-session reuse."
   Assert-Equal "False" ([string]$report.workflowReport.backendWorkflow.repositoryClosed) "Installed core workflow evidence should prove the organic session remains open."

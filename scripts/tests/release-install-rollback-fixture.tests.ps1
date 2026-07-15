@@ -188,10 +188,11 @@ New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
   $packagedNativeProbeFixtures = Build-PackagedNativeProbeFixtures -RepoRoot $repoRoot
   $backendModulePath = Join-Path $repoRoot "packages\vscode-extension\dist\backend\backendProcess.js"
+  $productVersion = [string]((Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json).version)
   Assert-True (Test-Path -LiteralPath $fixtureScript -PathType Leaf) "test-vscode-install-rollback-fixture.ps1 should exist."
 
   $currentPackageRoot = Join-Path $tempRoot "packages\current"
-  New-StagedPackageFixture -PackageRoot $currentPackageRoot -Version "0.2.0" -DaemonExe $packagedNativeProbeFixtures.currentProtocolDaemon
+  New-StagedPackageFixture -PackageRoot $currentPackageRoot -Version $productVersion -DaemonExe $packagedNativeProbeFixtures.currentProtocolDaemon
   $fixtureRoot = Join-Path $tempRoot "run"
   $evidencePath = Join-Path $tempRoot "evidence\install-rollback.json"
 
@@ -213,7 +214,7 @@ try {
   Assert-Equal "False" ([string]$report.publicReadinessClaim) "Fixture evidence must not claim public readiness."
   Assert-Equal "win32-x64" $report.target "Evidence should record the VS Code platform target."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Evidence should record the publisher-qualified extension id."
-  Assert-Equal "0.2.0" $report.extension.currentVersion "Evidence should record the current package version."
+  Assert-Equal $productVersion $report.extension.currentVersion "Evidence should record the current package version."
   Assert-Equal "0.0.0-m7f.fixture" $report.extension.previousVersion "Evidence should record the synthetic previous version."
   foreach ($traceId in @("MIG-009", "MIG-010", "TST-024")) {
     Assert-True (@($report.traceIds | Where-Object { $_ -eq $traceId }).Count -eq 1) "Evidence should trace $traceId."
@@ -232,7 +233,7 @@ try {
   Assert-True ($report.assertions.Contains("no real VS Code user-data or extension directory was touched")) "Evidence should make the isolation assertion explicit."
   Assert-True ($report.assertions.Contains("working-copy sentinel .svn/wc.db hash was unchanged")) "Evidence should state working-copy non-mutation explicitly."
   Assert-True (Test-Path -LiteralPath (Join-Path $fixtureRoot "upgrade\extensions\hitsuki-ban.subversionr-0.0.0-m7f.fixture\package.json") -PathType Leaf) "Rollback should restore the synthetic previous extension directory."
-  Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixtureRoot "upgrade\extensions\hitsuki-ban.subversionr-0.2.0"))) "Rollback should remove the current extension directory from the upgrade fixture."
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixtureRoot "upgrade\extensions\hitsuki-ban.subversionr-$productVersion"))) "Rollback should remove the current extension directory from the upgrade fixture."
 
   $tamperedPackageRoot = Join-Path $tempRoot "packages\tampered"
   Copy-Item -LiteralPath $currentPackageRoot -Destination $tamperedPackageRoot -Recurse
@@ -270,7 +271,7 @@ try {
       -Target win32-x64 `
       -CurrentPackageRoot $currentPackageRoot `
       -BackendModulePath $backendModulePath `
-      -SyntheticPreviousVersion "0.2.0" `
+      -SyntheticPreviousVersion $productVersion `
       -FixtureRoot (Join-Path $tempRoot "same-version-run") `
       -EvidencePath (Join-Path $tempRoot "evidence\same-version.json")
   } "SyntheticPreviousVersion must differ" "Fixture should not treat the current package as an upgrade source."

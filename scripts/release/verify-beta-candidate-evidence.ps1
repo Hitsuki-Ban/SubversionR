@@ -42,6 +42,12 @@ function Assert-Equal($Expected, $Actual, [string]$Message) {
   }
 }
 
+function Assert-OrdinalEqual([string]$Expected, [string]$Actual, [string]$Message) {
+  if ($Expected -cne $Actual) {
+    throw "$Message Expected '$Expected', got '$Actual'."
+  }
+}
+
 function Assert-RequiredBooleanTrue([object]$Object, [string]$Name, [string]$Context) {
   if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$Name]) {
     throw "$Context must define $Name."
@@ -455,7 +461,7 @@ function Assert-VsixArtifactBinding([object]$Record, [string]$Name, [bool]$Requi
 function Assert-ExtensionIdentity([object]$Record, [string]$Name, [bool]$RequireInstalledSource) {
   $extension = Get-RequiredProperty $Record "extension" $Name
   Assert-Equal $extensionId (Get-RequiredString $extension "id" "$Name extension") "$Name extension id must match current VSIX package identity."
-  Assert-Equal $extensionVersion (Get-RequiredString $extension "version" "$Name extension") "$Name extension version must match current VSIX package identity."
+  Assert-OrdinalEqual $extensionVersion (Get-RequiredString $extension "version" "$Name extension") "$Name extension version must match current VSIX package identity."
   if ($RequireInstalledSource) {
     Assert-Equal "installed-vsix" (Get-RequiredString $extension "source" "$Name extension") "$Name extension source must record installed-vsix."
   }
@@ -1223,8 +1229,17 @@ Assert-VsixArtifactBinding (Get-RequiredProperty $vsixPackageJson "vsix" "vsixPa
 Assert-Equal $vsixEntrypointSha256 (Get-RequiredString $vsixPackageJson.vsix "extensionEntrypointSha256" "vsixPackage.vsix") "vsixPackage VSIX entrypoint SHA256 must match current VSIX."
 Assert-Equal $vsixEntrypointSha256 (Get-RequiredString $vsixPackageJson.inputs "extensionEntrypointSha256" "vsixPackage.inputs") "vsixPackage input entrypoint SHA256 must match current VSIX."
 Assert-Equal $extensionId (Get-RequiredString $vsixPackageJson.extension "id" "vsixPackage.extension") "vsixPackage extension id must match current VSIX package.json."
-Assert-Equal $extensionVersion (Get-RequiredString $vsixPackageJson.extension "version" "vsixPackage.extension") "vsixPackage extension version must match current VSIX package.json."
+Assert-OrdinalEqual $extensionVersion (Get-RequiredString $vsixPackageJson.extension "version" "vsixPackage.extension") "vsixPackage extension version must match current VSIX package.json."
 Assert-RequiredBooleanTrue $vsixPackageJson.extension "preRelease" "vsixPackage.extension"
+$nativeCompatibility = Get-RequiredProperty $vsixPackageJson "nativeCompatibility" "vsixPackage"
+Assert-Equal "subversionr.release.packaged-native-version-evidence.v1" (Get-RequiredString $nativeCompatibility "schema" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility schema must match the release contract."
+Assert-OrdinalEqual $extensionVersion (Get-RequiredString $nativeCompatibility "expectedProductVersion" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility expectedProductVersion must match current VSIX package.json."
+Assert-OrdinalEqual $extensionVersion (Get-RequiredString $nativeCompatibility "backendVersion" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility backendVersion must match current VSIX package.json."
+Assert-OrdinalEqual "subversionr-svn-bridge/$extensionVersion" (Get-RequiredString $nativeCompatibility "bridgeVersion" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility bridgeVersion must match current VSIX package.json."
+$packagedLibsvnVersion = Get-RequiredString $nativeCompatibility "libsvnVersion" "vsixPackage.nativeCompatibility"
+$nativeProtocol = Get-RequiredProperty $nativeCompatibility "protocol" "vsixPackage.nativeCompatibility"
+Assert-Equal 1 ([int](Get-RequiredProperty $nativeProtocol "major" "vsixPackage.nativeCompatibility.protocol")) "vsixPackage native compatibility protocol major must match the release contract."
+Assert-True ([int](Get-RequiredProperty $nativeProtocol "minor" "vsixPackage.nativeCompatibility.protocol") -ge 29) "vsixPackage native compatibility protocol minor must be at least 29."
 $vsixPackageRootPath = Assert-Directory (Resolve-RepoPath (Get-RequiredString $vsixPackageJson.inputs "packageRoot" "vsixPackage.inputs")) "vsixPackage input packageRoot"
 $vsixPackageBackendManifestPath = Assert-File (Join-Path $vsixPackageRootPath "resources\backend\$Target\subversionr-backend-package-manifest.json") "vsixPackage input backend manifest"
 $vsixPackageBackendManifestSha256 = Get-Sha256 $vsixPackageBackendManifestPath
@@ -1258,7 +1273,19 @@ foreach ($spec in $installedEvidenceSpecs) {
   Assert-Equal $Target (Get-RequiredString $installedEvidence.json.vsix "targetPlatform" "$($spec.Name).vsix") "$($spec.Name) VSIX targetPlatform must match current target."
   Assert-ExtensionIdentity $installedEvidence.json $spec.Name $true
   Assert-InstalledExtensionLine $installedEvidence.json $spec.Name
-  if ($spec.Name -eq "installedSourceControlUiE2e") {
+  if ($spec.Name -eq "installedCoreWorkflow") {
+    $versionReport = Get-RequiredProperty $installedEvidence.json "versionReport" $spec.Name
+    Assert-Equal "subversionr.versionReport" (Get-RequiredString $versionReport "kind" "$($spec.Name).versionReport") "$($spec.Name) version report kind must match the installed diagnostics contract."
+    $reportedExtension = Get-RequiredProperty $versionReport "extension" "$($spec.Name).versionReport"
+    Assert-OrdinalEqual $extensionVersion (Get-RequiredString $reportedExtension "version" "$($spec.Name).versionReport.extension") "$($spec.Name) version report extension version must match current VSIX package.json."
+    $reportedBackend = Get-RequiredProperty $versionReport "backend" "$($spec.Name).versionReport"
+    Assert-Equal "initialized" (Get-RequiredString $reportedBackend "status" "$($spec.Name).versionReport.backend") "$($spec.Name) version report backend status must be initialized."
+    Assert-OrdinalEqual $extensionVersion (Get-RequiredString $reportedBackend "backendVersion" "$($spec.Name).versionReport.backend") "$($spec.Name) version report backendVersion must match current VSIX package.json."
+    Assert-OrdinalEqual "subversionr-svn-bridge/$extensionVersion" (Get-RequiredString $reportedBackend "bridgeVersion" "$($spec.Name).versionReport.backend") "$($spec.Name) version report bridgeVersion must match current VSIX package.json."
+    Assert-Equal $packagedLibsvnVersion (Get-RequiredString $reportedBackend "libsvnVersion" "$($spec.Name).versionReport.backend") "$($spec.Name) version report libsvnVersion must match the packaged native probe."
+    Add-VerifiedEvidence $installedEvidence "installed-vsix-and-native-version-report-match-current-candidate"
+  }
+  elseif ($spec.Name -eq "installedSourceControlUiE2e") {
     Assert-InstalledSourceControlUiE2eSemantics $installedEvidence.json
     Add-VerifiedEvidence $installedEvidence "installed-source-control-ui-e2e-beta-workflows-and-vsix-hash-bound"
   }
@@ -1273,7 +1300,7 @@ $installRollbackFixture = Read-EvidenceFile `
   -ExpectedSchema "subversionr.release.install-rollback-fixture.$Target.v1"
 $installRollbackExtension = Get-RequiredProperty $installRollbackFixture.json "extension" "installRollbackFixture"
 Assert-Equal $extensionId (Get-RequiredString $installRollbackExtension "id" "installRollbackFixture.extension") "installRollbackFixture extension id must match current VSIX package identity."
-Assert-Equal $extensionVersion (Get-RequiredString $installRollbackExtension "currentVersion" "installRollbackFixture.extension") "installRollbackFixture currentVersion must match current VSIX package identity."
+Assert-OrdinalEqual $extensionVersion (Get-RequiredString $installRollbackExtension "currentVersion" "installRollbackFixture.extension") "installRollbackFixture currentVersion must match current VSIX package identity."
 $rollbackCurrentPackage = Get-RequiredProperty (Get-RequiredProperty $installRollbackFixture.json "packages" "installRollbackFixture") "current" "installRollbackFixture.packages"
 Assert-SamePath $vsixPackageRootPath (Get-RequiredString $rollbackCurrentPackage "root" "installRollbackFixture.packages.current") "installRollbackFixture current package root must match VSIX package input packageRoot."
 Assert-Equal $vsixPackageBackendManifestSha256 (Get-RequiredString $rollbackCurrentPackage "manifestSha256" "installRollbackFixture.packages.current") "installRollbackFixture current package manifest SHA256 must match current VSIX package backend manifest."
