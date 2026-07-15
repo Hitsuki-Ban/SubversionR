@@ -731,6 +731,63 @@ impl fmt::Display for NativeBridgeLoadError {
 
 impl std::error::Error for NativeBridgeLoadError {}
 
+impl NativeBridgeLoadError {
+    pub fn startup_error(&self) -> serde_json::Value {
+        let (code, message_key, safe_args) = match self {
+            Self::PathMustBeAbsolute(_) => (
+                "SUBVERSIONR_NATIVE_BRIDGE_PATH_NOT_ABSOLUTE",
+                "error.backend.nativeBridgePathNotAbsolute",
+                json!({}),
+            ),
+            Self::MissingLibrary(_) => (
+                "SUBVERSIONR_NATIVE_BRIDGE_LIBRARY_MISSING",
+                "error.backend.nativeBridgeLibraryMissing",
+                json!({}),
+            ),
+            Self::LoadLibrary { .. } => (
+                "SUBVERSIONR_NATIVE_BRIDGE_LOAD_FAILED",
+                "error.backend.nativeBridgeLoadFailed",
+                json!({}),
+            ),
+            Self::MissingSymbol(_) => (
+                "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING",
+                "error.backend.nativeBridgeSymbolMissing",
+                json!({}),
+            ),
+            Self::RuntimeCreateFailed(status) => (
+                "SUBVERSIONR_NATIVE_BRIDGE_RUNTIME_CREATE_FAILED",
+                "error.backend.nativeBridgeRuntimeCreateFailed",
+                json!({ "status": status }),
+            ),
+            Self::RuntimeCreateReturnedNull => (
+                "SUBVERSIONR_NATIVE_BRIDGE_RUNTIME_CREATE_NULL",
+                "error.backend.nativeBridgeRuntimeCreateNull",
+                json!({}),
+            ),
+            Self::NullString(field) => (
+                "SUBVERSIONR_NATIVE_BRIDGE_STRING_NULL",
+                "error.backend.nativeBridgeStringNull",
+                json!({ "field": field }),
+            ),
+            Self::InvalidUtf8 { field, .. } => (
+                "SUBVERSIONR_NATIVE_BRIDGE_STRING_INVALID_UTF8",
+                "error.backend.nativeBridgeStringInvalidUtf8",
+                json!({ "field": field }),
+            ),
+        };
+
+        json!({
+            "schema": "subversionr.daemon.startup-error.v1",
+            "code": code,
+            "category": "process",
+            "messageKey": message_key,
+            "safeArgs": safe_args,
+            "retryable": false,
+            "diagnostics": null,
+        })
+    }
+}
+
 pub struct NativeBridge {
     info: BridgeInfo,
     runtime: NonNull<c_void>,
@@ -5508,6 +5565,30 @@ unsafe fn optional_c_string_to_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_bridge_startup_errors_are_stable_and_path_safe() {
+        let missing = NativeBridgeLoadError::MissingLibrary(PathBuf::from(
+            r"C:\Users\fixture\secret\subversionr_svn_bridge.dll",
+        ));
+        let missing_record = missing.startup_error();
+        assert_eq!(
+            missing_record["code"],
+            "SUBVERSIONR_NATIVE_BRIDGE_LIBRARY_MISSING"
+        );
+        assert_eq!(missing_record["category"], "process");
+        assert_eq!(missing_record["safeArgs"], json!({}));
+        assert!(!missing_record.to_string().contains("fixture"));
+
+        let create_failed = NativeBridgeLoadError::RuntimeCreateFailed(17).startup_error();
+        assert_eq!(
+            create_failed["code"],
+            "SUBVERSIONR_NATIVE_BRIDGE_RUNTIME_CREATE_FAILED"
+        );
+        assert_eq!(create_failed["safeArgs"], json!({ "status": 17 }));
+        assert_eq!(create_failed["retryable"], false);
+        assert_eq!(create_failed["diagnostics"], serde_json::Value::Null);
+    }
 
     #[test]
     fn native_diagnostic_causes_map_only_safe_symbolic_names() {

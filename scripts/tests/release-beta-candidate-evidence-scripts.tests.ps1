@@ -1376,6 +1376,7 @@ $uploadPathBlock
     'ScriptName "test-vscode-installed-source-control-surface.ps1"',
     'ScriptName "test-vscode-installed-source-control-ui-e2e.ps1"',
     'ScriptName "test-vscode-install-rollback-fixture.ps1"',
+    '"-BackendModulePath", $backendModulePath',
     'Invoke-PnpmScript "Test state-engine Beta performance" "release:test-state-engine-beta-performance:$Target"',
     'Invoke-PnpmScript "Generate Beta artifact bundle manifest" "release:generate-beta-artifact-bundle-manifest:$Target"',
     'Invoke-PnpmScript "Verify Beta candidate evidence consistency" "release:verify-beta-candidate:$Target"'
@@ -1385,6 +1386,7 @@ $uploadPathBlock
   Assert-True ($orchestration.Contains('Assert-CodeCliPath $CodeCliPath')) "Beta candidate orchestration should validate CodeCliPath before running release gates."
   Assert-True ($orchestration.Contains('Assert-RepoDirectory') -and $orchestration.Contains('.cache\native\stage\subversion-win-x64\bin')) "Beta candidate orchestration should require the explicit staged SVN tools root."
   Assert-True ($orchestration.Contains('Assert-RepoFile') -and $orchestration.Contains('scripts\release')) "Beta candidate orchestration should require an explicit renderer capture driver path."
+  Assert-True ($orchestration.Contains('(Resolve-RepoPath "packages/vscode-extension/dist/backend/backendProcess.js")')) "Beta candidate orchestration should bind install rollback verification to the exact compiled package backend module."
 
   $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   Assert-True ($packageJson.scripts."release:test-beta-candidate-evidence-scripts".Contains("release-beta-candidate-evidence-scripts.tests.ps1")) "Root package should expose Beta candidate evidence script tests."

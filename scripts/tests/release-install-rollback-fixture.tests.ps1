@@ -5,6 +5,7 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $fixtureScript = Join-Path $repoRoot "scripts\release\test-vscode-install-rollback-fixture.ps1"
 $packageJsonPath = Join-Path $repoRoot "package.json"
 $ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
+. (Join-Path $PSScriptRoot "packaged-native-probe-fixtures.ps1")
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
@@ -122,7 +123,7 @@ function Write-PackageManifest([string]$PackageRoot, [string]$Target, [string]$V
   } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $resourceRoot "subversionr-backend-package-manifest.json") -Encoding utf8
 }
 
-function New-StagedPackageFixture([string]$PackageRoot, [string]$Version) {
+function New-StagedPackageFixture([string]$PackageRoot, [string]$Version, [string]$DaemonExe) {
   $target = "win32-x64"
   $resourceRoot = Join-Path $PackageRoot "resources\backend\$target"
   New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "l10n") | Out-Null
@@ -153,7 +154,7 @@ function New-StagedPackageFixture([string]$PackageRoot, [string]$Version) {
   Assert-True (Test-Path -LiteralPath $peExeSource -PathType Leaf) "Test fixture requires the Windows x64 cmd.exe PE file."
   Assert-True (Test-Path -LiteralPath $peDllSource -PathType Leaf) "Test fixture requires the Windows x64 kernel32.dll PE file."
 
-  Copy-TestFile $peExeSource (Join-Path $resourceRoot "subversionr-daemon.exe")
+  Copy-TestFile $DaemonExe (Join-Path $resourceRoot "subversionr-daemon.exe")
   Copy-TestFile $peDllSource (Join-Path $resourceRoot "subversionr_svn_bridge.dll")
   foreach ($dependencyName in @(
     "libsvn_client-1.dll",
@@ -180,20 +181,24 @@ function New-StagedPackageFixture([string]$PackageRoot, [string]$Version) {
   Write-PackageManifest -PackageRoot $PackageRoot -Target $target -Version $Version
 }
 
-$tempRoot = Join-Path $repoRoot "target\tests\release-install-rollback-fixture\$([Guid]::NewGuid().ToString('N'))"
+$runId = [Guid]::NewGuid().ToString("N").Substring(0, 12)
+$tempRoot = Join-Path $repoRoot "target\tests\release-install-rollback-fixture\$runId"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
+  $packagedNativeProbeFixtures = Build-PackagedNativeProbeFixtures -RepoRoot $repoRoot
+  $backendModulePath = Join-Path $repoRoot "packages\vscode-extension\dist\backend\backendProcess.js"
   Assert-True (Test-Path -LiteralPath $fixtureScript -PathType Leaf) "test-vscode-install-rollback-fixture.ps1 should exist."
 
   $currentPackageRoot = Join-Path $tempRoot "packages\current"
-  New-StagedPackageFixture -PackageRoot $currentPackageRoot -Version "0.2.0"
+  New-StagedPackageFixture -PackageRoot $currentPackageRoot -Version "0.2.0" -DaemonExe $packagedNativeProbeFixtures.currentProtocolDaemon
   $fixtureRoot = Join-Path $tempRoot "run"
   $evidencePath = Join-Path $tempRoot "evidence\install-rollback.json"
 
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
     -Target win32-x64 `
     -CurrentPackageRoot $currentPackageRoot `
+    -BackendModulePath $backendModulePath `
     -SyntheticPreviousVersion "0.0.0-m7f.fixture" `
     -FixtureRoot $fixtureRoot `
     -EvidencePath $evidencePath
@@ -238,6 +243,7 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
       -Target win32-x64 `
       -CurrentPackageRoot $tamperedPackageRoot `
+      -BackendModulePath $backendModulePath `
       -SyntheticPreviousVersion "0.0.0-m7f.fixture" `
       -FixtureRoot (Join-Path $tempRoot "tampered-run") `
       -EvidencePath (Join-Path $tempRoot "evidence\tampered.json")
@@ -253,6 +259,7 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
       -Target win32-x64 `
       -CurrentPackageRoot $wrongPublisherPackageRoot `
+      -BackendModulePath $backendModulePath `
       -SyntheticPreviousVersion "0.0.0-m7f.fixture" `
       -FixtureRoot (Join-Path $tempRoot "wrong-publisher-run") `
       -EvidencePath (Join-Path $tempRoot "evidence\wrong-publisher.json")
@@ -262,6 +269,7 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
       -Target win32-x64 `
       -CurrentPackageRoot $currentPackageRoot `
+      -BackendModulePath $backendModulePath `
       -SyntheticPreviousVersion "0.2.0" `
       -FixtureRoot (Join-Path $tempRoot "same-version-run") `
       -EvidencePath (Join-Path $tempRoot "evidence\same-version.json")
@@ -271,6 +279,7 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
       -Target win32-x64 `
       -CurrentPackageRoot $currentPackageRoot `
+      -BackendModulePath $backendModulePath `
       -SyntheticPreviousVersion "0.0.0-m7f.fixture" `
       -FixtureRoot (Join-Path $env:TEMP "subversionr-outside-target-fixture") `
       -EvidencePath (Join-Path $tempRoot "evidence\outside-target.json")
@@ -280,6 +289,7 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
       -Target win32-x64 `
       -CurrentPackageRoot $currentPackageRoot `
+      -BackendModulePath $backendModulePath `
       -SyntheticPreviousVersion "0.0.0-m7f.fixture" `
       -FixtureRoot "target/vscode-package" `
       -EvidencePath (Join-Path $tempRoot "evidence\disallowed-fixture-root.json")
@@ -289,6 +299,7 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
       -Target win32-x64 `
       -CurrentPackageRoot $currentPackageRoot `
+      -BackendModulePath $backendModulePath `
       -SyntheticPreviousVersion "0.0.0-m7f.fixture" `
       -FixtureRoot "target/release-evidence/install-rollback-fixture" `
       -EvidencePath (Join-Path $tempRoot "evidence\aggregate-fixture-root.json")
@@ -302,6 +313,7 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
       -Target win32-x64 `
       -CurrentPackageRoot $embeddedCurrentPackageRoot `
+      -BackendModulePath $backendModulePath `
       -SyntheticPreviousVersion "0.0.0-m7f.fixture" `
       -FixtureRoot $embeddedFixtureRoot `
       -EvidencePath (Join-Path $tempRoot "evidence\embedded-current.json")
@@ -314,14 +326,16 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $fixtureScript `
       -Target win32-x64 `
       -CurrentPackageRoot $missingManifestPackageRoot `
+      -BackendModulePath $backendModulePath `
       -SyntheticPreviousVersion "0.0.0-m7f.fixture" `
       -FixtureRoot (Join-Path $tempRoot "missing-manifest-run") `
       -EvidencePath (Join-Path $tempRoot "evidence\missing-manifest.json")
   } "Backend package manifest" "Fixture should fail through the layout verifier when the backend manifest is missing."
 
   $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
-  Assert-Equal "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-install-rollback-fixture.tests.ps1" $packageJson.scripts."release:test-install-rollback-fixture" "Root package should expose the M7f fixture script tests."
+  Assert-Equal "pnpm release:build-vscode-extension && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-install-rollback-fixture.tests.ps1" $packageJson.scripts."release:test-install-rollback-fixture" "Root package should build the extension backend before running the M7f fixture script tests."
   Assert-True ($packageJson.scripts."release:install-rollback:win32-x64".Contains("test-vscode-install-rollback-fixture.ps1")) "Root package should expose the win32-x64 install rollback fixture."
+  Assert-True ($packageJson.scripts."release:install-rollback:win32-x64".Contains("-BackendModulePath packages/vscode-extension/dist/backend/backendProcess.js")) "Root package should probe the exact compiled extension backend used by the package."
   Assert-True ($packageJson.scripts."release:install-rollback:win32-x64".Contains("-SyntheticPreviousVersion 0.0.0-m7f.fixture")) "Root package should make the synthetic previous fixture explicit."
 
   $ciWorkflow = Get-Content -Raw -LiteralPath $ciWorkflowPath

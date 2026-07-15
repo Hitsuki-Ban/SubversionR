@@ -852,6 +852,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       showErrorMessage: async (message, ...actions) => await vscode.window.showErrorMessage(message, ...actions),
     },
     localize: vscode.l10n.t,
+    recordFailure: (operation, error) => diagnostics.recordFailure(operation, error),
     retryDisappearedRepositoryCleanup: async (trigger) => {
       await repositoryLifecycleCoordinator.runExclusive(trigger, async () => {
         await repositoryLifecycleService.closeDisappearedRepositories(trigger);

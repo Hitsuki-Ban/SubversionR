@@ -649,6 +649,14 @@ $currentLineBlameHoverProviderTests = Read-RequiredDocument "packages/vscode-ext
 $symbolHistoryCodeLensProviderTests = Read-RequiredDocument "packages/vscode-extension/tests/symbolHistoryCodeLensProvider.test.ts"
 $fileHeaderCodeLensProviderTests = Read-RequiredDocument "packages/vscode-extension/tests/fileHeaderCodeLensProvider.test.ts"
 $backendProcessSource = Read-RequiredDocument "packages/vscode-extension/src/backend/backendProcess.ts"
+$packagedNativeProbe = Read-RequiredDocument "scripts/release/probe-vscode-packaged-native.mjs"
+$packagedNativeProbeVerifier = Read-RequiredDocument "scripts/release/verify-packaged-native-compatibility.ps1"
+$stageVscodePackageLayout = Read-RequiredDocument "scripts/release/stage-vscode-package-layout.ps1"
+$verifyVscodePackageLayout = Read-RequiredDocument "scripts/release/verify-vscode-package-layout.ps1"
+$packageVscodeVsix = Read-RequiredDocument "scripts/release/package-vscode-vsix.ps1"
+$releaseScriptTests = Read-RequiredDocument "scripts/tests/release-scripts.tests.ps1"
+$releaseVsixScriptTests = Read-RequiredDocument "scripts/tests/release-vsix-scripts.tests.ps1"
+$betaCandidateOrchestration = Read-RequiredDocument "scripts/release/run-beta-candidate-evidence.ps1"
 $backendProcessTests = Read-RequiredDocument "packages/vscode-extension/tests/backendProcess.test.ts"
 $cacheLifecycleSource = Read-RequiredDocument "packages/vscode-extension/src/cache/cacheLifecycleService.ts"
 $cacheLifecycleTests = Read-RequiredDocument "packages/vscode-extension/tests/cacheLifecycleService.test.ts"
@@ -1429,6 +1437,69 @@ Assert-Terms $backendProcessTests @(
   "SUBVERSIONR_CACHE_SCHEMA_UNSUPPORTED",
   "error.backend.cacheSchemaUnsupported"
 ) "MIG-008 backend cache schema validation test coverage"
+Assert-Terms $packagedNativeProbe @(
+  "startBackendProcess",
+  'connection.sendRequest("repository/discover"',
+  "workspaceRoots",
+  "connection.shutdown()",
+  "subversionr.release.packaged-native-compatibility.v1",
+  "APPDATA: options.profileRoot",
+  "LOCALAPPDATA: options.profileRoot",
+  "USERPROFILE: options.profileRoot",
+  "HOME: options.profileRoot"
+) "packaged native startup, protocol, ABI, and read-only bridge probe coverage"
+Assert-Terms $packagedNativeProbeVerifier @(
+  "backendProcess.js",
+  "WaitForExit(30000)",
+  '"--profile-root", $profileRoot',
+  "SUBVERSIONR_PACKAGED_NATIVE_PROBE_TIMEOUT"
+) "fail-closed packaged native probe process isolation coverage"
+Assert-Terms $stageVscodePackageLayout @(
+  "verify-packaged-native-compatibility.ps1"
+) "staged package native compatibility gate coverage"
+Assert-Terms $verifyVscodePackageLayout @(
+  "verify-packaged-native-compatibility.ps1",
+  "BackendModulePath"
+) "verified package native compatibility gate coverage"
+Assert-Terms $packageVscodeVsix @(
+  'Join-Path $distRootResolved "backend\backendProcess.js"',
+  "dist/backend/backendProcess.js",
+  '& $verifyLayoutScript',
+  "-BackendModulePath `$backendModulePath"
+) "VSIX packaging exact extension contract and native compatibility gate coverage"
+Assert-Terms $backendProcessSource @(
+  "subversionr.daemon.startup-error.v1",
+  "parseDaemonStartupError",
+  "backendExitedDuringInitialize"
+) "stable daemon startup error propagation coverage"
+Assert-Terms $nativeBridgeRustSource @(
+  "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING",
+  "subversionr.daemon.startup-error.v1",
+  "startup_error"
+) "stable native bridge loader startup error coverage"
+Assert-Terms $releaseScriptTests @(
+  "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
+  "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING",
+  "staleProtocolDaemon",
+  "missingSymbolBridge"
+) "packaged native negative release script coverage"
+Assert-Terms $releaseVsixScriptTests @(
+  "stale-protocol-package",
+  "missing-symbol-package",
+  "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
+  "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING",
+  "must not create a VSIX output directory"
+) "VSIX packaging native compatibility negative coverage"
+Assert-Terms $betaCandidateOrchestration @(
+  '(Resolve-RepoPath "packages/vscode-extension/dist/backend/backendProcess.js")',
+  '"-BackendModulePath", $backendModulePath'
+) "Beta candidate install rollback exact extension contract coverage"
+Assert-Terms $releaseGates @(
+  "fail-closed packaged-native startup probe",
+  "read-only libsvn-backed discovery operation",
+  "reject stale protocol daemons",
+  "no probe skip switch or compatibility fallback"
+) "packaged native compatibility release gate documentation"
 Assert-Terms $protocolContractTests @(
   'json["cacheSchema"]["schemaId"], "subversionr.cache.v1"',
   'json["cacheSchema"]["version"], 1',

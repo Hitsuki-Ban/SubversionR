@@ -1,0 +1,21 @@
+[package]
+name = "packaged-native-probe-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "current-protocol-daemon"
+path = "src/bin/current_protocol_daemon.rs"
+
+[[bin]]
+name = "stale-protocol-daemon"
+path = "src/bin/stale_protocol_daemon.rs"
+
+[dependencies]
+serde_json = "1"

@@ -16,6 +16,7 @@ const EXPECTED_CACHE_SCHEMA_ID = "subversionr.cache.v1";
 const EXPECTED_CACHE_SCHEMA_VERSION = 1;
 const EXPECTED_CACHE_SCHEMA_ROLLBACK = "delete-and-reconcile";
 const STDERR_LIMIT_BYTES = 16 * 1024;
+const INITIALIZE_PROCESS_CLOSE_GRACE_MS = 250;
 const REQUIRED_CAPABILITIES: Array<keyof InitializeResult["capabilities"]> = [
   "contentLengthFraming",
   "realLibsvnBridge",
@@ -196,6 +197,8 @@ export class BackendLaunchError extends Error {
     public readonly category: BackendErrorCategory,
     public readonly messageKey: string,
     public readonly safeArgs: Record<string, unknown> = {},
+    public readonly retryable = false,
+    public readonly diagnostics: unknown = null,
   ) {
     super(code);
     this.name = "BackendLaunchError";
@@ -250,14 +253,22 @@ export async function startBackendProcess(
 
   return await new Promise<BackendConnection>((resolve, reject) => {
     let settled = false;
+    let initializeRequestFailureTimer: NodeJS.Timeout | undefined;
+    let exitCloseGraceTimer: NodeJS.Timeout | undefined;
 
     const fail = (error: Error): void => {
       if (settled) {
         return;
       }
       settled = true;
+      if (initializeRequestFailureTimer !== undefined) {
+        clearTimeout(initializeRequestFailureTimer);
+      }
+      if (exitCloseGraceTimer !== undefined) {
+        clearTimeout(exitCloseGraceTimer);
+      }
       child.off("exit", handleExit);
-      child.off("close", handleExit);
+      child.off("close", handleClose);
       child.off("error", handleProcessError);
       child.stderr.off("data", collectStderr);
       rpc.dispose(error);
@@ -265,18 +276,17 @@ export async function startBackendProcess(
     };
 
     const handleExit = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
-      fail(
-        new BackendLaunchError(
-          "SUBVERSIONR_BACKEND_EXITED",
-          "process",
-          "error.backend.exitedDuringInitialize",
-          {
-            exitCode,
-            signal,
-            stderr: stderr.value(),
-          },
-        ),
-      );
+      if (initializeRequestFailureTimer !== undefined) {
+        clearTimeout(initializeRequestFailureTimer);
+        initializeRequestFailureTimer = undefined;
+      }
+      exitCloseGraceTimer = setTimeout(() => {
+        fail(backendExitedDuringInitialize(stderr.value(), exitCode, signal));
+      }, INITIALIZE_PROCESS_CLOSE_GRACE_MS);
+    };
+
+    const handleClose = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+      fail(backendExitedDuringInitialize(stderr.value(), exitCode, signal));
     };
 
     const handleProcessError = (error: Error): void => {
@@ -291,7 +301,7 @@ export async function startBackendProcess(
     };
 
     child.once("exit", handleExit);
-    child.once("close", handleExit);
+    child.once("close", handleClose);
     child.once("error", handleProcessError);
 
     rpc
@@ -344,17 +354,85 @@ export async function startBackendProcess(
 
         settled = true;
         child.off("exit", handleExit);
-        child.off("close", handleExit);
+        child.off("close", handleClose);
         child.off("error", handleProcessError);
         const connection = new BackendConnectionImpl(child, rpc, collectStderr, initializeResult);
         activeConnection = connection;
         resolve(connection);
       })
       .catch((error: unknown) => {
-        terminateChild(child);
-        fail(error instanceof Error ? error : new Error(String(error)));
+        if (settled) {
+          return;
+        }
+        if (!child.stdout.readableEnded && !child.stdout.destroyed) {
+          terminateChild(child);
+          fail(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
+        initializeRequestFailureTimer = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          terminateChild(child);
+          fail(error instanceof Error ? error : new Error(String(error)));
+        }, INITIALIZE_PROCESS_CLOSE_GRACE_MS);
       });
   });
+}
+
+function backendExitedDuringInitialize(
+  stderr: string,
+  exitCode: number | null,
+  signal: NodeJS.Signals | null,
+): BackendLaunchError {
+  const startupError = parseDaemonStartupError(stderr);
+  if (startupError !== undefined) {
+    return startupError;
+  }
+  return new BackendLaunchError(
+    "SUBVERSIONR_BACKEND_EXITED",
+    "process",
+    "error.backend.exitedDuringInitialize",
+    { exitCode, signal, stderr },
+  );
+}
+
+function parseDaemonStartupError(stderr: string): BackendLaunchError | undefined {
+  const recordText = stderr.trim();
+  if (recordText.length === 0 || recordText.includes("\n") || recordText.includes("\r")) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(recordText);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || parsed.schema !== "subversionr.daemon.startup-error.v1") {
+    return undefined;
+  }
+  if (
+    typeof parsed.code !== "string" ||
+    parsed.code.trim().length === 0 ||
+    parsed.category !== "process" ||
+    typeof parsed.messageKey !== "string" ||
+    parsed.messageKey.trim().length === 0 ||
+    !isRecord(parsed.safeArgs) ||
+    typeof parsed.retryable !== "boolean" ||
+    parsed.diagnostics !== null
+  ) {
+    return undefined;
+  }
+
+  return new BackendLaunchError(
+    parsed.code,
+    parsed.category,
+    parsed.messageKey,
+    parsed.safeArgs,
+    parsed.retryable,
+    parsed.diagnostics,
+  );
 }
 
 function initializeParams(config: BackendLaunchConfig): InitializeParams {

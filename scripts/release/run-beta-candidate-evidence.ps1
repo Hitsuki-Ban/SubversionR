@@ -151,6 +151,9 @@ Invoke-PnpmScript "Verify source SBOM and third-party notice evidence" "release:
 Invoke-PnpmScript "Stage VS Code $Target package layout" "release:stage-vscode:$Target"
 Invoke-PnpmScript "Verify VS Code $Target package layout" "release:verify-vscode:$Target"
 Invoke-PnpmScript "Package VS Code $Target VSIX" "release:package-vsix:$Target"
+$backendModulePath = Assert-File `
+  (Resolve-RepoPath "packages/vscode-extension/dist/backend/backendProcess.js") `
+  "Packaged extension backend module"
 Invoke-PnpmScript "Generate native artifact map preflight" "release:generate-native-artifact-map:$Target"
 Invoke-PnpmScript "Verify native artifact map preflight" "release:verify-native-artifact-map:$Target"
 Invoke-PnpmScript "Generate release provenance preflight" "release:generate-provenance:$Target"
@@ -224,6 +227,7 @@ Invoke-ReleaseScript `
   -Arguments @(
     "-Target", $Target,
     "-CurrentPackageRoot", $packageRoot,
+    "-BackendModulePath", $backendModulePath,
     "-SyntheticPreviousVersion", "0.0.0-m7f.fixture",
     "-FixtureRoot", "$releaseEvidenceRoot/install-rollback-fixture/$Target",
     "-EvidencePath", "$releaseEvidenceRoot/subversionr-install-rollback-fixture-$Target.json"

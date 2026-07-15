@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).ProviderPath
 $stageScript = Join-Path $repoRoot "scripts\release\stage-vscode-package-layout.ps1"
 $verifyLayoutScript = Join-Path $repoRoot "scripts\release\verify-vscode-package-layout.ps1"
+$backendModulePath = Join-Path $repoRoot "packages\vscode-extension\dist\backend\backendProcess.js"
 $verifyReadinessScript = Join-Path $repoRoot "scripts\release\verify-readiness.ps1"
 $verifyRequirementCatalogAlignmentScript = Join-Path $repoRoot "scripts\release\verify-requirement-catalog-alignment.ps1"
 $requirementsEvidencePath = Join-Path $repoRoot "docs\release\requirements-release-evidence.csv"
@@ -35,6 +36,7 @@ $architectureDecisionPaths = @(
 
 Import-Module (Join-Path $repoRoot "scripts\release\lib\ReadinessModel.psm1") -Force -Global
 Import-Module (Join-Path $repoRoot "scripts\release\lib\ReadinessRules.psm1") -Force -Global
+. (Join-Path $PSScriptRoot "packaged-native-probe-fixtures.ps1")
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
@@ -75,6 +77,18 @@ function Assert-NativeCommandSucceedsContaining([scriptblock]$Action, [string]$E
   Assert-True ($exitCode -eq 0) "$Message Expected native command to succeed, got exit code $exitCode."
   $text = $output | Out-String
   Assert-True ($text.Contains($ExpectedText)) "$Message Expected output to contain '$ExpectedText', got '$text'."
+}
+
+function Update-StagedArtifactRecord([string]$PackageRoot, [string]$RelativePath) {
+  $manifestPath = Join-Path $PackageRoot "resources\backend\win32-x64\subversionr-backend-package-manifest.json"
+  $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+  $artifact = @($manifest.artifacts | Where-Object { $_.path -eq $RelativePath })
+  Assert-True ($artifact.Count -eq 1) "Runtime probe fixture should find exactly one manifest artifact for $RelativePath."
+  $artifactPath = Join-Path $PackageRoot ($RelativePath.Replace("/", "\"))
+  $item = Get-Item -LiteralPath $artifactPath
+  $artifact[0].size = $item.Length
+  $artifact[0].sha256 = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8
 }
 
 function Assert-ContainsInOrder([string]$Text, [string[]]$Needles, [string]$Message) {
@@ -510,6 +524,7 @@ $tempRoot = Join-Path $repoRoot "target\tests\release-scripts\$([Guid]::NewGuid(
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
+  $packagedNativeProbeFixtures = Build-PackagedNativeProbeFixtures -RepoRoot $repoRoot -IncludeCurrentDaemon
   Assert-ReleaseScriptTestsDoNotMutateSourceControlledFixtures
   Assert-RequirementCoverageUsesSyntheticFixtures
   Assert-RequirementCatalogAlignmentUsesSyntheticArchive $tempRoot
@@ -2510,6 +2525,7 @@ try {
   "{}" | Set-Content -LiteralPath (Join-Path $fixtureExtensionRoot "l10n\bundle.l10n.json") -NoNewline
   "{}" | Set-Content -LiteralPath (Join-Path $fixtureExtensionRoot "l10n\bundle.l10n.ja.json") -NoNewline
   "{}" | Set-Content -LiteralPath (Join-Path $fixtureExtensionRoot "l10n\bundle.l10n.zh-cn.json") -NoNewline
+  Copy-Item -LiteralPath (Join-Path $repoRoot "packages\vscode-extension\dist") -Destination (Join-Path $fixtureExtensionRoot "dist") -Recurse
 
   $peExeSource = Join-Path $env:WINDIR "System32\cmd.exe"
   $peDllSource = Join-Path $env:WINDIR "System32\kernel32.dll"
@@ -2517,7 +2533,9 @@ try {
   Assert-True (Test-Path -LiteralPath $peDllSource -PathType Leaf) "Test fixture requires the Windows x64 kernel32.dll PE file."
 
   $daemonExe = Join-Path $tempRoot "daemon\subversionr-daemon.exe"
-  Copy-TestFile $peExeSource $daemonExe
+  Copy-TestFile $packagedNativeProbeFixtures.currentProtocolDaemon $daemonExe
+  $staleDaemonExe = Join-Path $tempRoot "stale-daemon\subversionr-daemon.exe"
+  Copy-TestFile $packagedNativeProbeFixtures.staleProtocolDaemon $staleDaemonExe
 
   $bridgeRuntime = Join-Path $tempRoot "bridge-runtime"
   Copy-TestFile $peDllSource (Join-Path $bridgeRuntime "subversionr_svn_bridge.dll")
@@ -2609,16 +2627,59 @@ try {
 
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript `
     -Target win32-x64 `
-    -PackageRoot $stagedRoot
+    -PackageRoot $stagedRoot `
+    -BackendModulePath $backendModulePath
   if ($LASTEXITCODE -ne 0) {
     throw "verify-vscode-package-layout.ps1 failed with exit code $LASTEXITCODE."
   }
+
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $stageScript `
+      -Target win32-x64 `
+      -ExtensionRoot $fixtureExtensionRoot `
+      -DaemonExe $staleDaemonExe `
+      -BridgeRuntimeDirectory $bridgeRuntime `
+      -SourceLockPath $sourceLock `
+      -OutputRoot (Join-Path $tempRoot "stale-protocol-stage")
+  } "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED" "Staging should reject a packaged daemon below the extension minimum protocol."
+
+  $missingSymbolRuntime = Join-Path $tempRoot "missing-symbol-runtime"
+  Copy-Item -LiteralPath $bridgeRuntime -Destination $missingSymbolRuntime -Recurse
+  Copy-Item -LiteralPath $packagedNativeProbeFixtures.missingSymbolBridge -Destination (Join-Path $missingSymbolRuntime "subversionr_svn_bridge.dll") -Force
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $stageScript `
+      -Target win32-x64 `
+      -ExtensionRoot $fixtureExtensionRoot `
+      -DaemonExe $packagedNativeProbeFixtures.currentDaemon `
+      -BridgeRuntimeDirectory $missingSymbolRuntime `
+      -SourceLockPath $sourceLock `
+      -OutputRoot (Join-Path $tempRoot "missing-symbol-stage")
+  } "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING" "Staging should reject the current daemon paired with a bridge missing a required C ABI symbol."
+
+  $staleVerifyRoot = Join-Path $tempRoot "stale-protocol-verify"
+  Copy-Item -LiteralPath $stagedRoot -Destination $staleVerifyRoot -Recurse
+  Copy-Item -LiteralPath $packagedNativeProbeFixtures.staleProtocolDaemon -Destination (Join-Path $staleVerifyRoot "resources\backend\win32-x64\subversionr-daemon.exe") -Force
+  Update-StagedArtifactRecord $staleVerifyRoot "resources/backend/win32-x64/subversionr-daemon.exe"
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript -Target win32-x64 -PackageRoot $staleVerifyRoot -BackendModulePath $backendModulePath
+  } "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED" "Layout verification should reject a manifest-consistent stale protocol daemon."
+
+  $missingSymbolVerifyRoot = Join-Path $tempRoot "missing-symbol-verify"
+  Copy-Item -LiteralPath $stagedRoot -Destination $missingSymbolVerifyRoot -Recurse
+  Copy-Item -LiteralPath $packagedNativeProbeFixtures.currentDaemon -Destination (Join-Path $missingSymbolVerifyRoot "resources\backend\win32-x64\subversionr-daemon.exe") -Force
+  Copy-Item -LiteralPath $packagedNativeProbeFixtures.missingSymbolBridge -Destination (Join-Path $missingSymbolVerifyRoot "resources\backend\win32-x64\subversionr_svn_bridge.dll") -Force
+  Update-StagedArtifactRecord $missingSymbolVerifyRoot "resources/backend/win32-x64/subversionr-daemon.exe"
+  Update-StagedArtifactRecord $missingSymbolVerifyRoot "resources/backend/win32-x64/subversionr_svn_bridge.dll"
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript -Target win32-x64 -PackageRoot $missingSymbolVerifyRoot -BackendModulePath $backendModulePath
+  } "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING" "Layout verification should reject a manifest-consistent bridge missing a required C ABI symbol."
 
   Remove-Item -LiteralPath $marketplaceIcon -Force
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript `
       -Target win32-x64 `
-      -PackageRoot $stagedRoot
+      -PackageRoot $stagedRoot `
+      -BackendModulePath $backendModulePath
   } "Marketplace icon" "Layout verification should fail when the staged Marketplace icon is missing."
   Write-TestPngIcon $marketplaceIcon
 
@@ -2670,7 +2731,8 @@ try {
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript `
       -Target win32-x64 `
-      -PackageRoot $stagedRoot
+      -PackageRoot $stagedRoot `
+      -BackendModulePath $backendModulePath
   } "PNG file" "Layout verification should reject invalid Marketplace icon PNG bytes."
   Write-TestPngIcon $invalidIconPath
 
@@ -2678,7 +2740,8 @@ try {
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript `
       -Target win32-x64 `
-      -PackageRoot $stagedRoot
+      -PackageRoot $stagedRoot `
+      -BackendModulePath $backendModulePath
   } "svn.exe" "Layout verification should reject SVN CLI tools anywhere in the staged package."
   Remove-Item -LiteralPath (Join-Path $stagedRoot "l10n\svn.exe") -Force
 
@@ -2686,7 +2749,8 @@ try {
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript `
       -Target win32-x64 `
-      -PackageRoot $stagedRoot
+      -PackageRoot $stagedRoot `
+      -BackendModulePath $backendModulePath
   } "svnversion.exe" "Layout verification should reject staged SVN CLI tools beyond svn.exe."
   Remove-Item -LiteralPath (Join-Path $resourceRoot "svnversion.exe") -Force
 
@@ -2694,7 +2758,8 @@ try {
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript `
       -Target win32-x64 `
-      -PackageRoot $stagedRoot
+      -PackageRoot $stagedRoot `
+      -BackendModulePath $backendModulePath
   } "unexpected resource file" "Layout verification should fail on files outside the manifest allowlist."
   Remove-Item -LiteralPath (Join-Path $resourceRoot "unexpected-helper.exe") -Force
 
@@ -2704,7 +2769,8 @@ try {
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript `
       -Target win32-x64 `
-      -PackageRoot $stagedRoot
+      -PackageRoot $stagedRoot `
+      -BackendModulePath $backendModulePath
   } "sha256" "Layout verification should fail when a staged artifact hash changes."
 
   Assert-NativeCommandFailsContaining {
@@ -2734,7 +2800,10 @@ try {
   } "Required native dependency" "Staging should fail fast when a required native dependency is missing."
 
   $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
-  Assert-Equal "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-scripts.tests.ps1" $packageJson.scripts."release:test-scripts" "Root package should expose release script tests."
+  Assert-ContainsInOrder $packageJson.scripts."release:test-scripts" @(
+    "pnpm release:build-vscode-extension",
+    "scripts/tests/release-scripts.tests.ps1"
+  ) "Release script tests should build the extension contract consumed by the packaged native probe."
   Assert-True ($packageJson.scripts."release:stage-vscode:win32-x64".Contains("-Target win32-x64")) "Root package should expose explicit win32-x64 staging."
   Assert-True ($packageJson.scripts."release:stage-vscode:win32-x64".Contains("-DaemonExe target/release/subversionr-daemon.exe")) "Staging script should require the release sidecar path."
   Assert-True ($packageJson.scripts."release:verify-vscode:win32-x64".Contains("-Target win32-x64")) "Root package should expose explicit win32-x64 layout verification."
