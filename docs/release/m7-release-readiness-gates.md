@@ -24,7 +24,7 @@ Public release is blocked until:
 - Differential, integration, VS Code E2E, performance, security, migration, and release-install gates are complete.
 - No high-severity data corruption, secret leakage, Extension Host hang, or unbounded backend failure remains open.
 - Documentation and UI behavior are consistent in English, Japanese, and Chinese.
-- Protocol v1.29 operation failures preserve a bounded symbolic libsvn error chain through the required native ABI, render localized actionable notifications without raw internal codes, expose a bounded redacted `SubversionR` log with Show Log, and keep failed commit message/review selection state.
+- Protocol v1.29 operation failures preserve a bounded symbolic libsvn error chain through the required native ABI, render localized actionable notifications without raw internal codes, expose a bounded redacted `SubversionR` log with Show Log, and keep failed commit message/review selection state. Missing commit messages use one explicit localized prompt; cancellation has no operation side effects, and epoch/generation/path/changelist state is revalidated before RPC dispatch.
 - Security issue handling is published in `SECURITY.md`.
 
 ## Platform Packaging Gates

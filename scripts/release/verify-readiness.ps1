@@ -3318,6 +3318,50 @@ Assert-Terms $installedSourceControlUiE2eScriptTests @(
   "unselectedNonChangelistPathStillModified",
   "commitChangelistRepositoryOracle"
 ) "COM-003 installed commit by changelist script-test evidence"
+Assert-Terms $repositoryCommandControllerTests @(
+  "prompts once and cancels without side effects when the repository input message is whitespace-only",
+  "commits a selected resource with one explicitly prompted message",
+  "commits all resources with one explicitly prompted message",
+  "reviews and commits the selected resources with one explicitly prompted message",
+  "preserves the reviewed selection when commit-message prompting is cancelled",
+  "rejects Commit Changelist when its exact path membership changes after message prompting",
+  "rejects a prompted Commit All when the",
+  "revalidates prompted Commit All after progress starts and immediately before RPC dispatch"
+) "COM-003 missing-message prompt and stale-selection unit coverage"
+Assert-Terms $installedSourceControlUiE2eScript @(
+  "commitMessagePromptCaptureExpectations",
+  "reviewCommitSelectionCaptureExpectations",
+  "commitPromptRendererCaptures",
+  "runReviewCommitPromptWorkflow",
+  "sourceControlUiReviewCommitPromptWorkflow",
+  "reviewCommitPromptRepositoryOracle",
+  "subversionr.installedSourceControlUiE2eReviewCommitPromptRepositoryOracle",
+  "emptyInputPrompted",
+  "promptCancellationBytesUnchanged",
+  "promptCancellationProjectionUnchanged",
+  "promptCancellationRefreshUnchanged",
+  "promptCancellationJournalUnchanged",
+  "promptCancellationHistoryUnchanged",
+  "reviewedSelectionRetainedAfterCancellation",
+  "reviewedSelectionRetainedAfterFailure",
+  "forcedCommitFailureObserved",
+  "exactlyReviewedPathsCommitted",
+  "unselectedProbeRemainedUncommitted"
+) "COM-003 installed missing-message and Review & Commit retention evidence"
+Assert-Terms $installedSourceControlUiE2eScriptTests @(
+  "subversionr.reviewCommit",
+  "sourceControlUiReviewCommitPromptWorkflow",
+  "reviewCommitPromptRepositoryOracle",
+  "subversionr.installedSourceControlUiE2eReviewCommitPromptRepositoryOracle",
+  "commitPromptRendererCaptures",
+  "emptyInputPrompted",
+  "promptCancellationJournalUnchanged",
+  "reviewedSelectionRetainedAfterCancellation",
+  "reviewedSelectionRetainedAfterFailure",
+  "forcedCommitFailureObserved",
+  "exactlyReviewedPathsCommitted",
+  "unselectedProbeRemainedUncommitted"
+) "COM-003 installed missing-message script-test evidence"
 Assert-Terms $installedSourceControlUiE2eScript @(
   "runRevertChangelistWorkflow",
   "sourceControlUiRevertChangelistWorkflow",

@@ -6,6 +6,7 @@ $workflowScript = Join-Path $repoRoot "scripts\release\test-vscode-installed-sou
 $driverScript = Join-Path $repoRoot "scripts\release\capture-vscode-renderer-ui.mjs"
 $packageJsonPath = Join-Path $repoRoot "package.json"
 $ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
+$workflowContent = Get-Content -Raw -LiteralPath $workflowScript
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -27,6 +28,61 @@ function Assert-NativeCommandFailsContaining([scriptblock]$Action, [string]$Expe
   Assert-True ($exitCode -ne 0) "$Message Expected native command to fail."
   $text = $output | Out-String
   Assert-True ($text.Contains($ExpectedText)) "$Message Expected output to contain '$ExpectedText', got '$text'."
+}
+
+function Invoke-EmptyHistoryProbeOrderSmoke([string]$WorkflowContent, [string]$TempRoot) {
+  $probeMatch = [regex]::Match(
+    $WorkflowContent,
+    '(?s)(async function probeEmptyCommitMessageHistory\(repositoryId, label\) \{.*?\r?\n\})\r?\n\r?\nasync function runCommitAllWorkflow'
+  )
+  Assert-True $probeMatch.Success "Generated run-tests.js should expose the empty commit-message history probe for the order smoke test."
+  $smokePath = Join-Path $TempRoot "probe-empty-history-order-smoke.js"
+  $smokePrefix = @'
+let warningResolver;
+let notificationClearAttempts = 0;
+const vscode = {
+  window: {
+    showWarningMessage() {
+      return new Promise(resolve => { warningResolver = resolve; });
+    }
+  },
+  commands: {
+    executeCommand(command) {
+      if (command === "subversionr.pickCommitMessageHistory") {
+        return vscode.window.showWarningMessage("No SVN commit message history is available.");
+      }
+      if (command === "notifications.clearAll") {
+        if (typeof warningResolver !== "function") {
+          throw new Error("notifications.clearAll ran before showWarningMessage started.");
+        }
+        notificationClearAttempts += 1;
+        warningResolver(undefined);
+        return Promise.resolve();
+      }
+      throw new Error(`Unexpected smoke command: ${command}`);
+    }
+  }
+};
+async function clearWorkbenchNotificationsBeforePrompt() {
+  await vscode.commands.executeCommand("notifications.clearAll");
+}
+'@
+  $smokeSuffix = @'
+(async () => {
+  const result = await probeEmptyCommitMessageHistory("repo-smoke", "notification-order-smoke");
+  if (notificationClearAttempts < 1 || result.returnedUndefined !== true || result.historyEmpty !== true || result.notificationClearAttempts < 1) {
+    throw new Error(`Empty-history order smoke failed: ${JSON.stringify({ notificationClearAttempts, result })}`);
+  }
+})().catch(error => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exitCode = 1;
+});
+'@
+  Set-Content -LiteralPath $smokePath -Value ($smokePrefix + "`n" + $probeMatch.Groups[1].Value + "`n" + $smokeSuffix) -Encoding utf8
+  & node --check $smokePath
+  Assert-Equal 0 $LASTEXITCODE "Generated empty-history probe order smoke should parse as JavaScript."
+  & node $smokePath
+  Assert-Equal 0 $LASTEXITCODE "Generated empty-history probe should settle only after notifications.clearAll resolves the warning."
 }
 
 function New-TestVsix([string]$Path, [string]$Version, [string]$TargetPlatform = "win32-x64") {
@@ -77,6 +133,8 @@ function New-TestVsix([string]$Path, [string]$Version, [string]$TargetPlatform =
     "onCommand:subversionr.branchCreateRepository",
     "onCommand:subversionr.switchRepository",
     "onCommand:subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage",
+    "onCommand:subversionr.diagnostics.installedRedactionReport",
+    "onCommand:subversionr.reviewCommit",
     "onCommand:subversionr.moveResource",
     "onCommand:subversionr.removeResource",
     "onCommand:subversionr.removeResourceKeepLocal",
@@ -166,6 +224,8 @@ $removeCancellationPromptDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI
 $removeKeepLocalPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REMOVE_KEEP_LOCAL_PROMPT_READY
 $movePromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_PROMPT_READY
 $moveCancellationPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_CANCELLATION_PROMPT_READY
+$commitPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_READY
+$commitPromptDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_DONE
 $checkoutCancellationPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_READY
 $checkoutCancellationPromptDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_DONE
 $checkoutExistingTargetFailureUrlPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_URL_PROMPT_READY
@@ -294,6 +354,7 @@ $loadItemCountText = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOAD_ITEM_
 $commitAllWorkingCopyRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_ALL_WORKING_COPY
 $commitSelectedWorkingCopyRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_WORKING_COPY
 $commitSelectedMultiSelectionWorkingCopyRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_SELECTED_MULTI_SELECTION_WORKING_COPY
+$reviewCommitPromptWorkingCopyRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVIEW_COMMIT_PROMPT_WORKING_COPY
 $checkoutRepositoryUrl = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_URL
 $checkoutCancellationTargetWorkingCopyRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_TARGET_WORKING_COPY
 $checkoutExistingTargetFailureTargetPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_TARGET_PATH
@@ -327,6 +388,12 @@ $resolveWorkingCopyRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOL
 $resolveCancellationWorkingCopyRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CANCELLATION_WORKING_COPY
 if ([string]::IsNullOrWhiteSpace($resultPath) -or [string]::IsNullOrWhiteSpace($readyPath) -or [string]::IsNullOrWhiteSpace($donePath) -or [string]::IsNullOrWhiteSpace($noRepositoryWelcomeRendererReadyPath) -or [string]::IsNullOrWhiteSpace($noRepositoryWelcomeRendererDonePath) -or [string]::IsNullOrWhiteSpace($partialFreshnessRendererReadyPath) -or [string]::IsNullOrWhiteSpace($partialFreshnessRendererDonePath) -or [string]::IsNullOrWhiteSpace($staleFreshnessRendererReadyPath) -or [string]::IsNullOrWhiteSpace($staleFreshnessRendererDonePath) -or [string]::IsNullOrWhiteSpace($fullReconcileCancellationReadyPath) -or [string]::IsNullOrWhiteSpace($fullReconcileCancellationDonePath) -or [string]::IsNullOrWhiteSpace($multiRepositoryRefreshPromptReadyPath) -or [string]::IsNullOrWhiteSpace($deletePromptReadyPath) -or [string]::IsNullOrWhiteSpace($deleteLoadPromptReadyPath) -or [string]::IsNullOrWhiteSpace($removePromptReadyPath) -or [string]::IsNullOrWhiteSpace($removeCancellationPromptReadyPath) -or [string]::IsNullOrWhiteSpace($removeCancellationPromptDonePath) -or [string]::IsNullOrWhiteSpace($removeKeepLocalPromptReadyPath) -or [string]::IsNullOrWhiteSpace($movePromptReadyPath) -or [string]::IsNullOrWhiteSpace($moveCancellationPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutCancellationPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutCancellationPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureUrlPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureUrlPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureTargetPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureTargetPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureRevisionPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureRevisionPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureDepthPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureDepthPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureExternalsPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureExternalsPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureNotificationReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureNotificationDonePath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureUrlPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureUrlPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureTargetPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureTargetPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureRevisionPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureRevisionPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureDepthPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureDepthPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureExternalsPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureExternalsPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureNotificationReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureNotificationDonePath) -or [string]::IsNullOrWhiteSpace($checkoutUrlPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutUrlPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutTargetPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutTargetPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutRevisionPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutRevisionPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutDepthPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutDepthPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExternalsPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExternalsPromptDonePath) -or [string]::IsNullOrWhiteSpace($updateRevisionPromptReadyPath) -or [string]::IsNullOrWhiteSpace($updateRevisionPromptDonePath) -or [string]::IsNullOrWhiteSpace($updateCancellationRevisionPromptReadyPath) -or [string]::IsNullOrWhiteSpace($updateCancellationRevisionPromptDonePath) -or [string]::IsNullOrWhiteSpace($updateDepthPromptReadyPath) -or [string]::IsNullOrWhiteSpace($updateDepthPromptDonePath) -or [string]::IsNullOrWhiteSpace($updateStickyDepthPromptReadyPath) -or [string]::IsNullOrWhiteSpace($updateStickyDepthPromptDonePath) -or [string]::IsNullOrWhiteSpace($updateExternalsPromptReadyPath) -or [string]::IsNullOrWhiteSpace($updateExternalsPromptDonePath) -or [string]::IsNullOrWhiteSpace($branchCreateSourcePromptReadyPath) -or [string]::IsNullOrWhiteSpace($branchCreateSourcePromptDonePath) -or [string]::IsNullOrWhiteSpace($branchCreateDestinationPromptReadyPath) -or [string]::IsNullOrWhiteSpace($branchCreateDestinationPromptDonePath) -or [string]::IsNullOrWhiteSpace($branchCreateRevisionPromptReadyPath) -or [string]::IsNullOrWhiteSpace($branchCreateRevisionPromptDonePath) -or [string]::IsNullOrWhiteSpace($branchCreateMessagePromptReadyPath) -or [string]::IsNullOrWhiteSpace($branchCreateMessagePromptDonePath) -or [string]::IsNullOrWhiteSpace($branchCreateParentsPromptReadyPath) -or [string]::IsNullOrWhiteSpace($branchCreateParentsPromptDonePath) -or [string]::IsNullOrWhiteSpace($branchCreateExternalsPromptReadyPath) -or [string]::IsNullOrWhiteSpace($branchCreateExternalsPromptDonePath) -or [string]::IsNullOrWhiteSpace($branchCreateSwitchPromptReadyPath) -or [string]::IsNullOrWhiteSpace($branchCreateSwitchPromptDonePath) -or [string]::IsNullOrWhiteSpace($switchUrlPromptReadyPath) -or [string]::IsNullOrWhiteSpace($switchUrlPromptDonePath) -or [string]::IsNullOrWhiteSpace($switchRevisionPromptReadyPath) -or [string]::IsNullOrWhiteSpace($switchRevisionPromptDonePath) -or [string]::IsNullOrWhiteSpace($switchDepthPromptReadyPath) -or [string]::IsNullOrWhiteSpace($switchDepthPromptDonePath) -or [string]::IsNullOrWhiteSpace($switchStickyDepthPromptReadyPath) -or [string]::IsNullOrWhiteSpace($switchStickyDepthPromptDonePath) -or [string]::IsNullOrWhiteSpace($switchExternalsPromptReadyPath) -or [string]::IsNullOrWhiteSpace($switchExternalsPromptDonePath) -or [string]::IsNullOrWhiteSpace($switchAncestryPromptReadyPath) -or [string]::IsNullOrWhiteSpace($switchAncestryPromptDonePath) -or [string]::IsNullOrWhiteSpace($lockMessageCancellationPromptReadyPath) -or [string]::IsNullOrWhiteSpace($lockMessageCancellationPromptDonePath) -or [string]::IsNullOrWhiteSpace($lockMessagePromptReadyPath) -or [string]::IsNullOrWhiteSpace($lockMessagePromptDonePath) -or [string]::IsNullOrWhiteSpace($lockModePromptReadyPath) -or [string]::IsNullOrWhiteSpace($lockModePromptDonePath) -or [string]::IsNullOrWhiteSpace($lockHeldOracleReadyPath) -or [string]::IsNullOrWhiteSpace($lockHeldOracleDonePath) -or [string]::IsNullOrWhiteSpace($unlockModeCancellationPromptReadyPath) -or [string]::IsNullOrWhiteSpace($unlockModeCancellationPromptDonePath) -or [string]::IsNullOrWhiteSpace($unlockModePromptReadyPath) -or [string]::IsNullOrWhiteSpace($unlockModePromptDonePath) -or [string]::IsNullOrWhiteSpace($changelistSetPromptReadyPath) -or [string]::IsNullOrWhiteSpace($changelistRevertPromptReadyPath) -or [string]::IsNullOrWhiteSpace($revertPromptReadyPath) -or [string]::IsNullOrWhiteSpace($revertCancellationPromptReadyPath) -or [string]::IsNullOrWhiteSpace($revertCancellationPromptDonePath) -or [string]::IsNullOrWhiteSpace($resolveUpdateWarningReadyPath) -or [string]::IsNullOrWhiteSpace($resolveUpdateWarningDonePath) -or [string]::IsNullOrWhiteSpace($resolvePromptReadyPath) -or [string]::IsNullOrWhiteSpace($resolveCancellationPromptReadyPath) -or [string]::IsNullOrWhiteSpace($extensionsRoot) -or [string]::IsNullOrWhiteSpace($workingCopyRoot) -or [string]::IsNullOrWhiteSpace($multiRepositoryRefreshWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($lazyExternalProviderWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($boundaryLoadWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($boundaryLoadParentModifiedItemCountText) -or [string]::IsNullOrWhiteSpace($boundaryLoadBoundaryModifiedItemCountText) -or [string]::IsNullOrWhiteSpace($refreshLoadWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($refreshLoadItemCountText) -or [string]::IsNullOrWhiteSpace($loadWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($loadItemCountText) -or [string]::IsNullOrWhiteSpace($commitAllWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($commitSelectedWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($commitSelectedMultiSelectionWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($checkoutRepositoryUrl) -or [string]::IsNullOrWhiteSpace($checkoutCancellationTargetWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($checkoutExistingTargetFailureTargetPath) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureRepositoryUrl) -or [string]::IsNullOrWhiteSpace($checkoutInvalidUrlFailureTargetWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($checkoutTargetWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($updateWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($updateRevisionText) -or [string]::IsNullOrWhiteSpace($updateTargetRelativePath) -or [string]::IsNullOrWhiteSpace($branchCreateWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($branchCreateSourceUrl) -or [string]::IsNullOrWhiteSpace($branchCreateDestinationUrl) -or [string]::IsNullOrWhiteSpace($branchCreateMessage) -or [string]::IsNullOrWhiteSpace($switchWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($switchTargetUrl) -or [string]::IsNullOrWhiteSpace($addWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($addToIgnoreWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($lockWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($changelistSetClearWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($commitChangelistWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($revertChangelistWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($moveWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($moveCancellationWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($removeWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($removeCancellationWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($revertWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($revertCancellationWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($resolveWorkingCopyRoot) -or [string]::IsNullOrWhiteSpace($resolveCancellationWorkingCopyRoot)) {
   throw "required installed Source Control UI E2E harness environment variables are missing."
+}
+if ([string]::IsNullOrWhiteSpace($commitPromptReadyPath) -or [string]::IsNullOrWhiteSpace($commitPromptDonePath)) {
+  throw "required installed Source Control UI E2E commit prompt coordination variables are missing."
+}
+if ([string]::IsNullOrWhiteSpace($reviewCommitPromptWorkingCopyRoot)) {
+  throw "required installed Source Control UI E2E Review & Commit prompt working-copy variable is missing."
 }
 if ([string]::IsNullOrWhiteSpace($checkoutExistingDirectoryUrlPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryUrlPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryTargetPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryTargetPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryRevisionPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryRevisionPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryDepthPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryDepthPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryExternalsPromptReadyPath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryExternalsPromptDonePath) -or [string]::IsNullOrWhiteSpace($checkoutExistingDirectoryTargetWorkingCopyRoot)) {
   throw "required installed Source Control UI E2E checkout existing-directory harness environment variables are missing."
@@ -1777,6 +1844,49 @@ $deleteLoadPromptExpectations = [pscustomobject]@{
   loadItemCount = $loadItemCount
   rendererCaptureExpectations = $deleteLoadPromptExpectations
 } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $deleteLoadPromptReadyPath -Encoding utf8
+$commitPromptFakePhases = @(
+  [pscustomobject]@{ phase = "commitAllMessagePrompt"; command = "subversionr.commitAll"; kind = "message"; text = "commit all eligible changed file resources from the explicit message prompt" },
+  [pscustomobject]@{ phase = "reviewCommitInitialSelection"; command = "subversionr.reviewCommit"; kind = "selection" },
+  [pscustomobject]@{ phase = "reviewCommitMessageCancellation"; command = "subversionr.reviewCommit"; kind = "cancel" },
+  [pscustomobject]@{ phase = "reviewCommitFailureSelection"; command = "subversionr.reviewCommit"; kind = "selection" },
+  [pscustomobject]@{ phase = "reviewCommitFailureMessage"; command = "subversionr.reviewCommit"; kind = "message"; text = "force installed Review & Commit hook rejection" },
+  [pscustomobject]@{ phase = "reviewCommitFailureObserved"; command = "subversionr.reviewCommit"; kind = "handshake" },
+  [pscustomobject]@{ phase = "reviewCommitSuccessSelection"; command = "subversionr.reviewCommit"; kind = "selection" }
+)
+foreach ($commitPromptFakePhase in $commitPromptFakePhases) {
+  Remove-Item -LiteralPath $commitPromptDonePath -Force -ErrorAction SilentlyContinue
+  $rendererCaptureExpectations = $null
+  if ($commitPromptFakePhase.kind -eq "selection") {
+    $rendererCaptureExpectations = [pscustomobject]@{
+      requiredDomTokens = @("Review SVN commit", "src/tracked.txt", "load/modified-001.txt", "load/modified-002.txt")
+      requiredAccessibilityTokens = @("Review SVN commit", "src/tracked.txt", "load/modified-001.txt")
+      requiredScreenshot = $true
+      quickInputSubmitKey = "Enter"
+    }
+  }
+  elseif ($commitPromptFakePhase.kind -in @("message", "cancel")) {
+    $rendererCaptureExpectations = [pscustomobject]@{
+      requiredDomTokens = @("Commit SVN changes", "Enter an SVN commit message for", "SVN commit message")
+      requiredAccessibilityTokens = @("Commit SVN changes", "SVN commit message")
+      requiredScreenshot = $true
+    }
+    if ($commitPromptFakePhase.kind -eq "cancel") {
+      $rendererCaptureExpectations | Add-Member -NotePropertyName cancelKey -NotePropertyValue "Escape"
+    }
+    else {
+      $rendererCaptureExpectations | Add-Member -NotePropertyName inputText -NotePropertyValue $commitPromptFakePhase.text
+      $rendererCaptureExpectations | Add-Member -NotePropertyName submitKey -NotePropertyValue "Enter"
+    }
+  }
+  [pscustomobject]@{
+    ok = $true
+    phase = $commitPromptFakePhase.phase
+    command = $commitPromptFakePhase.command
+    rendererCaptureExpectations = $rendererCaptureExpectations
+  } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $commitPromptReadyPath -Encoding utf8
+  Wait-FakeRendererDone -Path $commitPromptDonePath -Description $commitPromptFakePhase.phase
+  Remove-Item -LiteralPath $commitPromptReadyPath -Force
+}
 $loadPaths = @($loadResources | ForEach-Object { Join-Path $loadWorkingCopyRoot $_.path })
 $allFilesExistedBefore = (@($loadPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -eq $loadItemCount)
 foreach ($loadPath in $loadPaths) {
@@ -1971,13 +2081,17 @@ $commitAllReport = [pscustomobject]@{
     workingCopyRoot = $commitAllWorkingCopyRoot
   }
   input = [pscustomobject]@{
-    messageLength = "commit all eligible changed file resources for the repository input message".Length
+    messageLength = "commit all eligible changed file resources from the explicit message prompt".Length
     setInputReport = [pscustomobject]@{
       kind = "subversionr.installedSourceControlUiE2eSetInputMessageReport"
       repositoryId = $commitAllOpenReport.repository.repositoryId
       previousMessageLength = 0
-      messageLength = "commit all eligible changed file resources for the repository input message".Length
+      messageLength = 0
       inputMessageSet = $true
+    }
+    prompt = [pscustomobject]@{
+      startedFromEmptyInput = $true
+      rendererCaptureExpectations = [pscustomobject]@{ inputText = "commit all eligible changed file resources from the explicit message prompt"; submitKey = "Enter" }
     }
     postCommitProbePreviousMessageLength = 0
   }
@@ -1995,7 +2109,8 @@ $commitAllReport = [pscustomobject]@{
   }
   assertions = [pscustomobject]@{
     commandExecuted = $true
-    inputMessageWasSet = $true
+    emptyInputPrompted = $true
+    inputMessageWasSet = $false
     inputMessageClearedAfterCommit = $true
     trackedFileCommitted = $true
     unversionedPathRemainedUnversioned = $commitAllScratchExistsAfter
@@ -2348,10 +2463,6 @@ $commitSelectedMultiSelectionReport = [pscustomobject]@{
   input = [pscustomobject]@{
     messageLength = "commit selected SCM resources from a Source Control multi-selection".Length
     setInputReport = [pscustomobject]@{
-      kind = "subversionr.installedSourceControlUiE2eSetInputMessageReport"
-      repositoryId = $commitSelectedMultiSelectionOpenReport.repository.repositoryId
-      previousMessageLength = 0
-      messageLength = "commit selected SCM resources from a Source Control multi-selection".Length
       inputMessageSet = $true
     }
     postCommitProbePreviousMessageLength = 0
@@ -2372,6 +2483,78 @@ $commitSelectedMultiSelectionReport = [pscustomobject]@{
     inputMessageWasSet = $true
     inputMessageClearedAfterCommit = $true
     allSelectedFilesCommitted = $true
+    sourceControlProjectionClearedSelectedPaths = $true
+    targetedReconcileAfterCommit = $true
+  }
+}
+$reviewCommitSuccessMessageReplacementReport = [pscustomobject]@{
+  kind = "subversionr.installedSourceControlUiE2eSetInputMessageReport"
+  repositoryId = "repo-uuid:$reviewCommitPromptWorkingCopyRoot"
+  previousMessageLength = "force installed Review & Commit hook rejection".Length
+  messageLength = "commit exactly the retained Review & Commit selection".Length
+  inputMessageSet = $true
+}
+$reviewCommitPromptPostCommitFreshnessReport = [pscustomobject]@{
+  lastCompletedRefresh = [pscustomobject]@{
+    generation = 2
+    targets = @(
+      [pscustomobject]@{ path = "load/modified-001.txt"; depth = "empty"; reason = "operationCommit" },
+      [pscustomobject]@{ path = "src/tracked.txt"; depth = "empty"; reason = "operationCommit" }
+    )
+    coverage = @(
+      [pscustomobject]@{ path = "load/modified-001.txt"; depth = "empty"; reason = "operationCommit"; generation = 2 },
+      [pscustomobject]@{ path = "src/tracked.txt"; depth = "empty"; reason = "operationCommit"; generation = 2 }
+    )
+  }
+}
+$reviewCommitPromptReport = [pscustomobject]@{
+  kind = "subversionr.installedSourceControlUiE2eReviewCommitPromptWorkflow"
+  generatedAt = "2026-06-25T00:00:06Z"
+  command = [pscustomobject]@{
+    command = "subversionr.reviewCommit"
+    argumentShape = "repositoryId"
+    arguments = @("repo-uuid:$reviewCommitPromptWorkingCopyRoot")
+  }
+  repository = [pscustomobject]@{
+    repositoryId = "repo-uuid:$reviewCommitPromptWorkingCopyRoot"
+    epoch = 9
+    workingCopyRoot = $reviewCommitPromptWorkingCopyRoot
+  }
+  input = [pscustomobject]@{
+    messageLength = "commit exactly the retained Review & Commit selection".Length
+    startedFromEmptyInput = $true
+    successMessageReplacementReport = $reviewCommitSuccessMessageReplacementReport
+    postCommitProbePreviousMessageLength = 0
+  }
+  targets = [pscustomobject]@{
+    selectedPaths = @("src/tracked.txt", "load/modified-001.txt")
+    retainedProbePath = "load/modified-002.txt"
+  }
+  forcedFailure = [pscustomobject]@{
+    journalEntry = [pscustomobject]@{
+      kind = "commit"
+      resultCategory = "failed"
+      touchedCount = 2
+    }
+    successMessageReplacementReport = $reviewCommitSuccessMessageReplacementReport
+    failedMessageRetained = $true
+  }
+  postCommitFreshnessReport = $reviewCommitPromptPostCommitFreshnessReport
+  assertions = [pscustomobject]@{
+    commandExecuted = $true
+    emptyInputPrompted = $true
+    promptCancellationBytesUnchanged = $true
+    promptCancellationProjectionUnchanged = $true
+    promptCancellationRefreshUnchanged = $true
+    promptCancellationJournalUnchanged = $true
+    promptCancellationHistoryUnchanged = $true
+    reviewedSelectionRetainedAfterCancellation = $true
+    reviewedSelectionRetainedAfterFailure = $true
+    forcedCommitFailureObserved = $true
+    failedMessageRetained = $true
+    inputMessageClearedAfterCommit = $true
+    allSelectedFilesCommitted = $true
+    unselectedProbeStillModified = $true
     sourceControlProjectionClearedSelectedPaths = $true
     targetedReconcileAfterCommit = $true
   }
@@ -6704,6 +6887,7 @@ $lifecycleMoveReport = [pscustomobject]@{
   commitAllReport = $commitAllReport
   commitSelectedReport = $commitSelectedReport
   commitSelectedMultiSelectionReport = $commitSelectedMultiSelectionReport
+  reviewCommitPromptReport = $reviewCommitPromptReport
   addToIgnoreReport = $addToIgnoreReport
   readonlyPropertyReportWorkflow = $readonlyPropertyReportWorkflow
   lockUnlockReport = $lockUnlockReport
@@ -7231,6 +7415,26 @@ public static class Program {
           Console.WriteLine("modified load item load/modified-001.txt by M7j3");
           return 0;
         }
+        if (normalizedUrl.IndexOf("commit-selected-multi-selection-fixture", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            normalizedUrl.EndsWith("/trunk/load/modified-002.txt", StringComparison.OrdinalIgnoreCase)) {
+          Console.WriteLine("initial load item 2");
+          return 0;
+        }
+        if (normalizedUrl.IndexOf("review-commit-prompt-fixture", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            normalizedUrl.EndsWith("/trunk/src/tracked.txt", StringComparison.OrdinalIgnoreCase)) {
+          Console.WriteLine("modified by M7j3");
+          return 0;
+        }
+        if (normalizedUrl.IndexOf("review-commit-prompt-fixture", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            normalizedUrl.EndsWith("/trunk/load/modified-001.txt", StringComparison.OrdinalIgnoreCase)) {
+          Console.WriteLine("modified load item load/modified-001.txt by M7j3");
+          return 0;
+        }
+        if (normalizedUrl.IndexOf("review-commit-prompt-fixture", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            normalizedUrl.EndsWith("/trunk/load/modified-002.txt", StringComparison.OrdinalIgnoreCase)) {
+          Console.WriteLine("initial load item 2");
+          return 0;
+        }
         if (normalizedUrl.IndexOf("commit-changelist-fixture", StringComparison.OrdinalIgnoreCase) >= 0 &&
             normalizedUrl.EndsWith("/trunk/src/tracked.txt", StringComparison.OrdinalIgnoreCase)) {
           Console.WriteLine("modified by M7j3");
@@ -7265,7 +7469,7 @@ public static class Program {
           Console.WriteLine("------------------------------------------------------------------------");
           Console.WriteLine("r2 | SubversionR fake | 2026-06-25 | 1 line");
           Console.WriteLine("");
-          Console.WriteLine("commit all eligible changed file resources for the repository input message");
+          Console.WriteLine("commit all eligible changed file resources from the explicit message prompt");
           Console.WriteLine("------------------------------------------------------------------------");
           return 0;
         }
@@ -7284,6 +7488,19 @@ public static class Program {
           Console.WriteLine("r2 | SubversionR fake | 2026-06-25 | 1 line");
           Console.WriteLine("");
           Console.WriteLine("commit selected SCM resources from a Source Control multi-selection");
+          Console.WriteLine("------------------------------------------------------------------------");
+          return 0;
+        }
+        if (normalizedUrl.IndexOf("review-commit-prompt-fixture", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            normalizedUrl.EndsWith("/trunk/src/tracked.txt", StringComparison.OrdinalIgnoreCase)) {
+          Console.WriteLine("------------------------------------------------------------------------");
+          Console.WriteLine("r2 | SubversionR fake | 2026-06-25 | 1 line");
+          Console.WriteLine("");
+          Console.WriteLine("Changed paths:");
+          Console.WriteLine("   M /trunk/src/tracked.txt");
+          Console.WriteLine("   M /trunk/load/modified-001.txt");
+          Console.WriteLine("");
+          Console.WriteLine("commit exactly the retained Review & Commit selection");
           Console.WriteLine("------------------------------------------------------------------------");
           return 0;
         }
@@ -7385,6 +7602,7 @@ $tempRoot = Join-Path $repoRoot "target\tests\release-installed-source-control-u
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
+  Invoke-EmptyHistoryProbeOrderSmoke -WorkflowContent $workflowContent -TempRoot $tempRoot
   Assert-True (Test-Path -LiteralPath $workflowScript -PathType Leaf) "test-vscode-installed-source-control-ui-e2e.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $driverScript -PathType Leaf) "capture-vscode-renderer-ui.mjs should exist."
 
@@ -7680,7 +7898,7 @@ try {
   Assert-Equal $report.sourceControlUiCommitAllWorkflow.repository.repositoryId (@($report.sourceControlUiCommitAllWorkflow.command.arguments)[0]) "Commit All workflow should pass the SourceControl input command's repository argument."
   Assert-Equal "src/tracked.txt" (@($report.sourceControlUiCommitAllWorkflow.targets.eligiblePaths)[0]) "Commit All workflow should commit the tracked modified file."
   Assert-Equal "scratch.txt" (@($report.sourceControlUiCommitAllWorkflow.targets.excludedUnversionedPaths)[0]) "Commit All workflow should record the excluded unversioned path."
-  Assert-Equal "True" ([string]$report.sourceControlUiCommitAllWorkflow.assertions.inputMessageWasSet) "Commit All workflow should set the SourceControl input message before accepting it."
+  Assert-Equal "True" ([string]$report.sourceControlUiCommitAllWorkflow.assertions.emptyInputPrompted) "Commit All workflow should prompt explicitly when the SourceControl input is empty."
   Assert-Equal "True" ([string]$report.sourceControlUiCommitAllWorkflow.assertions.inputMessageClearedAfterCommit) "Commit All workflow should prove the repository input message was cleared after success."
   Assert-Equal "True" ([string]$report.sourceControlUiCommitAllWorkflow.assertions.trackedFileCommitted) "Commit All workflow should prove the tracked modified file was committed."
   Assert-Equal "True" ([string]$report.sourceControlUiCommitAllWorkflow.assertions.unversionedPathRemainedUnversioned) "Commit All workflow should prove the unversioned path was excluded from the commit."
@@ -7705,19 +7923,55 @@ try {
   Assert-Equal "True" ([string]$report.commitSelectedRepositoryOracle.latestLogContainsCommitMessage) "Commit Selected repository oracle should prove the latest SVN log contains the selected commit message."
   Assert-Equal "True" ([string]$report.commitSelectedWorkingCopy.repositoryOracle.unselectedFileRemainedUncommitted) "Commit Selected working-copy evidence should link to the repository oracle."
   Assert-Equal "subversionr.installedSourceControlUiE2eCommitSelectedMultiSelectionWorkflow" $report.sourceControlUiCommitSelectedMultiSelectionWorkflow.kind "Installed Source Control UI E2E evidence should include a Commit Selected multi-selection workflow report."
-  Assert-Equal "subversionr.commitResource" $report.sourceControlUiCommitSelectedMultiSelectionWorkflow.command.command "Commit Selected multi-selection workflow should execute the installed Commit Selected command."
-  Assert-Equal "resourceStateArray" $report.sourceControlUiCommitSelectedMultiSelectionWorkflow.command.argumentShape "Commit Selected multi-selection workflow should use the VS Code SCM resource array command argument."
+  Assert-Equal "subversionr.commitResource" $report.sourceControlUiCommitSelectedMultiSelectionWorkflow.command.command "Commit Selected multi-selection workflow should execute the installed resource command."
+  Assert-Equal "resourceStateArray" $report.sourceControlUiCommitSelectedMultiSelectionWorkflow.command.argumentShape "Commit Selected multi-selection workflow should preserve its resource-state array argument contract."
   Assert-Equal "src/tracked.txt" (@($report.sourceControlUiCommitSelectedMultiSelectionWorkflow.targets.selectedPaths)[0]) "Commit Selected multi-selection workflow should commit the first selected tracked file."
   Assert-Equal "load/modified-001.txt" (@($report.sourceControlUiCommitSelectedMultiSelectionWorkflow.targets.selectedPaths)[1]) "Commit Selected multi-selection workflow should commit the second selected tracked file."
   Assert-Equal "True" ([string]$report.sourceControlUiCommitSelectedMultiSelectionWorkflow.assertions.allSelectedFilesCommitted) "Commit Selected multi-selection workflow should prove every selected file was committed."
   Assert-Equal "True" ([string]$report.sourceControlUiCommitSelectedMultiSelectionWorkflow.assertions.sourceControlProjectionClearedSelectedPaths) "Commit Selected multi-selection workflow should prove selected paths left the SourceControl changes projection."
   Assert-Equal "True" ([string]$report.sourceControlUiCommitSelectedMultiSelectionWorkflow.assertions.inputMessageClearedAfterCommit) "Commit Selected multi-selection workflow should prove the repository input message was cleared after success."
   Assert-Equal "True" ([string]$report.sourceControlUiCommitSelectedMultiSelectionWorkflow.assertions.targetedReconcileAfterCommit) "Commit Selected multi-selection workflow should prove targeted post-commit reconcile evidence for both selected paths."
+  Assert-Equal "6" ([string]@($report.commitPromptRendererCaptures).Count) "Installed commit prompt evidence should publish all six renderer captures."
   Assert-Equal "subversionr.installedSourceControlUiE2eCommitSelectedMultiSelectionRepositoryOracle" $report.commitSelectedMultiSelectionRepositoryOracle.kind "Commit Selected multi-selection repository oracle should be published in final evidence."
   Assert-Equal "modified by M7j3" $report.commitSelectedMultiSelectionRepositoryOracle.trackedFileContent "Commit Selected multi-selection repository oracle should prove the first selected content was committed."
   Assert-Equal "modified load item load/modified-001.txt by M7j3" $report.commitSelectedMultiSelectionRepositoryOracle.loadFileContent "Commit Selected multi-selection repository oracle should prove the second selected content was committed."
   Assert-Equal "True" ([string]$report.commitSelectedMultiSelectionRepositoryOracle.latestLogContainsCommitMessage) "Commit Selected multi-selection repository oracle should prove the latest SVN log contains the selected multi-selection commit message."
   Assert-Equal "True" ([string]$report.commitSelectedMultiSelectionWorkingCopy.repositoryOracle.allSelectedFilesCommitted) "Commit Selected multi-selection working-copy evidence should link to the repository oracle."
+  Assert-Equal "subversionr.installedSourceControlUiE2eReviewCommitPromptWorkflow" $report.sourceControlUiReviewCommitPromptWorkflow.kind "Installed evidence should publish the independent Review & Commit prompt workflow."
+  Assert-Equal "subversionr.reviewCommit" $report.sourceControlUiReviewCommitPromptWorkflow.command.command "Review & Commit workflow should execute the installed repository review command."
+  Assert-Equal "repositoryId" $report.sourceControlUiReviewCommitPromptWorkflow.command.argumentShape "Review & Commit workflow should use the repository identity command argument."
+  Assert-Equal "1" ([string]@($report.sourceControlUiReviewCommitPromptWorkflow.command.arguments).Count) "Review & Commit evidence should record exactly one command argument."
+  Assert-Equal $report.sourceControlUiReviewCommitPromptWorkflow.repository.repositoryId (@($report.sourceControlUiReviewCommitPromptWorkflow.command.arguments)[0]) "Review & Commit evidence should record the exact repositoryId passed to the installed command."
+  Assert-Equal "True" ([string]$report.sourceControlUiReviewCommitPromptWorkflow.assertions.promptCancellationBytesUnchanged) "Review & Commit cancellation should preserve fixture and .svn bytes."
+  Assert-Equal "True" ([string]$report.sourceControlUiReviewCommitPromptWorkflow.assertions.promptCancellationJournalUnchanged) "Review & Commit cancellation should not journal an operation."
+  Assert-Equal "True" ([string]$report.sourceControlUiReviewCommitPromptWorkflow.assertions.promptCancellationHistoryUnchanged) "Review & Commit cancellation should leave message history unchanged."
+  Assert-Equal "True" ([string]$report.sourceControlUiReviewCommitPromptWorkflow.assertions.reviewedSelectionRetainedAfterCancellation) "Review & Commit should retain the reviewed selection after message cancellation."
+  Assert-Equal "True" ([string]$report.sourceControlUiReviewCommitPromptWorkflow.assertions.reviewedSelectionRetainedAfterFailure) "Review & Commit should retain the reviewed selection after forced commit failure."
+  Assert-Equal "2" ([string]$report.sourceControlUiReviewCommitPromptWorkflow.forcedFailure.journalEntry.touchedCount) "Forced Review & Commit failure should journal exactly the two reviewed paths."
+  Assert-Equal "True" ([string]$report.sourceControlUiReviewCommitPromptWorkflow.forcedFailure.failedMessageRetained) "Forced Review & Commit failure should retain its message until the explicit retry reset."
+  Assert-Equal ([string]"force installed Review & Commit hook rejection".Length) ([string]$report.sourceControlUiReviewCommitPromptWorkflow.forcedFailure.successMessageReplacementReport.previousMessageLength) "Review & Commit success-message replacement should observe the exact failed message length."
+  Assert-Equal ([string]"commit exactly the retained Review & Commit selection".Length) ([string]$report.sourceControlUiReviewCommitPromptWorkflow.forcedFailure.successMessageReplacementReport.messageLength) "Review & Commit retry should replace the retained failed message with the exact non-empty success message."
+  Assert-Equal ([string]$report.sourceControlUiReviewCommitPromptWorkflow.forcedFailure.successMessageReplacementReport.previousMessageLength) ([string]$report.sourceControlUiReviewCommitPromptWorkflow.input.successMessageReplacementReport.previousMessageLength) "Review & Commit input evidence should publish the same exact failed-message replacement observation."
+  Assert-Equal "True" ([string]$report.sourceControlUiReviewCommitPromptWorkflow.assertions.unselectedProbeStillModified) "Review & Commit should leave the post-cancellation probe path uncommitted."
+  $reviewCommitRefresh = $report.sourceControlUiReviewCommitPromptWorkflow.postCommitFreshnessReport.lastCompletedRefresh
+  Assert-Equal "load/modified-001.txt|src/tracked.txt" ((@($reviewCommitRefresh.targets | ForEach-Object { $_.path })) -join "|") "Review & Commit targeted reconcile should publish reviewed paths in canonical order."
+  Assert-Equal "load/modified-001.txt|src/tracked.txt" ((@($reviewCommitRefresh.coverage | ForEach-Object { $_.path })) -join "|") "Review & Commit returned reconcile coverage should match the exact canonical reviewed-path set."
+  foreach ($reviewCommitRefreshScope in @($reviewCommitRefresh.targets) + @($reviewCommitRefresh.coverage)) {
+    Assert-Equal "empty" $reviewCommitRefreshScope.depth "Review & Commit targeted reconcile scopes should preserve exact empty depth."
+    Assert-Equal "operationCommit" $reviewCommitRefreshScope.reason "Review & Commit targeted reconcile scopes should preserve the exact commit reason."
+  }
+  foreach ($reviewCommitCoverageScope in @($reviewCommitRefresh.coverage)) {
+    Assert-Equal ([string]$reviewCommitRefresh.generation) ([string]$reviewCommitCoverageScope.generation) "Review & Commit returned reconcile scopes should preserve the authoritative generation."
+  }
+  Assert-Equal "subversionr.installedSourceControlUiE2eReviewCommitPromptRepositoryOracle" $report.reviewCommitPromptRepositoryOracle.kind "Review & Commit repository oracle should be published independently."
+  Assert-Equal "initial load item 2" $report.reviewCommitPromptRepositoryOracle.unselectedFileRepositoryContent "Review & Commit repository oracle should prove the retained-probe path was not committed."
+  Assert-Equal "True" ([string]$report.reviewCommitPromptRepositoryOracle.exactlyReviewedPathsCommitted) "Review & Commit repository oracle should prove exactly the reviewed paths were committed."
+  Assert-Equal "True" ([string]$report.reviewCommitPromptRepositoryOracle.unselectedProbeRemainedUncommitted) "Review & Commit repository oracle should prove the retained-probe path remained uncommitted."
+  Assert-Equal "2" ([string]@($report.reviewCommitPromptRepositoryOracle.changedPaths).Count) "Review & Commit repository oracle should expose exactly two committed changed paths."
+  Assert-True ((@($report.reviewCommitPromptRepositoryOracle.changedPaths) -join "`n") -match '/trunk/src/tracked\.txt') "Review & Commit repository oracle should expose the reviewed tracked path."
+  Assert-True ((@($report.reviewCommitPromptRepositoryOracle.changedPaths) -join "`n") -match '/trunk/load/modified-001\.txt') "Review & Commit repository oracle should expose the reviewed load path."
+  Assert-True ((@($report.reviewCommitPromptRepositoryOracle.changedPaths) -join "`n") -notmatch '/trunk/load/modified-002\.txt') "Review & Commit repository oracle should exclude the retained unselected probe path."
+  Assert-Equal "True" ([string]$report.reviewCommitPromptWorkingCopy.repositoryOracle.exactlyReviewedPathsCommitted) "Review & Commit working-copy evidence should link to its independent repository oracle."
   Assert-Equal "subversionr.installedSourceControlUiE2eAddToIgnoreWorkflow" $report.sourceControlUiAddToIgnoreWorkflow.kind "Installed Source Control UI E2E evidence should include an Add to Ignore workflow report."
   Assert-Equal "subversionr.addToIgnoreResource" $report.sourceControlUiAddToIgnoreWorkflow.command.command "Add to Ignore workflow should execute the installed Add to Ignore command."
   Assert-Equal "scratch.txt" $report.sourceControlUiAddToIgnoreWorkflow.resource.path "Add to Ignore workflow should target the unversioned fixture resource."
@@ -8305,7 +8559,7 @@ try {
         -RendererCaptureDriverPath $fakeDriverPath `
         -FixtureRoot (Join-Path $tempRoot "missing-dom-token\win32-x64") `
         -EvidencePath (Join-Path $tempRoot "evidence\missing-dom-token.json") `
-        -RemoteDebuggingPort 32149 `
+        -RemoteDebuggingPort 32249 `
         -ExtensionHostTimeoutSeconds 30 `
         -UiReadyTimeoutSeconds 10
     } "DOM artifact text is missing required tokens" "Installed Source Control UI E2E gate should reject renderer DOM captures missing required tokens."
@@ -8445,7 +8699,6 @@ try {
   }
 
   $ciWorkflow = Get-Content -Raw -LiteralPath $ciWorkflowPath
-  $workflowContent = Get-Content -Raw -LiteralPath $workflowScript
   $driverContent = Get-Content -Raw -LiteralPath $driverScript
   Assert-True ($driverContent -match '(?s)queryAllOpenRoots.*?element\.shadowRoot.*?monaco-menu') "Renderer capture driver should inspect VS Code menus rendered inside open Shadow DOM roots."
   Assert-True ($driverContent -match '(?s)function matchTokens.*?normalizeTokenText\(text\).*?function normalizeTokenText.*?replace\(/\\s\+/gu') "Renderer capture driver should normalize renderer whitespace such as Output-panel non-breaking spaces before matching required and forbidden tokens."
@@ -8516,7 +8769,7 @@ try {
   Assert-True ($workflowContent -match '(?s)async function runDeleteUnversionedLoadWorkflow.*?postDeleteFreshnessReport\s*=\s*await collectFreshnessReportUntilUnversionedCount\([\s\S]*?"subversionr\.diagnostics\.installedSourceControlUiE2eFreshnessReport/deleteLoad",\s*0,\s*30000') "Delete All Unversioned load workflow should wait until the unversioned SourceControl projection reaches zero after deletion."
   Assert-True ($workflowContent -match '(?s)async function runMoveWorkflow.*?postMoveFreshnessReport\s*=\s*await collectFreshnessReportWithSurfaceRetry') "Move workflow should collect post-move freshness through the surface retry helper."
   Assert-True ($workflowContent -match '(?s)Installed Move workflow did not project src/tracked\.txt.*?sourceControlResourceSummary\(postMoveFreshnessReport\)') "Move workflow should include SourceControl resources when source deletion projection is missing."
-  Assert-True ($workflowContent -match '(?s)async function runCommitAllWorkflow.*?acceptInputCommandArguments.*?subversionr\.diagnostics\.installedSourceControlUiE2eSetInputMessage.*?executeCommand\(acceptInputCommand, \.\.\.acceptInputCommandArguments\)') "Installed Source Control UI E2E harness should run Commit All through the installed SourceControl input accept command path and arguments."
+  Assert-True ($workflowContent -match '(?s)async function runCommitAllWorkflow.*?acceptInputCommandArguments.*?executeCommand\(acceptInputCommand, \.\.\.acceptInputCommandArguments\).*?publishCommitPromptReadyAndWait\(commitPromptReadyPath, commitPromptDonePath, "commitAllMessagePrompt".*?await commitCommand') "Installed Source Control UI E2E harness should run Commit All through the installed SourceControl input accept command and capture the empty-input message prompt."
   Assert-True ($workflowContent -match "sourceControlUiCommitAllWorkflow") "Installed Source Control UI E2E evidence should publish the Commit All workflow report."
   Assert-True ($workflowContent -match "Get-CommitAllRepositoryOracle") "Installed Source Control UI E2E evidence should verify Commit All using an SVN repository oracle."
   Assert-True ($workflowContent -match '(?s)async function runCommitSelectedWorkflow.*?resourceStateArgument\(commitSelectedWorkingCopyRoot, selected\).*?executeCommand\("subversionr\.commitResource", commandArgument\)') "Installed Source Control UI E2E harness should run Commit Selected through the installed SCM resource command argument."
@@ -8526,6 +8779,25 @@ try {
   Assert-True ($workflowContent -match '(?s)async function runCommitSelectedMultiSelectionWorkflow.*?postCommitObservation\s*=\s*await collectFreshnessReportUntilPathsAbsent\([\s\S]*?\[firstSelected\.path, secondSelected\.path\][\s\S]*?expectedRefreshTargets') "Commit Selected multi-selection should wait for both committed paths to leave the SourceControl projection and for exact targeted refresh coverage."
   Assert-True ($workflowContent -match "sourceControlUiCommitSelectedMultiSelectionWorkflow") "Installed Source Control UI E2E evidence should publish the Commit Selected multi-selection workflow report."
   Assert-True ($workflowContent -match "Get-CommitSelectedMultiSelectionRepositoryOracle") "Installed Source Control UI E2E evidence should verify Commit Selected multi-selection using an SVN repository oracle."
+  Assert-True ($workflowContent -match "sourceControlUiReviewCommitPromptWorkflow") "Installed Source Control UI E2E evidence should publish Review & Commit prompt evidence independently from Commit Selected multi-selection."
+  Assert-True ($workflowContent -match "Get-ReviewCommitPromptRepositoryOracle") "Installed Source Control UI E2E evidence should verify Review & Commit using its independent SVN repository oracle."
+  Assert-True ($workflowContent -match '(?s)executeCommand\("subversionr\.reviewCommit", repositoryId\).*?command:\s*\{\s*command:\s*"subversionr\.reviewCommit",\s*argumentShape:\s*"repositoryId",\s*arguments:\s*\[repositoryId\]') "Review & Commit report should mirror the exact single repositoryId argument passed to the installed command."
+  Assert-True ($workflowContent -match 'async function publishCommitPromptReadyAndWait\(readyPath, donePath, phase, payload\)') "Installed commit prompt coordination helper should receive ready/done paths explicitly across the generated run-tests.js scope boundary."
+  Assert-True ($workflowContent -match 'async function runCommitAllWorkflow\(commitAllWorkingCopyRoot, commitPromptReadyPath, commitPromptDonePath\)') "Commit All workflow should receive prompt coordination paths explicitly across the generated run-tests.js scope boundary."
+  Assert-True ($workflowContent -match 'commitAllReport\s*=\s*await runCommitAllWorkflow\(commitAllWorkingCopyRoot, commitPromptReadyPath, commitPromptDonePath\)') "Generated run() should pass both prompt coordination paths into Commit All."
+  Assert-True ($workflowContent -match 'async function runReviewCommitPromptWorkflow\(commitSelectedMultiSelectionWorkingCopyRoot, commitPromptReadyPath, commitPromptDonePath, commitDiagnosticsToken\)') "Review & Commit workflow should receive prompt coordination paths and the diagnostics token explicitly across the generated run-tests.js scope boundary."
+  Assert-True ($workflowContent -match 'reviewCommitPromptReport\s*=\s*await runReviewCommitPromptWorkflow\(reviewCommitPromptWorkingCopyRoot, commitPromptReadyPath, commitPromptDonePath, commitDiagnosticsToken\)') "Generated run() should pass prompt coordination paths and the diagnostics token into Review & Commit."
+  Assert-True ($workflowContent -match 'async function collectCommitDiagnostics\(diagnosticsToken, label\)') "Installed commit diagnostics helper should receive its token explicitly instead of referencing a run() local."
+  Assert-True ([regex]::Matches($workflowContent, 'collectCommitDiagnostics\(commitDiagnosticsToken, "reviewCommit').Count -eq 3) "All three Review & Commit diagnostics probes should pass the run()-supplied token explicitly."
+  foreach ($commitPromptHelperPhase in @("commitAllMessagePrompt", "reviewCommitInitialSelection", "reviewCommitMessageCancellation", "reviewCommitFailureSelection", "reviewCommitFailureMessage", "reviewCommitFailureObserved", "reviewCommitSuccessSelection")) {
+    Assert-True ($workflowContent -match ('publishCommitPromptReadyAndWait\(commitPromptReadyPath, commitPromptDonePath, "' + [regex]::Escape($commitPromptHelperPhase) + '"')) "Installed commit prompt phase $commitPromptHelperPhase should pass both coordination paths explicitly."
+  }
+  Assert-True ($workflowContent -match '(?s)cancellationHistoryBefore\s*=\s*await probeEmptyCommitMessageHistory.*?cancellationHistoryAfter\s*=\s*await probeEmptyCommitMessageHistory.*?cancellationHistoryUnchanged\s*=\s*cancellationHistoryBefore\.completedWithoutQuickPickInteraction\s*===\s*true\s*&&\s*cancellationHistoryBefore\.returnedUndefined\s*===\s*true\s*&&\s*cancellationHistoryAfter\.completedWithoutQuickPickInteraction\s*===\s*true\s*&&\s*cancellationHistoryAfter\.returnedUndefined\s*===\s*true') "Review & Commit cancellation history evidence should be derived from before/after command probes rather than a constant."
+  Assert-True ($workflowContent -match 'reviewedSelectionRetainedAfterCancellation:\s*forcedFailureJournaled\s*&&\s*Boolean\(retainedProbeResourceAfter\)') "Review & Commit cancellation retention evidence should be derived from the subsequent exact reviewed-path failure and retained probe."
+  Assert-True ($workflowContent -match 'reviewedSelectionRetainedAfterFailure:\s*selectedPathsCleared\s*&&\s*Boolean\(retainedProbeResourceAfter\)') "Review & Commit failure retention evidence should be derived from the subsequent exact reviewed-path success and retained probe."
+  Assert-True ($workflowContent -match '(?s)await failedReviewCommand;.*?message:\s*commitMessage.*?successMessageReplacementReport\.previousMessageLength\s*===\s*failedCommitMessage\.length.*?successMessageReplacementReport\.messageLength\s*===\s*commitMessage\.length.*?publishCommitPromptReadyAndWait\(commitPromptReadyPath, commitPromptDonePath, "reviewCommitFailureObserved".*?executeCommand\("subversionr\.reviewCommit", repositoryId\).*?"reviewCommitSuccessSelection".*?await successfulReviewCommand') "Review & Commit success retry should prove the failed message was retained, replace it with the non-empty success message, then capture only the retained selection before commit."
+  Assert-True ($workflowContent -notmatch '"reviewCommitSuccessMessage"') "Review & Commit success retry should reuse the explicitly replaced non-empty message without expecting another message prompt."
+  Assert-True ($workflowContent -match '(?s)canonicalReviewedPaths\s*=\s*\[\.\.\.reviewedPaths\]\.sort.*?expectedRefreshTargets\s*=\s*canonicalReviewedPaths\.map.*?coverageReport\.targets\.length\s*===\s*expectedRefreshTargets\.length.*?target\.depth\s*===\s*expectedTarget\.depth.*?coverage\.reason\s*===\s*expectedTarget\.reason.*?coverage\.generation\s*===\s*coverageReport\.generation') "Review & Commit targeted reconcile evidence should canonicalize the exact reviewed-path set and preserve depth, reason, and generation."
   Assert-True ($workflowContent -match '(?s)async function runLockUnlockWorkflow.*?findResource\(openReport, "metadata", resourcePath, "subversionr\.workingCopyMetadataFile"\).*?executeCommand\("subversionr\.lockResource", resourceStateArgument\(lockWorkingCopyRoot, resource\)\).*?currentUnlockResource.*?findResource\(preUnlockSurfaceReport, "metadata", resource\.path, "subversionr\.workingCopyMetadataFile\.locked"\).*?executeCommand\("subversionr\.unlockResource", resourceStateArgument\(lockWorkingCopyRoot, currentUnlockResource\)\)') "Installed Source Control UI E2E harness should refresh the installed SCM resource command argument before Unlock so the projection generation is current."
   Assert-True ($workflowContent -match "sourceControlUiLockUnlockWorkflow") "Installed Source Control UI E2E evidence should publish the Lock/Unlock workflow report."
   Assert-True ($workflowContent -match "Get-LockHeldWorkingCopyOracle") "Installed Source Control UI E2E evidence should verify the held lock using an SVN working-copy oracle."

@@ -6977,7 +6977,11 @@ describe("RepositoryCommandController", () => {
     const operationClient = fakeOperationClient(
       operationResponse({ kind: "commit", path: "src/review.c", reason: "operationCommit", revision: 8 }),
     );
-    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"], commitMessage: "commit review changelist" });
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "",
+      promptedCommitMessage: "commit review changelist",
+    });
     const sourceControlProjection = fakeSourceControlProjection({
       projection: scmProjection({ resources: [scmChangelistProjectedResource({ path: "src/review.c" })] }),
     });
@@ -6993,6 +6997,7 @@ describe("RepositoryCommandController", () => {
     });
 
     expect(sourceControlProjection.getProjection).toHaveBeenCalledWith("repo-uuid:C:/workspace");
+    expect(ui.promptCommitMessage).toHaveBeenCalledWith("src/review.c");
     expect(operationClient.commit).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -7007,6 +7012,49 @@ describe("RepositoryCommandController", () => {
       includeDirExternals: false,
     });
     expect(ui.clearCommitMessage).toHaveBeenCalledWith("repo-uuid:C:/workspace");
+  });
+
+  it("rejects Commit Changelist when its exact path membership changes after message prompting", async () => {
+    const initialProjection = scmProjection({
+      resources: [scmChangelistProjectedResource({ path: "src/review.c" })],
+    });
+    const changedProjection = scmProjection({
+      resources: [
+        scmChangelistProjectedResource({ path: "src/review.c" }),
+        scmChangelistProjectedResource({ path: "src/second.c" }),
+      ],
+    });
+    const sourceControlProjection = fakeSourceControlProjection({ projection: initialProjection });
+    sourceControlProjection.getProjection
+      .mockReturnValueOnce(initialProjection)
+      .mockReturnValueOnce(initialProjection)
+      .mockReturnValue(changedProjection);
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/review.c", reason: "operationCommit", revision: 8 }),
+    );
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "",
+      promptedCommitMessage: "commit stale changelist",
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await controller.commitChangelist({
+      subversionrRepositoryId: "repo-uuid:C:/workspace",
+      subversionrChangelistName: "review",
+    });
+
+    expect(ui.promptCommitMessage).toHaveBeenCalledWith("src/review.c");
+    expect(operationClient.commit).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
+      "Show Log",
+    );
   });
 
   it.each([
@@ -8707,9 +8755,13 @@ describe("RepositoryCommandController", () => {
       operationResponse({ kind: "commit", path: "src", reason: "operationCommit", revision: 8 }),
     );
     const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"], commitMessage: "commit directory props" });
+    const resource = contextValue.endsWith(".changelisted")
+      ? scmChangelistProjectedResource({ path: "src", kind: "dir", changelist: "review" })
+      : scmProjectedResource({ path: "src", kind: "dir" });
     const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
       refreshService,
       operationClient,
+      sourceControlProjection: fakeSourceControlProjection({ projection: scmProjection({ resources: [resource] }) }),
     });
 
     await controller.commitResource({
@@ -8751,6 +8803,9 @@ describe("RepositoryCommandController", () => {
     const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
       refreshService,
       operationClient,
+      sourceControlProjection: fakeSourceControlProjection({
+        projection: scmProjection({ resources: [scmProjectedResource({ path: ".", kind: "dir" })] }),
+      }),
     });
 
     await controller.commitResource({
@@ -8801,6 +8856,11 @@ describe("RepositoryCommandController", () => {
     const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
       refreshService,
       operationClient,
+      sourceControlProjection: fakeSourceControlProjection({
+        projection: scmProjection({
+          resources: [scmProjectedResource(), scmProjectedResource({ path: "src/other.c" })],
+        }),
+      }),
     });
 
     await controller.commitResource([
@@ -9310,8 +9370,10 @@ describe("RepositoryCommandController", () => {
     );
   });
 
-  it("does not commit when the repository input message is empty", async () => {
+  it("prompts once and cancels without side effects when the repository input message is whitespace-only", async () => {
     const refreshService = fakeRefreshService();
+    const operationJournal = new RepositoryOperationJournal({ maxEntries: 10 });
+    const commitMessageHistory = fakeCommitMessageHistory();
     const operationClient = fakeOperationClient(
       operationResponse({ kind: "commit", path: "src/main.c", reason: "operationCommit", revision: 8 }),
     );
@@ -9319,6 +9381,8 @@ describe("RepositoryCommandController", () => {
     const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), fakeSessionService({ sessions: [repositorySession()] }), ui, {
       refreshService,
       operationClient,
+      operationJournal,
+      commitMessageHistory,
     });
 
     await controller.commitResource({
@@ -9330,10 +9394,281 @@ describe("RepositoryCommandController", () => {
     expect(operationClient.commit).not.toHaveBeenCalled();
     expect(refreshService.refreshTargets).not.toHaveBeenCalled();
     expect(ui.clearCommitMessage).not.toHaveBeenCalled();
-    expect(ui.showWarningMessage).toHaveBeenCalledWith(
-      "Enter an SVN commit message before committing src/main.c.",
+    expect(ui.promptCommitMessage).toHaveBeenCalledTimes(1);
+    expect(ui.promptCommitMessage).toHaveBeenCalledWith("src/main.c");
+    expect(ui.setCommitMessage).not.toHaveBeenCalled();
+    expect(commitMessageHistory.record).not.toHaveBeenCalled();
+    expect(operationJournal.snapshot()).toEqual([]);
+    expect(ui.showWarningMessage).not.toHaveBeenCalled();
+  });
+
+  it("commits a selected resource with one explicitly prompted message", async () => {
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/main.c", reason: "operationCommit", revision: 8 }),
+    );
+    const commitMessageHistory = fakeCommitMessageHistory();
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "",
+      promptedCommitMessage: "commit prompted resource",
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient, commitMessageHistory },
+    );
+
+    await controller.commitResource({
+      contextValue: "subversionr.changedFile",
+      subversionrResourceKind: "file",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    });
+
+    expect(ui.promptCommitMessage).toHaveBeenCalledOnce();
+    expect(ui.promptCommitMessage).toHaveBeenCalledWith("src/main.c");
+    expect(ui.setCommitMessage).toHaveBeenCalledWith(
+      "repo-uuid:C:/workspace",
+      "commit prompted resource",
+    );
+    expect(operationClient.commit).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "commit prompted resource", paths: ["src/main.c"] }),
+    );
+    expect(commitMessageHistory.record).toHaveBeenCalledWith(
+      "repo-uuid:C:/workspace",
+      "commit prompted resource",
+    );
+    expect(ui.clearCommitMessage).toHaveBeenCalledWith("repo-uuid:C:/workspace");
+  });
+
+  it("commits all resources with one explicitly prompted message", async () => {
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/main.c", reason: "operationCommit", revision: 8 }),
+    );
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: " \t ",
+      promptedCommitMessage: "commit prompted all",
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient, sourceControlProjection: fakeSourceControlProjection() },
+    );
+
+    await controller.commitAll("repo-uuid:C:/workspace");
+
+    expect(ui.promptCommitMessage).toHaveBeenCalledWith("src/main.c");
+    expect(operationClient.commit).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "commit prompted all", paths: ["src/main.c"] }),
     );
   });
+
+  it("reviews and commits the selected resources with one explicitly prompted message", async () => {
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/other.c", reason: "operationCommit", revision: 8 }),
+    );
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "",
+      promptedCommitMessage: "commit prompted review",
+      reviewCommitSelection: ["src/other.c"],
+    });
+    const sourceControlProjection = fakeSourceControlProjection({
+      targets: commitAllTargets({
+        targets: [
+          { path: "src/main.c", changelist: null },
+          { path: "src/other.c", changelist: "review" },
+        ],
+      }),
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await controller.reviewCommit("repo-uuid:C:/workspace");
+
+    expect(ui.promptCommitMessage).toHaveBeenCalledWith("src/other.c");
+    expect(operationClient.commit).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "commit prompted review", paths: ["src/other.c"] }),
+    );
+  });
+
+  it("preserves the reviewed selection when commit-message prompting is cancelled", async () => {
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/other.c", reason: "operationCommit", revision: 8 }),
+    );
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "",
+      reviewCommitSelection: ["src/other.c"],
+    });
+    const sourceControlProjection = fakeSourceControlProjection({
+      targets: commitAllTargets({
+        targets: [
+          { path: "src/main.c", changelist: null },
+          { path: "src/other.c", changelist: null },
+        ],
+      }),
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await controller.reviewCommit("repo-uuid:C:/workspace");
+    expect(operationClient.commit).not.toHaveBeenCalled();
+
+    ui.promptCommitMessage.mockResolvedValueOnce("commit retained review");
+    await controller.reviewCommit("repo-uuid:C:/workspace");
+
+    expect(ui.promptReviewCommitTargets).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Array),
+      new Set(["src/other.c"]),
+    );
+    expect(operationClient.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["repository epoch", { ...repositorySession(), epoch: 8 }, commitAllTargets()],
+    ["projection generation", repositorySession(), commitAllTargets({ generation: 12 })],
+    [
+      "selected paths",
+      repositorySession(),
+      commitAllTargets({ targets: [{ path: "src/other.c", changelist: null }] }),
+    ],
+    [
+      "changelist identity",
+      repositorySession(),
+      commitAllTargets({ targets: [{ path: "src/main.c", changelist: "review" }] }),
+    ],
+  ])("rejects a prompted Commit All when the %s changes before RPC", async (_label, currentSession, currentTargets) => {
+    const initialSession = repositorySession();
+    const sessionService = fakeSessionService({ sessions: [initialSession] });
+    sessionService.listOpenSessions
+      .mockReturnValueOnce([initialSession])
+      .mockReturnValue([currentSession]);
+    const sourceControlProjection = fakeSourceControlProjection();
+    sourceControlProjection.getCommitAllTargets
+      .mockReturnValueOnce(commitAllTargets())
+      .mockReturnValue(currentTargets);
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/main.c", reason: "operationCommit", revision: 8 }),
+    );
+    const refreshService = fakeRefreshService();
+    const operationJournal = new RepositoryOperationJournal({ maxEntries: 10 });
+    const commitMessageHistory = fakeCommitMessageHistory();
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "",
+      promptedCommitMessage: "commit stale selection",
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      sessionService,
+      ui,
+      {
+        operationClient,
+        refreshService,
+        operationJournal,
+        commitMessageHistory,
+        sourceControlProjection,
+      },
+    );
+
+    await controller.commitAll("repo-uuid:C:/workspace");
+
+    expect(ui.setCommitMessage).toHaveBeenCalledWith(
+      "repo-uuid:C:/workspace",
+      "commit stale selection",
+    );
+    expect(operationClient.commit).not.toHaveBeenCalled();
+    expect(operationJournal.snapshot()).toEqual([]);
+    expect(commitMessageHistory.record).not.toHaveBeenCalled();
+    expect(refreshService.refreshTargets).not.toHaveBeenCalled();
+    expect(refreshService.fullReconcileRepository).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
+      "Show Log",
+    );
+  });
+
+  it("revalidates prompted Commit All after progress starts and immediately before RPC dispatch", async () => {
+    const initialTargets = commitAllTargets();
+    let currentTargets = initialTargets;
+    const sourceControlProjection = fakeSourceControlProjection();
+    sourceControlProjection.getCommitAllTargets.mockImplementation(() => currentTargets);
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "commit", path: "src/main.c", reason: "operationCommit", revision: 8 }),
+    );
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      commitMessage: "",
+      promptedCommitMessage: "commit before-rpc selection",
+      operationProgressBeforeTask: () => {
+        currentTargets = commitAllTargets({
+          generation: initialTargets.generation + 1,
+          targets: [{ path: "src/other.c", changelist: null }],
+        });
+      },
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await controller.commitAll("repo-uuid:C:/workspace");
+
+    expect(ui.runOperationWithProgress).toHaveBeenCalledOnce();
+    expect(sourceControlProjection.getCommitAllTargets).toHaveBeenCalledTimes(3);
+    expect(operationClient.commit).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
+      "Show Log",
+    );
+  });
+
+  it.each(["   ", "line one\rline two", "message\0suffix"])(
+    "fails fast when a prompted commit message is invalid: %j",
+    async (promptedCommitMessage) => {
+      const operationClient = fakeOperationClient(
+        operationResponse({ kind: "commit", path: "src/main.c", reason: "operationCommit", revision: 8 }),
+      );
+      const ui = fakeCommandUi({
+        workspaceRoots: ["C:\\workspace"],
+        commitMessage: "",
+        promptedCommitMessage,
+      });
+      const controller = commandController(
+        fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+        fakeSessionService({ sessions: [repositorySession()] }),
+        ui,
+        { operationClient },
+      );
+
+      await controller.commitResource({
+        contextValue: "subversionr.changedFile",
+        subversionrResourceKind: "file",
+        resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+      });
+
+      expect(operationClient.commit).not.toHaveBeenCalled();
+      expect(ui.setCommitMessage).not.toHaveBeenCalled();
+      expect(ui.showErrorMessage).toHaveBeenCalledWith(
+        "Enter a non-empty SVN commit message without carriage returns and try again.",
+        "Show Log",
+      );
+    },
+  );
 
   it("fails fast before commit when the input message contains unsupported characters", async () => {
     const refreshService = fakeRefreshService();
@@ -9432,6 +9767,11 @@ describe("RepositoryCommandController", () => {
     const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), fakeSessionService({ sessions: [repositorySession()] }), ui, {
       refreshService,
       operationClient,
+      sourceControlProjection: fakeSourceControlProjection({
+        projection: scmProjection({
+          resources: [scmProjectedResource(), scmProjectedResource({ path: "src/other.c" })],
+        }),
+      }),
     });
 
     await controller.commitResource([
@@ -10380,6 +10720,9 @@ describe("RepositoryCommandController", () => {
       {
         operationClient,
         operationJournal,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/private-feature.c" })] }),
+        }),
         now: sequenceNow([
           "2026-06-25T00:00:00.000Z",
           "2026-06-25T00:00:00.250Z",
@@ -11058,6 +11401,7 @@ interface FakeCommandUi {
       (targets: readonly FakeReviewCommitTarget[]) => Promise<readonly FakeReviewCommitTarget[] | undefined>
     >
   >;
+  promptCommitMessage: ReturnType<typeof vi.fn<(pathSummary: string) => Promise<string | undefined>>>;
   promptCommitMessageHistory: ReturnType<typeof vi.fn<(messages: readonly string[]) => Promise<string | undefined>>>;
   runOperationWithProgress: RepositoryCommandUi["runOperationWithProgress"] & ReturnType<typeof vi.fn>;
   workspaceTrusted: ReturnType<typeof vi.fn<() => boolean>>;
@@ -11197,8 +11541,11 @@ function fakeCommandUi(options: {
   workspaceTrusted?: boolean;
   dirtyTextDocumentFsPaths?: string[];
   commitMessage?: string;
+  promptedCommitMessage?: string;
+  commitMessagePrompt?: (pathSummary: string) => Promise<string | undefined>;
   pickedCommitHistoryMessage?: string;
   operationProgressSignal?: AbortSignal;
+  operationProgressBeforeTask?: () => void;
 }): FakeCommandUi {
   const dirtyTextDocumentFsPaths = new Set(options.dirtyTextDocumentFsPaths ?? []);
   return {
@@ -11312,8 +11659,16 @@ function fakeCommandUi(options: {
       const selectedPaths = new Set(options.reviewCommitSelection);
       return targets.filter((target) => selectedPaths.has(target.path));
     }),
+    promptCommitMessage: vi.fn(async (pathSummary) =>
+      options.commitMessagePrompt
+        ? await options.commitMessagePrompt(pathSummary)
+        : options.promptedCommitMessage,
+    ),
     promptCommitMessageHistory: vi.fn(async () => options.pickedCommitHistoryMessage),
-    runOperationWithProgress: vi.fn((_title, task) => task(options.operationProgressSignal)) as FakeCommandUi["runOperationWithProgress"],
+    runOperationWithProgress: vi.fn((_title, task) => {
+      options.operationProgressBeforeTask?.();
+      return task(options.operationProgressSignal);
+    }) as FakeCommandUi["runOperationWithProgress"],
     workspaceTrusted: vi.fn(() => options.workspaceTrusted ?? true),
     hasUnsavedTextDocument: vi.fn((fsPath) => dirtyTextDocumentFsPaths.has(fsPath)),
     deleteLocalFile: vi.fn(async () => undefined),
