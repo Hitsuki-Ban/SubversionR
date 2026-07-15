@@ -21,7 +21,7 @@ jobs:
       LINK: /Brepro
       SUBVERSIONR_RELEASE_CI_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_seal == true && 'candidate-seal' || 'continuous-validation' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set reproducible source date epoch
         shell: pwsh
         run: |
@@ -32,7 +32,7 @@ jobs:
           }
           $epoch = $epochContent.TrimEnd("`r", "`n")
           "SOURCE_DATE_EPOCH=$epoch" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
       - uses: actions/setup-node@v5

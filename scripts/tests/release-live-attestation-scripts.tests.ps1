@@ -294,7 +294,7 @@ try {
       "artifact-metadata: write",
       'group: release-vsix-attestation-${{ inputs.release_tag }}',
       "cancel-in-progress: false",
-      "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
       "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       "docs/release/github-attestation-candidate-contract.win32-x64.json",

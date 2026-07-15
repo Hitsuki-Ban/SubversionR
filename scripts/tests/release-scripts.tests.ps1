@@ -11,6 +11,7 @@ $deleteUnversionedTrashPolicyPath = Join-Path $repoRoot "docs\release\delete-unv
 $packageJsonPath = Join-Path $repoRoot "package.json"
 $ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
 $prFastWorkflowPath = Join-Path $repoRoot ".github\workflows\pr-fast.yml"
+$marketplaceIdentityBootstrapWorkflowPath = Join-Path $repoRoot ".github\workflows\bootstrap-marketplace-identity.yml"
 $githubActionsRestorationPath = Join-Path $repoRoot "docs\ci\github-actions-restoration.md"
 $roadmapPath = Join-Path $repoRoot "docs\roadmap\README.md"
 $engineeringHandoffPath = Join-Path $repoRoot "docs\onboarding\ENGINEERING_HANDOFF.md"
@@ -404,6 +405,9 @@ on:
 jobs:
   windows:
     steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm test
@@ -534,6 +538,9 @@ try {
     "pull_request:",
     "push:",
     "- main",
+    "actions/checkout@v7",
+    "pnpm/action-setup@v6",
+    "actions/setup-node@v5",
     "pnpm release:test-marketplace-publication-scripts",
     "pnpm release:verify-readiness:smoke",
     "pnpm release:test-state-engine-beta-performance:win32-x64"
@@ -542,8 +549,25 @@ try {
     "workflow_dispatch:",
     "schedule:",
     "cron:",
-    "concurrency:"
+    "concurrency:",
+    "actions/checkout@v7",
+    "pnpm/action-setup@v6",
+    "actions/setup-node@v5",
+    "astral-sh/setup-uv@v8.2.0",
+    "actions/upload-artifact@v7"
   ) "CI should remain scheduled/manual while carrying a concurrency group."
+  Assert-TextFileContainsTokens $marketplaceIdentityBootstrapWorkflowPath @(
+    "workflow_dispatch:",
+    "contents: read",
+    "id-token: write",
+    "environment: marketplace",
+    "azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43",
+    "allow-no-subscriptions: true"
+  ) "Marketplace identity bootstrap should use the pinned Node 24 azure/login revision and OIDC."
+  Assert-TextFileContainsTokens $verifyReadinessScript @(
+    '.github/workflows/bootstrap-marketplace-identity.yml',
+    "azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43"
+  ) "Release readiness should validate the Marketplace identity bootstrap Node 24 action pin."
   Assert-TextFileContainsTokens $githubActionsRestorationPath @(
     "PR Fast / windows",
     "pull_request",
@@ -2730,6 +2754,10 @@ try {
   Assert-True ($packageJson.scripts."release:verify-beta-candidate:win32-x64".Contains("-ArtifactBundleManifestPath target/release-evidence/subversionr-beta-artifact-bundle-manifest-win32-x64.json")) "Beta candidate consistency gate should require the artifact bundle manifest path."
 
   $ciWorkflow = Get-Content -Raw -LiteralPath $ciWorkflowPath
+  Assert-True ($ciWorkflow.Contains("actions/checkout@v7")) "CI should use the current Node 24 checkout major."
+  Assert-True ($ciWorkflow.Contains("pnpm/action-setup@v6")) "CI should use the current Node 24 pnpm setup major."
+  Assert-True (-not $ciWorkflow.Contains("actions/checkout@v4")) "CI should not use the deprecated Node 20 checkout major."
+  Assert-True (-not $ciWorkflow.Contains("pnpm/action-setup@v4")) "CI should not use the deprecated Node 20 pnpm setup major."
   Assert-True ($ciWorkflow.Contains("LINK: /Brepro")) "CI should use reproducible MSVC linking for release-native dependencies and packaged VSIX bytes."
   Assert-True ($ciWorkflow.Contains('Set reproducible source date epoch') -and $ciWorkflow.Contains('native/release-build-epoch.txt') -and $ciWorkflow.Contains('SOURCE_DATE_EPOCH=$epoch')) "CI should derive embedded native build timestamps from the versioned release epoch."
   Assert-True ($ciWorkflow.Contains("Release script tests")) "CI should run release script tests."
