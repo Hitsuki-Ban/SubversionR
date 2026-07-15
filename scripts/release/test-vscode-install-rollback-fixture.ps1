@@ -8,6 +8,9 @@ param(
   [string]$CurrentPackageRoot,
 
   [Parameter(Mandatory = $true)]
+  [string]$BackendModulePath,
+
+  [Parameter(Mandatory = $true)]
   [string]$SyntheticPreviousVersion,
 
   [Parameter(Mandatory = $true)]
@@ -122,7 +125,7 @@ function Assert-SemVer([string]$Version, [string]$Name) {
 
 function Invoke-LayoutVerification([string]$PackageRoot) {
   Assert-File $verifyLayoutScript "VS Code package layout verifier" | Out-Null
-  & $verifyLayoutScript -Target $Target -PackageRoot $PackageRoot
+  & $verifyLayoutScript -Target $Target -PackageRoot $PackageRoot -BackendModulePath $backendModulePathResolved
 }
 
 function Read-PackageContract([string]$PackageRoot, [string]$Name) {
@@ -242,6 +245,7 @@ function Assert-WorkingCopySentinelUnchanged([object]$Sentinel) {
 }
 
 $currentPackageRootResolved = Assert-Directory $CurrentPackageRoot "CurrentPackageRoot"
+$backendModulePathResolved = Assert-File $BackendModulePath "BackendModulePath"
 Assert-SemVer -Version $SyntheticPreviousVersion -Name "SyntheticPreviousVersion"
 $fixtureRootResolved = Assert-AllowedFixtureRoot -Path $FixtureRoot
 $evidencePathResolved = Assert-AllowedEvidencePath -Path $EvidencePath

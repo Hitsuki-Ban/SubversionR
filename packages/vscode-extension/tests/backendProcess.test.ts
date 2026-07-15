@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BackendLaunchError,
   type BackendChildProcess,
@@ -424,6 +424,59 @@ describe("startBackendProcess", () => {
         stderr: "native bridge library is missing\n",
       },
     });
+  });
+
+  it("surfaces a strict daemon startup record without parsing native loader prose", async () => {
+    const spawner = new RecordingSpawner();
+
+    const start = startBackendProcess(backendConfig(), backendDeps({ spawner }));
+    await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.emit("exit", 2, null);
+    spawner.child.stderr.write(
+      `${JSON.stringify({
+        schema: "subversionr.daemon.startup-error.v1",
+        code: "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING",
+        category: "process",
+        messageKey: "error.backend.nativeBridgeSymbolMissing",
+        safeArgs: {},
+        retryable: false,
+        diagnostics: null,
+      })}\n`,
+    );
+    spawner.child.emit("close", 2, null);
+
+    await expect(start).rejects.toMatchObject({
+      code: "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING",
+      category: "process",
+      messageKey: "error.backend.nativeBridgeSymbolMissing",
+      safeArgs: {},
+      retryable: false,
+      diagnostics: null,
+    });
+  });
+
+  it("bounds initialize failure when exit occurs but stdio close never arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const spawner = new RecordingSpawner();
+      const start = startBackendProcess(backendConfig(), backendDeps({ spawner }));
+      await readJsonRpcRequest(spawner.child.stdin);
+      spawner.child.stderr.write("native bridge process stopped\n");
+      spawner.child.emit("exit", 2, null);
+
+      const failure = expect(start).rejects.toMatchObject({
+        code: "SUBVERSIONR_BACKEND_EXITED",
+        safeArgs: {
+          exitCode: 2,
+          signal: null,
+          stderr: "native bridge process stopped\n",
+        },
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      await failure;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects pending initialize when the sidecar fails to spawn", async () => {

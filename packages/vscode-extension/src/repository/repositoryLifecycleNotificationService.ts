@@ -9,6 +9,7 @@ export interface RepositoryLifecycleNotificationUi {
 export interface RepositoryLifecycleNotificationServiceOptions {
   ui: RepositoryLifecycleNotificationUi;
   localize(message: string, ...args: unknown[]): string;
+  recordFailure(operation: string, error: unknown): void;
   retryDisappearedRepositoryCleanup(trigger: RepositoryAutoOpenTrigger): Promise<void>;
   retryMovedRepositoryRecovery(trigger: RepositoryAutoOpenTrigger): Promise<void>;
   retryWorkspaceRepositoryOpen(trigger: RepositoryAutoOpenTrigger): Promise<void>;
@@ -18,6 +19,17 @@ export class RepositoryLifecycleNotificationService {
   public constructor(private readonly options: RepositoryLifecycleNotificationServiceOptions) {}
 
   public async handleEvent(event: RepositoryLifecycleEvent): Promise<void> {
+    if (event.kind === "autoOpenFailed") {
+      this.options.recordFailure("Repository Auto Open", {
+        code: event.code,
+        category: "lifecycle",
+        messageKey: "error.repository.autoOpenFailed",
+        safeArgs: { trigger: event.trigger },
+        retryable: false,
+        diagnostics: null,
+      });
+      return;
+    }
     if (event.kind === "openSessionClosed" && event.reason === "workingCopyMissing") {
       await this.options.ui.showWarningMessage(
         this.options.localize("SubversionR closed missing SVN working copy: {0}", event.workingCopyRoot),

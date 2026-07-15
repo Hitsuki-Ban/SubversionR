@@ -435,11 +435,15 @@ $evidencePathResolved = Assert-GeneratedPath -Path $EvidencePath -Name "Evidence
 ) -Description "target/release-evidence or target/tests/release-vsix-scripts"
 
 $extensionEntrypointPath = Assert-File (Join-Path $distRootResolved "extension.js") "dist/extension.js"
+$backendModulePath = Assert-File (Join-Path $distRootResolved "backend\backendProcess.js") "dist/backend/backendProcess.js"
 $extensionEntrypointSha256 = (Get-FileHash -LiteralPath $extensionEntrypointPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $readmeSha256 = (Get-FileHash -LiteralPath $readmeResolved -Algorithm SHA256).Hash.ToLowerInvariant()
 Assert-NoCompiledTestArtifacts $distRootResolved
 
-& $verifyLayoutScript -Target $Target -PackageRoot $packageRootResolved
+& $verifyLayoutScript `
+  -Target $Target `
+  -PackageRoot $packageRootResolved `
+  -BackendModulePath $backendModulePath
 
 $packageJson = Get-Content -Raw -LiteralPath (Join-Path $packageRootResolved "package.json") | ConvertFrom-Json
 if ($packageJson.name -ne "subversionr" -or $packageJson.publisher -ne "hitsuki-ban") {

@@ -10,6 +10,7 @@ $extensionPackageJsonPath = Join-Path $repoRoot "packages\vscode-extension\packa
 $extensionReadmePath = Join-Path $repoRoot "packages\vscode-extension\README.md"
 $extensionBuildTsconfigPath = Join-Path $repoRoot "packages\vscode-extension\tsconfig.build.json"
 $ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
+. (Join-Path $PSScriptRoot "packaged-native-probe-fixtures.ps1")
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -257,7 +258,19 @@ function Write-PackageManifest([string]$PackageRoot, [string]$Target, [string]$V
   } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $resourceRoot "subversionr-backend-package-manifest.json") -Encoding utf8
 }
 
-function New-StagedPackageFixture([string]$PackageRoot, [string]$Version) {
+function Update-PackageArtifactRecord([string]$PackageRoot, [string]$RelativePath) {
+  $manifestPath = Join-Path $PackageRoot "resources\backend\win32-x64\subversionr-backend-package-manifest.json"
+  $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+  $artifact = @($manifest.artifacts | Where-Object { $_.path -eq $RelativePath })
+  Assert-True ($artifact.Count -eq 1) "VSIX runtime probe fixture should find exactly one manifest artifact for $RelativePath."
+  $artifactPath = Join-Path $PackageRoot ($RelativePath.Replace("/", "\"))
+  $item = Get-Item -LiteralPath $artifactPath
+  $artifact[0].size = $item.Length
+  $artifact[0].sha256 = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+}
+
+function New-StagedPackageFixture([string]$PackageRoot, [string]$Version, [string]$DaemonExe) {
   $target = "win32-x64"
   $resourceRoot = Join-Path $PackageRoot "resources\backend\$target"
   New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "l10n") | Out-Null
@@ -307,7 +320,7 @@ function New-StagedPackageFixture([string]$PackageRoot, [string]$Version) {
   Assert-True (Test-Path -LiteralPath $peExeSource -PathType Leaf) "Test fixture requires the Windows x64 cmd.exe PE file."
   Assert-True (Test-Path -LiteralPath $peDllSource -PathType Leaf) "Test fixture requires the Windows x64 kernel32.dll PE file."
 
-  Copy-TestFile $peExeSource (Join-Path $resourceRoot "subversionr-daemon.exe")
+  Copy-TestFile $DaemonExe (Join-Path $resourceRoot "subversionr-daemon.exe")
   Copy-TestFile $peDllSource (Join-Path $resourceRoot "subversionr_svn_bridge.dll")
   foreach ($dependencyName in @(
     "libsvn_client-1.dll",
@@ -335,7 +348,8 @@ function New-StagedPackageFixture([string]$PackageRoot, [string]$Version) {
 }
 
 function New-ExtensionDistFixture([string]$DistRoot) {
-  New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $DistRoot) | Out-Null
+  Copy-Item -LiteralPath (Join-Path $repoRoot "packages\vscode-extension\dist") -Destination $DistRoot -Recurse
   @'
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -404,6 +418,7 @@ $tempRoot = Join-Path $repoRoot "target\tests\release-vsix-scripts\$([Guid]::New
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
+  $packagedNativeProbeFixtures = Build-PackagedNativeProbeFixtures -RepoRoot $repoRoot -IncludeCurrentDaemon
   Assert-True (Test-Path -LiteralPath $packageVsixScript -PathType Leaf) "package-vscode-vsix.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $installVsixScript -PathType Leaf) "test-vscode-cli-install-vsix.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $extensionReadmePath -PathType Leaf) "VS Code extension Marketplace README should exist."
@@ -438,10 +453,11 @@ try {
   $workRoot = Join-Path $tempRoot "vsix-work"
   $outputRoot = Join-Path $tempRoot "vsix"
   $evidencePath = Join-Path $tempRoot "evidence\vsix-package.json"
-  New-StagedPackageFixture -PackageRoot $packageRoot -Version "0.2.0"
+  New-StagedPackageFixture -PackageRoot $packageRoot -Version "0.2.0" -DaemonExe $packagedNativeProbeFixtures.currentProtocolDaemon
   New-ExtensionDistFixture -DistRoot $distRoot
+  $backendModulePath = Join-Path $distRoot "backend\backendProcess.js"
 
-  & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript -Target win32-x64 -PackageRoot $packageRoot
+  & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript -Target win32-x64 -PackageRoot $packageRoot -BackendModulePath $backendModulePath
   if ($LASTEXITCODE -ne 0) {
     throw "verify-vscode-package-layout.ps1 failed for the VSIX package fixture."
   }
@@ -485,6 +501,48 @@ try {
   Assert-True (@($report.assertions | Where-Object { $_ -eq "VSIX manifest declares Microsoft.VisualStudio.Code.PreRelease exactly once with Value=true" }).Count -eq 1) "VSIX package evidence should assert the exact pre-release manifest property."
   Assert-True (@($report.assertions | Where-Object { $_ -eq "all VSIX ZIP entry timestamps are normalized to 2000-01-01T00:00:00Z" }).Count -eq 1) "VSIX package evidence should assert deterministic ZIP timestamps."
 
+  $stalePackageRoot = Join-Path $tempRoot "stale-protocol-package"
+  Copy-Item -LiteralPath $packageRoot -Destination $stalePackageRoot -Recurse
+  Copy-Item -LiteralPath $packagedNativeProbeFixtures.staleProtocolDaemon -Destination (Join-Path $stalePackageRoot "resources\backend\win32-x64\subversionr-daemon.exe") -Force
+  Update-PackageArtifactRecord $stalePackageRoot "resources/backend/win32-x64/subversionr-daemon.exe"
+  $staleOutputRoot = Join-Path $tempRoot "stale-protocol-vsix"
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $packageVsixScript `
+      -Target win32-x64 `
+      -PackageRoot $stalePackageRoot `
+      -ExtensionDistDirectory $distRoot `
+      -ReadmePath $extensionReadmePath `
+      -LicensePath LICENSE `
+      -ChangelogPath CHANGELOG.md `
+      -SupportPath SUPPORT.md `
+      -WorkRoot (Join-Path $tempRoot "stale-protocol-work") `
+      -OutputRoot $staleOutputRoot `
+      -EvidencePath (Join-Path $tempRoot "evidence\stale-protocol.json")
+  } "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED" "VSIX packaging should reject a manifest-consistent stale protocol daemon."
+  Assert-True (-not (Test-Path -LiteralPath $staleOutputRoot)) "Rejected stale protocol packaging must not create a VSIX output directory."
+
+  $missingSymbolPackageRoot = Join-Path $tempRoot "missing-symbol-package"
+  Copy-Item -LiteralPath $packageRoot -Destination $missingSymbolPackageRoot -Recurse
+  Copy-Item -LiteralPath $packagedNativeProbeFixtures.currentDaemon -Destination (Join-Path $missingSymbolPackageRoot "resources\backend\win32-x64\subversionr-daemon.exe") -Force
+  Copy-Item -LiteralPath $packagedNativeProbeFixtures.missingSymbolBridge -Destination (Join-Path $missingSymbolPackageRoot "resources\backend\win32-x64\subversionr_svn_bridge.dll") -Force
+  Update-PackageArtifactRecord $missingSymbolPackageRoot "resources/backend/win32-x64/subversionr-daemon.exe"
+  Update-PackageArtifactRecord $missingSymbolPackageRoot "resources/backend/win32-x64/subversionr_svn_bridge.dll"
+  $missingSymbolOutputRoot = Join-Path $tempRoot "missing-symbol-vsix"
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $packageVsixScript `
+      -Target win32-x64 `
+      -PackageRoot $missingSymbolPackageRoot `
+      -ExtensionDistDirectory $distRoot `
+      -ReadmePath $extensionReadmePath `
+      -LicensePath LICENSE `
+      -ChangelogPath CHANGELOG.md `
+      -SupportPath SUPPORT.md `
+      -WorkRoot (Join-Path $tempRoot "missing-symbol-work") `
+      -OutputRoot $missingSymbolOutputRoot `
+      -EvidencePath (Join-Path $tempRoot "evidence\missing-symbol.json")
+  } "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING" "VSIX packaging should reject a manifest-consistent bridge missing a required C ABI symbol."
+  Assert-True (-not (Test-Path -LiteralPath $missingSymbolOutputRoot)) "Rejected missing-symbol packaging must not create a VSIX output directory."
+
   $vsixPath = $report.vsix.path
   $firstVsixSha256 = (Get-FileHash -LiteralPath $vsixPath -Algorithm SHA256).Hash.ToLowerInvariant()
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $packageVsixScript `
@@ -506,6 +564,7 @@ try {
   Assert-ZipContains $vsixPath "extension/package.json" "VSIX should contain extension/package.json."
   Assert-ZipContains $vsixPath "extension.vsixmanifest" "VSIX should contain the VSIX manifest."
   Assert-ZipContains $vsixPath "extension/dist/extension.js" "VSIX should contain the compiled extension entrypoint."
+  Assert-ZipContains $vsixPath "extension/dist/backend/backendProcess.js" "VSIX should contain the exact backend contract module used by the native probe."
   Assert-ZipContains $vsixPath "extension/resources/backend/win32-x64/subversionr-daemon.exe" "VSIX should contain the packaged sidecar."
   Assert-ZipContains $vsixPath "extension/resources/backend/win32-x64/subversionr_svn_bridge.dll" "VSIX should contain the packaged bridge."
   Assert-ZipContains $vsixPath "extension/resources/backend/win32-x64/subversionr-backend-package-manifest.json" "VSIX should contain the backend manifest."

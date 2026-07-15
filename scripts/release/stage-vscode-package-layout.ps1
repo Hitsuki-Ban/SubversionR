@@ -239,6 +239,7 @@ function Copy-IconvModules([string]$SourceRoot, [string]$DestinationRoot) {
 }
 
 $extensionRootResolved = Assert-Directory $ExtensionRoot "ExtensionRoot"
+$backendModulePath = Assert-File (Join-Path $extensionRootResolved "dist\backend\backendProcess.js") "Extension backend contract module"
 $daemonExeResolved = Assert-File $DaemonExe "DaemonExe"
 $bridgeRuntimeResolved = Assert-Directory $BridgeRuntimeDirectory "BridgeRuntimeDirectory"
 $sourceLockResolved = Assert-File $SourceLockPath "SourceLockPath"
@@ -297,6 +298,11 @@ foreach ($requiredPattern in $requiredNativeDependencyPatterns) {
 Copy-IconvModules -SourceRoot $bridgeRuntimeResolved -DestinationRoot $resourceRoot
 
 Assert-NoSvnCliToolsInPackage $packageRoot
+
+& (Join-Path $PSScriptRoot "verify-packaged-native-compatibility.ps1") `
+  -Target $Target `
+  -PackageRoot $packageRoot `
+  -BackendModulePath $backendModulePath
 
 $artifactRecords = @()
 $artifactRecords += Get-ArtifactRecord -PackageRoot $packageRoot -Path (Join-Path $resourceRoot "subversionr-daemon.exe") -Role "sidecar"

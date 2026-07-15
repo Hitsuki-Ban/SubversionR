@@ -15,7 +15,7 @@ fn main() -> ExitCode {
     let bridge = match NativeBridge::load(&bridge_path) {
         Ok(bridge) => bridge,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.startup_error());
             return ExitCode::from(2);
         }
     };

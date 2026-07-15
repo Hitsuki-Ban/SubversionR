@@ -5,7 +5,10 @@ param(
   [string]$Target,
 
   [Parameter(Mandatory = $true)]
-  [string]$PackageRoot
+  [string]$PackageRoot,
+
+  [Parameter(Mandatory = $true)]
+  [string]$BackendModulePath
 )
 
 $ErrorActionPreference = "Stop"
@@ -218,6 +221,7 @@ function Assert-RequiredNativeDependencyPattern([object[]]$Artifacts, [string]$P
 }
 
 $packageRootResolved = Assert-Directory $PackageRoot "PackageRoot"
+$backendModulePathResolved = Assert-File $BackendModulePath "BackendModulePath"
 $resourceRoot = Join-Path $packageRootResolved "resources\backend\$Target"
 Assert-Directory $resourceRoot "Backend resource root" | Out-Null
 
@@ -328,5 +332,10 @@ foreach ($artifact in $artifacts) {
 
 Assert-File (Join-Path $resourceRoot "subversionr-daemon.exe") "Staged sidecar" | Out-Null
 Assert-File (Join-Path $resourceRoot "subversionr_svn_bridge.dll") "Staged bridge" | Out-Null
+
+& (Join-Path $PSScriptRoot "verify-packaged-native-compatibility.ps1") `
+  -Target $Target `
+  -PackageRoot $packageRootResolved `
+  -BackendModulePath $backendModulePathResolved
 
 Write-Host "Verified SubversionR VS Code package layout for $Target at $packageRootResolved."

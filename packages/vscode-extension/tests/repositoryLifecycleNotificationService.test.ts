@@ -5,6 +5,30 @@ import {
 } from "../src/repository/repositoryLifecycleNotificationService";
 
 describe("RepositoryLifecycleNotificationService", () => {
+  it("records automatic open failures without showing a notification", async () => {
+    const ui = notificationUi();
+    const recordFailure = vi.fn();
+    const service = notificationService({ ui, recordFailure });
+
+    await service.handleEvent({
+      kind: "autoOpenFailed",
+      trigger: "activation",
+      code: "SUBVERSIONR_REPOSITORY_DISCOVERY_FAILED",
+    });
+
+    expect(recordFailure).toHaveBeenCalledWith("Repository Auto Open", {
+      code: "SUBVERSIONR_REPOSITORY_DISCOVERY_FAILED",
+      category: "lifecycle",
+      messageKey: "error.repository.autoOpenFailed",
+      safeArgs: { trigger: "activation" },
+      retryable: false,
+      diagnostics: null,
+    });
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+    expect(ui.showWarningMessage).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).not.toHaveBeenCalled();
+  });
+
   it("offers a retry action when closing a missing working copy fails", async () => {
     const ui = notificationUi({ selectedErrorAction: "l10n:Retry Close" });
     const retryDisappearedRepositoryCleanup = vi.fn(async () => undefined);
@@ -133,6 +157,7 @@ describe("RepositoryLifecycleNotificationService", () => {
 function notificationService(
   options: {
     ui?: RepositoryLifecycleNotificationUi;
+    recordFailure?: (operation: string, error: unknown) => void;
     retryDisappearedRepositoryCleanup?: (trigger: "activation" | "workspaceTrust" | "workspaceFolders") => Promise<void>;
     retryMovedRepositoryRecovery?: (trigger: "activation" | "workspaceTrust" | "workspaceFolders") => Promise<void>;
     retryWorkspaceRepositoryOpen?: (trigger: "activation" | "workspaceTrust" | "workspaceFolders") => Promise<void>;
@@ -141,6 +166,7 @@ function notificationService(
   return new RepositoryLifecycleNotificationService({
     ui: options.ui ?? notificationUi(),
     localize: localizeForTest,
+    recordFailure: options.recordFailure ?? vi.fn(),
     retryDisappearedRepositoryCleanup: options.retryDisappearedRepositoryCleanup ?? vi.fn(async () => undefined),
     retryMovedRepositoryRecovery: options.retryMovedRepositoryRecovery ?? vi.fn(async () => undefined),
     retryWorkspaceRepositoryOpen: options.retryWorkspaceRepositoryOpen ?? vi.fn(async () => undefined),
