@@ -8336,6 +8336,387 @@ async function runRepositoryHistoryWorkflow(openReport, readyPath, donePath) {
   };
 }
 
+function readonlyPropertyReportTabs(uri) {
+  return vscode.window.tabGroups.all
+    .flatMap(group => group.tabs)
+    .filter(tab => tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uri.toString());
+}
+
+function installedMergeinfoCommandExposure(packageJson) {
+  const mergeinfoCommands = [
+    "subversionr.showRepositoryMergeinfo",
+    "subversionr.showResourceMergeinfo"
+  ];
+  const menus = packageJson?.contributes?.menus;
+  if (!menus || typeof menus !== "object" || Array.isArray(menus)) {
+    throw new Error("Installed SubversionR manifest did not expose contributed menu metadata.");
+  }
+  const commandPalette = Array.isArray(menus.commandPalette) ? menus.commandPalette : [];
+  const userFacingEntries = Object.entries(menus)
+    .filter(([menuId]) => menuId !== "commandPalette")
+    .flatMap(([, entries]) => Array.isArray(entries) ? entries : []);
+  const commands = mergeinfoCommands.map(command => {
+    const commandPaletteEntries = commandPalette.filter(entry => entry?.command === command);
+    const userFacingMenuEntries = userFacingEntries.filter(entry => entry?.command === command);
+    if (
+      commandPaletteEntries.length !== 1 ||
+      commandPaletteEntries[0].when !== "false" ||
+      userFacingMenuEntries.length !== 0
+    ) {
+      throw new Error(`Installed mergeinfo command ${command} was exposed through the Command Palette or a user-facing menu.`);
+    }
+    return {
+      command,
+      commandPaletteEntryCount: commandPaletteEntries.length,
+      commandPaletteWhen: commandPaletteEntries[0].when,
+      userFacingMenuEntryCount: userFacingMenuEntries.length
+    };
+  });
+  return {
+    commands,
+    allCommandPaletteEntriesDisabled: commands.every(command => command.commandPaletteWhen === "false"),
+    userFacingMenuEntryCount: commands.reduce((count, command) => count + command.userFacingMenuEntryCount, 0)
+  };
+}
+
+async function waitForReadonlyPropertyReport(kind, repositoryId, epoch, svnPath, propertyName, propertyValueToken, timeoutMs = 30000) {
+  const expectedPath = `/${kind}.md`;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const document = vscode.window.activeTextEditor?.document;
+    if (
+      document &&
+      document.uri.scheme === "svn-r-diagnostics" &&
+      document.uri.authority === "readonly" &&
+      document.uri.path === expectedPath
+    ) {
+      const params = new URLSearchParams(document.uri.query);
+      const queryKeys = Array.from(params.keys());
+      if (
+        queryKeys.length !== 3 ||
+        queryKeys[0] !== "repositoryId" ||
+        queryKeys[1] !== "epoch" ||
+        queryKeys[2] !== "path" ||
+        params.getAll("repositoryId").length !== 1 ||
+        params.getAll("epoch").length !== 1 ||
+        params.getAll("path").length !== 1 ||
+        params.get("repositoryId") !== repositoryId ||
+        params.get("epoch") !== String(epoch) ||
+        params.get("path") !== svnPath
+      ) {
+        throw new Error(`Installed readonly ${kind} report URI did not preserve the exact repository identity query.`);
+      }
+      const matchingDocuments = vscode.workspace.textDocuments.filter(candidate => candidate.uri.toString() === document.uri.toString());
+      const matchingTabs = readonlyPropertyReportTabs(document.uri);
+      if (matchingDocuments.length !== 1 || matchingTabs.length !== 1 || matchingTabs[0].isActive !== true) {
+        throw new Error(
+          `Installed readonly ${kind} report expected one reusable document and one active tab; ` +
+          `got documents=${matchingDocuments.length}, tabs=${matchingTabs.length}.`
+        );
+      }
+      if (document.isUntitled || document.isDirty || document.languageId !== "markdown") {
+        throw new Error(
+          `Installed readonly ${kind} report expected a clean, non-untitled Markdown document; ` +
+          `got isUntitled=${document.isUntitled}, isDirty=${document.isDirty}, languageId=${document.languageId}.`
+        );
+      }
+      const content = document.getText();
+      if (!content.includes(propertyName) || !content.includes(propertyValueToken)) {
+        throw new Error(`Installed readonly ${kind} report did not contain the current ${propertyName} property value.`);
+      }
+      if (!matchingTabs[0].label.includes("SVN Properties") || matchingTabs[0].label.includes(repositoryId)) {
+        throw new Error(`Installed readonly ${kind} report tab title was not localized or leaked the internal repository id.`);
+      }
+      return {
+        uri: document.uri.toString(),
+        uriPath: document.uri.path,
+        query: {
+          repositoryId: params.get("repositoryId"),
+          epoch: Number(params.get("epoch")),
+          path: params.get("path")
+        },
+        documentCount: matchingDocuments.length,
+        tabCount: matchingTabs.length,
+        tabLabel: matchingTabs[0].label,
+        tabActive: matchingTabs[0].isActive,
+        isUntitled: document.isUntitled,
+        isDirty: document.isDirty,
+        languageId: document.languageId,
+        contentContainsPropertyName: content.includes(propertyName),
+        contentContainsCurrentPropertyValue: content.includes(propertyValueToken)
+      };
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for installed readonly ${kind} report document.`);
+}
+
+async function closeReadonlyPropertyReport(uri, label) {
+  await withTimeout(
+    vscode.commands.executeCommand("workbench.action.closeActiveEditor"),
+    `workbench.action.closeActiveEditor/${label}`,
+    30000
+  );
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 30000) {
+    const documentCount = vscode.workspace.textDocuments.filter(document => document.uri.toString() === uri).length;
+    const tabCount = vscode.window.tabGroups.all
+      .flatMap(group => group.tabs)
+      .filter(tab => tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uri).length;
+    if (tabCount === 0) {
+      return { documentCount, tabCount };
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`Installed readonly ${label} report tab did not close without a save prompt.`);
+}
+
+async function readonlyPropertyActivitySnapshot(openReport, label) {
+  const surfaceReport = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport", {
+      path: openReport.repository.identity.workingCopyRoot
+    }),
+    `subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport/${label}`,
+    30000
+  );
+  const activityReport = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport", {
+      repositoryId: openReport.repository.repositoryId,
+      epoch: openReport.repository.epoch
+    }),
+    `subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport/${label}`,
+    30000
+  );
+  return {
+    surfaceReport,
+    activityReport,
+    activity: repositoryHistoryActivity(activityReport, label)
+  };
+}
+
+function assertReadonlyPropertyActivityUnchanged(before, after, label) {
+  const sourceControlProjectionUnchanged = sourceControlProjectionMatches(after.surfaceReport, before.surfaceReport);
+  const lastCompletedRefreshUnchanged = JSON.stringify(after.activityReport.lastCompletedRefresh ?? null) ===
+    JSON.stringify(before.activityReport.lastCompletedRefresh ?? null);
+  const operationActivityUnchanged = JSON.stringify(after.activity) === JSON.stringify(before.activity);
+  if (!sourceControlProjectionUnchanged || !lastCompletedRefreshUnchanged || !operationActivityUnchanged) {
+    throw new Error(`Installed readonly ${label} report changed Source Control projection, refresh, reconcile, or remote polling activity.`);
+  }
+  return { sourceControlProjectionUnchanged, lastCompletedRefreshUnchanged, operationActivityUnchanged };
+}
+
+async function runReadonlyPropertyReportWorkflow(repositoryWorkingCopyRoot, resourceWorkingCopyRoot, packageJson) {
+  let repositoryOpenReport;
+  let repositoryCloseReport;
+  let resourceOpenReport;
+  let resourceCloseReport;
+  const mergeinfoCommandExposure = installedMergeinfoCommandExposure(packageJson);
+  try {
+    repositoryOpenReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eOpenReport", { path: repositoryWorkingCopyRoot }),
+      "subversionr.diagnostics.installedSourceControlUiE2eOpenReport/readonlyRepositoryProperties",
+      60000
+    );
+    if (!repositoryOpenReport || repositoryOpenReport.kind !== "subversionr.installedSourceControlUiE2eOpenReport") {
+      throw new Error(`Unexpected installed readonly repository property open report kind: ${repositoryOpenReport && repositoryOpenReport.kind}`);
+    }
+    const rootPropertyResource = findResource(repositoryOpenReport, "changes", ".", "subversionr.changedDirectory");
+    if (!rootPropertyResource || rootPropertyResource.kind !== "dir" || !Number.isSafeInteger(rootPropertyResource.generation)) {
+      throw new Error("Installed readonly repository property report workflow could not find the projected svn:ignore root resource.");
+    }
+    const repositoryBefore = await readonlyPropertyActivitySnapshot(repositoryOpenReport, "readonlyRepositoryPropertiesBefore");
+    await withTimeout(
+      vscode.commands.executeCommand("subversionr.showRepositoryProperties", repositoryOpenReport.repository.repositoryId),
+      "subversionr.showRepositoryProperties/first",
+      60000
+    );
+    const repositoryFirst = await waitForReadonlyPropertyReport(
+      "repository-properties",
+      repositoryOpenReport.repository.repositoryId,
+      repositoryOpenReport.repository.epoch,
+      ".",
+      "svn:ignore",
+      "scratch.txt"
+    );
+    await withTimeout(
+      vscode.commands.executeCommand("subversionr.showRepositoryProperties", repositoryOpenReport.repository.repositoryId),
+      "subversionr.showRepositoryProperties/second",
+      60000
+    );
+    const repositorySecond = await waitForReadonlyPropertyReport(
+      "repository-properties",
+      repositoryOpenReport.repository.repositoryId,
+      repositoryOpenReport.repository.epoch,
+      ".",
+      "svn:ignore",
+      "scratch.txt"
+    );
+    if (repositoryFirst.uri !== repositorySecond.uri) {
+      throw new Error("Installed repository property report did not reuse its deterministic document identity.");
+    }
+    const repositoryAfterClose = await closeReadonlyPropertyReport(repositorySecond.uri, "repository-properties");
+    const repositoryAfter = await readonlyPropertyActivitySnapshot(repositoryOpenReport, "readonlyRepositoryPropertiesAfter");
+    const repositoryActivityAssertions = assertReadonlyPropertyActivityUnchanged(
+      repositoryBefore,
+      repositoryAfter,
+      "repository property"
+    );
+    repositoryCloseReport = await closeOpenReport(repositoryOpenReport);
+
+    resourceOpenReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eOpenReport", { path: resourceWorkingCopyRoot }),
+      "subversionr.diagnostics.installedSourceControlUiE2eOpenReport/readonlyResourceProperties",
+      60000
+    );
+    if (!resourceOpenReport || resourceOpenReport.kind !== "subversionr.installedSourceControlUiE2eOpenReport") {
+      throw new Error(`Unexpected installed readonly resource property open report kind: ${resourceOpenReport && resourceOpenReport.kind}`);
+    }
+    const resource = findResource(
+      resourceOpenReport,
+      "metadata",
+      "src/needs-lock.txt",
+      "subversionr.workingCopyMetadataFile"
+    );
+    if (!resource || resource.kind !== "file" || !Number.isSafeInteger(resource.generation)) {
+      throw new Error("Installed readonly resource property report workflow could not find the projected svn:needs-lock resource.");
+    }
+    const resourceBefore = await readonlyPropertyActivitySnapshot(resourceOpenReport, "readonlyResourcePropertiesBefore");
+    const resourceArgument = resourceStateArgument(resourceWorkingCopyRoot, resource);
+    await withTimeout(
+      vscode.commands.executeCommand("subversionr.showResourceProperties", resourceArgument),
+      "subversionr.showResourceProperties/first",
+      60000
+    );
+    const resourceFirst = await waitForReadonlyPropertyReport(
+      "resource-properties",
+      resourceOpenReport.repository.repositoryId,
+      resourceOpenReport.repository.epoch,
+      "src/needs-lock.txt",
+      "svn:needs-lock",
+      "*"
+    );
+    await withTimeout(
+      vscode.commands.executeCommand("subversionr.showResourceProperties", resourceArgument),
+      "subversionr.showResourceProperties/second",
+      60000
+    );
+    const resourceSecond = await waitForReadonlyPropertyReport(
+      "resource-properties",
+      resourceOpenReport.repository.repositoryId,
+      resourceOpenReport.repository.epoch,
+      "src/needs-lock.txt",
+      "svn:needs-lock",
+      "*"
+    );
+    if (resourceFirst.uri !== resourceSecond.uri || resourceSecond.uri === repositorySecond.uri) {
+      throw new Error("Installed resource property report did not reuse its own distinct deterministic document identity.");
+    }
+    const resourceAfterClose = await closeReadonlyPropertyReport(resourceSecond.uri, "resource-properties");
+    const resourceAfter = await readonlyPropertyActivitySnapshot(resourceOpenReport, "readonlyResourcePropertiesAfter");
+    const resourceActivityAssertions = assertReadonlyPropertyActivityUnchanged(resourceBefore, resourceAfter, "resource property");
+    resourceCloseReport = await closeOpenReport(resourceOpenReport);
+    if (
+      repositoryCloseReport?.repositoryClosed !== true ||
+      resourceCloseReport?.repositoryClosed !== true
+    ) {
+      throw new Error("Installed readonly property report workflow did not close both fixture repositories.");
+    }
+
+    return {
+      kind: "subversionr.installedSourceControlUiE2eReadonlyPropertyReportWorkflow",
+      generatedAt: new Date().toISOString(),
+      commands: {
+        repository: "subversionr.showRepositoryProperties",
+        resource: "subversionr.showResourceProperties"
+      },
+      mergeinfoCommandExposure,
+      fixtures: {
+        repository: {
+          repositoryId: repositoryOpenReport.repository.repositoryId,
+          epoch: repositoryOpenReport.repository.epoch,
+          workingCopyRoot: repositoryOpenReport.repository.identity.workingCopyRoot,
+          path: ".",
+          propertyName: "svn:ignore",
+          propertyValueToken: "scratch.txt",
+          resource: rootPropertyResource
+        },
+        resource: {
+          repositoryId: resourceOpenReport.repository.repositoryId,
+          epoch: resourceOpenReport.repository.epoch,
+          workingCopyRoot: resourceOpenReport.repository.identity.workingCopyRoot,
+          path: resource.path,
+          propertyName: "svn:needs-lock",
+          propertyValueToken: "*",
+          resource
+        }
+      },
+      reports: {
+        repository: {
+          first: repositoryFirst,
+          second: repositorySecond,
+          afterClose: repositoryAfterClose,
+          before: repositoryBefore,
+          after: repositoryAfter,
+          closeReport: repositoryCloseReport
+        },
+        resource: {
+          first: resourceFirst,
+          second: resourceSecond,
+          afterClose: resourceAfterClose,
+          before: resourceBefore,
+          after: resourceAfter,
+          closeReport: resourceCloseReport
+        }
+      },
+      assertions: {
+        repositoryCommandExecutedTwice: true,
+        resourceCommandExecutedTwice: true,
+        repositoryDocumentIdentityReused: repositoryFirst.uri === repositorySecond.uri,
+        resourceDocumentIdentityReused: resourceFirst.uri === resourceSecond.uri,
+        reportKindsUseDistinctIdentities: repositorySecond.uri !== resourceSecond.uri,
+        resourceTargetIsProjectedNonRootPath: resource.path === "src/needs-lock.txt",
+        oneDocumentAndTabPerIdentity:
+          repositorySecond.documentCount === 1 && repositorySecond.tabCount === 1 &&
+          resourceSecond.documentCount === 1 && resourceSecond.tabCount === 1,
+        reportsAreReadonlyMarkdown:
+          repositorySecond.isUntitled === false && repositorySecond.isDirty === false && repositorySecond.languageId === "markdown" &&
+          resourceSecond.isUntitled === false && resourceSecond.isDirty === false && resourceSecond.languageId === "markdown",
+        reportsContainCurrentProperty:
+          repositorySecond.contentContainsPropertyName === true && repositorySecond.contentContainsCurrentPropertyValue === true &&
+          resourceSecond.contentContainsPropertyName === true && resourceSecond.contentContainsCurrentPropertyValue === true,
+        tabsClosedWithoutSavePrompt:
+          repositoryAfterClose.tabCount === 0 && resourceAfterClose.tabCount === 0,
+        sourceControlProjectionUnchanged:
+          repositoryActivityAssertions.sourceControlProjectionUnchanged && resourceActivityAssertions.sourceControlProjectionUnchanged,
+        lastCompletedRefreshUnchanged:
+          repositoryActivityAssertions.lastCompletedRefreshUnchanged && resourceActivityAssertions.lastCompletedRefreshUnchanged,
+        statusRefreshNotRequested:
+          repositoryActivityAssertions.operationActivityUnchanged && resourceActivityAssertions.operationActivityUnchanged,
+        reconcileNotRequested:
+          repositoryActivityAssertions.operationActivityUnchanged && resourceActivityAssertions.operationActivityUnchanged,
+        remoteStatusPollingNotRequested:
+          repositoryActivityAssertions.operationActivityUnchanged && resourceActivityAssertions.operationActivityUnchanged,
+        mergeinfoCommandsHidden:
+          mergeinfoCommandExposure.allCommandPaletteEntriesDisabled === true &&
+          mergeinfoCommandExposure.userFacingMenuEntryCount === 0,
+        repositoriesClosedAfterEvidence:
+          repositoryCloseReport.repositoryClosed === true && resourceCloseReport.repositoryClosed === true
+      }
+    };
+  } catch (error) {
+    for (const openReport of [resourceOpenReport, repositoryOpenReport]) {
+      if (!openReport) {
+        continue;
+      }
+      try {
+        await closeOpenReport(openReport);
+      } catch {
+      }
+    }
+    throw error;
+  }
+}
+
 async function closeOpenReport(openReport) {
   if (!openReport) {
     return undefined;
@@ -8753,6 +9134,7 @@ async function run() {
   let commitSelectedReport;
   let commitSelectedMultiSelectionReport;
   let addToIgnoreReport;
+  let readonlyPropertyReportWorkflow;
   let lockUnlockReport;
   let lockMessageCancellationReport;
   let unlockModeCancellationReport;
@@ -8813,6 +9195,7 @@ async function run() {
       commitSelectedReport,
       commitSelectedMultiSelectionReport,
       addToIgnoreReport,
+      readonlyPropertyReportWorkflow,
       lockUnlockReport,
       lockMessageCancellationReport,
       unlockModeCancellationReport,
@@ -8901,6 +9284,8 @@ async function run() {
       "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
       "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
       "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+      "subversionr.showRepositoryProperties",
+      "subversionr.showResourceProperties",
       "subversionr.diagnostics.installedSourceControlUiE2eArmDirtyGenerationCancellation",
       "subversionr.diagnostics.installedSourceControlUiE2eDirtyGenerationCancellationReport",
       "subversionr.diagnostics.installedSourceControlUiE2eDirtyEvent",
@@ -9129,6 +9514,14 @@ async function run() {
 
     phase = "executingAddToIgnore";
     addToIgnoreReport = await runAddToIgnoreWorkflow(addToIgnoreWorkingCopyRoot);
+    writeResult(partialResult());
+
+    phase = "executingReadonlyPropertyReports";
+    readonlyPropertyReportWorkflow = await runReadonlyPropertyReportWorkflow(
+      addToIgnoreWorkingCopyRoot,
+      lockWorkingCopyRoot,
+      extension.packageJSON
+    );
     writeResult(partialResult());
 
     phase = "executingLockUnlock";
@@ -9486,7 +9879,12 @@ async function run() {
       30000
     );
     phase = "validatingVersionReport";
-    const versionReportDocument = vscode.workspace.textDocuments.find(document => document.uri.scheme === "svn-r-diagnostics");
+    const versionReportDocument = vscode.workspace.textDocuments.find(
+      document =>
+        document.uri.scheme === "svn-r-diagnostics" &&
+        document.uri.authority === "readonly" &&
+        document.uri.path === "/version-report.json"
+    );
     if (!versionReportDocument) {
       throw new Error("SubversionR version report readonly document was not opened.");
     }
@@ -9523,6 +9921,8 @@ async function run() {
         "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
         "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
         "subversionr.showRepositoryLog",
+        "subversionr.showRepositoryProperties",
+        "subversionr.showResourceProperties",
         "subversionr.initialize",
         "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
       "subversionr.diagnostics.installedSourceControlUiE2eArmFullReconcileCancellation",
@@ -9568,6 +9968,8 @@ async function run() {
       hasInstalledSourceControlUiE2eFreshnessReportCommand: true,
       hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand: true,
       hasShowRepositoryLogCommand: true,
+      hasShowRepositoryPropertiesCommand: true,
+      hasShowResourcePropertiesCommand: true,
       hasInstalledSourceControlUiE2eArmFullReconcileCancellationCommand: true,
       hasInstalledSourceControlUiE2eFullReconcileCancellationReportCommand: true,
       hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand: true,
@@ -9622,6 +10024,7 @@ async function run() {
       commitSelectedReport,
       commitSelectedMultiSelectionReport,
       addToIgnoreReport,
+      readonlyPropertyReportWorkflow,
       lockUnlockReport,
       lockMessageCancellationReport,
       unlockModeCancellationReport,
@@ -9917,6 +10320,8 @@ function Assert-HarnessResult(
     $Result.hasInstalledSourceControlUiE2eOpenReportCommand -ne $true -or
     $Result.hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand -ne $true -or
     $Result.hasInstalledSourceControlUiE2eFreshnessReportCommand -ne $true -or
+    $Result.hasShowRepositoryPropertiesCommand -ne $true -or
+    $Result.hasShowResourcePropertiesCommand -ne $true -or
     $Result.hasInstalledSourceControlUiE2eArmFullReconcileCancellationCommand -ne $true -or
     $Result.hasInstalledSourceControlUiE2eFullReconcileCancellationReportCommand -ne $true -or
     $Result.hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand -ne $true -or
@@ -10197,6 +10602,58 @@ function Assert-HarnessResult(
     $Result.addToIgnoreReport.assertions.unversionedProjectionCleared -ne $true -or
     $Result.addToIgnoreReport.closeReport.repositoryClosed -ne $true) {
     throw "Installed Source Control UI E2E result must include an Add to Ignore workflow proving properties/list, svn:ignore propertySet, projection refresh, and evidence cleanup."
+  }
+  if ($Result.readonlyPropertyReportWorkflow.kind -ne "subversionr.installedSourceControlUiE2eReadonlyPropertyReportWorkflow" -or
+    $Result.readonlyPropertyReportWorkflow.commands.repository -ne "subversionr.showRepositoryProperties" -or
+    $Result.readonlyPropertyReportWorkflow.commands.resource -ne "subversionr.showResourceProperties" -or
+    @($Result.readonlyPropertyReportWorkflow.mergeinfoCommandExposure.commands).Count -ne 2 -or
+    $Result.readonlyPropertyReportWorkflow.mergeinfoCommandExposure.commands[0].command -ne "subversionr.showRepositoryMergeinfo" -or
+    $Result.readonlyPropertyReportWorkflow.mergeinfoCommandExposure.commands[1].command -ne "subversionr.showResourceMergeinfo" -or
+    $Result.readonlyPropertyReportWorkflow.mergeinfoCommandExposure.commands[0].commandPaletteEntryCount -ne 1 -or
+    $Result.readonlyPropertyReportWorkflow.mergeinfoCommandExposure.commands[1].commandPaletteEntryCount -ne 1 -or
+    $Result.readonlyPropertyReportWorkflow.mergeinfoCommandExposure.commands[0].commandPaletteWhen -ne "false" -or
+    $Result.readonlyPropertyReportWorkflow.mergeinfoCommandExposure.commands[1].commandPaletteWhen -ne "false" -or
+    $Result.readonlyPropertyReportWorkflow.mergeinfoCommandExposure.userFacingMenuEntryCount -ne 0 -or
+    $Result.readonlyPropertyReportWorkflow.fixtures.repository.path -ne "." -or
+    $Result.readonlyPropertyReportWorkflow.fixtures.repository.propertyName -ne "svn:ignore" -or
+    $Result.readonlyPropertyReportWorkflow.fixtures.repository.propertyValueToken -ne "scratch.txt" -or
+    $Result.readonlyPropertyReportWorkflow.fixtures.resource.path -ne "src/needs-lock.txt" -or
+    $Result.readonlyPropertyReportWorkflow.fixtures.resource.propertyName -ne "svn:needs-lock" -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.first.uri -ne $Result.readonlyPropertyReportWorkflow.reports.repository.second.uri -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.first.uri -ne $Result.readonlyPropertyReportWorkflow.reports.resource.second.uri -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.second.uri -eq $Result.readonlyPropertyReportWorkflow.reports.resource.second.uri -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.second.uriPath -ne "/repository-properties.md" -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.second.uriPath -ne "/resource-properties.md" -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.second.query.path -ne "." -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.second.query.path -ne "src/needs-lock.txt" -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.second.documentCount -ne 1 -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.second.tabCount -ne 1 -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.second.documentCount -ne 1 -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.second.tabCount -ne 1 -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.second.isUntitled -ne $false -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.second.isDirty -ne $false -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.second.languageId -ne "markdown" -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.second.isUntitled -ne $false -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.second.isDirty -ne $false -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.second.languageId -ne "markdown" -or
+    $Result.readonlyPropertyReportWorkflow.reports.repository.afterClose.tabCount -ne 0 -or
+    $Result.readonlyPropertyReportWorkflow.reports.resource.afterClose.tabCount -ne 0 -or
+    $Result.readonlyPropertyReportWorkflow.assertions.repositoryDocumentIdentityReused -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.resourceDocumentIdentityReused -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.reportKindsUseDistinctIdentities -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.resourceTargetIsProjectedNonRootPath -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.oneDocumentAndTabPerIdentity -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.reportsAreReadonlyMarkdown -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.reportsContainCurrentProperty -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.tabsClosedWithoutSavePrompt -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.mergeinfoCommandsHidden -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.sourceControlProjectionUnchanged -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.lastCompletedRefreshUnchanged -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.statusRefreshNotRequested -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.reconcileNotRequested -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.remoteStatusPollingNotRequested -ne $true -or
+    $Result.readonlyPropertyReportWorkflow.assertions.repositoriesClosedAfterEvidence -ne $true) {
+    throw "Installed Source Control UI E2E result must include reusable, clean repository and resource property report tabs, hidden mergeinfo actions, and no Source Control activity."
   }
   if ($Result.lockMessageCancellationReport.kind -ne "subversionr.installedSourceControlUiE2eLockMessageCancellationWorkflow" -or
     $Result.lockMessageCancellationReport.command.command -ne "subversionr.lockResource" -or
@@ -13825,7 +14282,8 @@ $report = [pscustomObject]@{
     "This gate proves installed Lock and Unlock plus Lock message and Unlock mode prompt cancellation for a local file-backed svn:needs-lock working copy item but does not prove broad remote lock-server matrices, auth/certificate lock prompts, break-lock policy, steal-lock policy, or lock load behavior.",
     "This gate proves installed changelist set/clear plus commit/revert by changelist happy paths but does not prove changelist load behavior, cancellation UX for all changelist commands, project-wide changelist policy UX, or commit template/message-history behavior.",
     "This gate proves installed Branch/Tag create and Switch local file-backed happy paths but does not prove switch-after-copy, target browsing, broad remote/auth/certificate matrices, repository-browser integration, merge workflows, or switched working-copy edge/load behavior.",
-    "This gate proves installed local file-backed Repository Log targeting, history view reveal/focus, and missing-author presentation but does not prove remote history, repository browsing, merge history, or broad history load behavior."
+    "This gate proves installed local file-backed Repository Log targeting, history view reveal/focus, and missing-author presentation but does not prove remote history, repository browsing, merge history, or broad history load behavior.",
+    "This gate proves reusable installed repository/resource property report documents for svn:ignore and svn:needs-lock but does not prove remote properties, mergeinfo report content, or broad property load behavior."
   )
   extension = [pscustomobject]@{
     id = "hitsuki-ban.subversionr"
@@ -13842,6 +14300,8 @@ $report = [pscustomObject]@{
     hasInstalledSourceControlUiE2eFreshnessReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eFreshnessReportCommand
     hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand
     hasShowRepositoryLogCommand = [bool]$harnessResult.hasShowRepositoryLogCommand
+    hasShowRepositoryPropertiesCommand = [bool]$harnessResult.hasShowRepositoryPropertiesCommand
+    hasShowResourcePropertiesCommand = [bool]$harnessResult.hasShowResourcePropertiesCommand
     hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand
     hasInstalledSourceControlUiE2eDirtyGenerationCancellationReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eDirtyGenerationCancellationReportCommand
     hasInstalledSourceControlUiE2eDirtyEventCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eDirtyEventCommand
@@ -13899,6 +14359,7 @@ $report = [pscustomObject]@{
   sourceControlUiCommitSelectedMultiSelectionWorkflow = $harnessResult.commitSelectedMultiSelectionReport
   commitSelectedMultiSelectionRepositoryOracle = $commitSelectedMultiSelectionRepositoryOracle
   sourceControlUiAddToIgnoreWorkflow = $harnessResult.addToIgnoreReport
+  sourceControlUiReadonlyPropertyReportWorkflow = $harnessResult.readonlyPropertyReportWorkflow
   addToIgnoreWorkingCopyOracle = $addToIgnoreWorkingCopyOracle
   sourceControlUiLockUnlockWorkflow = $harnessResult.lockUnlockReport
   sourceControlUiLockMessageCancellationWorkflow = $harnessResult.lockMessageCancellationReport
@@ -14420,6 +14881,10 @@ $report = [pscustomObject]@{
     "SubversionR executed the installed Add to Ignore command against an independent unversioned fixture resource",
     "SubversionR read the parent svn:ignore property, wrote scratch.txt, and refreshed SourceControl projection",
     "Source-built SVN working-copy oracle confirmed svn:ignore contains scratch.txt and status reports the file as ignored",
+    "SubversionR executed installed repository and resource Properties commands twice against real svn:ignore and svn:needs-lock fixtures",
+    "Installed repository and resource Properties reports reused one deterministic svn-r-diagnostics URI and one clean read-only Markdown tab per identity",
+    "Closing each installed Properties report closed its clean read-only tab without a save prompt",
+    "Installed Properties reports did not change SourceControl projection, completed refresh coverage, status refresh, reconcile, or remote polling activity",
     "SubversionR executed installed Set Changelist and Clear Changelist commands against an independent changed fixture",
     "VS Code renderer DOM, accessibility, screenshot, and QuickInput submission evidence confirmed the Set Changelist prompt",
     "SubversionR projected the review changelist group after set and returned the resource to Changes after clear",
