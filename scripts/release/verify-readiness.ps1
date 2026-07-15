@@ -513,6 +513,7 @@ $liveAttestationRecorder = Read-RequiredDocument "scripts/release/record-live-gi
 $liveAttestationScriptTests = Read-RequiredDocument "scripts/tests/release-live-attestation-scripts.tests.ps1"
 $projectReadme = Read-RequiredDocument "README.md"
 $publication023Evidence = Read-RequiredDocument "docs/release/0.2.3-publication-evidence.md"
+$publication024Evidence = Read-RequiredDocument "docs/release/0.2.4-publication-evidence.md"
 $engineeringHandoff = Read-RequiredDocument "docs/onboarding/ENGINEERING_HANDOFF.md"
 $architectureDecisions = Read-AndAssertArchitectureDecisionRecords
 $stableVsCodeApiAdr = $architectureDecisions["docs/adr/ADR-008-stable-vscode-apis.md"]
@@ -6603,6 +6604,43 @@ Assert-Terms $publication023Evidence @(
   "public-install verification",
   "overall public release readiness"
 ) "0.2.3 publication evidence coverage"
+Assert-Terms $publication024Evidence @(
+  '# 0.2.4 Beta Publication Evidence',
+  'shipped on 2026-07-15 JST (2026-07-14 UTC)',
+  '- Release: [`v0.2.4-beta.1`](https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.4-beta.1)',
+  '- Release ID: `354129040`',
+  '- Published at: `2026-07-14T23:37:44Z` (`2026-07-15T08:37:44+09:00`)',
+  '- Source commit: `22e6645067e64f3b403392c4648a8b23bdca1b09`',
+  '- VSIX asset: `subversionr-win32-x64-0.2.4.vsix`, `8295021` bytes, SHA256 `880e7937423695ca772436f01e2419498463ebd7cc25ba8a283a135530418249`',
+  '- Candidate evidence bundle: `subversionr-win32-x64-beta-candidate.zip`, `15991871` bytes, SHA256 `16ef3415f28de609874ce3b775feb9b756beccd813ff4f0511d15444cadf50b3`',
+  '- Source SBOM: `subversionr-source-sbom.cdx.json`, `272845` bytes, SHA256 `780010d7b0c36ab07986bd17868a2da15cf3f8ef088305efbffb43fb1e0e603e`',
+  '- Third-party notices: `THIRD-PARTY-NOTICES.md`, `75300` bytes, SHA256 `d034ba2756b7e555f582f29ed5a2bf1fe29df6980c8593cbc480a432dfb14edf`',
+  '1,469 manifest-verified payloads plus the manifest and final consistency JSON, for 1,471 ZIP entries',
+  '- Workflow run: [`29376755227`](https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29376755227)',
+  '- Attestation: [`35359353`](https://github.com/Hitsuki-Ban/SubversionR/attestations/35359353)',
+  '- Subject: `subversionr-win32-x64-0.2.4.vsix`',
+  '- Subject SHA256: `880e7937423695ca772436f01e2419498463ebd7cc25ba8a283a135530418249`',
+  '- Predicate type: `https://github.com/Hitsuki-Ban/SubversionR/attestations/post-release-asset/v1`',
+  '- Publish workflow run: [`29376825168`](https://github.com/Hitsuki-Ban/SubversionR/actions/runs/29376825168)',
+  '- Gallery entry: [`hitsuki-ban.subversionr`](https://marketplace.visualstudio.com/items?itemName=hitsuki-ban.subversionr)',
+  '- Display name: `SVN-R`',
+  '- Version and target: `0.2.4`, `win32-x64`',
+  '- Gallery flags: `validated`',
+  '- VS Code pre-release property: `Microsoft.VisualStudio.Code.PreRelease=true`',
+  '- Extension/version `lastUpdated`: `2026-07-14T23:47:33.967Z`',
+  '- Gallery `VsixSha256` property: `880e7937423695ca772436f01e2419498463ebd7cc25ba8a283a135530418249`',
+  '- Gallery VSIX asset: [`Microsoft.VisualStudio.Services.VSIXPackage`](https://hitsuki-ban.gallerycdn.vsassets.io/extensions/hitsuki-ban/subversionr/0.2.4/1784072476933/Microsoft.VisualStudio.Services.VSIXPackage)',
+  '- Gallery VSIX size: `8295021` bytes',
+  '- Gallery VSIX SHA256: `880e7937423695ca772436f01e2419498463ebd7cc25ba8a283a135530418249`',
+  '- Independent verification time: `2026-07-14T23:48:23.1547110Z`',
+  "does not claim that the public install flow was exercised",
+  "does not claim original source-to-binary build provenance or artifact signing",
+  'This evidence does not claim a stable-channel release, artifact signing, signed source-to-binary provenance, public-install verification, previous-stable upgrade or rollback, cross-platform support, final SBOM/NOTICE/legal approval, final vulnerability approval, or overall public release readiness.'
+) "0.2.4 publication evidence coverage"
+Assert-NoTerms $publication024Evidence @(
+  "__GALLERY_",
+  "__PENDING_"
+) "0.2.4 publication evidence must contain final Gallery facts"
 Assert-Terms $attestationContract @(
   "subversionr.release.github-attestation-contract.win32-x64.v1",
   "subversionr-win32-x64-0.2.0.vsix",

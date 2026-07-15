@@ -7,6 +7,7 @@
 - Adds runtime Source Control count policies and a dedicated working-copy metadata group while preserving Lock and Unlock workflows.
 - Strengthens installed VSIX UI evidence for command placement, accessibility, renderer output, and negative detail-accuracy cases.
 - Retains the `hitsuki-ban.subversionr` identity, `SVN-R` Marketplace display name, Windows `win32-x64` pre-release channel, and existing public-readiness non-claim.
+- Publishes the exact Windows package through the Visual Studio Marketplace pre-release channel and as the `v0.2.4-beta.1` GitHub pre-release, with live digest attestation and Gallery byte-continuity evidence.
 
 ## 0.2.3
 
