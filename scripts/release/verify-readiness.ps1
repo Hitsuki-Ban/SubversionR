@@ -135,6 +135,9 @@ function Assert-PrFastWorkflow([object]$Workflow) {
     "branches:",
     "- main",
     "workflow_dispatch:",
+    "actions/checkout@v7",
+    "pnpm/action-setup@v6",
+    "actions/setup-node@v5",
     "pnpm install --frozen-lockfile",
     "pnpm check",
     "pnpm test",
@@ -151,6 +154,10 @@ function Assert-PrFastWorkflow([object]$Workflow) {
     "cargo test --workspace",
     "pnpm native:test-scripts"
   ) "automatic GitHub Actions PR Fast gate coverage"
+  Assert-NoTerms $Workflow @(
+    "actions/checkout@v4",
+    "pnpm/action-setup@v4"
+  ) "automatic GitHub Actions PR Fast gate must not use Node 20 action runtimes"
   if ($Workflow.Content -match "(?m)^\s*run:\s*pnpm release:verify-readiness\s*$") {
     throw ".github/workflows/pr-fast.yml: PR Fast gate must use release:verify-readiness:smoke instead of full release readiness."
   }
@@ -501,6 +508,7 @@ $evidenceMatrix = Read-RequiredDocument "docs/release/security-evidence-matrix.m
 $publicClaimMatrix = Read-RequiredDocument "docs/release/public-claim-matrix.md"
 $publicCutoverRunbook = Read-RequiredDocument "docs/release/public-cutover-runbook.md"
 $publicCutoverEvidence = Read-RequiredDocument "docs/release/public-cutover-evidence.json"
+$marketplaceIdentityBootstrapWorkflow = Read-RequiredDocument ".github/workflows/bootstrap-marketplace-identity.yml"
 $attestationWorkflow = Read-RequiredDocument ".github/workflows/attest-release-vsix.yml"
 $attestationContract = Read-RequiredDocument "docs/release/github-attestation-contract.win32-x64.json"
 $attestationPredicateSchema = Read-RequiredDocument "docs/release/post-release-asset-verification-predicate.v1.schema.json"
@@ -6569,7 +6577,7 @@ Assert-Terms $attestationWorkflow @(
   "artifact-metadata: write",
   'group: release-vsix-attestation-${{ inputs.release_tag }}',
   "cancel-in-progress: false",
-  "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+  "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
   "gh release download",
   "scripts/release/verify-release-attestation-subject.ps1",
   "scripts/release/generate-post-release-asset-verification-predicate.ps1",
@@ -6587,6 +6595,19 @@ Assert-Terms $attestationWorkflow @(
   "scripts/release/record-live-github-attestation.ps1",
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 ) "live GitHub artifact attestation workflow coverage"
+Assert-Terms $marketplaceIdentityBootstrapWorkflow @(
+  "workflow_dispatch:",
+  "contents: read",
+  "id-token: write",
+  "environment: marketplace",
+  "azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43",
+  "client-id:",
+  "tenant-id:",
+  "allow-no-subscriptions: true"
+) "Marketplace identity bootstrap Node 24 action and OIDC workflow coverage"
+Assert-NoTerms $marketplaceIdentityBootstrapWorkflow @(
+  "azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5"
+) "Marketplace identity bootstrap must not use the Node 20 azure/login revision"
 Assert-Terms $publication023Evidence @(
   "# 0.2.3 Beta Publication Evidence",
   "v0.2.3-beta.1",
@@ -6921,8 +6942,17 @@ Assert-Terms $ciWorkflow @(
   "workflow_dispatch:",
   "schedule:",
   "cron:",
-  "concurrency:"
+  "concurrency:",
+  "actions/checkout@v7",
+  "pnpm/action-setup@v6",
+  "actions/setup-node@v5",
+  "astral-sh/setup-uv@v8.2.0",
+  "actions/upload-artifact@v7"
 ) "scheduled/manual release workflow trigger while heavy native and publication gates remain explicit"
+Assert-NoTerms $ciWorkflow @(
+  "actions/checkout@v4",
+  "pnpm/action-setup@v4"
+) "scheduled/manual CI must not use Node 20 action runtimes"
 if ($ciWorkflow.Content -match "(?m)^\s*(push|pull_request):\s*$") {
   throw ".github/workflows/ci.yml: heavy release workflow must not run on pull_request or push; keep it scheduled/manual while PR Fast owns automatic PR checks."
 }

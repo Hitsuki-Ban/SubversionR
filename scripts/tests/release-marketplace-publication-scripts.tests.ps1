@@ -276,6 +276,7 @@ try {
       "environment: marketplace",
       "contents: read",
       "id-token: write",
+      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
       "docs/release/github-attestation-candidate-contract.win32-x64.json",
       "verify-release-attestation-subject.ps1",
       "Microsoft.VisualStudio.Code.PreRelease",
@@ -290,9 +291,12 @@ try {
       "Preflight Marketplace publication evidence recording",
       "-ValidateOnly",
       "node-version: 24.16.0",
+      "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+      "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
       "version: 11.5.2",
       "pnpm install --frozen-lockfile",
       "azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       "pnpm exec vsce publish --packagePath `$env:SUBJECT_PATH --pre-release --azure-credential",
       "record-marketplace-publication.ps1"
     )) {
