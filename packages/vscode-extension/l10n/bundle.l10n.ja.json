@@ -218,6 +218,7 @@
   "Enter a non-empty SVN commit message without carriage returns.": "空ではなく、キャリッジリターンを含まない SVN コミットメッセージを入力してください。",
   "Enter a non-empty SVN commit message without carriage returns and try again.": "空ではなく、キャリッジリターンを含まない SVN コミットメッセージを入力して、もう一度お試しください。",
   "The selected SVN changes changed while entering the commit message. Review the current changes and try again.": "コミットメッセージの入力中に選択した SVN の変更が変わりました。現在の変更を確認して、もう一度お試しください。",
+  "The local OS username is unavailable, so SubversionR cannot record an author for this local SVN commit. Check the OS account and retry.": "ローカル OS のユーザー名を取得できないため、SubversionR はこのローカル SVN コミットの作者を記録できません。OS アカウントを確認して、もう一度お試しください。",
   "No eligible SVN file changes to commit.": "コミット対象の SVN ファイル変更はありません。",
   "Save SVN resource before committing: {0}": "コミットする前に SVN リソースを保存してください: {0}",
   "SubversionR post-commit reconcile failed after revision {0}: {1}": "SubversionR はリビジョン {0} のコミット後照合に失敗しました: {1}",

@@ -696,6 +696,52 @@ function Get-CommitAllRepositoryOracle(
     throw "Commit All repository oracle did not find the expected commit message in the latest repository log for $trackedFileUrl."
   }
 
+  $initialCliRevision = 1L
+  $initialCliRevisionAuthor = (Invoke-CheckedTool -Path $SvnExe -Arguments (@(
+        "propget",
+        "--strict",
+        "--revprop",
+        "-r",
+        [string]$initialCliRevision,
+        "svn:author",
+        $Fixture.repoUrl
+      ) + $commonArguments) -Description "svn propget Commit All fixture initial revision author") -join "`n"
+  if ([string]::IsNullOrWhiteSpace($initialCliRevisionAuthor)) {
+    throw "Commit All repository oracle expected the fixture initial CLI revision to have a non-empty svn:author."
+  }
+
+  $committedRevisionText = (Invoke-CheckedTool -Path $SvnExe -Arguments (@(
+        "info",
+        "--show-item",
+        "last-changed-revision",
+        $trackedFileUrl
+      ) + $commonArguments) -Description "svn info Commit All committed revision") -join "`n"
+  $committedRevision = 0L
+  if (-not [long]::TryParse(
+      $committedRevisionText,
+      [System.Globalization.NumberStyles]::None,
+      [System.Globalization.CultureInfo]::InvariantCulture,
+      [ref]$committedRevision
+    ) -or $committedRevision -le $initialCliRevision) {
+    throw "Commit All repository oracle expected a committed revision after fixture revision $initialCliRevision, got '$committedRevisionText'."
+  }
+
+  $committedRevisionAuthor = (Invoke-CheckedTool -Path $SvnExe -Arguments (@(
+        "propget",
+        "--strict",
+        "--revprop",
+        "-r",
+        [string]$committedRevision,
+        "svn:author",
+        $Fixture.repoUrl
+      ) + $commonArguments) -Description "svn propget Commit All committed revision author") -join "`n"
+  if ([string]::IsNullOrWhiteSpace($committedRevisionAuthor)) {
+    throw "Commit All repository oracle expected revision $committedRevision to have a non-empty svn:author."
+  }
+  if (-not [string]::Equals($initialCliRevisionAuthor, $committedRevisionAuthor, [System.StringComparison]::Ordinal)) {
+    throw "Commit All repository oracle expected revision $committedRevision svn:author to exactly match the fixture initial CLI revision author."
+  }
+
   $scratchProbe = Invoke-ToolProbe -Path $SvnExe -Arguments (@("cat", $unversionedScratchUrl) + $commonArguments)
   if ($scratchProbe.exitCode -eq 0) {
     throw "Commit All repository oracle unexpectedly found unversioned scratch.txt in the repository."
@@ -706,6 +752,11 @@ function Get-CommitAllRepositoryOracle(
     trackedFileUrl = $trackedFileUrl
     trackedFileContent = $trackedContent
     latestLogContainsCommitMessage = $true
+    initialCliRevision = $initialCliRevision
+    initialCliRevisionAuthorNonEmpty = $true
+    committedRevision = $committedRevision
+    committedRevisionAuthorNonEmpty = $true
+    committedRevisionAuthorMatchedInitialCliRevision = $true
     unversionedScratchUrl = $unversionedScratchUrl
     unversionedScratchAbsentFromRepository = $true
   }

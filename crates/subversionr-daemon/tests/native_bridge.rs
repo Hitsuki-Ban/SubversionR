@@ -28,6 +28,45 @@ use subversionr_protocol::{
 static NATIVE_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
+fn native_bridge_configures_file_commit_author_before_commit_mutation() {
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../native/svn-bridge/src/subversionr_bridge.c");
+    let source = fs::read_to_string(&source_path)
+        .expect("native bridge source should be readable")
+        .replace("\r\n", "\n");
+    let commit_start = source
+        .find("static int bridge_operation_commit_impl(")
+        .expect("commit implementation should exist");
+    let commit_end = source[commit_start..]
+        .find("\nint subversionr_bridge_operation_commit_with_auth(")
+        .map(|offset| commit_start + offset)
+        .expect("commit implementation should be bounded");
+    let commit = &source[commit_start..commit_end];
+
+    let unavailable_check = commit
+        .find("return BRIDGE_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE;")
+        .expect("file-backed commits should reject a missing OS username");
+    let default_username_parameter = commit
+        .find("SVN_AUTH_PARAM_DEFAULT_USERNAME")
+        .expect("file-backed commits should inject the OS username through libsvn auth");
+    let commit_mutation = commit
+        .find("svn_client_commit6(")
+        .expect("commit implementation should call libsvn commit");
+
+    assert!(unavailable_check < default_username_parameter);
+    assert!(default_username_parameter < commit_mutation);
+    assert!(
+        commit.contains("file_url_err->apr_err == SVN_ERR_RA_ILLEGAL_URL"),
+        "only libsvn's explicit non-file URL result may classify the target as remote"
+    );
+    assert_eq!(
+        source.matches("SVN_AUTH_PARAM_DEFAULT_USERNAME").count(),
+        1,
+        "default username injection must remain scoped to local commit setup"
+    );
+}
+
+#[test]
 fn native_bridge_public_operations_clear_stale_diagnostics_before_validation() {
     let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../native/svn-bridge/src/subversionr_bridge.c");
@@ -1617,6 +1656,26 @@ fn native_bridge_commit_against_svnserve_routes_credentials_through_broker() {
     assert_eq!(result.result.touched_paths, vec!["tracked.txt"]);
     assert!(result.result.skipped_paths.is_empty());
     assert!(result.revision >= 3);
+
+    let committed_author = raw_revision_author(
+        &svn,
+        &checkout_url,
+        result.revision,
+        [
+            "--username".as_ref(),
+            "alice".as_ref(),
+            "--password".as_ref(),
+            "secret".as_ref(),
+            "--no-auth-cache".as_ref(),
+            "--non-interactive".as_ref(),
+            "--config-dir".as_ref(),
+            checkout_config.as_os_str(),
+        ],
+    );
+    assert_eq!(
+        committed_author, "alice",
+        "svnserve commits must preserve the authenticated broker identity as svn:author"
+    );
 
     fixture.update_seed_wc(&svn);
     assert_eq!(
@@ -4031,6 +4090,11 @@ fn native_bridge_commit_modified_file_publishes_revision_and_cleans_status() {
     fixture.add_committed_file(&svn, "tracked.txt", "initial\n");
     let peer_wc = fixture.checkout_copy(&svn, "peer-wc");
     fixture.write_file("tracked.txt", "committed through bridge\n");
+    let expected_os_username = raw_revision_author(&svn, &fixture.repo_url, 1, []);
+    assert!(
+        !expected_os_username.is_empty(),
+        "the staged SVN client must record the current OS username for the file-backed fixture"
+    );
 
     let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
     let identity = bridge
@@ -4059,6 +4123,11 @@ fn native_bridge_commit_modified_file_publishes_revision_and_cleans_status() {
     assert_eq!(result.result.touched_paths, vec!["tracked.txt"]);
     assert!(result.result.skipped_paths.is_empty());
     assert!(result.revision >= 3);
+    assert_eq!(
+        raw_revision_author(&svn, &fixture.repo_url, result.revision, []),
+        expected_os_username,
+        "file-backed bridge commits must record the same OS username as native SVN"
+    );
 
     let snapshot = bridge
         .status_scan(&identity, "tracked.txt", "empty", 84)
@@ -6338,6 +6407,33 @@ fn run_tool_output<const N: usize>(tool: &PathBuf, args: [&OsStr; N]) -> std::pr
         .args(args)
         .output()
         .expect("staged Subversion fixture tool should run")
+}
+
+fn raw_revision_author<const N: usize>(
+    svn: &PathBuf,
+    repository_url: &str,
+    revision: i64,
+    additional_args: [&OsStr; N],
+) -> String {
+    let revision = revision.to_string();
+    let output = Command::new(svn)
+        .args(["propget", "--revprop", "-r"])
+        .arg(&revision)
+        .args(["svn:author", repository_url])
+        .args(additional_args)
+        .output()
+        .expect("staged SVN client should read the raw revision author");
+    assert!(
+        output.status.success(),
+        "svn:author lookup for r{revision} failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("svn:author should be valid UTF-8")
+        .trim_end_matches(['\r', '\n'])
+        .to_string()
 }
 
 fn file_url(path: &Path) -> String {

@@ -2123,6 +2123,11 @@ $commitAllRepositoryOracle = [pscustomobject]@{
   trackedFileUrl = "file:///fixture/commit-all/repo/trunk/src/tracked.txt"
   trackedFileContent = "modified by M7j3"
   latestLogContainsCommitMessage = $true
+  initialCliRevision = 1
+  initialCliRevisionAuthorNonEmpty = $true
+  committedRevision = 4
+  committedRevisionAuthorNonEmpty = $true
+  committedRevisionAuthorMatchedInitialCliRevision = $true
   unversionedScratchUrl = "file:///fixture/commit-all/repo/trunk/scratch.txt"
   unversionedScratchAbsentFromRepository = $true
 }
@@ -7297,6 +7302,15 @@ public static class Program {
         CopyDirectory(sourcePath, destinationPath);
         return 0;
       }
+      if (exe == "svn.exe" && args.Length >= 7 && args[0] == "propget" && args[1] == "--strict" &&
+          args[2] == "--revprop" && args[3] == "-r" && args[5] == "svn:author") {
+        var normalizedUrl = args[6].Replace('\\', '/');
+        if (normalizedUrl.IndexOf("commit-all-fixture", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            (args[4] == "1" || args[4] == "4")) {
+          Console.Write("SubversionR fake");
+          return 0;
+        }
+      }
       if (exe == "svn.exe" && args.Length >= 2 && args[0] == "propget" && args[1] == "svn:needs-lock") {
         Console.WriteLine("*");
         return 0;
@@ -7362,6 +7376,12 @@ public static class Program {
           WriteText(Path.Combine(targetRoot, "library", "load", "modified-" + index.ToString("D3") + ".txt"), "directory external load source\n");
         }
         WriteText(Path.Combine(targetRoot, "pinned.txt"), "file external source\n");
+        return 0;
+      }
+      if (exe == "svn.exe" && args.Length >= 4 && args[0] == "info" && args[1] == "--show-item" &&
+          args[2] == "last-changed-revision" &&
+          args[3].IndexOf("commit-all-fixture", StringComparison.OrdinalIgnoreCase) >= 0) {
+        Console.WriteLine("4");
         return 0;
       }
       if (exe == "svn.exe" && args.Length >= 2 && args[0] == "info") {
@@ -7907,6 +7927,11 @@ try {
   Assert-Equal "subversionr.installedSourceControlUiE2eCommitAllRepositoryOracle" $report.commitAllRepositoryOracle.kind "Commit All repository oracle should be published in final evidence."
   Assert-Equal "modified by M7j3" $report.commitAllRepositoryOracle.trackedFileContent "Commit All repository oracle should prove the repository contains the committed tracked content."
   Assert-Equal "True" ([string]$report.commitAllRepositoryOracle.latestLogContainsCommitMessage) "Commit All repository oracle should prove the latest SVN log contains the input message."
+  Assert-Equal "1" ([string]$report.commitAllRepositoryOracle.initialCliRevision) "Commit All repository oracle should bind the expected author to the fixture initial CLI revision."
+  Assert-Equal "True" ([string]$report.commitAllRepositoryOracle.initialCliRevisionAuthorNonEmpty) "Commit All repository oracle should require a non-empty initial CLI revision author."
+  Assert-Equal "4" ([string]$report.commitAllRepositoryOracle.committedRevision) "Commit All repository oracle should bind the installed commit revision."
+  Assert-Equal "True" ([string]$report.commitAllRepositoryOracle.committedRevisionAuthorNonEmpty) "Commit All repository oracle should prove the installed commit svn:author is non-empty."
+  Assert-Equal "True" ([string]$report.commitAllRepositoryOracle.committedRevisionAuthorMatchedInitialCliRevision) "Commit All repository oracle should prove the installed commit svn:author exactly matches the fixture initial CLI revision author."
   Assert-Equal "True" ([string]$report.commitAllRepositoryOracle.unversionedScratchAbsentFromRepository) "Commit All repository oracle should prove scratch.txt was not committed."
   Assert-Equal "True" ([string]$report.commitAllWorkingCopy.repositoryOracle.unversionedScratchAbsentFromRepository) "Commit All working-copy evidence should link to the repository oracle."
   Assert-Equal "subversionr.installedSourceControlUiE2eCommitSelectedWorkflow" $report.sourceControlUiCommitSelectedWorkflow.kind "Installed Source Control UI E2E evidence should include a Commit Selected workflow report."
@@ -8772,6 +8797,8 @@ try {
   Assert-True ($workflowContent -match '(?s)async function runCommitAllWorkflow.*?acceptInputCommandArguments.*?executeCommand\(acceptInputCommand, \.\.\.acceptInputCommandArguments\).*?publishCommitPromptReadyAndWait\(commitPromptReadyPath, commitPromptDonePath, "commitAllMessagePrompt".*?await commitCommand') "Installed Source Control UI E2E harness should run Commit All through the installed SourceControl input accept command and capture the empty-input message prompt."
   Assert-True ($workflowContent -match "sourceControlUiCommitAllWorkflow") "Installed Source Control UI E2E evidence should publish the Commit All workflow report."
   Assert-True ($workflowContent -match "Get-CommitAllRepositoryOracle") "Installed Source Control UI E2E evidence should verify Commit All using an SVN repository oracle."
+  Assert-True ($workflowContent -match '(?s)propget.*?--revprop.*?svn:author.*?initialCliRevisionAuthor.*?propget.*?--revprop.*?svn:author.*?committedRevisionAuthor') "Installed Source Control UI E2E evidence should read the fixture and installed-commit svn:author values only through the SVN CLI oracle."
+  Assert-True ($workflowContent -match 'StringComparison\]::Ordinal') "Installed Source Control UI E2E evidence should compare the fixture and installed-commit svn:author values exactly."
   Assert-True ($workflowContent -match '(?s)async function runCommitSelectedWorkflow.*?resourceStateArgument\(commitSelectedWorkingCopyRoot, selected\).*?executeCommand\("subversionr\.commitResource", commandArgument\)') "Installed Source Control UI E2E harness should run Commit Selected through the installed SCM resource command argument."
   Assert-True ($workflowContent -match "sourceControlUiCommitSelectedWorkflow") "Installed Source Control UI E2E evidence should publish the Commit Selected workflow report."
   Assert-True ($workflowContent -match "Get-CommitSelectedRepositoryOracle") "Installed Source Control UI E2E evidence should verify Commit Selected using an SVN repository oracle."

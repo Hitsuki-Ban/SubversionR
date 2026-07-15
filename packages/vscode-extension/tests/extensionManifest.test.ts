@@ -1888,6 +1888,9 @@ describe("extension manifest", () => {
       expect(bundle).toHaveProperty(
         "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
       );
+      expect(bundle).toHaveProperty(
+        "The local OS username is unavailable, so SubversionR cannot record an author for this local SVN commit. Check the OS account and retry.",
+      );
       expect(bundle).toHaveProperty("No eligible SVN file changes to commit.");
       expect(bundle).toHaveProperty("Save SVN resource before committing: {0}");
       expect(bundle).toHaveProperty("SubversionR post-commit reconcile failed after revision {0}: {1}");
@@ -2477,6 +2480,7 @@ function runtimeLocalizationKeys(): string[] {
     "Enter a non-empty SVN commit message without carriage returns.",
     "Enter a non-empty SVN commit message without carriage returns and try again.",
     "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
+    "The local OS username is unavailable, so SubversionR cannot record an author for this local SVN commit. Check the OS account and retry.",
     "No eligible SVN file changes to commit.",
     "Save SVN resource before committing: {0}",
     "SubversionR post-commit reconcile failed after revision {0}: {1}",

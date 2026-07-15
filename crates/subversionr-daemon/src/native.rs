@@ -46,6 +46,7 @@ const RAW_STATUS_CALLBACK_FAILED: c_int = 10;
 const RAW_STATUS_CANCELLED: c_int = 11;
 const RAW_OPERATION_CANCEL_CALLBACK_FAILED: c_int = 11;
 const RAW_OPERATION_CANCELLED: c_int = 12;
+const RAW_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE: c_int = 13;
 const NATIVE_AUTH_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const RAW_CERT_FAILURE_NOT_YET_VALID: u32 = 0x0000_0001;
 const RAW_CERT_FAILURE_EXPIRED: u32 = 0x0000_0002;
@@ -4565,6 +4566,16 @@ fn operation_commit_failure(status: c_int, path: &str) -> BridgeFailure {
         return failure;
     }
 
+    if status == RAW_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE {
+        return BridgeFailure::new(
+            "SUBVERSIONR_LOCAL_COMMIT_AUTHOR_UNAVAILABLE",
+            "native",
+            "error.native.localCommitAuthorUnavailable",
+            json!({ "status": status }),
+            false,
+        );
+    }
+
     let (code, message_key) = match status {
         1 => (
             "SVN_BRIDGE_INVALID_ARGUMENT",
@@ -5833,6 +5844,27 @@ mod tests {
         assert_eq!(cancelled.code, "SVN_OPERATION_CANCELLED");
         assert_eq!(cancelled.category, "cancelled");
         assert_eq!(cancelled.message_key, "error.native.operationCancelled");
+    }
+
+    #[test]
+    fn operation_commit_failure_maps_missing_local_author_without_path_disclosure() {
+        let failure = operation_commit_failure(
+            RAW_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE,
+            "C:/Users/fixture/private/wc/tracked.txt",
+        );
+
+        assert_eq!(failure.code, "SUBVERSIONR_LOCAL_COMMIT_AUTHOR_UNAVAILABLE");
+        assert_eq!(failure.category, "native");
+        assert_eq!(
+            failure.message_key,
+            "error.native.localCommitAuthorUnavailable"
+        );
+        assert_eq!(
+            failure.args,
+            json!({ "status": RAW_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE })
+        );
+        assert!(!failure.args.to_string().contains("fixture"));
+        assert!(!failure.retryable);
     }
 
     #[test]

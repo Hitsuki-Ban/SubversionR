@@ -4356,6 +4356,10 @@ function repositoryFailureMessage(
       return localize(
         "The selected SVN changes changed while entering the commit message. Review the current changes and try again.",
       );
+    case "SUBVERSIONR_LOCAL_COMMIT_AUTHOR_UNAVAILABLE":
+      return localize(
+        "The local OS username is unavailable, so SubversionR cannot record an author for this local SVN commit. Check the OS account and retry.",
+      );
   }
   const cause = operationFailureCause(error);
   switch (cause) {
