@@ -438,7 +438,7 @@ try {
   Assert-Equal "tsc -p tsconfig.build.json" $extensionPackage.scripts.build "VS Code extension should expose a release build script."
 
   $rootPackage = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
-  Assert-Equal "0.2.4" $rootPackage.version "Root package should declare the current 0.2.4 candidate version."
+  $productVersion = [string]$rootPackage.version
   Assert-True ($null -ne $rootPackage.devDependencies."@vscode/vsce") "Root devDependencies should pin @vscode/vsce."
   Assert-True ($rootPackage.scripts."release:test-vsix-scripts".Contains("release-vsix-scripts.tests.ps1")) "Root package should expose M7g VSIX script tests."
   Assert-True ($rootPackage.scripts."release:build-vscode-extension".Contains("--filter ./packages/vscode-extension build")) "Root package should expose the extension release build."
@@ -453,7 +453,7 @@ try {
   $workRoot = Join-Path $tempRoot "vsix-work"
   $outputRoot = Join-Path $tempRoot "vsix"
   $evidencePath = Join-Path $tempRoot "evidence\vsix-package.json"
-  New-StagedPackageFixture -PackageRoot $packageRoot -Version "0.2.0" -DaemonExe $packagedNativeProbeFixtures.currentProtocolDaemon
+  New-StagedPackageFixture -PackageRoot $packageRoot -Version $productVersion -DaemonExe $packagedNativeProbeFixtures.currentProtocolDaemon
   New-ExtensionDistFixture -DistRoot $distRoot
   $backendModulePath = Join-Path $distRoot "backend\backendProcess.js"
 
@@ -500,6 +500,13 @@ try {
   Assert-Equal $report.inputs.marketplaceIcon.sha256 $report.vsix.marketplaceIconSha256 "VSIX package evidence should prove Marketplace icon hash continuity."
   Assert-True (@($report.assertions | Where-Object { $_ -eq "VSIX manifest declares Microsoft.VisualStudio.Code.PreRelease exactly once with Value=true" }).Count -eq 1) "VSIX package evidence should assert the exact pre-release manifest property."
   Assert-True (@($report.assertions | Where-Object { $_ -eq "all VSIX ZIP entry timestamps are normalized to 2000-01-01T00:00:00Z" }).Count -eq 1) "VSIX package evidence should assert deterministic ZIP timestamps."
+  Assert-Equal "subversionr.release.packaged-native-version-evidence.v1" $report.nativeCompatibility.schema "VSIX package evidence should persist the packaged native version probe."
+  Assert-Equal $productVersion $report.nativeCompatibility.expectedProductVersion "VSIX package evidence should record the authoritative product version."
+  Assert-Equal $productVersion $report.nativeCompatibility.backendVersion "VSIX package evidence should bind the daemon version to the product."
+  Assert-Equal "subversionr-svn-bridge/$productVersion" $report.nativeCompatibility.bridgeVersion "VSIX package evidence should bind the bridge version to the product."
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$report.nativeCompatibility.libsvnVersion)) "VSIX package evidence should preserve the independent libsvn version."
+  Assert-Equal "1" ([string]$report.nativeCompatibility.protocol.major) "VSIX package evidence should record the probed protocol major."
+  Assert-True ([int]$report.nativeCompatibility.protocol.minor -ge 29) "VSIX package evidence should record a supported protocol minor."
 
   $stalePackageRoot = Join-Path $tempRoot "stale-protocol-package"
   Copy-Item -LiteralPath $packageRoot -Destination $stalePackageRoot -Recurse
@@ -542,6 +549,39 @@ try {
       -EvidencePath (Join-Path $tempRoot "evidence\missing-symbol.json")
   } "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING" "VSIX packaging should reject a manifest-consistent bridge missing a required C ABI symbol."
   Assert-True (-not (Test-Path -LiteralPath $missingSymbolOutputRoot)) "Rejected missing-symbol packaging must not create a VSIX output directory."
+
+  foreach ($versionMismatch in @(
+    [pscustomobject]@{
+      name = "backend"
+      daemon = $packagedNativeProbeFixtures.mismatchedBackendVersionDaemon
+      code = "SUBVERSIONR_PACKAGED_NATIVE_BACKEND_VERSION_MISMATCH"
+    },
+    [pscustomobject]@{
+      name = "bridge"
+      daemon = $packagedNativeProbeFixtures.mismatchedBridgeVersionDaemon
+      code = "SUBVERSIONR_PACKAGED_NATIVE_BRIDGE_VERSION_MISMATCH"
+    }
+  )) {
+    $versionMismatchPackageRoot = Join-Path $tempRoot "mismatched-$($versionMismatch.name)-version-package"
+    Copy-Item -LiteralPath $packageRoot -Destination $versionMismatchPackageRoot -Recurse
+    Copy-Item -LiteralPath $versionMismatch.daemon -Destination (Join-Path $versionMismatchPackageRoot "resources\backend\win32-x64\subversionr-daemon.exe") -Force
+    Update-PackageArtifactRecord $versionMismatchPackageRoot "resources/backend/win32-x64/subversionr-daemon.exe"
+    $versionMismatchOutputRoot = Join-Path $tempRoot "mismatched-$($versionMismatch.name)-version-vsix"
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $packageVsixScript `
+        -Target win32-x64 `
+        -PackageRoot $versionMismatchPackageRoot `
+        -ExtensionDistDirectory $distRoot `
+        -ReadmePath $extensionReadmePath `
+        -LicensePath LICENSE `
+        -ChangelogPath CHANGELOG.md `
+        -SupportPath SUPPORT.md `
+        -WorkRoot (Join-Path $tempRoot "mismatched-$($versionMismatch.name)-version-work") `
+        -OutputRoot $versionMismatchOutputRoot `
+        -EvidencePath (Join-Path $tempRoot "evidence\mismatched-$($versionMismatch.name)-version.json")
+    } $versionMismatch.code "VSIX packaging should reject a manifest-consistent $($versionMismatch.name) product version mismatch."
+    Assert-True (-not (Test-Path -LiteralPath $versionMismatchOutputRoot)) "Rejected $($versionMismatch.name) version packaging must not create a VSIX output directory."
+  }
 
   $vsixPath = $report.vsix.path
   $firstVsixSha256 = (Get-FileHash -LiteralPath $vsixPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -602,7 +642,7 @@ try {
   Assert-Equal "subversionr.release.vsix-cli-install.win32-x64.v1" $installReport.schema "VSIX CLI install evidence should use the M7g schema."
   Assert-Equal "False" ([string]$installReport.publicReadinessClaim) "VSIX CLI install evidence must not claim public readiness."
   Assert-Equal "hitsuki-ban.subversionr" $installReport.extension.id "VSIX CLI install evidence should record the installed extension id."
-  Assert-Equal "0.2.0" $installReport.extension.version "VSIX CLI install evidence should record the installed extension version."
+  Assert-Equal $productVersion $installReport.extension.version "VSIX CLI install evidence should record the installed extension version."
   Assert-Equal $vsixPath $installReport.vsix.path "VSIX CLI install evidence should record the installed VSIX path."
   Assert-Equal "win32-x64" $installReport.vsix.targetPlatform "VSIX CLI install evidence should record the VSIX target platform."
   Assert-Equal ([string](Get-Item -LiteralPath $vsixPath).Length) ([string]$installReport.vsix.size) "VSIX CLI install evidence should record the installed VSIX size."
@@ -612,7 +652,7 @@ try {
   Assert-Equal $installReport.workingCopySentinel.svnTreeBeforeSha256 $installReport.workingCopySentinel.svnTreeAfterSha256 "VSIX CLI install should prove recursive .svn tree non-mutation."
   Assert-True ($installReport.codeCli.sha256 -match '^[a-f0-9]{64}$') "VSIX CLI install evidence should record the Code CLI file hash."
   Assert-True (@($installReport.traceIds | Where-Object { $_ -eq "TST-024" }).Count -eq 1) "VSIX CLI install evidence should trace TST-024."
-  Assert-True (@($installReport.installedExtensions | Where-Object { $_ -eq "hitsuki-ban.subversionr@0.2.0" }).Count -eq 1) "VSIX CLI install should list the installed extension."
+  Assert-True (@($installReport.installedExtensions | Where-Object { $_ -eq "hitsuki-ban.subversionr@$productVersion" }).Count -eq 1) "VSIX CLI install should list the installed extension."
 
   $fakePnpmRoot = Join-Path $tempRoot "fake-pnpm"
   New-FakePnpm -Root $fakePnpmRoot

@@ -107,7 +107,7 @@ foreach ($staleOutput in @($daemonPath, $daemonPdbPath)) {
 
 Push-Location $repoRoot
 try {
-  & $cargo.Source build -p subversionr-daemon --release --target-dir $targetRoot
+  & $cargo.Source build -p subversionr-daemon --release --locked --target-dir $targetRoot
   if ($LASTEXITCODE -ne 0) {
     throw "Release daemon build failed with exit code $LASTEXITCODE."
   }

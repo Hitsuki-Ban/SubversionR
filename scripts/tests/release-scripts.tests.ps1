@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).ProviderPath
 $stageScript = Join-Path $repoRoot "scripts\release\stage-vscode-package-layout.ps1"
 $verifyLayoutScript = Join-Path $repoRoot "scripts\release\verify-vscode-package-layout.ps1"
+$verifyProductVersionScript = Join-Path $repoRoot "scripts\release\verify-product-version-consistency.ps1"
 $backendModulePath = Join-Path $repoRoot "packages\vscode-extension\dist\backend\backendProcess.js"
 $verifyReadinessScript = Join-Path $repoRoot "scripts\release\verify-readiness.ps1"
 $verifyRequirementCatalogAlignmentScript = Join-Path $repoRoot "scripts\release\verify-requirement-catalog-alignment.ps1"
@@ -77,6 +78,62 @@ function Assert-NativeCommandSucceedsContaining([scriptblock]$Action, [string]$E
   Assert-True ($exitCode -eq 0) "$Message Expected native command to succeed, got exit code $exitCode."
   $text = $output | Out-String
   Assert-True ($text.Contains($ExpectedText)) "$Message Expected output to contain '$ExpectedText', got '$text'."
+}
+
+function Assert-ProductVersionVerifierContract([string]$Root) {
+  $fixtureRoot = Join-Path $Root "product-version-consistency"
+  New-Item -ItemType Directory -Force -Path $fixtureRoot | Out-Null
+  $rootPackagePath = Join-Path $fixtureRoot "package.json"
+  $extensionPackagePath = Join-Path $fixtureRoot "extension-package.json"
+  $cargoManifestPath = Join-Path $fixtureRoot "Cargo.toml"
+  $productVersion = [string]((Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json).version)
+
+  function Write-VersionFixtures([string]$RootJson, [string]$ExtensionJson, [string]$CargoToml) {
+    Set-Content -LiteralPath $rootPackagePath -Value $RootJson -NoNewline
+    Set-Content -LiteralPath $extensionPackagePath -Value $ExtensionJson -NoNewline
+    Set-Content -LiteralPath $cargoManifestPath -Value $CargoToml -NoNewline
+  }
+
+  function Invoke-VersionVerifier {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyProductVersionScript `
+      -RootPackagePath $rootPackagePath `
+      -ExtensionPackagePath $extensionPackagePath `
+      -CargoWorkspaceManifestPath $cargoManifestPath
+  }
+
+  $matchingPackage = "{`"version`":`"$productVersion`"}"
+  $matchingCargo = "[workspace]`n`n[workspace.package]`nversion = `"$productVersion`"`n"
+  Write-VersionFixtures $matchingPackage $matchingPackage $matchingCargo
+  Assert-NativeCommandSucceedsContaining { Invoke-VersionVerifier } $productVersion "Product version verifier should accept exact declarations."
+
+  Write-VersionFixtures '{}' $matchingPackage $matchingCargo
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Root package.json must declare exactly one string version property" "Product version verifier should reject a missing root version."
+  Write-VersionFixtures $matchingPackage '{}' $matchingCargo
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Extension package.json must declare exactly one string version property" "Product version verifier should reject a missing extension version."
+  Write-VersionFixtures $matchingPackage $matchingPackage "[workspace.package]`nedition = `"2024`"`n"
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "exactly one string version declaration" "Product version verifier should reject a missing Cargo version."
+
+  Write-VersionFixtures '{"version":"not-semver"}' $matchingPackage $matchingCargo
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Root package version must be a semantic version" "Product version verifier should reject a malformed root version."
+  Write-VersionFixtures $matchingPackage '{"version":"not-semver"}' $matchingCargo
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Extension package version must be a semantic version" "Product version verifier should reject a malformed extension version."
+  Write-VersionFixtures $matchingPackage $matchingPackage "[workspace.package]`nversion = `"not-semver`"`n"
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Cargo workspace version must be a semantic version" "Product version verifier should reject a malformed Cargo version."
+  Write-VersionFixtures "{`"version`":`"$productVersion`",`"version`":`"$productVersion`"}" $matchingPackage $matchingCargo
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "exactly one string version property" "Product version verifier should reject duplicate JSON version properties."
+  Write-VersionFixtures $matchingPackage $matchingPackage "[workspace.package]`nversion = 123`nversion = `"$productVersion`"`n"
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "exactly one string version declaration" "Product version verifier should reject duplicate or non-string Cargo version declarations."
+  Write-VersionFixtures '{"version":"0.2.4-01"}' $matchingPackage $matchingCargo
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Root package version must be a semantic version" "Product version verifier should reject numeric prerelease identifiers with leading zeros."
+
+  $prereleaseRoot = '{"version":"0.2.4-beta.1"}'
+  $prereleaseCargo = "[workspace.package]`nversion = `"0.2.4-beta.1`"`n"
+  Write-VersionFixtures $prereleaseRoot '{"version":"0.2.4-beta.2"}' $prereleaseCargo
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Extension package version must exactly match" "Product version verifier should reject a prerelease mismatch."
+  Write-VersionFixtures $prereleaseRoot '{"version":"0.2.4-BETA.1"}' $prereleaseCargo
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Extension package version must exactly match" "Product version verifier should reject a case-only prerelease mismatch."
+  Write-VersionFixtures $matchingPackage $matchingPackage "[workspace.package]`nversion = `"0.0.1`"`n"
+  Assert-NativeCommandFailsContaining { Invoke-VersionVerifier } "Cargo workspace version must exactly match" "Product version verifier should reject a Cargo mismatch."
 }
 
 function Update-StagedArtifactRecord([string]$PackageRoot, [string]$RelativePath) {
@@ -530,6 +587,8 @@ try {
   Assert-RequirementCatalogAlignmentUsesSyntheticArchive $tempRoot
   Assert-True (Test-Path -LiteralPath $stageScript -PathType Leaf) "stage-vscode-package-layout.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $verifyLayoutScript -PathType Leaf) "verify-vscode-package-layout.ps1 should exist."
+  Assert-True (Test-Path -LiteralPath $verifyProductVersionScript -PathType Leaf) "verify-product-version-consistency.ps1 should exist."
+  Assert-ProductVersionVerifierContract $tempRoot
   Assert-True (Test-Path -LiteralPath $verifyReadinessScript -PathType Leaf) "verify-readiness.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $verifyRequirementCatalogAlignmentScript -PathType Leaf) "verify-requirement-catalog-alignment.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $requirementsEvidencePath -PathType Leaf) "Requirements release evidence CSV should exist."
@@ -2507,17 +2566,18 @@ try {
 
   $fixtureExtensionRoot = Join-Path $tempRoot "extension"
   New-Item -ItemType Directory -Force -Path (Join-Path $fixtureExtensionRoot "l10n") | Out-Null
-  @'
+  $productVersion = [string]((Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json).version)
+  @"
 {
   "name": "subversionr",
   "displayName": "SVN-R",
-  "version": "0.2.0",
+  "version": "$productVersion",
   "publisher": "hitsuki-ban",
   "main": "./dist/extension.js",
   "keywords": ["svn", "subversion", "source-control", "scm", "apache-subversion"],
   "icon": "resources/marketplace/icon.png"
 }
-'@ | Set-Content -LiteralPath (Join-Path $fixtureExtensionRoot "package.json") -NoNewline
+"@ | Set-Content -LiteralPath (Join-Path $fixtureExtensionRoot "package.json") -NoNewline
   Write-TestPngIcon (Join-Path $fixtureExtensionRoot "resources\marketplace\icon.png")
   "{}" | Set-Content -LiteralPath (Join-Path $fixtureExtensionRoot "package.nls.json") -NoNewline
   "{}" | Set-Content -LiteralPath (Join-Path $fixtureExtensionRoot "package.nls.ja.json") -NoNewline
@@ -2656,6 +2716,30 @@ try {
       -OutputRoot (Join-Path $tempRoot "missing-symbol-stage")
   } "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING" "Staging should reject the current daemon paired with a bridge missing a required C ABI symbol."
 
+  $mismatchedBackendVersionExe = Join-Path $tempRoot "mismatched-backend-version-daemon\subversionr-daemon.exe"
+  $mismatchedBridgeVersionExe = Join-Path $tempRoot "mismatched-bridge-version-daemon\subversionr-daemon.exe"
+  Copy-TestFile $packagedNativeProbeFixtures.mismatchedBackendVersionDaemon $mismatchedBackendVersionExe
+  Copy-TestFile $packagedNativeProbeFixtures.mismatchedBridgeVersionDaemon $mismatchedBridgeVersionExe
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $stageScript `
+      -Target win32-x64 `
+      -ExtensionRoot $fixtureExtensionRoot `
+      -DaemonExe $mismatchedBackendVersionExe `
+      -BridgeRuntimeDirectory $bridgeRuntime `
+      -SourceLockPath $sourceLock `
+      -OutputRoot (Join-Path $tempRoot "mismatched-backend-version-stage")
+  } "SUBVERSIONR_PACKAGED_NATIVE_BACKEND_VERSION_MISMATCH" "Staging should reject a daemon whose compiled product version drifts."
+
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $stageScript `
+      -Target win32-x64 `
+      -ExtensionRoot $fixtureExtensionRoot `
+      -DaemonExe $mismatchedBridgeVersionExe `
+      -BridgeRuntimeDirectory $bridgeRuntime `
+      -SourceLockPath $sourceLock `
+      -OutputRoot (Join-Path $tempRoot "mismatched-bridge-version-stage")
+  } "SUBVERSIONR_PACKAGED_NATIVE_BRIDGE_VERSION_MISMATCH" "Staging should reject a bridge runtime label whose product version drifts."
+
   $staleVerifyRoot = Join-Path $tempRoot "stale-protocol-verify"
   Copy-Item -LiteralPath $stagedRoot -Destination $staleVerifyRoot -Recurse
   Copy-Item -LiteralPath $packagedNativeProbeFixtures.staleProtocolDaemon -Destination (Join-Path $staleVerifyRoot "resources\backend\win32-x64\subversionr-daemon.exe") -Force
@@ -2673,6 +2757,37 @@ try {
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript -Target win32-x64 -PackageRoot $missingSymbolVerifyRoot -BackendModulePath $backendModulePath
   } "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING" "Layout verification should reject a manifest-consistent bridge missing a required C ABI symbol."
+
+  foreach ($versionMismatch in @(
+    [pscustomobject]@{
+      name = "backend"
+      daemon = $packagedNativeProbeFixtures.mismatchedBackendVersionDaemon
+      code = "SUBVERSIONR_PACKAGED_NATIVE_BACKEND_VERSION_MISMATCH"
+    },
+    [pscustomobject]@{
+      name = "bridge"
+      daemon = $packagedNativeProbeFixtures.mismatchedBridgeVersionDaemon
+      code = "SUBVERSIONR_PACKAGED_NATIVE_BRIDGE_VERSION_MISMATCH"
+    }
+  )) {
+    $versionMismatchRoot = Join-Path $tempRoot "mismatched-$($versionMismatch.name)-version-verify"
+    Copy-Item -LiteralPath $stagedRoot -Destination $versionMismatchRoot -Recurse
+    Copy-Item -LiteralPath $versionMismatch.daemon -Destination (Join-Path $versionMismatchRoot "resources\backend\win32-x64\subversionr-daemon.exe") -Force
+    Update-StagedArtifactRecord $versionMismatchRoot "resources/backend/win32-x64/subversionr-daemon.exe"
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript -Target win32-x64 -PackageRoot $versionMismatchRoot -BackendModulePath $backendModulePath
+    } $versionMismatch.code "Layout verification should reject a manifest-consistent $($versionMismatch.name) product version mismatch."
+  }
+
+  $manifestVersionMismatchRoot = Join-Path $tempRoot "manifest-version-mismatch-verify"
+  Copy-Item -LiteralPath $stagedRoot -Destination $manifestVersionMismatchRoot -Recurse
+  $manifestVersionMismatchPath = Join-Path $manifestVersionMismatchRoot "resources\backend\win32-x64\subversionr-backend-package-manifest.json"
+  $manifestVersionMismatch = Get-Content -Raw -LiteralPath $manifestVersionMismatchPath | ConvertFrom-Json
+  $manifestVersionMismatch.extension.version = "0.0.1-manifest-mismatch"
+  $manifestVersionMismatch | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestVersionMismatchPath -Encoding utf8
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $verifyLayoutScript -Target win32-x64 -PackageRoot $manifestVersionMismatchRoot -BackendModulePath $backendModulePath
+  } "Manifest extension version should exactly match staged package.json" "Layout verification should reject backend manifest version drift."
 
   Remove-Item -LiteralPath $marketplaceIcon -Force
   Assert-NativeCommandFailsContaining {

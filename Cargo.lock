@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "subversionr-daemon"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "base64",
  "libloading",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "subversionr-protocol"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "serde",
  "serde_json",

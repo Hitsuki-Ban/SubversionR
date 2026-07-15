@@ -8,13 +8,20 @@ param(
   [string]$PackageRoot,
 
   [Parameter(Mandatory = $true)]
-  [string]$BackendModulePath
+  [string]$BackendModulePath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$ExpectedProductVersion
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).ProviderPath
+if ([string]::IsNullOrWhiteSpace($ExpectedProductVersion)) {
+  throw "SUBVERSIONR_PRODUCT_VERSION_REQUIRED"
+}
+$expectedBridgeVersion = "subversionr-svn-bridge/$ExpectedProductVersion"
 $packageRootResolved = (Resolve-Path -LiteralPath $PackageRoot -ErrorAction Stop).ProviderPath
 $resourceRoot = Join-Path $packageRootResolved "resources\backend\$Target"
 $daemonPath = (Resolve-Path -LiteralPath (Join-Path $resourceRoot "subversionr-daemon.exe") -ErrorAction Stop).ProviderPath
@@ -91,6 +98,12 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($stderr)) {
     throw "SUBVERSIONR_PACKAGED_NATIVE_PROBE_STDERR_NOT_EMPTY"
   }
+  if ([string]$probeResult["backendVersion"] -cne $ExpectedProductVersion) {
+    throw "SUBVERSIONR_PACKAGED_NATIVE_BACKEND_VERSION_MISMATCH"
+  }
+  if ([string]$probeResult["bridgeVersion"] -cne $expectedBridgeVersion) {
+    throw "SUBVERSIONR_PACKAGED_NATIVE_BRIDGE_VERSION_MISMATCH"
+  }
   $protocol = $probeResult["protocol"]
   if (
     $probeResult["status"] -ne "passed" `
@@ -104,7 +117,19 @@ try {
     throw "SUBVERSIONR_PACKAGED_NATIVE_PROBE_RESULT_INVALID"
   }
 
-  Write-Host "Verified packaged native startup, protocol, ABI, and read-only bridge operation for $Target."
+  $compatibility = [pscustomobject]@{
+    schema = "subversionr.release.packaged-native-version-evidence.v1"
+    expectedProductVersion = $ExpectedProductVersion
+    backendVersion = [string]$probeResult["backendVersion"]
+    bridgeVersion = [string]$probeResult["bridgeVersion"]
+    libsvnVersion = [string]$probeResult["libsvnVersion"]
+    protocol = [pscustomobject]@{
+      major = [int]$protocol["major"]
+      minor = [int]$protocol["minor"]
+    }
+  }
+  Write-Host "Verified packaged native startup, protocol, ABI, read-only bridge operation, and product version $ExpectedProductVersion for $Target."
+  $compatibility
 }
 finally {
   if ($null -ne $process) {

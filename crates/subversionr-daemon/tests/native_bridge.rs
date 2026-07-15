@@ -153,7 +153,10 @@ fn native_bridge_loads_built_dll_and_reports_libsvn_version() {
     let info = bridge.info();
 
     assert!(info.real_libsvn_bridge);
-    assert_eq!(info.bridge_version, "subversionr-svn-bridge/0.1.0");
+    assert_eq!(
+        info.bridge_version,
+        format!("subversionr-svn-bridge/{}", env!("CARGO_PKG_VERSION"))
+    );
     assert!(info.libsvn_version.starts_with("1.14.5"));
 }
 

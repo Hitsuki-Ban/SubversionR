@@ -501,6 +501,11 @@ if ($Mode -eq "smoke") {
 
 Invoke-SupportIntakeChecks
 
+& (Join-Path $repoRoot "scripts\release\verify-product-version-consistency.ps1") `
+  -RootPackagePath (Join-Path $repoRoot "package.json") `
+  -ExtensionPackagePath (Join-Path $repoRoot "packages\vscode-extension\package.json") `
+  -CargoWorkspaceManifestPath (Join-Path $repoRoot "Cargo.toml")
+
 $rootPackageJson = Read-RequiredDocument "package.json"
 $securityPolicy = Read-RequiredDocument "SECURITY.md"
 $releaseGates = Read-RequiredDocument "docs/release/m7-release-readiness-gates.md"
@@ -657,6 +662,7 @@ $packageVscodeVsix = Read-RequiredDocument "scripts/release/package-vscode-vsix.
 $releaseScriptTests = Read-RequiredDocument "scripts/tests/release-scripts.tests.ps1"
 $releaseVsixScriptTests = Read-RequiredDocument "scripts/tests/release-vsix-scripts.tests.ps1"
 $betaCandidateOrchestration = Read-RequiredDocument "scripts/release/run-beta-candidate-evidence.ps1"
+$productVersionVerifier = Read-RequiredDocument "scripts/release/verify-product-version-consistency.ps1"
 $backendProcessTests = Read-RequiredDocument "packages/vscode-extension/tests/backendProcess.test.ts"
 $cacheLifecycleSource = Read-RequiredDocument "packages/vscode-extension/src/cache/cacheLifecycleService.ts"
 $cacheLifecycleTests = Read-RequiredDocument "packages/vscode-extension/tests/cacheLifecycleService.test.ts"
@@ -1452,15 +1458,30 @@ Assert-Terms $packagedNativeProbeVerifier @(
   "backendProcess.js",
   "WaitForExit(30000)",
   '"--profile-root", $profileRoot',
-  "SUBVERSIONR_PACKAGED_NATIVE_PROBE_TIMEOUT"
+  "SUBVERSIONR_PACKAGED_NATIVE_PROBE_TIMEOUT",
+  "ExpectedProductVersion",
+  "SUBVERSIONR_PACKAGED_NATIVE_BACKEND_VERSION_MISMATCH",
+  "SUBVERSIONR_PACKAGED_NATIVE_BRIDGE_VERSION_MISMATCH"
 ) "fail-closed packaged native probe process isolation coverage"
 Assert-Terms $stageVscodePackageLayout @(
-  "verify-packaged-native-compatibility.ps1"
+  "verify-packaged-native-compatibility.ps1",
+  "verify-product-version-consistency.ps1",
+  "ExpectedProductVersion"
 ) "staged package native compatibility gate coverage"
 Assert-Terms $verifyVscodePackageLayout @(
   "verify-packaged-native-compatibility.ps1",
-  "BackendModulePath"
+  "verify-product-version-consistency.ps1",
+  "BackendModulePath",
+  "ExpectedProductVersion"
 ) "verified package native compatibility gate coverage"
+Assert-Terms $productVersionVerifier @(
+  "System.Text.Json.JsonDocument",
+  "[workspace.package]",
+  "exactly one string version property",
+  "exactly one string version declaration",
+  "must exactly match root product version",
+  "prereleaseIdentifier"
+) "fail-closed product, extension, and Cargo version declaration coverage"
 Assert-Terms $packageVscodeVsix @(
   'Join-Path $distRootResolved "backend\backendProcess.js"',
   "dist/backend/backendProcess.js",
@@ -1481,7 +1502,12 @@ Assert-Terms $releaseScriptTests @(
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
   "SUBVERSIONR_NATIVE_BRIDGE_SYMBOL_MISSING",
   "staleProtocolDaemon",
-  "missingSymbolBridge"
+  "missingSymbolBridge",
+  "Assert-ProductVersionVerifierContract",
+  "missing root version",
+  "malformed extension version",
+  "numeric prerelease identifiers with leading zeros",
+  "Cargo mismatch"
 ) "packaged native negative release script coverage"
 Assert-Terms $releaseVsixScriptTests @(
   "stale-protocol-package",

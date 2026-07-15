@@ -5,7 +5,11 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{Value, json};
 
-pub fn run_daemon(protocol_minor: u64) -> io::Result<()> {
+pub fn run_daemon(
+    protocol_minor: u64,
+    backend_version: &str,
+    bridge_version: &str,
+) -> io::Result<()> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let stdout = io::stdout();
@@ -22,7 +26,7 @@ pub fn run_daemon(protocol_minor: u64) -> io::Result<()> {
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": initialize_result(protocol_minor),
+                    "result": initialize_result(protocol_minor, backend_version, bridge_version),
                 }),
                 false,
             ),
@@ -64,11 +68,11 @@ pub fn run_daemon(protocol_minor: u64) -> io::Result<()> {
     }
 }
 
-fn initialize_result(protocol_minor: u64) -> Value {
+fn initialize_result(protocol_minor: u64, backend_version: &str, bridge_version: &str) -> Value {
     json!({
         "protocol": { "major": 1, "minor": protocol_minor },
-        "backendVersion": "fixture",
-        "bridgeVersion": "fixture",
+        "backendVersion": backend_version,
+        "bridgeVersion": bridge_version,
         "libsvnVersion": "fixture",
         "platform": { "os": "windows", "arch": "x86_64" },
         "cacheSchema": {
@@ -133,19 +137,21 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<Value>> {
             break;
         }
         if let Some(value) = line.strip_prefix("Content-Length:") {
-            content_length = Some(value.trim().parse::<usize>().map_err(|error| {
-                io::Error::new(io::ErrorKind::InvalidData, error)
-            })?);
+            content_length = Some(
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+            );
         }
     }
-    let length = content_length.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "Content-Length is required")
-    })?;
+    let length = content_length
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Content-Length is required"))?;
     let mut body = vec![0; length];
     reader.read_exact(&mut body)?;
-    serde_json::from_slice(&body).map(Some).map_err(|error| {
-        io::Error::new(io::ErrorKind::InvalidData, error)
-    })
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 fn write_frame(writer: &mut impl Write, response: &Value) -> io::Result<()> {

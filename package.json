@@ -10,6 +10,7 @@
     "docs:verify-support-intake": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify-support-intake.ps1",
     "release:verify-readiness": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release/verify-readiness.ps1",
     "release:verify-readiness:smoke": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release/verify-readiness.ps1 -Mode smoke",
+    "release:verify-product-version-consistency": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release/verify-product-version-consistency.ps1 -RootPackagePath package.json -ExtensionPackagePath packages/vscode-extension/package.json -CargoWorkspaceManifestPath Cargo.toml",
     "release:test-scripts": "pnpm release:build-vscode-extension && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-scripts.tests.ps1",
     "release:test-support-intake-scripts": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/support-intake-scripts.tests.ps1",
     "release:test-install-rollback-fixture": "pnpm release:build-vscode-extension && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/release-install-rollback-fixture.tests.ps1",
