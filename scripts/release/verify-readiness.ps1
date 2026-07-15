@@ -7306,6 +7306,8 @@ Assert-Terms $m7Plan @(
   "partial/stale SourceControl status bar command and renderer capture evidence, Full Reconcile cancellation and recovery evidence",
   "sourceControlUiUpdateToRevisionWorkflow",
   "updateToRevisionRepositoryOracle",
+  "sourceControlUiReadonlyPropertyReportWorkflow",
+  "deterministic repository/resource report identity",
   "Beta-C: covered by M7j3 installed VSIX E2E evidence",
   "sourceControlUiLockMessageCancellationWorkflow",
   "sourceControlUiUnlockModeCancellationWorkflow",

@@ -1921,6 +1921,21 @@ describe("extension manifest", () => {
     },
   );
 
+  it("localizes readonly property and mergeinfo report titles in priority languages", () => {
+    expect(readJson("l10n/bundle.l10n.json")).toMatchObject({
+      "SVN Properties: {0}": "SVN Properties: {0}",
+      "SVN Mergeinfo: {0}": "SVN Mergeinfo: {0}",
+    });
+    expect(readJson("l10n/bundle.l10n.ja.json")).toMatchObject({
+      "SVN Properties: {0}": "SVN プロパティ: {0}",
+      "SVN Mergeinfo: {0}": "SVN マージ情報: {0}",
+    });
+    expect(readJson("l10n/bundle.l10n.zh-cn.json")).toMatchObject({
+      "SVN Properties: {0}": "SVN 属性：{0}",
+      "SVN Mergeinfo: {0}": "SVN 合并信息：{0}",
+    });
+  });
+
   it("keeps contributed and localized user-facing text in SVN terminology", () => {
     const manifest = readJson("package.json");
     const userFacingText = [
@@ -2460,6 +2475,9 @@ function runtimeLocalizationKeys(): string[] {
     "Select an SVN repository",
     "Select an open SVN repository and try Show Repository Log again.",
     "The selected SVN repository session is no longer open. Select the current repository and try Show Repository Log again.",
+    "The SVN report document is no longer available. Reopen the current repository and run the command again.",
+    "The SVN report belongs to an older repository session. Run the command again to open the current report.",
+    "SubversionR could not open the SVN report because its document address is invalid.",
     "SubversionR backend setting is required: {0}",
     "SubversionR packaged backend does not support this host: {0}/{1}.",
     "SubversionR packaged backend resource is missing: {0} for {1}.",

@@ -470,6 +470,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     sourceControlProjection,
   });
   repositorySessionService = sessionService;
+  const diagnosticsDocumentProvider = new DiagnosticsReadonlyDocumentProvider({
+    createEventEmitter: () => new vscode.EventEmitter<vscode.Uri>(),
+    uriFromComponents: (components) => vscode.Uri.from(components),
+    currentRepositoryEpoch: (repositoryId) =>
+      sessionService.listOpenSessions().find((session) => session.repositoryId === repositoryId)?.epoch,
+  });
   const fileHeaderCodeLensProvider = new FileHeaderCodeLensProvider<vscode.CodeLens>({
     settings: () => lensSettings,
     sessionService,
@@ -754,6 +760,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
         await vscode.window.showTextDocument(textDocument, { preview: false });
       },
+      showReadonlyRepositoryReport: async (document) => {
+        const uri = diagnosticsDocumentProvider.createOrUpdateRepositoryReport({
+          kind: document.kind,
+          repositoryId: document.repositoryId,
+          epoch: document.epoch,
+          path: document.path,
+          content: document.content,
+        });
+        const textDocument = await vscode.workspace.openTextDocument(uri);
+        if (textDocument.languageId !== document.language) {
+          await vscode.languages.setTextDocumentLanguage(textDocument, document.language);
+        }
+        await vscode.commands.executeCommand("vscode.open", uri, { preview: false }, document.title);
+      },
       confirmRevertResource: async (resourcePath) => {
         const confirm = vscode.l10n.t("Revert");
         const selected = await vscode.window.showWarningMessage(
@@ -939,10 +959,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("workspaceFolders");
   });
   await repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("activation");
-  const diagnosticsDocumentProvider = new DiagnosticsReadonlyDocumentProvider({
-    createEventEmitter: () => new vscode.EventEmitter<vscode.Uri>(),
-    uriFromComponents: (components) => vscode.Uri.from(components),
-  });
   const diagnosticsDocumentRegistration = vscode.workspace.registerTextDocumentContentProvider(
     DIAGNOSTICS_DOCUMENT_URI_SCHEME,
     diagnosticsDocumentProvider,

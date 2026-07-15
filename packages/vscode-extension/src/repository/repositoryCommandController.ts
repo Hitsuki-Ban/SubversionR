@@ -72,6 +72,15 @@ export interface RepositoryCommandUi {
   showWarningMessage(message: string): Promise<void>;
   showErrorMessage(message: string, ...actions: string[]): Promise<unknown>;
   showTextDocument(document: { title: string; content: string; language: string }): Promise<void>;
+  showReadonlyRepositoryReport(document: {
+    kind: "repository-properties" | "resource-properties" | "repository-mergeinfo" | "resource-mergeinfo";
+    repositoryId: string;
+    epoch: number;
+    path: string;
+    title: string;
+    content: string;
+    language: string;
+  }): Promise<void>;
   confirmRevertResource(path: string): Promise<boolean>;
   confirmRemoveResource(path: string): Promise<boolean>;
   confirmRemoveResourceKeepLocal(path: string): Promise<boolean>;
@@ -1218,7 +1227,11 @@ export class RepositoryCommandController {
         return;
       }
 
-      await this.options.ui.showTextDocument({
+      await this.options.ui.showReadonlyRepositoryReport({
+        kind: "repository-mergeinfo",
+        repositoryId: session.repositoryId,
+        epoch: session.epoch,
+        path: ".",
         title: this.options.localize("SVN Mergeinfo: {0}", session.identity.workingCopyRoot),
         language: "markdown",
         content: svnMergeinfoDocument(
@@ -1287,7 +1300,11 @@ export class RepositoryCommandController {
         return;
       }
 
-      await this.options.ui.showTextDocument({
+      await this.options.ui.showReadonlyRepositoryReport({
+        kind: "repository-properties",
+        repositoryId: session.repositoryId,
+        epoch: session.epoch,
+        path: ".",
         title: this.options.localize("SVN Properties: {0}", session.identity.workingCopyRoot),
         language: "markdown",
         content: svnPropertiesDocument(
@@ -1340,7 +1357,11 @@ export class RepositoryCommandController {
         return;
       }
 
-      await this.options.ui.showTextDocument({
+      await this.options.ui.showReadonlyRepositoryReport({
+        kind: "resource-mergeinfo",
+        repositoryId: target.repositoryId,
+        epoch: target.epoch,
+        path,
         title: this.options.localize("SVN Mergeinfo: {0}", path),
         language: "markdown",
         content: svnMergeinfoDocument(
@@ -1427,7 +1448,11 @@ export class RepositoryCommandController {
         return;
       }
 
-      await this.options.ui.showTextDocument({
+      await this.options.ui.showReadonlyRepositoryReport({
+        kind: "resource-properties",
+        repositoryId: target.repositoryId,
+        epoch: target.epoch,
+        path,
         title: this.options.localize("SVN Properties: {0}", path),
         language: "markdown",
         content: svnPropertiesDocument(
@@ -4167,6 +4192,18 @@ function repositoryFailureMessage(
       return localize(
         "The selected SVN repository session is no longer open. Select the current repository and try Show Repository Log again.",
       );
+    case "SUBVERSIONR_DIAGNOSTICS_DOCUMENT_NOT_FOUND":
+    case "SUBVERSIONR_DIAGNOSTICS_REPORT_REPOSITORY_NOT_OPEN":
+      return localize(
+        "The SVN report document is no longer available. Reopen the current repository and run the command again.",
+      );
+    case "SUBVERSIONR_DIAGNOSTICS_REPORT_SESSION_STALE":
+      return localize(
+        "The SVN report belongs to an older repository session. Run the command again to open the current report.",
+      );
+    case "SUBVERSIONR_DIAGNOSTICS_DOCUMENT_URI_INVALID":
+    case "SUBVERSIONR_DIAGNOSTICS_REPORT_DOCUMENT_INVALID":
+      return localize("SubversionR could not open the SVN report because its document address is invalid.");
   }
   const cause = operationFailureCause(error);
   switch (cause) {

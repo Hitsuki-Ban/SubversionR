@@ -2571,6 +2571,101 @@ $lockOpenReport = [pscustomobject]@{
   rendererCaptureExpectations = $openReport.rendererCaptureExpectations
   surfaceWorkflow = $openReport.surfaceWorkflow
 }
+$readonlyRepositoryPropertyUri = "svn-r-diagnostics://readonly/repository-properties.md?repositoryId=fixture-add-to-ignore&epoch=5&path=."
+$readonlyResourcePropertyUri = "svn-r-diagnostics://readonly/resource-properties.md?repositoryId=fixture-lock&epoch=6&path=src%2Fneeds-lock.txt"
+$readonlyRepositoryPropertyDocument = [pscustomobject]@{
+  uri = $readonlyRepositoryPropertyUri
+  uriPath = "/repository-properties.md"
+  query = [pscustomobject]@{ repositoryId = $addToIgnoreOpenReport.repository.repositoryId; epoch = $addToIgnoreOpenReport.repository.epoch; path = "." }
+  documentCount = 1
+  tabCount = 1
+  tabLabel = "SVN Properties: $addToIgnoreWorkingCopyRoot"
+  tabActive = $true
+  isUntitled = $false
+  isDirty = $false
+  languageId = "markdown"
+  contentContainsPropertyName = $true
+  contentContainsCurrentPropertyValue = $true
+}
+$readonlyResourcePropertyDocument = [pscustomobject]@{
+  uri = $readonlyResourcePropertyUri
+  uriPath = "/resource-properties.md"
+  query = [pscustomobject]@{ repositoryId = $lockOpenReport.repository.repositoryId; epoch = $lockOpenReport.repository.epoch; path = "src/needs-lock.txt" }
+  documentCount = 1
+  tabCount = 1
+  tabLabel = "SVN Properties: src/needs-lock.txt"
+  tabActive = $true
+  isUntitled = $false
+  isDirty = $false
+  languageId = "markdown"
+  contentContainsPropertyName = $true
+  contentContainsCurrentPropertyValue = $true
+}
+$readonlyPropertyReportWorkflow = [pscustomobject]@{
+  kind = "subversionr.installedSourceControlUiE2eReadonlyPropertyReportWorkflow"
+  generatedAt = "2026-06-25T00:00:07Z"
+  commands = [pscustomobject]@{
+    repository = "subversionr.showRepositoryProperties"
+    resource = "subversionr.showResourceProperties"
+  }
+  mergeinfoCommandExposure = [pscustomobject]@{
+    commands = @(
+      [pscustomobject]@{ command = "subversionr.showRepositoryMergeinfo"; commandPaletteEntryCount = 1; commandPaletteWhen = "false"; userFacingMenuEntryCount = 0 },
+      [pscustomobject]@{ command = "subversionr.showResourceMergeinfo"; commandPaletteEntryCount = 1; commandPaletteWhen = "false"; userFacingMenuEntryCount = 0 }
+    )
+    allCommandPaletteEntriesDisabled = $true
+    userFacingMenuEntryCount = 0
+  }
+  fixtures = [pscustomobject]@{
+    repository = [pscustomobject]@{
+      repositoryId = $addToIgnoreOpenReport.repository.repositoryId
+      epoch = $addToIgnoreOpenReport.repository.epoch
+      workingCopyRoot = $addToIgnoreWorkingCopyRoot
+      path = "."
+      propertyName = "svn:ignore"
+      propertyValueToken = "scratch.txt"
+    }
+    resource = [pscustomobject]@{
+      repositoryId = $lockOpenReport.repository.repositoryId
+      epoch = $lockOpenReport.repository.epoch
+      workingCopyRoot = $lockWorkingCopyRoot
+      path = "src/needs-lock.txt"
+      propertyName = "svn:needs-lock"
+      propertyValueToken = "*"
+    }
+  }
+  reports = [pscustomobject]@{
+    repository = [pscustomobject]@{
+      first = $readonlyRepositoryPropertyDocument
+      second = $readonlyRepositoryPropertyDocument
+      afterClose = [pscustomobject]@{ documentCount = 1; tabCount = 0 }
+    }
+    resource = [pscustomobject]@{
+      first = $readonlyResourcePropertyDocument
+      second = $readonlyResourcePropertyDocument
+      afterClose = [pscustomobject]@{ documentCount = 1; tabCount = 0 }
+    }
+  }
+  assertions = [pscustomobject]@{
+    repositoryCommandExecutedTwice = $true
+    resourceCommandExecutedTwice = $true
+    repositoryDocumentIdentityReused = $true
+    resourceDocumentIdentityReused = $true
+    reportKindsUseDistinctIdentities = $true
+    resourceTargetIsProjectedNonRootPath = $true
+    oneDocumentAndTabPerIdentity = $true
+    reportsAreReadonlyMarkdown = $true
+    reportsContainCurrentProperty = $true
+    tabsClosedWithoutSavePrompt = $true
+    sourceControlProjectionUnchanged = $true
+    lastCompletedRefreshUnchanged = $true
+    statusRefreshNotRequested = $true
+    reconcileNotRequested = $true
+    remoteStatusPollingNotRequested = $true
+    mergeinfoCommandsHidden = $true
+    repositoriesClosedAfterEvidence = $true
+  }
+}
 $lockMessageCancellationPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("Lock SVN resource", "Enter an SVN lock message for src/needs-lock.txt.")
   requiredAccessibilityTokens = @("Lock SVN resource", "Enter an SVN lock message for src/needs-lock.txt.", "Lock message")
@@ -6511,6 +6606,8 @@ $lifecycleMoveReport = [pscustomobject]@{
     "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
     "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
     "subversionr.showRepositoryLog",
+    "subversionr.showRepositoryProperties",
+    "subversionr.showResourceProperties",
     "subversionr.initialize",
     "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
     "subversionr.diagnostics.installedSourceControlUiE2eArmDirtyGenerationCancellation",
@@ -6552,6 +6649,8 @@ $lifecycleMoveReport = [pscustomobject]@{
   hasInstalledSourceControlUiE2eFreshnessReportCommand = $true
   hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand = $true
   hasShowRepositoryLogCommand = $true
+  hasShowRepositoryPropertiesCommand = $true
+  hasShowResourcePropertiesCommand = $true
   hasInstalledSourceControlUiE2eArmFullReconcileCancellationCommand = $true
   hasInstalledSourceControlUiE2eFullReconcileCancellationReportCommand = $true
   hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand = $true
@@ -6606,6 +6705,7 @@ $lifecycleMoveReport = [pscustomobject]@{
   commitSelectedReport = $commitSelectedReport
   commitSelectedMultiSelectionReport = $commitSelectedMultiSelectionReport
   addToIgnoreReport = $addToIgnoreReport
+  readonlyPropertyReportWorkflow = $readonlyPropertyReportWorkflow
   lockUnlockReport = $lockUnlockReport
   lockMessageCancellationReport = $lockMessageCancellationReport
   unlockModeCancellationReport = $unlockModeCancellationReport
@@ -7331,16 +7431,28 @@ try {
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.branchCreateRepository" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Branch/Tag create command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.switchRepository" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Switch command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.showRepositoryLog" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the Repository Log command invocation."
+  Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.showRepositoryProperties" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the repository Properties command invocation."
+  Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.showResourceProperties" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the resource Properties command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.diagnostics.installedSourceControlUiE2eShowOutput" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the command that exposes the SubversionR output channel."
   Assert-Equal "True" ([string]$report.extension.afterActive) "Installed Source Control UI E2E evidence should prove SubversionR was active before UI validation."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eOpenReportCommand) "Installed Source Control UI E2E evidence should prove hidden open command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eFreshnessReportCommand) "Installed Source Control UI E2E evidence should prove hidden freshness command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand) "Installed Source Control UI E2E evidence should prove hidden Repository Log report command registration."
   Assert-Equal "True" ([string]$report.extension.hasShowRepositoryLogCommand) "Installed Source Control UI E2E evidence should prove Repository Log command registration."
+  Assert-Equal "True" ([string]$report.extension.hasShowRepositoryPropertiesCommand) "Installed Source Control UI E2E evidence should prove repository Properties command registration."
+  Assert-Equal "True" ([string]$report.extension.hasShowResourcePropertiesCommand) "Installed Source Control UI E2E evidence should prove resource Properties command registration."
   Assert-Equal "subversionr.installedSourceControlUiE2eRepositoryHistoryWorkflow" $report.sourceControlUiRepositoryHistoryWorkflow.kind "Installed Source Control UI E2E evidence should publish the Repository Log workflow."
   Assert-Equal "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE" $report.sourceControlUiRepositoryHistoryWorkflow.staleReport.diagnostics.latestHistoryTargetingError.code "Installed Repository Log stale-target evidence should preserve the stable lifecycle code."
   Assert-Equal "True" ([string]$report.sourceControlUiRepositoryHistoryWorkflow.assertions.remoteStatusPollingNotRequested) "Installed Repository Log evidence should prove remote polling stayed idle."
   Assert-Equal "True" ([string]$report.repositoryHistoryLoadedRendererCapture.assertions.treeViewFocused) "Installed Repository Log renderer evidence should prove History view focus."
+  Assert-Equal "subversionr.installedSourceControlUiE2EReadonlyPropertyReportWorkflow" $report.sourceControlUiReadonlyPropertyReportWorkflow.kind "Installed Source Control UI E2E evidence should publish the readonly property report workflow."
+  Assert-Equal "src/needs-lock.txt" $report.sourceControlUiReadonlyPropertyReportWorkflow.fixtures.resource.path "Installed resource Properties evidence should target a projected non-root path."
+  Assert-Equal "True" ([string]$report.sourceControlUiReadonlyPropertyReportWorkflow.assertions.repositoryDocumentIdentityReused) "Installed repository Properties evidence should reuse one deterministic document identity."
+  Assert-Equal "True" ([string]$report.sourceControlUiReadonlyPropertyReportWorkflow.assertions.resourceDocumentIdentityReused) "Installed resource Properties evidence should reuse one deterministic document identity."
+  Assert-Equal "True" ([string]$report.sourceControlUiReadonlyPropertyReportWorkflow.assertions.tabsClosedWithoutSavePrompt) "Installed property report evidence should close both clean tabs without a save prompt."
+  Assert-Equal "True" ([string]$report.sourceControlUiReadonlyPropertyReportWorkflow.assertions.mergeinfoCommandsHidden) "Installed property report evidence should prove mergeinfo commands remain hidden."
+  Assert-Equal "0" ([string]$report.sourceControlUiReadonlyPropertyReportWorkflow.mergeinfoCommandExposure.userFacingMenuEntryCount) "Installed mergeinfo evidence should prove no user-facing menu entries."
+  Assert-Equal "True" ([string]$report.sourceControlUiReadonlyPropertyReportWorkflow.assertions.remoteStatusPollingNotRequested) "Installed property report evidence should prove remote polling stayed idle."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eArmDirtyGenerationCancellationCommand) "Installed Source Control UI E2E evidence should prove hidden dirty-generation cancellation arm command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eDirtyGenerationCancellationReportCommand) "Installed Source Control UI E2E evidence should prove hidden dirty-generation cancellation report command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eDirtyEventCommand) "Installed Source Control UI E2E evidence should prove hidden dirty-event diagnostic command registration."
@@ -8442,6 +8554,14 @@ try {
   Assert-True ($workflowContent -match '(?s)repositoryHistoryInitialRendererExpectations.*?expectedExpanded: false.*?repositoryHistoryLoadedRendererExpectations.*?expectedFocused: true.*?selectedTokens: \[workingCopyRoot\]') "Installed Repository Log renderer evidence should observe the initial collapsed state and end focused on the selected working-copy-root target."
   Assert-True ($workflowContent -match '(?s)svnadmin remove svn:author.*?svnadmin set empty svn:author') "Installed Repository Log fixture should include distinct missing and empty svn:author revisions."
   Assert-True ($workflowContent -match '(?s)operationActivityUnchanged.*?statusRefreshNotRequested.*?reconcileNotRequested.*?remoteStatusPollingNotRequested') "Installed Repository Log evidence should prove no status refresh, reconcile, or remote status polling request was added."
+  Assert-True ($workflowContent -match "sourceControlUiReadonlyPropertyReportWorkflow") "Installed Source Control UI E2E evidence should publish the readonly property report workflow."
+  Assert-True ($workflowContent -match '(?s)async function runReadonlyPropertyReportWorkflow.*?executeCommand\("subversionr\.showRepositoryProperties".*?executeCommand\("subversionr\.showRepositoryProperties".*?executeCommand\("subversionr\.showResourceProperties".*?executeCommand\("subversionr\.showResourceProperties"') "Installed readonly property report harness should execute both public Properties commands twice."
+  Assert-True ($workflowContent -match '(?s)findResource\(\s*resourceOpenReport,\s*"metadata",\s*"src/needs-lock\.txt",\s*"subversionr\.workingCopyMetadataFile"\s*\).*?resourceTargetIsProjectedNonRootPath') "Installed resource Properties evidence should use the projected non-root svn:needs-lock fixture resource."
+  Assert-True ($workflowContent -match '(?s)waitForReadonlyPropertyReport.*?matchingDocuments\.length !== 1.*?matchingTabs\.length !== 1.*?document\.isUntitled.*?document\.isDirty.*?document\.languageId !== "markdown"') "Installed readonly property report evidence should require a single clean, non-untitled Markdown document and tab."
+  Assert-True ($workflowContent -match '(?s)closeReadonlyPropertyReport.*?workbench\.action\.closeActiveEditor.*?if \(tabCount === 0\).*?tabsClosedWithoutSavePrompt') "Installed readonly property report evidence should close each clean tab without a save prompt path."
+  Assert-True ($workflowContent -match '(?s)installedMergeinfoCommandExposure.*?subversionr\.showRepositoryMergeinfo.*?subversionr\.showResourceMergeinfo.*?commandPaletteEntries\[0\]\.when !== "false".*?userFacingMenuEntries\.length !== 0.*?mergeinfoCommandsHidden') "Installed readonly property report evidence should prove both mergeinfo commands remain disabled in the Command Palette and absent from user-facing menus."
+  Assert-True ($workflowContent -match '(?s)const versionReportDocument = vscode\.workspace\.textDocuments\.find\(.*?document\.uri\.scheme === "svn-r-diagnostics".*?document\.uri\.authority === "readonly".*?document\.uri\.path === "/version-report\.json"') "Installed version report validation should select its exact diagnostics document when other readonly reports remain loaded."
+  Assert-True ($workflowContent -match '(?s)assertReadonlyPropertyActivityUnchanged.*?sourceControlProjectionMatches.*?lastCompletedRefreshUnchanged.*?operationActivityUnchanged') "Installed readonly property report evidence should prove Source Control projection, refresh, reconcile, and remote polling activity stayed unchanged."
   Assert-True ($workflowContent -match "Get-SwitchWorkingCopyOracle") "Installed Source Control UI E2E evidence should verify Switch using an SVN working-copy oracle."
   Assert-True ($workflowContent -match "sourceControlUiCheckoutCancellationWorkflow") "Installed Source Control UI E2E evidence should publish the Checkout cancellation workflow report."
   Assert-True ($workflowContent -match "checkoutCancellationPromptCapture") "Installed Source Control UI E2E evidence should publish Checkout cancellation prompt renderer capture evidence."

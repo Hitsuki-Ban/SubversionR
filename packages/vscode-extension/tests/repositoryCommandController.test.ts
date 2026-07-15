@@ -2630,7 +2630,11 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: ".",
     });
-    expect(ui.showTextDocument).toHaveBeenCalledWith({
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith({
+      kind: "repository-mergeinfo",
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      path: ".",
       title: "SVN Mergeinfo: C:\\workspace",
       language: "markdown",
       content:
@@ -2682,8 +2686,14 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: ".",
     });
-    expect(ui.showTextDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "SVN Mergeinfo: D:\\other-wc" }),
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "repository-mergeinfo",
+        repositoryId: "repo-uuid:D:/other-wc",
+        epoch: 7,
+        path: ".",
+        title: "SVN Mergeinfo: D:\\other-wc",
+      }),
     );
   });
 
@@ -2709,7 +2719,11 @@ describe("RepositoryCommandController", () => {
 
     await controller.showRepositoryMergeinfo();
 
-    expect(ui.showTextDocument).toHaveBeenCalledWith({
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith({
+      kind: "repository-mergeinfo",
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      path: ".",
       title: "SVN Mergeinfo: C:\\workspace",
       language: "markdown",
       content:
@@ -2765,7 +2779,11 @@ describe("RepositoryCommandController", () => {
 
     await controller.showRepositoryMergeinfo();
 
-    expect(ui.showTextDocument).toHaveBeenCalledWith({
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith({
+      kind: "repository-mergeinfo",
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      path: ".",
       title: "SVN Mergeinfo: C:\\workspace",
       language: "markdown",
       content:
@@ -2804,7 +2822,7 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: ".",
     });
-    expect(ui.showTextDocument).not.toHaveBeenCalled();
+    expect(ui.showReadonlyRepositoryReport).not.toHaveBeenCalled();
     expect(ui.showInformationMessage).toHaveBeenCalledWith(
       "No SVN mergeinfo found on working copy root: C:\\workspace",
     );
@@ -2834,7 +2852,11 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: ".",
     });
-    expect(ui.showTextDocument).toHaveBeenCalledWith({
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith({
+      kind: "repository-properties",
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      path: ".",
       title: "SVN Properties: C:\\workspace",
       language: "markdown",
       content:
@@ -2876,8 +2898,14 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: ".",
     });
-    expect(ui.showTextDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "SVN Properties: D:\\other-wc" }),
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "repository-properties",
+        repositoryId: "repo-uuid:D:/other-wc",
+        epoch: 7,
+        path: ".",
+        title: "SVN Properties: D:\\other-wc",
+      }),
     );
   });
 
@@ -2897,10 +2925,42 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: ".",
     });
-    expect(ui.showTextDocument).not.toHaveBeenCalled();
+    expect(ui.showReadonlyRepositoryReport).not.toHaveBeenCalled();
     expect(ui.showInformationMessage).toHaveBeenCalledWith(
       "No SVN properties found on working copy root: C:\\workspace",
     );
+  });
+
+  it("shows actionable recovery when a readonly property report belongs to a stale session", async () => {
+    const session = repositorySession();
+    const sessionService = fakeSessionService({ sessions: [session] });
+    const propertiesClient = fakePropertiesClient(
+      propertiesResponse({
+        path: ".",
+        properties: [{ name: "svn:ignore", value: "node_modules", valueEncoding: "utf8" }],
+      }),
+    );
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    ui.showReadonlyRepositoryReport.mockRejectedValueOnce({
+      code: "SUBVERSIONR_DIAGNOSTICS_REPORT_SESSION_STALE",
+      category: "lifecycle",
+      messageKey: "error.diagnostics.reportSessionStale",
+      safeArgs: { repositoryId: "repo-uuid:C:/workspace", expectedEpoch: 7, actualEpoch: 8 },
+      retryable: false,
+      diagnostics: null,
+    });
+    const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
+      propertiesClient,
+    });
+
+    await controller.showRepositoryProperties();
+
+    await vi.waitFor(() => {
+      expect(ui.showErrorMessage).toHaveBeenCalledWith(
+        "The SVN report belongs to an older repository session. Run the command again to open the current report.",
+        "Show Log",
+      );
+    });
   });
 
   it("shows selected SVN resource mergeinfo from libsvn properties", async () => {
@@ -2934,7 +2994,11 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: "src/main.c",
     });
-    expect(ui.showTextDocument).toHaveBeenCalledWith({
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith({
+      kind: "resource-mergeinfo",
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      path: "src/main.c",
       title: "SVN Mergeinfo: src/main.c",
       language: "markdown",
       content:
@@ -2989,8 +3053,12 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: "src/main.c",
     });
-    expect(ui.showTextDocument).toHaveBeenCalledWith(
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith(
       expect.objectContaining({
+        kind: "resource-mergeinfo",
+        repositoryId: "repo-uuid:C:/workspace",
+        epoch: 7,
+        path: "src/main.c",
         title: "SVN Mergeinfo: src/main.c",
         content: expect.stringContaining("SVN mergeinfo for src/main.c"),
       }),
@@ -3017,7 +3085,7 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: "src/main.c",
     });
-    expect(ui.showTextDocument).not.toHaveBeenCalled();
+    expect(ui.showReadonlyRepositoryReport).not.toHaveBeenCalled();
     expect(ui.showInformationMessage).toHaveBeenCalledWith(
       "No SVN mergeinfo found on SVN path: src/main.c",
     );
@@ -3051,7 +3119,11 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: "src/main.c",
     });
-    expect(ui.showTextDocument).toHaveBeenCalledWith({
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith({
+      kind: "resource-properties",
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      path: "src/main.c",
       title: "SVN Properties: src/main.c",
       language: "markdown",
       content:
@@ -3064,6 +3136,46 @@ describe("RepositoryCommandController", () => {
         "| bugtraq:number | SR-42 |\n" +
         "| svn:eol-style | native |",
     });
+  });
+
+  it("opens a working-copy-root changed directory as a distinct resource property report", async () => {
+    const session = repositorySession();
+    const sessionService = fakeSessionService({ sessions: [session] });
+    const propertiesClient = fakePropertiesClient(
+      propertiesResponse({
+        path: ".",
+        properties: [{ name: "svn:ignore", value: "scratch.txt", valueEncoding: "utf8" }],
+      }),
+    );
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({ resources: [scmProjectedResource({ path: ".", kind: "dir" })] }),
+    });
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
+      propertiesClient,
+      sourceControlProjection,
+    });
+
+    await controller.showResourceProperties({
+      contextValue: "subversionr.changedDirectory",
+      resourceUri: { fsPath: "C:\\workspace" },
+      resourceKind: "dir",
+    });
+
+    expect(propertiesClient.listProperties).toHaveBeenCalledWith({
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      path: ".",
+    });
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "resource-properties",
+        repositoryId: "repo-uuid:C:/workspace",
+        epoch: 7,
+        path: ".",
+        title: "SVN Properties: .",
+      }),
+    );
   });
 
   it("shows selected SVN resource properties from an editor URI", async () => {
@@ -3094,8 +3206,12 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: "src/main.c",
     });
-    expect(ui.showTextDocument).toHaveBeenCalledWith(
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith(
       expect.objectContaining({
+        kind: "resource-properties",
+        repositoryId: "repo-uuid:C:/workspace",
+        epoch: 7,
+        path: "src/main.c",
         title: "SVN Properties: src/main.c",
         content: expect.stringContaining("SVN properties for src/main.c"),
       }),
@@ -3122,7 +3238,7 @@ describe("RepositoryCommandController", () => {
       resourceKind: "file",
     });
 
-    expect(ui.showTextDocument).toHaveBeenCalledWith(
+    expect(ui.showReadonlyRepositoryReport).toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining("| svn:ignore | node_modules<br>.DS_Store |"),
       }),
@@ -3149,7 +3265,7 @@ describe("RepositoryCommandController", () => {
       epoch: 7,
       path: "src/main.c",
     });
-    expect(ui.showTextDocument).not.toHaveBeenCalled();
+    expect(ui.showReadonlyRepositoryReport).not.toHaveBeenCalled();
     expect(ui.showInformationMessage).toHaveBeenCalledWith(
       "No SVN properties found on SVN path: src/main.c",
     );
@@ -10903,6 +11019,15 @@ interface FakeCommandUi {
   showTextDocument: ReturnType<
     typeof vi.fn<(document: { title: string; content: string; language: string }) => Promise<void>>
   >;
+  showReadonlyRepositoryReport: ReturnType<typeof vi.fn<(document: {
+    kind: "repository-properties" | "resource-properties" | "repository-mergeinfo" | "resource-mergeinfo";
+    repositoryId: string;
+    epoch: number;
+    path: string;
+    title: string;
+    content: string;
+    language: string;
+  }) => Promise<void>>>;
   confirmRevertResource: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
   confirmRemoveResource: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
   confirmRemoveResourceKeepLocal: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
@@ -11085,6 +11210,7 @@ function fakeCommandUi(options: {
     showWarningMessage: vi.fn(async () => undefined),
     showErrorMessage: vi.fn(async () => undefined),
     showTextDocument: vi.fn(async () => undefined),
+    showReadonlyRepositoryReport: vi.fn(async () => undefined),
     confirmRevertResource: vi.fn(async () => options.revertConfirmed ?? true),
     confirmRemoveResource: vi.fn(async () => options.removeConfirmed ?? true),
     confirmRemoveResourceKeepLocal: vi.fn(async () => options.removeKeepLocalConfirmed ?? true),
