@@ -324,6 +324,8 @@ $lockMessagePromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_L
 $lockMessagePromptDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MESSAGE_PROMPT_DONE
 $lockModePromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MODE_PROMPT_READY
 $lockModePromptDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MODE_PROMPT_DONE
+$lockFailureObservedReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_FAILURE_OBSERVED_READY
+$lockFailureRecoveredDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_FAILURE_RECOVERED_DONE
 $lockHeldOracleReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_HELD_ORACLE_READY
 $lockHeldOracleDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_HELD_ORACLE_DONE
 $unlockModeCancellationPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_UNLOCK_MODE_CANCELLATION_PROMPT_READY
@@ -2962,6 +2964,29 @@ $lockModePromptExpectations = [pscustomobject]@{
   rendererCaptureExpectations = $lockModePromptExpectations
 } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockModePromptReadyPath -Encoding utf8
 Wait-FakeRendererDone -Path $lockModePromptDonePath -Description "lock mode"
+[pscustomobject]@{
+  ok = $true
+  phase = "lockNativeFailureObserved"
+  command = "subversionr.lockResource"
+  code = "SVN_OPERATION_LOCK_FAILED"
+  resultCategory = "failed"
+} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockFailureObservedReadyPath -Encoding utf8
+Wait-FakeRendererDone -Path $lockFailureRecoveredDonePath -Description "competing lock failure recovery"
+Remove-Item -LiteralPath $lockMessagePromptDonePath, $lockModePromptDonePath -Force
+[pscustomobject]@{
+  ok = $true
+  phase = "lockRecoveryMessagePromptReady"
+  command = "subversionr.lockResource"
+  rendererCaptureExpectations = $lockMessagePromptExpectations
+} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockMessagePromptReadyPath -Encoding utf8
+Wait-FakeRendererDone -Path $lockMessagePromptDonePath -Description "recovery lock message"
+[pscustomobject]@{
+  ok = $true
+  phase = "lockRecoveryModePromptReady"
+  command = "subversionr.lockResource"
+  rendererCaptureExpectations = $lockModePromptExpectations
+} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockModePromptReadyPath -Encoding utf8
+Wait-FakeRendererDone -Path $lockModePromptDonePath -Description "recovery lock mode"
 $postLockFreshnessReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eFreshnessReport"
   generatedAt = "2026-06-25T00:00:07Z"
@@ -3178,6 +3203,9 @@ $lockUnlockReport = [pscustomobject]@{
   unlockRefreshCoverage = $postUnlockFreshnessReport.lastCompletedRefresh
   closeReport = [pscustomobject]@{ kind = "subversionr.installedSourceControlUiE2eCloseReport"; generatedAt = "2026-06-25T00:00:07Z"; repositoryId = $lockOpenReport.repository.repositoryId; epoch = $lockOpenReport.repository.epoch; repositoryClosed = $true }
   assertions = [pscustomobject]@{
+    presenterOwnedResourceIdentityUsed = $true
+    rejectedArgumentCasesSettled = $true
+    rejectedArgumentCasesSkippedNativeDispatch = $true
     needsLockProjectedBefore = $true
     lockCommandExecuted = $true
     lockUsedNormalPolicy = $true
@@ -3189,6 +3217,58 @@ $lockUnlockReport = [pscustomobject]@{
     lockTargetedReconcile = $true
     unlockTargetedReconcile = $true
     repositoryClosedAfterEvidence = $true
+  }
+  settlement = [pscustomobject]@{
+    boundMs = 60000
+    rejectedCases = @(
+      foreach ($case in @(
+        @("lockMissingArgument", "subversionr.lockResource", "SUBVERSIONR_RESOURCE_LOCK_TARGET_INVALID"),
+        @("lockSyntheticArgument", "subversionr.lockResource", "SUBVERSIONR_RESOURCE_LOCK_TARGET_INVALID"),
+        @("lockStaleGeneration", "subversionr.lockResource", "SUBVERSIONR_RESOURCE_LOCK_TARGET_INVALID"),
+        @("lockOutsideRepository", "subversionr.lockResource", "SUBVERSIONR_RESOURCE_LOCK_TARGET_OUTSIDE_REPOSITORY"),
+        @("unlockMissingArgument", "subversionr.unlockResource", "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_INVALID"),
+        @("unlockSyntheticArgument", "subversionr.unlockResource", "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_INVALID"),
+        @("unlockStaleGeneration", "subversionr.unlockResource", "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_INVALID"),
+        @("unlockOutsideRepository", "subversionr.unlockResource", "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_OUTSIDE_REPOSITORY")
+      )) {
+        [pscustomobject]@{
+          label = $case[0]
+          command = $case[1]
+          expectedCode = $case[2]
+          settlementTimeoutMs = 5000
+          assertions = [pscustomobject]@{
+            settledWithinBound = $true
+            stableInputErrorRecorded = $true
+            operationJournalUnchanged = $true
+            nativeOperationNotDispatched = $true
+          }
+        }
+      }
+    )
+    lockMessageCancellationSettledWithinBound = $true
+    lockSuccessSettledWithinBound = $true
+    unlockModeCancellationSettledWithinBound = $true
+    unlockSuccessSettledWithinBound = $true
+    nativeFailure = [pscustomobject]@{
+      code = "SVN_OPERATION_LOCK_FAILED"
+      category = "native"
+      journalEntry = [pscustomobject]@{ kind = "lock"; resultCategory = "failed" }
+      redacted = $true
+      redactionCategories = @(
+        "mainWorkingCopyRoot",
+        "mainWorkingCopyPath",
+        "contenderWorkingCopyRoot",
+        "contenderWorkingCopyPath",
+        "repositoryUrl",
+        "resourceUrl",
+        "username",
+        "workflowSecret",
+        "lockToken"
+      )
+      settledWithinBound = $true
+    }
+    schedulerReleasedForRecoveryLockAfterNativeFailure = $true
+    schedulerReleasedForUnlockAfterLockSuccess = $true
   }
 }
 $changelistSetPromptExpectations = [pscustomobject]@{
@@ -6793,6 +6873,7 @@ $lifecycleMoveReport = [pscustomobject]@{
     "workbench.view.scm",
     "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
     "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+    "subversionr.diagnostics.installedSourceControlUiE2eExecuteResourceCommand",
     "subversionr.showRepositoryLog",
     "subversionr.showRepositoryProperties",
     "subversionr.showResourceProperties",
@@ -6836,6 +6917,7 @@ $lifecycleMoveReport = [pscustomobject]@{
   hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand = $true
   hasInstalledSourceControlUiE2eFreshnessReportCommand = $true
   hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand = $true
+  hasInstalledSourceControlUiE2eExecuteResourceCommand = $true
   hasShowRepositoryLogCommand = $true
   hasShowRepositoryPropertiesCommand = $true
   hasShowResourcePropertiesCommand = $true
@@ -6876,6 +6958,16 @@ $lifecycleMoveReport = [pscustomobject]@{
   partialFreshnessReport = $partialFreshnessReport
   staleFreshnessReport = $staleFreshnessReport
   repositoryHistoryReport = $repositoryHistoryReport
+  initializeSettlementReport = [pscustomobject]@{
+    kind = "subversionr.installedSourceControlUiE2eInitializeSettlementReport"
+    command = "subversionr.initialize"
+    settlementTimeoutMs = 30000
+    assertions = [pscustomobject]@{
+      organicActivationCompletedBeforeCommand = $true
+      repeatedInitializeSettledWithinBound = $true
+      backendRemainedInitialized = $true
+    }
+  }
   noRepositoryWelcomeRendererCaptureExpectations = $noRepositoryWelcomeRendererExpectations
   partialFreshnessRendererCaptureExpectations = $partialFreshnessRendererExpectations
   staleFreshnessRendererCaptureExpectations = $staleFreshnessRendererExpectations
@@ -7382,6 +7474,10 @@ public static class Program {
           args[2] == "last-changed-revision" &&
           args[3].IndexOf("commit-all-fixture", StringComparison.OrdinalIgnoreCase) >= 0) {
         Console.WriteLine("4");
+        return 0;
+      }
+      if (exe == "svn.exe" && args.Length >= 3 && args[0] == "info" && args[1] == "--xml") {
+        Console.WriteLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?><info><entry kind=\"file\" path=\"src/needs-lock.txt\" revision=\"1\"><lock><token>opaquelocktoken:subversionr-fake-lock</token><owner>SubversionR fake</owner></lock></entry></info>");
         return 0;
       }
       if (exe == "svn.exe" && args.Length >= 2 && args[0] == "info") {
@@ -8825,7 +8921,17 @@ try {
   Assert-True ($workflowContent -match '(?s)await failedReviewCommand;.*?message:\s*commitMessage.*?successMessageReplacementReport\.previousMessageLength\s*===\s*failedCommitMessage\.length.*?successMessageReplacementReport\.messageLength\s*===\s*commitMessage\.length.*?publishCommitPromptReadyAndWait\(commitPromptReadyPath, commitPromptDonePath, "reviewCommitFailureObserved".*?executeCommand\("subversionr\.reviewCommit", repositoryId\).*?"reviewCommitSuccessSelection".*?await successfulReviewCommand') "Review & Commit success retry should prove the failed message was retained, replace it with the non-empty success message, then capture only the retained selection before commit."
   Assert-True ($workflowContent -notmatch '"reviewCommitSuccessMessage"') "Review & Commit success retry should reuse the explicitly replaced non-empty message without expecting another message prompt."
   Assert-True ($workflowContent -match '(?s)canonicalReviewedPaths\s*=\s*\[\.\.\.reviewedPaths\]\.sort.*?expectedRefreshTargets\s*=\s*canonicalReviewedPaths\.map.*?coverageReport\.targets\.length\s*===\s*expectedRefreshTargets\.length.*?target\.depth\s*===\s*expectedTarget\.depth.*?coverage\.reason\s*===\s*expectedTarget\.reason.*?coverage\.generation\s*===\s*coverageReport\.generation') "Review & Commit targeted reconcile evidence should canonicalize the exact reviewed-path set and preserve depth, reason, and generation."
-  Assert-True ($workflowContent -match '(?s)async function runLockUnlockWorkflow.*?findResource\(openReport, "metadata", resourcePath, "subversionr\.workingCopyMetadataFile"\).*?executeCommand\("subversionr\.lockResource", resourceStateArgument\(lockWorkingCopyRoot, resource\)\).*?currentUnlockResource.*?findResource\(preUnlockSurfaceReport, "metadata", resource\.path, "subversionr\.workingCopyMetadataFile\.locked"\).*?executeCommand\("subversionr\.unlockResource", resourceStateArgument\(lockWorkingCopyRoot, currentUnlockResource\)\)') "Installed Source Control UI E2E harness should refresh the installed SCM resource command argument before Unlock so the projection generation is current."
+  Assert-True ($workflowContent -match '(?s)async function runLockUnlockWorkflow.*?findResource\(openReport, "metadata", resourcePath, "subversionr\.workingCopyMetadataFile"\).*?executePresenterOwnedResourceCommand\(\s*openReport,\s*"metadata",\s*resource,\s*"subversionr\.lockResource".*?currentUnlockResource.*?findResource\(preUnlockSurfaceReport, "metadata", resource\.path, "subversionr\.workingCopyMetadataFile\.locked"\).*?executePresenterOwnedResourceCommand\(\s*openReport,\s*"metadata",\s*currentUnlockResource,\s*"subversionr\.unlockResource"') "Installed Source Control UI E2E harness should execute Lock and Unlock with current presenter-owned SCM resource identities."
+  Assert-True ($workflowContent -match 'subversionr\.diagnostics\.installedSourceControlUiE2eExecuteResourceCommand') "Installed Source Control UI E2E harness should route valid resource commands through the presenter-owned identity bridge."
+  Assert-True ($workflowContent -match '(?s)lockSyntheticArgument.*?SUBVERSIONR_RESOURCE_LOCK_TARGET_INVALID') "Installed Source Control UI E2E harness should require a stable rejected synthetic Lock target case."
+  Assert-True ($workflowContent -match 'schedulerReleasedForRecoveryLockAfterNativeFailure') "Installed Source Control UI E2E harness should require scheduler recovery after the native Lock failure."
+  Assert-True ($workflowContent -match '(?s)svn read competing Lock fixture metadata.*?\[xml\]\$lockInfoXml.*?lockInfoXml\.info\.entry\.lock\.owner.*?lockInfoXml\.info\.entry\.lock\.token') "Installed Source Control UI E2E fixture should parse SVN XML and fail fast unless the competing lock exposes its actual owner and opaque token."
+  foreach ($redactionCategory in @("mainWorkingCopyRoot", "mainWorkingCopyPath", "contenderWorkingCopyRoot", "contenderWorkingCopyPath", "repositoryUrl", "resourceUrl", "username", "workflowSecret", "lockToken")) {
+    Assert-True ($workflowContent -match [regex]::Escape($redactionCategory)) "Installed competing-lock diagnostics should include the $redactionCategory category in its forbidden-value redaction contract."
+  }
+  Assert-True ($workflowContent -match 'SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_REDACTION_FORBIDDEN_JSON') "Installed competing-lock diagnostics should receive its explicit forbidden-value set through the generated runner environment."
+  Assert-True ($workflowContent -match '(?s)requiredRedactionCategories.*?serializedLockFailureDiagnostic.*?leakedRedactionCategories.*?redactionCategories: requiredRedactionCategories') "Installed competing-lock diagnostics should reject every explicit sensitive value without publishing those values."
+  Assert-True ([regex]::Matches($workflowContent, 'value\.replaceAll\(').Count -ge 2) "Installed competing-lock diagnostics should check both native and slash-normalized sensitive-value forms."
   Assert-True ($workflowContent -match "sourceControlUiLockUnlockWorkflow") "Installed Source Control UI E2E evidence should publish the Lock/Unlock workflow report."
   Assert-True ($workflowContent -match "Get-LockHeldWorkingCopyOracle") "Installed Source Control UI E2E evidence should verify the held lock using an SVN working-copy oracle."
   Assert-True ($workflowContent -match "Get-LockUnlockWorkingCopyOracle") "Installed Source Control UI E2E evidence should verify unlock and svn:needs-lock preservation using an SVN working-copy oracle."

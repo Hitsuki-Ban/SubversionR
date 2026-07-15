@@ -472,6 +472,7 @@ function fakePresenter(): SourceControlProjectionPresenter {
     registerRepository: vi.fn(),
     updateRepository: vi.fn(),
     unregisterRepository: vi.fn(),
+    isCurrentResourceState: vi.fn(() => false),
   };
 }
 

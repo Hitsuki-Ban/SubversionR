@@ -88,8 +88,14 @@ export interface RepositoryCommandUi {
   confirmDeleteUnversionedResources(paths: readonly string[]): Promise<boolean>;
   promptResolveChoice(path: string): Promise<ResolveOperationChoice | undefined>;
   promptChangelistName(paths: readonly string[]): Promise<string | undefined>;
-  promptLockOptions(paths: readonly string[]): Promise<RepositoryLockOptions | undefined>;
-  promptUnlockOptions(paths: readonly string[]): Promise<RepositoryUnlockOptions | undefined>;
+  promptLockOptions(
+    paths: readonly string[],
+    cancellation: RepositoryCommandCancellationToken,
+  ): Promise<RepositoryLockOptions | undefined>;
+  promptUnlockOptions(
+    paths: readonly string[],
+    cancellation: RepositoryCommandCancellationToken,
+  ): Promise<RepositoryUnlockOptions | undefined>;
   promptCleanupOptions(workingCopyRoot: string): Promise<RepositoryCleanupOptions | undefined>;
   promptUpdateOptions(workingCopyRoot: string): Promise<RepositoryUpdateOptions | undefined>;
   promptCheckoutOptions(): Promise<RepositoryCheckoutOptions | undefined>;
@@ -209,6 +215,15 @@ export interface RepositoryUnlockOptions {
   breakLock: boolean;
 }
 
+export interface RepositoryCommandCancellationToken {
+  readonly isCancellationRequested: boolean;
+  readonly onCancellationRequested: (
+    listener: (event: void) => unknown,
+    thisArgs?: unknown,
+    disposables?: Array<{ dispose(): unknown }>,
+  ) => { dispose(): void };
+}
+
 export interface RepositoryCommandControllerOptions {
   discoveryService: Pick<RepositoryDiscoveryService, "discoverRepositories" | "openDiscoveredRepository">;
   sessionService: Pick<
@@ -251,7 +266,11 @@ export interface RepositoryCommandControllerOptions {
   };
   historyClient: Pick<HistoryClient, "getLog">;
   operationScheduler: Pick<RepositoryOperationScheduler, "run">;
-  sourceControlProjection: Pick<SourceControlProjectionService, "getCommitAllTargets" | "getProjection">;
+  sourceControlProjection: Pick<
+    SourceControlProjectionService,
+    "getCommitAllTargets" | "getProjection" | "isCurrentResourceState"
+  >;
+  commandCancellation: RepositoryCommandCancellationToken;
   commitMessageHistory: Pick<RepositoryCommitMessageHistory, "messages" | "record">;
   includeMergedRevisions(): boolean;
   createRequestId(): string;
@@ -2717,7 +2736,7 @@ export class RepositoryCommandController {
   public async lockResource(...resourceStates: unknown[]): Promise<void> {
     try {
       this.requireTrustedWorkspace();
-      const targets = await this.resourceTargets(resourceStates, {
+      const targets = await this.currentResourceTargets(resourceStates, {
         contexts: LOCAL_LOCKABLE_CONTEXT_VALUES,
         invalid: invalidResourceLockTarget,
         outside: invalidResourceLockTargetOutsideRepository,
@@ -2731,32 +2750,46 @@ export class RepositoryCommandController {
         isLockableProjectedResource,
       );
       const pathSummary = commitPathSummary(paths);
-      const lockOptions = await this.options.ui.promptLockOptions(paths);
-      if (lockOptions === undefined) {
+      if (this.options.commandCancellation.isCancellationRequested) {
+        return;
+      }
+      const lockOptions = await this.options.ui.promptLockOptions(paths, this.options.commandCancellation);
+      if (lockOptions === undefined || this.options.commandCancellation.isCancellationRequested) {
         return;
       }
 
-      await this.options.operationScheduler.run(target.repositoryId, async () => {
-        const result = await this.runJournaledOperation(
-          "lock",
-          this.options.localize("Locking SVN resource"),
-          target.repositoryId,
-          paths.length,
-          (operationOptions) => {
-            const request = {
-              repositoryId: target.repositoryId,
-              epoch: target.epoch,
-              paths,
-              comment: lockOptions.comment,
-              stealLock: lockOptions.stealLock,
-            };
-            return operationOptions
-              ? this.options.operationClient.lock(request, operationOptions)
-              : this.options.operationClient.lock(request);
-          },
-        );
-        await this.applyOperationReconcile(target, result);
-      });
+      const schedulerCancellation = linkOperationCancellation(undefined, this.options.commandCancellation);
+      try {
+        await this.options.operationScheduler.run(target.repositoryId, async () => {
+          try {
+            const result = await this.runJournaledOperation(
+              "lock",
+              this.options.localize("Locking SVN resource"),
+              target.repositoryId,
+              paths.length,
+              (operationOptions) => {
+                const request = {
+                  repositoryId: target.repositoryId,
+                  epoch: target.epoch,
+                  paths,
+                  comment: lockOptions.comment,
+                  stealLock: lockOptions.stealLock,
+                };
+                return operationOptions
+                  ? this.options.operationClient.lock(request, operationOptions)
+                  : this.options.operationClient.lock(request);
+              },
+              this.options.commandCancellation,
+            );
+            await this.applyOperationReconcile(target, result);
+          } catch (error) {
+            await this.reconcilePotentialPartialOperationFailure(target, paths, "operationLock", error);
+            throw error;
+          }
+        }, { signal: schedulerCancellation.signal });
+      } finally {
+        schedulerCancellation.dispose();
+      }
       this.showCommandInformation(
         this.options.localize(
           paths.length === 1
@@ -2773,7 +2806,7 @@ export class RepositoryCommandController {
   public async unlockResource(...resourceStates: unknown[]): Promise<void> {
     try {
       this.requireTrustedWorkspace();
-      const targets = await this.resourceTargets(resourceStates, {
+      const targets = await this.currentResourceTargets(resourceStates, {
         contexts: LOCAL_UNLOCKABLE_CONTEXT_VALUES,
         invalid: invalidResourceUnlockTarget,
         outside: invalidResourceUnlockTargetOutsideRepository,
@@ -2787,31 +2820,45 @@ export class RepositoryCommandController {
         isUnlockableProjectedResource,
       );
       const pathSummary = commitPathSummary(paths);
-      const unlockOptions = await this.options.ui.promptUnlockOptions(paths);
-      if (unlockOptions === undefined) {
+      if (this.options.commandCancellation.isCancellationRequested) {
+        return;
+      }
+      const unlockOptions = await this.options.ui.promptUnlockOptions(paths, this.options.commandCancellation);
+      if (unlockOptions === undefined || this.options.commandCancellation.isCancellationRequested) {
         return;
       }
 
-      await this.options.operationScheduler.run(target.repositoryId, async () => {
-        const result = await this.runJournaledOperation(
-          "unlock",
-          this.options.localize("Unlocking SVN resource"),
-          target.repositoryId,
-          paths.length,
-          (operationOptions) => {
-            const request = {
-              repositoryId: target.repositoryId,
-              epoch: target.epoch,
-              paths,
-              breakLock: unlockOptions.breakLock,
-            };
-            return operationOptions
-              ? this.options.operationClient.unlock(request, operationOptions)
-              : this.options.operationClient.unlock(request);
-          },
-        );
-        await this.applyOperationReconcile(target, result);
-      });
+      const schedulerCancellation = linkOperationCancellation(undefined, this.options.commandCancellation);
+      try {
+        await this.options.operationScheduler.run(target.repositoryId, async () => {
+          try {
+            const result = await this.runJournaledOperation(
+              "unlock",
+              this.options.localize("Unlocking SVN resource"),
+              target.repositoryId,
+              paths.length,
+              (operationOptions) => {
+                const request = {
+                  repositoryId: target.repositoryId,
+                  epoch: target.epoch,
+                  paths,
+                  breakLock: unlockOptions.breakLock,
+                };
+                return operationOptions
+                  ? this.options.operationClient.unlock(request, operationOptions)
+                  : this.options.operationClient.unlock(request);
+              },
+              this.options.commandCancellation,
+            );
+            await this.applyOperationReconcile(target, result);
+          } catch (error) {
+            await this.reconcilePotentialPartialOperationFailure(target, paths, "operationUnlock", error);
+            throw error;
+          }
+        }, { signal: schedulerCancellation.signal });
+      } finally {
+        schedulerCancellation.dispose();
+      }
       this.showCommandInformation(
         this.options.localize(
           paths.length === 1
@@ -3835,6 +3882,32 @@ export class RepositoryCommandController {
     });
   }
 
+  private async currentResourceTargets(
+    resourceStateArgs: unknown[],
+    options: {
+      contexts: ReadonlySet<string>;
+      invalid(): RepositoryCommandError;
+      outside(fsPath: string): RepositoryCommandError;
+    },
+  ): Promise<RepositoryCommandResourceTarget[] | undefined> {
+    const resourceStates = normalizeResourceStateArgs(resourceStateArgs);
+    if (
+      resourceStates.length > 0 &&
+      this.options.sessionService.listOpenSessions().length === 0 &&
+      resourceStates.some((resourceState) => !this.options.sourceControlProjection.isCurrentResourceState(resourceState))
+    ) {
+      throw options.invalid();
+    }
+    const targets = await this.resourceTargets(resourceStates, options);
+    if (!targets) {
+      return undefined;
+    }
+    if (resourceStates.some((resourceState) => !this.options.sourceControlProjection.isCurrentResourceState(resourceState))) {
+      throw options.invalid();
+    }
+    return targets;
+  }
+
   private validateOperationTargets(
     targets: RepositoryCommandResourceTarget[],
     invalid: () => RepositoryCommandError,
@@ -3903,6 +3976,26 @@ export class RepositoryCommandController {
     }
   }
 
+  private async reconcilePotentialPartialOperationFailure(
+    target: RepositoryResourceRefreshTarget,
+    paths: readonly string[],
+    reason: "operationLock" | "operationUnlock",
+    operationError: unknown,
+  ): Promise<void> {
+    if (!operationMayHaveMutated(operationError)) {
+      return;
+    }
+    try {
+      await this.options.refreshService.refreshTargets({
+        repositoryId: target.repositoryId,
+        epoch: target.epoch,
+        targets: paths.map((path) => ({ path, depth: "empty", reason })),
+      });
+    } catch (reconcileError) {
+      this.options.diagnostics.recordFailure("Partial SVN operation reconcile", reconcileError);
+    }
+  }
+
   private async deleteUnversionedTargets(
     repositoryId: string,
     epoch: number,
@@ -3959,12 +4052,17 @@ export class RepositoryCommandController {
     repositoryId: string,
     requestedTouchedCount: number,
     operation: (options?: OperationRunClientOptions) => Promise<T>,
+    commandCancellation?: RepositoryCommandCancellationToken,
   ): Promise<T> {
     return await this.options.ui.runOperationWithProgress(progressTitle, async (signal) => {
+      const linkedCancellation = commandCancellation
+        ? linkOperationCancellation(signal, commandCancellation)
+        : undefined;
+      const operationSignal = linkedCancellation?.signal ?? signal;
       const startedAt = this.options.now();
       const startedMonotonicMs = this.options.monotonicNowMs();
       try {
-        const result = await operationRunWithOptionalOptions(operation, signal);
+        const result = await operationRunWithOptionalOptions(operation, operationSignal);
         const endedAt = this.options.now();
         const durationMs = operationJournalDurationMs(startedMonotonicMs, this.options.monotonicNowMs());
         this.recordOperationJournal({
@@ -3997,6 +4095,8 @@ export class RepositoryCommandController {
           cancelled: resultCategory === "cancelled",
         });
         throw error;
+      } finally {
+        linkedCancellation?.dispose();
       }
     });
   }
@@ -4222,7 +4322,7 @@ export class RepositoryCommandController {
   }
 
   private async showCommandError(error: unknown): Promise<void> {
-    if (isStatusRefreshCancellation(error)) {
+    if (isStatusRefreshCancellation(error) || isRepositoryCommandCancellation(error)) {
       return;
     }
     const code = errorCode(error);
@@ -4304,6 +4404,15 @@ function errorCode(error: unknown): string {
   return "SUBVERSIONR_REPOSITORY_COMMAND_FAILED";
 }
 
+function operationMayHaveMutated(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("safeArgs" in error)) {
+    return false;
+  }
+  const safeArgs = (error as { safeArgs?: unknown }).safeArgs;
+  return typeof safeArgs === "object" && safeArgs !== null && "mayHaveMutated" in safeArgs &&
+    (safeArgs as { mayHaveMutated?: unknown }).mayHaveMutated === true;
+}
+
 type RepositoryErrorLocalize = (message: string, ...args: unknown[]) => string;
 
 function repositoryErrorOperation(code: string, localize: RepositoryErrorLocalize): string {
@@ -4360,6 +4469,22 @@ function repositoryFailureMessage(
       return localize(
         "The local OS username is unavailable, so SubversionR cannot record an author for this local SVN commit. Check the OS account and retry.",
       );
+    case "SUBVERSIONR_RESOURCE_LOCK_TARGET_INVALID":
+      return localize(
+        "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.",
+      );
+    case "SUBVERSIONR_RESOURCE_LOCK_TARGET_OUTSIDE_REPOSITORY":
+      return localize(
+        "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.",
+      );
+    case "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_INVALID":
+      return localize(
+        "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.",
+      );
+    case "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_OUTSIDE_REPOSITORY":
+      return localize(
+        "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.",
+      );
   }
   const cause = operationFailureCause(error);
   switch (cause) {
@@ -4406,6 +4531,11 @@ function isStatusRefreshCancellation(error: unknown): boolean {
   return errorCode(error) === "SUBVERSIONR_STATUS_REFRESH_CANCELLED";
 }
 
+function isRepositoryCommandCancellation(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "SVN_OPERATION_CANCELLED" || code === "SUBVERSIONR_OPERATION_SCHEDULER_CANCELLED";
+}
+
 function isUnknownRepositoryCommandError(error: unknown): boolean {
   return errorCode(error) === "SUBVERSIONR_REPOSITORY_COMMAND_FAILED";
 }
@@ -4450,6 +4580,26 @@ function operationRunWithOptionalOptions<T>(
     return operation();
   }
   return operation({ signal });
+}
+
+function linkOperationCancellation(
+  progressSignal: AbortSignal | undefined,
+  commandCancellation: RepositoryCommandCancellationToken,
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  if (progressSignal?.aborted || commandCancellation.isCancellationRequested) {
+    abort();
+  }
+  progressSignal?.addEventListener("abort", abort, { once: true });
+  const commandSubscription = commandCancellation.onCancellationRequested(abort);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      progressSignal?.removeEventListener("abort", abort);
+      commandSubscription.dispose();
+    },
+  };
 }
 
 function statusRefreshRunOptions(signal: AbortSignal | undefined): { signal: AbortSignal } | undefined {

@@ -8,6 +8,7 @@ import { BackendLifecycleUiService } from "./backend/backendLifecycleUiService";
 import { resolvePackagedBackendResources } from "./backend/backendPackageResolver";
 import { BackendLaunchError, startBackendProcess } from "./backend/backendProcess";
 import { BackendService, systemBackendLifecycleClock } from "./backend/backendService";
+import { createInitializeCommandHandler } from "./backend/initializeCommandHandler";
 import { createAuthRequestHandler } from "./auth/authRequestHandler";
 import {
   createCertificateTrustController,
@@ -108,6 +109,7 @@ import {
   type RepositoryBranchCreateOptions,
   type RepositoryCheckoutOptions,
   type RepositoryCleanupOptions,
+  type RepositoryCommandCancellationToken,
   type RepositoryLockOptions,
   type RepositoryMergeRangeOptions,
   type RepositoryPropertySetOptions,
@@ -164,6 +166,7 @@ let backendService: BackendService | undefined;
 let repositorySessionService: RepositorySessionService | undefined;
 let repositoryWatcherService: RepositoryWatcherService | undefined;
 let operationDiagnostics: OperationDiagnostics | undefined;
+let repositoryCommandCancellationSource: vscode.CancellationTokenSource | undefined;
 
 const HISTORY_COPY_MESSAGE_LEGACY_ALIASES = ["svn.itemlog.copymsg", "svn.repolog.copymsg"] as const;
 const HISTORY_COPY_REVISION_LEGACY_ALIASES = [
@@ -185,6 +188,50 @@ interface MatchingCompletedRefreshCoverageRequest {
   repositoryId: string;
   epoch: number;
   target: StatusRefreshTarget;
+}
+
+interface InstalledSourceControlUiE2eExecuteResourceCommandRequest {
+  command: "subversionr.lockResource" | "subversionr.unlockResource";
+  repositoryId: string;
+  epoch: number;
+  groupId: string;
+  path: string;
+}
+
+function parseInstalledSourceControlUiE2eExecuteResourceCommandRequest(
+  rawRequest: unknown,
+): InstalledSourceControlUiE2eExecuteResourceCommandRequest {
+  if (typeof rawRequest !== "object" || rawRequest === null) {
+    throw installedSourceControlUiE2eResourceCommandError(
+      "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOURCE_COMMAND_REQUEST_INVALID",
+    );
+  }
+  const request = rawRequest as Record<string, unknown>;
+  if (
+    Object.keys(request).sort().join(",") !== "command,epoch,groupId,path,repositoryId" ||
+    (request.command !== "subversionr.lockResource" && request.command !== "subversionr.unlockResource") ||
+    typeof request.repositoryId !== "string" ||
+    request.repositoryId.trim().length === 0 ||
+    request.repositoryId !== request.repositoryId.trim() ||
+    typeof request.epoch !== "number" ||
+    !Number.isSafeInteger(request.epoch) ||
+    request.epoch < 0 ||
+    typeof request.groupId !== "string" ||
+    request.groupId.trim().length === 0 ||
+    request.groupId !== request.groupId.trim() ||
+    typeof request.path !== "string" ||
+    request.path.trim().length === 0 ||
+    request.path !== request.path.trim()
+  ) {
+    throw installedSourceControlUiE2eResourceCommandError(
+      "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOURCE_COMMAND_REQUEST_INVALID",
+    );
+  }
+  return request as unknown as InstalledSourceControlUiE2eExecuteResourceCommandRequest;
+}
+
+function installedSourceControlUiE2eResourceCommandError(code: string): Error & { code: string } {
+  return Object.assign(new Error(code), { code });
 }
 
 function parseMatchingCompletedRefreshCoverageRequest(rawRequest: unknown): MatchingCompletedRefreshCoverageRequest {
@@ -229,6 +276,14 @@ function parseMatchingCompletedRefreshCoverageRequest(rawRequest: unknown): Matc
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const commandCancellationSource = new vscode.CancellationTokenSource();
+  repositoryCommandCancellationSource = commandCancellationSource;
+  context.subscriptions.push({
+    dispose: () => {
+      commandCancellationSource.cancel();
+      commandCancellationSource.dispose();
+    },
+  });
   const operationLogChannel = vscode.window.createOutputChannel("SubversionR", { log: true });
   const diagnostics = new OperationDiagnostics(operationLogChannel);
   operationDiagnostics = diagnostics;
@@ -735,6 +790,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyClient,
     operationScheduler,
     sourceControlProjection,
+    commandCancellation: commandCancellationSource.token,
     commitMessageHistory,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     createRequestId: randomUUID,
@@ -1046,21 +1102,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     localize: vscode.l10n.t,
   });
 
-  const initializeCommand = vscode.commands.registerCommand("subversionr.initialize", async () => {
-    try {
-      const connection = await service.initialize();
+  const initializeCommandHandler = createInitializeCommandHandler({
+    initialize: () => service.initialize(),
+    onReady: (connection) => {
       operationLogChannel.info(
         vscode.l10n.t("SubversionR backend ready. libsvn: {0}", connection.initializeResult.libsvnVersion),
       );
-    } catch (error) {
-      diagnostics.recordFailure("Initialize Backend", error);
-      const showLog = vscode.l10n.t("Show Log");
-      const selected = await vscode.window.showErrorMessage(backendStartupMessage(error), showLog);
-      if (selected === showLog) {
-        diagnostics.show();
-      }
-    }
+    },
+    recordFailure: (error) => diagnostics.recordFailure("Initialize Backend", error),
+    failureMessage: backendStartupMessage,
+    showErrorMessage: async (message, action) => await vscode.window.showErrorMessage(message, action),
+    showLogAction: vscode.l10n.t("Show Log"),
+    showLog: () => diagnostics.show(),
+    recordNotificationFailure: (error) => {
+      console.error("SubversionR initialize notification failed.", error);
+    },
   });
+  const initializeCommand = vscode.commands.registerCommand("subversionr.initialize", initializeCommandHandler);
   const collectDiagnosticsCommand = vscode.commands.registerCommand("subversionr.diagnostics.collect", () =>
     diagnosticsController.collectDiagnostics(),
   );
@@ -1343,6 +1401,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const unlockResourceCommand = vscode.commands.registerCommand("subversionr.unlockResource", (...resourceStates: unknown[]) =>
     repositoryCommandController.unlockResource(...resourceStates),
   );
+  const installedSourceControlUiE2eExecuteResourceCommand = isInstalledSourceControlUiE2eRun()
+    ? vscode.commands.registerCommand(
+        "subversionr.diagnostics.installedSourceControlUiE2eExecuteResourceCommand",
+        async (rawRequest: unknown) => {
+          const request = parseInstalledSourceControlUiE2eExecuteResourceCommandRequest(rawRequest);
+          const resourceState = sourceControlPresenter.currentResourceState(
+            request.repositoryId,
+            request.epoch,
+            request.groupId,
+            request.path,
+          );
+          if (!resourceState) {
+            throw installedSourceControlUiE2eResourceCommandError(
+              "SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOURCE_TARGET_NOT_CURRENT",
+            );
+          }
+          await vscode.commands.executeCommand(request.command, resourceState);
+          return {
+            kind: "subversionr.installedSourceControlUiE2eExecuteResourceCommandReport" as const,
+            command: request.command,
+            repositoryId: request.repositoryId,
+            epoch: request.epoch,
+            groupId: request.groupId,
+            path: request.path,
+          };
+        },
+      )
+    : undefined;
   const deleteUnversionedResourceCommand = vscode.commands.registerCommand(
     "subversionr.deleteUnversionedResource",
     (...resourceStates: unknown[]) => repositoryCommandController.deleteUnversionedResource(...resourceStates),
@@ -1726,6 +1812,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   if (installedRedactionReportCommand !== undefined) {
     context.subscriptions.push(installedRedactionReportCommand);
+  }
+  if (installedSourceControlUiE2eExecuteResourceCommand !== undefined) {
+    context.subscriptions.push(installedSourceControlUiE2eExecuteResourceCommand);
   }
 }
 
@@ -2214,6 +2303,7 @@ function normalizedFsPath(fsPath: string): string {
 }
 
 export async function deactivate(): Promise<void> {
+  const commandCancellationSource = repositoryCommandCancellationSource;
   const service = backendService;
   const sessionService = repositorySessionService;
   const watcherService = repositoryWatcherService;
@@ -2221,6 +2311,8 @@ export async function deactivate(): Promise<void> {
   repositorySessionService = undefined;
   repositoryWatcherService = undefined;
   operationDiagnostics = undefined;
+  repositoryCommandCancellationSource = undefined;
+  commandCancellationSource?.cancel();
   sessionService?.dispose();
   watcherService?.dispose();
   try {
@@ -2378,7 +2470,10 @@ async function promptResolveChoice(resourcePath: string): Promise<ResolveOperati
   return picked?.choice;
 }
 
-async function promptLockOptions(resourcePaths: readonly string[]): Promise<RepositoryLockOptions | undefined> {
+async function promptLockOptions(
+  resourcePaths: readonly string[],
+  cancellation: RepositoryCommandCancellationToken,
+): Promise<RepositoryLockOptions | undefined> {
   const commentText = await vscode.window.showInputBox({
     title: vscode.l10n.t("Lock SVN resource"),
     prompt:
@@ -2388,11 +2483,11 @@ async function promptLockOptions(resourcePaths: readonly string[]): Promise<Repo
     placeHolder: vscode.l10n.t("Lock message"),
     ignoreFocusOut: true,
     validateInput: validateLockCommentInput,
-  });
+  }, cancellation);
   if (commentText === undefined) {
     return undefined;
   }
-  const stealLock = await pickLockStealPolicy();
+  const stealLock = await pickLockStealPolicy(cancellation);
   if (stealLock === undefined) {
     return undefined;
   }
@@ -2410,7 +2505,7 @@ function validateLockCommentInput(value: string): string | undefined {
   return undefined;
 }
 
-async function pickLockStealPolicy(): Promise<boolean | undefined> {
+async function pickLockStealPolicy(cancellation: RepositoryCommandCancellationToken): Promise<boolean | undefined> {
   const items: LockStealQuickPickItem[] = [
     {
       label: vscode.l10n.t("Lock"),
@@ -2427,12 +2522,15 @@ async function pickLockStealPolicy(): Promise<boolean | undefined> {
     title: vscode.l10n.t("SVN lock mode"),
     placeHolder: vscode.l10n.t("Choose how SVN lock handles existing locks"),
     ignoreFocusOut: true,
-  });
+  }, cancellation);
   return item?.stealLock;
 }
 
-async function promptUnlockOptions(_resourcePaths: readonly string[]): Promise<RepositoryUnlockOptions | undefined> {
-  const breakLock = await pickUnlockBreakPolicy();
+async function promptUnlockOptions(
+  _resourcePaths: readonly string[],
+  cancellation: RepositoryCommandCancellationToken,
+): Promise<RepositoryUnlockOptions | undefined> {
+  const breakLock = await pickUnlockBreakPolicy(cancellation);
   if (breakLock === undefined) {
     return undefined;
   }
@@ -2916,7 +3014,7 @@ function reviewCommitStatusLabel(status: string): string {
   }
 }
 
-async function pickUnlockBreakPolicy(): Promise<boolean | undefined> {
+async function pickUnlockBreakPolicy(cancellation: RepositoryCommandCancellationToken): Promise<boolean | undefined> {
   const items: UnlockBreakQuickPickItem[] = [
     {
       label: vscode.l10n.t("Unlock"),
@@ -2933,7 +3031,7 @@ async function pickUnlockBreakPolicy(): Promise<boolean | undefined> {
     title: vscode.l10n.t("SVN unlock mode"),
     placeHolder: vscode.l10n.t("Choose how SVN unlock handles locks held elsewhere"),
     ignoreFocusOut: true,
-  });
+  }, cancellation);
   return item?.breakLock;
 }
 

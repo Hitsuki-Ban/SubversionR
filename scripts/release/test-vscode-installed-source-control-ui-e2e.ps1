@@ -536,6 +536,51 @@ function New-SourceControlUiLockFixture(
   $fixture | Add-Member -NotePropertyName lockRelativePath -NotePropertyValue $relativePath
   $fixture | Add-Member -NotePropertyName lockWorkingCopyPath -NotePropertyValue $workingCopyPath
   $fixture | Add-Member -NotePropertyName lockComment -NotePropertyValue "Beta-E installed lock evidence"
+  $contenderWorkingCopyRoot = Join-Path $Root "contender-wc"
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "checkout",
+    "$($fixture.repoUrl)/trunk",
+    $contenderWorkingCopyRoot,
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $fixture.svnCliConfigRoot
+  ) -Description "svn checkout competing Lock fixture working copy" | Out-Null
+  $contenderWorkingCopyPath = Join-Path $contenderWorkingCopyRoot $relativePath.Replace("/", "\")
+  Invoke-CheckedTool -Path $SvnExe -Arguments @(
+    "lock",
+    $contenderWorkingCopyPath,
+    "-m",
+    "competing installed Lock settlement evidence",
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $fixture.svnCliConfigRoot
+  ) -Description "svn acquire competing Lock fixture lock" | Out-Null
+  $lockInfoXmlText = @(Invoke-CheckedTool -Path $SvnExe -Arguments @(
+      "info",
+      "--xml",
+      $contenderWorkingCopyPath,
+      "--non-interactive",
+      "--no-auth-cache",
+      "--config-dir",
+      $fixture.svnCliConfigRoot
+    ) -Description "svn read competing Lock fixture metadata") -join "`n"
+  try {
+    [xml]$lockInfoXml = $lockInfoXmlText
+  } catch {
+    throw "Competing Lock fixture info must be valid SVN XML metadata."
+  }
+  $lockOwner = ([string]$lockInfoXml.info.entry.lock.owner).Trim()
+  $lockToken = ([string]$lockInfoXml.info.entry.lock.token).Trim()
+  if ([string]::IsNullOrWhiteSpace($lockOwner) -or [string]::IsNullOrWhiteSpace($lockToken)) {
+    throw "Competing Lock fixture must expose a non-empty owner and opaque token."
+  }
+  $fixture | Add-Member -NotePropertyName lockContenderWorkingCopyRoot -NotePropertyValue $contenderWorkingCopyRoot
+  $fixture | Add-Member -NotePropertyName lockContenderWorkingCopyPath -NotePropertyValue $contenderWorkingCopyPath
+  $fixture | Add-Member -NotePropertyName lockRepositoryUrl -NotePropertyValue "$($fixture.repoUrl)/trunk/$relativePath"
+  $fixture | Add-Member -NotePropertyName lockOwner -NotePropertyValue $lockOwner
+  $fixture | Add-Member -NotePropertyName lockToken -NotePropertyValue $lockToken
   $fixture
 }
 
@@ -1566,6 +1611,8 @@ function Write-HarnessPackage(
   [string]$LockMessagePromptDonePath,
   [string]$LockModePromptReadyPath,
   [string]$LockModePromptDonePath,
+  [string]$LockFailureObservedReadyPath,
+  [string]$LockFailureRecoveredDonePath,
   [string]$LockHeldOracleReadyPath,
   [string]$LockHeldOracleDonePath,
   [string]$UnlockModeCancellationPromptReadyPath,
@@ -3018,6 +3065,40 @@ function resourceStateArgument(workingCopyRoot, resource) {
   };
 }
 
+function presenterOwnedResourceCommandRequest(openReport, groupId, resource, command) {
+  if (
+    !openReport ||
+    !openReport.repository ||
+    typeof openReport.repository.repositoryId !== "string" ||
+    typeof openReport.repository.epoch !== "number" ||
+    typeof groupId !== "string" ||
+    groupId.length === 0 ||
+    !resource ||
+    typeof resource.path !== "string" ||
+    typeof command !== "string"
+  ) {
+    throw new Error("Installed presenter-owned resource command request is incomplete.");
+  }
+  return {
+    command,
+    repositoryId: openReport.repository.repositoryId,
+    epoch: openReport.repository.epoch,
+    groupId,
+    path: resource.path
+  };
+}
+
+function executePresenterOwnedResourceCommand(openReport, groupId, resource, command, label, timeoutMs = 60000) {
+  return withTimeout(
+    vscode.commands.executeCommand(
+      "subversionr.diagnostics.installedSourceControlUiE2eExecuteResourceCommand",
+      presenterOwnedResourceCommandRequest(openReport, groupId, resource, command)
+    ),
+    label,
+    timeoutMs
+  );
+}
+
 function deletePromptCaptureExpectations(resourcePath) {
   const message = `Delete unversioned SVN item ${resourcePath}? This cannot be undone.`;
   return {
@@ -3270,6 +3351,68 @@ async function collectCommitDiagnostics(diagnosticsToken, label) {
     throw new Error(`Installed commit diagnostics ${label} did not expose the redacted operation journal.`);
   }
   return report;
+}
+
+async function collectResourceCommandDiagnostics(openReport, label) {
+  const report = await withTimeout(
+    vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport", {
+      repositoryId: openReport.repository.repositoryId,
+      epoch: openReport.repository.epoch
+    }),
+    `subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport/${label}`,
+    30000
+  );
+  if (!report || report.kind !== "subversionr.installedSourceControlUiE2eRepositoryHistoryReport" || !Array.isArray(report.diagnostics?.lines)) {
+    throw new Error(`Installed resource command diagnostics ${label} did not expose bounded diagnostic lines.`);
+  }
+  return report;
+}
+
+function parseLatestDiagnosticLine(report, label) {
+  const line = report.diagnostics.lines[report.diagnostics.lines.length - 1];
+  if (typeof line !== "string") {
+    throw new Error(`Installed resource command diagnostics ${label} did not include a latest line.`);
+  }
+  try {
+    return JSON.parse(line);
+  } catch (error) {
+    throw new Error(`Installed resource command diagnostics ${label} latest line was not JSON: ${error}`);
+  }
+}
+
+async function runRejectedResourceCommandCase(openReport, diagnosticsToken, spec) {
+  const beforeBundle = await collectCommitDiagnostics(diagnosticsToken, `${spec.label}/before`);
+  const beforeDiagnostics = await collectResourceCommandDiagnostics(openReport, `${spec.label}/before`);
+  await withTimeout(
+    vscode.commands.executeCommand(spec.command, ...spec.arguments),
+    `${spec.command}/${spec.label}`,
+    5000
+  );
+  const afterDiagnostics = await collectResourceCommandDiagnostics(openReport, `${spec.label}/after`);
+  const afterBundle = await collectCommitDiagnostics(diagnosticsToken, `${spec.label}/after`);
+  const latest = parseLatestDiagnosticLine(afterDiagnostics, spec.label);
+  const beforeJournal = beforeBundle.diagnosticsBundle.operationJournal.entries;
+  const afterJournal = afterBundle.diagnosticsBundle.operationJournal.entries;
+  const diagnosticAdvancedByOne = afterDiagnostics.diagnostics.lineCount === beforeDiagnostics.diagnostics.lineCount + 1;
+  const operationJournalUnchanged = JSON.stringify(afterJournal) === JSON.stringify(beforeJournal);
+  if (!diagnosticAdvancedByOne || latest.code !== spec.expectedCode || latest.category !== "input" || !operationJournalUnchanged) {
+    throw new Error(
+      `Installed rejected ${spec.command} case ${spec.label} did not settle with ${spec.expectedCode} and zero operation dispatch.`
+    );
+  }
+  return {
+    label: spec.label,
+    command: spec.command,
+    expectedCode: spec.expectedCode,
+    settlementTimeoutMs: 5000,
+    diagnostic: latest,
+    assertions: {
+      settledWithinBound: true,
+      stableInputErrorRecorded: true,
+      operationJournalUnchanged,
+      nativeOperationNotDispatched: operationJournalUnchanged
+    }
+  };
 }
 
 async function probeEmptyCommitMessageHistory(repositoryId, label) {
@@ -4219,7 +4362,7 @@ function unlockModeCancellationPromptCaptureExpectations() {
   };
 }
 
-async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
+async function runLockUnlockWorkflow(lockWorkingCopyRoot, diagnosticsToken, redactionForbiddenValues, promptPaths) {
   let openReport;
   let closeReport;
   let lockMessageCancellationPrompt;
@@ -4245,10 +4388,87 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
       throw new Error("Installed Lock/Unlock workflow could not find the clean svn:needs-lock metadata resource.");
     }
 
-    const lockCancellationCommand = withTimeout(
-      vscode.commands.executeCommand("subversionr.lockResource", resourceStateArgument(lockWorkingCopyRoot, resource)),
-      "subversionr.lockResource/messageCancellation",
-      60000
+    const syntheticArgument = resourceStateArgument(lockWorkingCopyRoot, resource);
+    const staleSyntheticArgument = {
+      ...syntheticArgument,
+      subversionrProjectionGeneration: resource.generation - 1
+    };
+    const outsideArgument = {
+      ...syntheticArgument,
+      resourceUri: vscode.Uri.file(path.resolve(lockWorkingCopyRoot, "..", "outside-lock-target.txt"))
+    };
+    const unlockSyntheticArgument = {
+      ...syntheticArgument,
+      contextValue: "subversionr.workingCopyMetadataFile.locked"
+    };
+    const staleUnlockSyntheticArgument = {
+      ...unlockSyntheticArgument,
+      subversionrProjectionGeneration: resource.generation - 1
+    };
+    const unlockOutsideArgument = {
+      ...unlockSyntheticArgument,
+      resourceUri: vscode.Uri.file(path.resolve(lockWorkingCopyRoot, "..", "outside-unlock-target.txt"))
+    };
+    const rejectedSettlementCases = [];
+    for (const spec of [
+      {
+        label: "lockMissingArgument",
+        command: "subversionr.lockResource",
+        arguments: [],
+        expectedCode: "SUBVERSIONR_RESOURCE_LOCK_TARGET_INVALID"
+      },
+      {
+        label: "lockSyntheticArgument",
+        command: "subversionr.lockResource",
+        arguments: [syntheticArgument],
+        expectedCode: "SUBVERSIONR_RESOURCE_LOCK_TARGET_INVALID"
+      },
+      {
+        label: "lockStaleGeneration",
+        command: "subversionr.lockResource",
+        arguments: [staleSyntheticArgument],
+        expectedCode: "SUBVERSIONR_RESOURCE_LOCK_TARGET_INVALID"
+      },
+      {
+        label: "lockOutsideRepository",
+        command: "subversionr.lockResource",
+        arguments: [outsideArgument],
+        expectedCode: "SUBVERSIONR_RESOURCE_LOCK_TARGET_OUTSIDE_REPOSITORY"
+      },
+      {
+        label: "unlockMissingArgument",
+        command: "subversionr.unlockResource",
+        arguments: [],
+        expectedCode: "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_INVALID"
+      },
+      {
+        label: "unlockSyntheticArgument",
+        command: "subversionr.unlockResource",
+        arguments: [unlockSyntheticArgument],
+        expectedCode: "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_INVALID"
+      },
+      {
+        label: "unlockStaleGeneration",
+        command: "subversionr.unlockResource",
+        arguments: [staleUnlockSyntheticArgument],
+        expectedCode: "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_INVALID"
+      },
+      {
+        label: "unlockOutsideRepository",
+        command: "subversionr.unlockResource",
+        arguments: [unlockOutsideArgument],
+        expectedCode: "SUBVERSIONR_RESOURCE_UNLOCK_TARGET_OUTSIDE_REPOSITORY"
+      }
+    ]) {
+      rejectedSettlementCases.push(await runRejectedResourceCommandCase(openReport, diagnosticsToken, spec));
+    }
+
+    const lockCancellationCommand = executePresenterOwnedResourceCommand(
+      openReport,
+      "metadata",
+      resource,
+      "subversionr.lockResource",
+      "subversionr.lockResource/messageCancellation"
     );
     await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -4287,17 +4507,21 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
       throw new Error("Installed Lock message cancellation workflow changed the Source Control projection after cancellation.");
     }
 
-    const lockCommand = withTimeout(
-      vscode.commands.executeCommand("subversionr.lockResource", resourceStateArgument(lockWorkingCopyRoot, resource)),
+    const lockFailureBundleBefore = await collectCommitDiagnostics(diagnosticsToken, "lockNativeFailure/before");
+    const lockFailureDiagnosticsBefore = await collectResourceCommandDiagnostics(openReport, "lockNativeFailure/before");
+    const failedLockCommand = executePresenterOwnedResourceCommand(
+      openReport,
+      "metadata",
+      resource,
       "subversionr.lockResource",
-      60000
+      "subversionr.lockResource/nativeFailure"
     );
     await new Promise(resolve => setTimeout(resolve, 500));
 
     const lockMessagePrompt = lockMessagePromptCaptureExpectations(lockComment, resource.path);
     await publishCheckoutPromptReadyAndWait(promptPaths.lockMessageReady, promptPaths.lockMessageDone, {
       ok: true,
-      phase: "lockMessagePromptReady",
+      phase: "lockFailureMessagePromptReady",
       command: "subversionr.lockResource",
       resource,
       prompt: {
@@ -4310,7 +4534,7 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
     const lockModePrompt = lockModePromptCaptureExpectations();
     await publishCheckoutPromptReadyAndWait(promptPaths.lockModeReady, promptPaths.lockModeDone, {
       ok: true,
-      phase: "lockModePromptReady",
+      phase: "lockFailureModePromptReady",
       command: "subversionr.lockResource",
       resource,
       prompt: {
@@ -4321,6 +4545,98 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
       rendererCaptureExpectations: lockModePrompt
     });
 
+    await failedLockCommand;
+    const lockFailureDiagnosticsAfter = await collectResourceCommandDiagnostics(openReport, "lockNativeFailure/after");
+    const lockFailureBundleAfter = await collectCommitDiagnostics(diagnosticsToken, "lockNativeFailure/after");
+    const lockFailureDiagnostic = parseLatestDiagnosticLine(lockFailureDiagnosticsAfter, "lockNativeFailure");
+    const failedLockEntriesBefore = lockFailureBundleBefore.diagnosticsBundle.operationJournal.entries;
+    const failedLockEntriesAfter = lockFailureBundleAfter.diagnosticsBundle.operationJournal.entries;
+    const failedLockEntry = failedLockEntriesAfter.find((entry, index) =>
+      index >= failedLockEntriesBefore.length && entry.kind === "lock" && entry.resultCategory === "failed"
+    );
+    const requiredRedactionCategories = [
+      "mainWorkingCopyRoot",
+      "mainWorkingCopyPath",
+      "contenderWorkingCopyRoot",
+      "contenderWorkingCopyPath",
+      "repositoryUrl",
+      "resourceUrl",
+      "username",
+      "workflowSecret",
+      "lockToken"
+    ];
+    if (
+      !redactionForbiddenValues ||
+      typeof redactionForbiddenValues !== "object" ||
+      requiredRedactionCategories.some(category =>
+        typeof redactionForbiddenValues[category] !== "string" ||
+        redactionForbiddenValues[category].trim().length === 0
+      )
+    ) {
+      throw new Error("Installed competing-lock redaction inputs are incomplete.");
+    }
+    const serializedLockFailureDiagnostic = JSON.stringify(lockFailureDiagnostic).toLowerCase();
+    const leakedRedactionCategories = requiredRedactionCategories.filter(category => {
+      const value = redactionForbiddenValues[category].trim().toLowerCase();
+      const variants = new Set([
+        value,
+        value.replaceAll("\\", "/"),
+        value.replaceAll("/", "\\")
+      ]);
+      return Array.from(variants).some(variant => serializedLockFailureDiagnostic.includes(variant));
+    });
+    const lockFailureRedacted = leakedRedactionCategories.length === 0;
+    if (
+      lockFailureDiagnosticsAfter.diagnostics.lineCount !== lockFailureDiagnosticsBefore.diagnostics.lineCount + 1 ||
+      lockFailureDiagnostic.code !== "SVN_OPERATION_LOCK_FAILED" ||
+      lockFailureDiagnostic.category !== "native" ||
+      !failedLockEntry ||
+      !lockFailureRedacted
+    ) {
+      throw new Error("Installed competing-lock native failure did not settle with a redacted stable cause and failed Lock journal entry.");
+    }
+    fs.rmSync(promptPaths.lockFailureRecoveredDone, { force: true });
+    fs.writeFileSync(promptPaths.lockFailureObservedReady, JSON.stringify({
+      ok: true,
+      phase: "lockNativeFailureObserved",
+      command: "subversionr.lockResource",
+      code: lockFailureDiagnostic.code,
+      resultCategory: failedLockEntry.resultCategory
+    }, null, 2));
+    await waitForFile(promptPaths.lockFailureRecoveredDone, 120000);
+    fs.rmSync(promptPaths.lockFailureObservedReady, { force: true });
+
+    const lockCommand = executePresenterOwnedResourceCommand(
+      openReport,
+      "metadata",
+      resource,
+      "subversionr.lockResource",
+      "subversionr.lockResource/recovery"
+    );
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await publishCheckoutPromptReadyAndWait(promptPaths.lockMessageReady, promptPaths.lockMessageDone, {
+      ok: true,
+      phase: "lockRecoveryMessagePromptReady",
+      command: "subversionr.lockResource",
+      resource,
+      prompt: {
+        comment: lockComment,
+        rendererCaptureExpectations: lockMessagePrompt
+      },
+      rendererCaptureExpectations: lockMessagePrompt
+    });
+    await publishCheckoutPromptReadyAndWait(promptPaths.lockModeReady, promptPaths.lockModeDone, {
+      ok: true,
+      phase: "lockRecoveryModePromptReady",
+      command: "subversionr.lockResource",
+      resource,
+      prompt: {
+        selected: "Lock",
+        stealLock: false,
+        rendererCaptureExpectations: lockModePrompt
+      },
+      rendererCaptureExpectations: lockModePrompt
+    });
     await lockCommand;
 
     const postLockFreshnessReport = await collectFreshnessReportWithSurfaceRetry(
@@ -4372,10 +4688,12 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
       throw new Error("Installed Lock/Unlock workflow could not find the current locked resource before Unlock cancellation.");
     }
 
-    const unlockCancellationCommand = withTimeout(
-      vscode.commands.executeCommand("subversionr.unlockResource", resourceStateArgument(lockWorkingCopyRoot, currentUnlockResource)),
-      "subversionr.unlockResource/modeCancellation",
-      60000
+    const unlockCancellationCommand = executePresenterOwnedResourceCommand(
+      openReport,
+      "metadata",
+      currentUnlockResource,
+      "subversionr.unlockResource",
+      "subversionr.unlockResource/modeCancellation"
     );
     await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -4418,10 +4736,12 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
       throw new Error("Installed Lock/Unlock workflow could not find the current locked resource after Unlock cancellation.");
     }
 
-    const unlockCommand = withTimeout(
-      vscode.commands.executeCommand("subversionr.unlockResource", resourceStateArgument(lockWorkingCopyRoot, currentUnlockResourceAfterCancellation)),
+    const unlockCommand = executePresenterOwnedResourceCommand(
+      openReport,
+      "metadata",
+      currentUnlockResourceAfterCancellation,
       "subversionr.unlockResource",
-      60000
+      "subversionr.unlockResource"
     );
     await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -4510,6 +4830,11 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
       unlockRefreshCoverage: unlockCoverage,
       closeReport,
       assertions: {
+        presenterOwnedResourceIdentityUsed: true,
+        rejectedArgumentCasesSettled: rejectedSettlementCases.length === 8,
+        rejectedArgumentCasesSkippedNativeDispatch: rejectedSettlementCases.every(
+          report => report.assertions.nativeOperationNotDispatched === true
+        ),
         needsLockProjectedBefore: true,
         lockCommandExecuted: true,
         lockUsedNormalPolicy: true,
@@ -4527,6 +4852,24 @@ async function runLockUnlockWorkflow(lockWorkingCopyRoot, promptPaths) {
           unlockCoverage.targets[0].reason === "operationUnlock" &&
           unlockCoverage.coverage[0].path === resource.path,
         repositoryClosedAfterEvidence: closeReport.repositoryClosed === true
+      },
+      settlement: {
+        boundMs: 60000,
+        rejectedCases: rejectedSettlementCases,
+        lockMessageCancellationSettledWithinBound: true,
+        lockSuccessSettledWithinBound: true,
+        unlockModeCancellationSettledWithinBound: true,
+        unlockSuccessSettledWithinBound: true,
+        nativeFailure: {
+          code: lockFailureDiagnostic.code,
+          category: lockFailureDiagnostic.category,
+          journalEntry: failedLockEntry,
+          redacted: lockFailureRedacted,
+          redactionCategories: requiredRedactionCategories,
+          settledWithinBound: true
+        },
+        schedulerReleasedForRecoveryLockAfterNativeFailure: true,
+        schedulerReleasedForUnlockAfterLockSuccess: true
       }
     };
     const lockMessageCancellationReport = {
@@ -9269,6 +9612,7 @@ async function run() {
   const commitPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_READY;
   const commitPromptDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_DONE;
   const commitDiagnosticsToken = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_DIAGNOSTICS_TOKEN;
+  const lockRedactionForbiddenJson = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_REDACTION_FORBIDDEN_JSON;
   const checkoutCancellationPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_READY;
   const checkoutCancellationPromptDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_DONE;
   const checkoutExistingTargetFailureUrlPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_EXISTING_TARGET_FAILURE_URL_PROMPT_READY;
@@ -9367,6 +9711,8 @@ async function run() {
   const lockMessagePromptDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MESSAGE_PROMPT_DONE;
   const lockModePromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MODE_PROMPT_READY;
   const lockModePromptDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MODE_PROMPT_DONE;
+  const lockFailureObservedReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_FAILURE_OBSERVED_READY;
+  const lockFailureRecoveredDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_FAILURE_RECOVERED_DONE;
   const lockHeldOracleReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_HELD_ORACLE_READY;
   const lockHeldOracleDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_HELD_ORACLE_DONE;
   const unlockModeCancellationPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_UNLOCK_MODE_CANCELLATION_PROMPT_READY;
@@ -9456,6 +9802,7 @@ async function run() {
     !commitPromptReadyPath ||
     !commitPromptDonePath ||
     !commitDiagnosticsToken ||
+    !lockRedactionForbiddenJson ||
     !checkoutCancellationPromptReadyPath ||
     !checkoutCancellationPromptDonePath ||
     !checkoutExistingTargetFailureUrlPromptReadyPath ||
@@ -9554,6 +9901,8 @@ async function run() {
     !lockMessagePromptDonePath ||
     !lockModePromptReadyPath ||
     !lockModePromptDonePath ||
+    !lockFailureObservedReadyPath ||
+    !lockFailureRecoveredDonePath ||
     !lockHeldOracleReadyPath ||
     !lockHeldOracleDonePath ||
     !unlockModeCancellationPromptReadyPath ||
@@ -9642,6 +9991,7 @@ async function run() {
   let partialFreshnessRendererCaptureExpectations;
   let staleFreshnessRendererCaptureExpectations;
   let repositoryHistoryReport;
+  let initializeSettlementReport;
   let fullReconcileCancellationReport;
   let refreshReport;
   let multiRepositoryRefreshReport;
@@ -9701,6 +10051,7 @@ async function run() {
       partialFreshnessReport,
       staleFreshnessReport,
       repositoryHistoryReport,
+      initializeSettlementReport,
       noRepositoryWelcomeRendererCaptureExpectations,
       partialFreshnessRendererCaptureExpectations,
       staleFreshnessRendererCaptureExpectations,
@@ -9808,6 +10159,7 @@ async function run() {
       "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
       "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
       "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+      "subversionr.diagnostics.installedSourceControlUiE2eExecuteResourceCommand",
       "subversionr.showRepositoryProperties",
       "subversionr.showResourceProperties",
       "subversionr.diagnostics.installedSourceControlUiE2eArmDirtyGenerationCancellation",
@@ -9904,6 +10256,16 @@ async function run() {
       "subversionr.initialize/installedSourceControlUiE2eRendererCapture",
       30000
     );
+    initializeSettlementReport = {
+      kind: "subversionr.installedSourceControlUiE2eInitializeSettlementReport",
+      command: "subversionr.initialize",
+      settlementTimeoutMs: 30000,
+      assertions: {
+        organicActivationCompletedBeforeCommand: beforeActive === true,
+        repeatedInitializeSettledWithinBound: true,
+        backendRemainedInitialized: true
+      }
+    };
     await withTimeout(
       vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eShowOutput"),
       "subversionr.diagnostics.installedSourceControlUiE2eShowOutput",
@@ -10053,13 +10415,16 @@ async function run() {
     writeResult(partialResult());
 
     phase = "executingLockUnlock";
-    const lockWorkflowReports = await runLockUnlockWorkflow(lockWorkingCopyRoot, {
+    const lockRedactionForbiddenValues = JSON.parse(lockRedactionForbiddenJson);
+    const lockWorkflowReports = await runLockUnlockWorkflow(lockWorkingCopyRoot, commitDiagnosticsToken, lockRedactionForbiddenValues, {
       lockMessageCancellationReady: lockMessageCancellationPromptReadyPath,
       lockMessageCancellationDone: lockMessageCancellationPromptDonePath,
       lockMessageReady: lockMessagePromptReadyPath,
       lockMessageDone: lockMessagePromptDonePath,
       lockModeReady: lockModePromptReadyPath,
       lockModeDone: lockModePromptDonePath,
+      lockFailureObservedReady: lockFailureObservedReadyPath,
+      lockFailureRecoveredDone: lockFailureRecoveredDonePath,
       lockHeldOracleReady: lockHeldOracleReadyPath,
       lockHeldOracleDone: lockHeldOracleDonePath,
       unlockModeCancellationReady: unlockModeCancellationPromptReadyPath,
@@ -10448,6 +10813,7 @@ async function run() {
         "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
         "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
         "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+        "subversionr.diagnostics.installedSourceControlUiE2eExecuteResourceCommand",
         "subversionr.showRepositoryLog",
         "subversionr.showRepositoryProperties",
         "subversionr.showResourceProperties",
@@ -10495,6 +10861,7 @@ async function run() {
       hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand: true,
       hasInstalledSourceControlUiE2eFreshnessReportCommand: true,
       hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand: true,
+      hasInstalledSourceControlUiE2eExecuteResourceCommand: true,
       hasShowRepositoryLogCommand: true,
       hasShowRepositoryPropertiesCommand: true,
       hasShowResourcePropertiesCommand: true,
@@ -10535,6 +10902,7 @@ async function run() {
       partialFreshnessReport,
       staleFreshnessReport,
       repositoryHistoryReport,
+      initializeSettlementReport,
       noRepositoryWelcomeRendererCaptureExpectations,
       partialFreshnessRendererCaptureExpectations,
       staleFreshnessRendererCaptureExpectations,
@@ -10732,6 +11100,8 @@ exports.run = run;
     LockMessagePromptDonePath = $LockMessagePromptDonePath
     LockModePromptReadyPath = $LockModePromptReadyPath
     LockModePromptDonePath = $LockModePromptDonePath
+    LockFailureObservedReadyPath = $LockFailureObservedReadyPath
+    LockFailureRecoveredDonePath = $LockFailureRecoveredDonePath
     LockHeldOracleReadyPath = $LockHeldOracleReadyPath
     LockHeldOracleDonePath = $LockHeldOracleDonePath
     UnlockModeCancellationPromptReadyPath = $UnlockModeCancellationPromptReadyPath
@@ -10874,6 +11244,8 @@ function Assert-HarnessResult(
     $Result.hasInstalledSourceControlUiE2eOpenReportCommand -ne $true -or
     $Result.hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand -ne $true -or
     $Result.hasInstalledSourceControlUiE2eFreshnessReportCommand -ne $true -or
+    $Result.hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand -ne $true -or
+    $Result.hasInstalledSourceControlUiE2eExecuteResourceCommand -ne $true -or
     $Result.hasShowRepositoryPropertiesCommand -ne $true -or
     $Result.hasShowResourcePropertiesCommand -ne $true -or
     $Result.hasInstalledSourceControlUiE2eArmFullReconcileCancellationCommand -ne $true -or
@@ -10890,6 +11262,8 @@ function Assert-HarnessResult(
     $Result.hasDeleteUnversionedResourceCommand -ne $true -or
     $Result.hasDeleteAllUnversionedResourcesCommand -ne $true -or
     $Result.hasAddToIgnoreResourceCommand -ne $true -or
+    $Result.hasLockResourceCommand -ne $true -or
+    $Result.hasUnlockResourceCommand -ne $true -or
     $Result.hasSetResourceChangelistCommand -ne $true -or
     $Result.hasClearResourceChangelistCommand -ne $true -or
     $Result.hasCommitAllCommand -ne $true -or
@@ -10909,6 +11283,14 @@ function Assert-HarnessResult(
     $Result.hasCleanupRepositoryCommand -ne $true
   ) {
     throw "Installed Source Control UI E2E result must prove hidden open/freshness/close/lifecycle diagnostic command and core workflow command registration."
+  }
+  if ($Result.initializeSettlementReport.kind -ne "subversionr.installedSourceControlUiE2eInitializeSettlementReport" -or
+    $Result.initializeSettlementReport.command -ne "subversionr.initialize" -or
+    $Result.initializeSettlementReport.settlementTimeoutMs -ne 30000 -or
+    $Result.initializeSettlementReport.assertions.organicActivationCompletedBeforeCommand -ne $true -or
+    $Result.initializeSettlementReport.assertions.repeatedInitializeSettledWithinBound -ne $true -or
+    $Result.initializeSettlementReport.assertions.backendRemainedInitialized -ne $true) {
+    throw "Installed Source Control UI E2E result must prove repeated Initialize settled within its bound and preserved the initialized backend."
   }
   if ($Result.openReport.kind -ne "subversionr.installedSourceControlUiE2eOpenReport") {
     throw "Installed Source Control UI E2E result must include an open report."
@@ -11242,6 +11624,43 @@ function Assert-HarnessResult(
     $Result.readonlyPropertyReportWorkflow.assertions.remoteStatusPollingNotRequested -ne $true -or
     $Result.readonlyPropertyReportWorkflow.assertions.repositoriesClosedAfterEvidence -ne $true) {
     throw "Installed Source Control UI E2E result must include reusable, clean repository and resource property report tabs, hidden mergeinfo actions, and no Source Control activity."
+  }
+  $rejectedLockSettlementCases = @($Result.lockUnlockReport.settlement.rejectedCases)
+  $nativeFailureRedactionCategories = @($Result.lockUnlockReport.settlement.nativeFailure.redactionCategories)
+  $expectedNativeFailureRedactionCategories = @(
+    "mainWorkingCopyRoot",
+    "mainWorkingCopyPath",
+    "contenderWorkingCopyRoot",
+    "contenderWorkingCopyPath",
+    "repositoryUrl",
+    "resourceUrl",
+    "username",
+    "workflowSecret",
+    "lockToken"
+  )
+  if ($Result.lockUnlockReport.kind -ne "subversionr.installedSourceControlUiE2eLockUnlockWorkflow" -or
+    $Result.lockUnlockReport.assertions.presenterOwnedResourceIdentityUsed -ne $true -or
+    $Result.lockUnlockReport.assertions.rejectedArgumentCasesSettled -ne $true -or
+    $Result.lockUnlockReport.assertions.rejectedArgumentCasesSkippedNativeDispatch -ne $true -or
+    $Result.lockUnlockReport.assertions.lockTargetedReconcile -ne $true -or
+    $Result.lockUnlockReport.assertions.unlockTargetedReconcile -ne $true -or
+    $Result.lockUnlockReport.settlement.nativeFailure.code -ne "SVN_OPERATION_LOCK_FAILED" -or
+    $Result.lockUnlockReport.settlement.nativeFailure.category -ne "native" -or
+    $Result.lockUnlockReport.settlement.nativeFailure.journalEntry.kind -ne "lock" -or
+    $Result.lockUnlockReport.settlement.nativeFailure.journalEntry.resultCategory -ne "failed" -or
+    $Result.lockUnlockReport.settlement.nativeFailure.redacted -ne $true -or
+    $nativeFailureRedactionCategories.Count -ne $expectedNativeFailureRedactionCategories.Count -or
+    @($expectedNativeFailureRedactionCategories | Where-Object { $_ -notin $nativeFailureRedactionCategories }).Count -ne 0 -or
+    $Result.lockUnlockReport.settlement.nativeFailure.settledWithinBound -ne $true -or
+    $Result.lockUnlockReport.settlement.schedulerReleasedForRecoveryLockAfterNativeFailure -ne $true -or
+    $Result.lockUnlockReport.settlement.schedulerReleasedForUnlockAfterLockSuccess -ne $true -or
+    $rejectedLockSettlementCases.Count -ne 8 -or
+    @($rejectedLockSettlementCases | Where-Object {
+      $_.assertions.settledWithinBound -ne $true -or
+      $_.assertions.stableInputErrorRecorded -ne $true -or
+      $_.assertions.nativeOperationNotDispatched -ne $true
+    }).Count -ne 0) {
+    throw "Installed Source Control UI E2E result must prove bounded presenter-owned Lock/Unlock success, cancellation, rejected arguments, native failure, and scheduler recovery."
   }
   if ($Result.lockMessageCancellationReport.kind -ne "subversionr.installedSourceControlUiE2eLockMessageCancellationWorkflow" -or
     $Result.lockMessageCancellationReport.command.command -ne "subversionr.lockResource" -or
@@ -12316,6 +12735,8 @@ $harnessLockMessagePromptReadyPath = Join-Path $fixtureRootResolved "installed-s
 $harnessLockMessagePromptDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-lock-message-prompt-done.json"
 $harnessLockModePromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-lock-mode-prompt-ready.json"
 $harnessLockModePromptDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-lock-mode-prompt-done.json"
+$harnessLockFailureObservedReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-lock-failure-observed-ready.json"
+$harnessLockFailureRecoveredDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-lock-failure-recovered-done.json"
 $harnessLockHeldOracleReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-lock-held-oracle-ready.json"
 $harnessLockHeldOracleDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-lock-held-oracle-done.json"
 $harnessUnlockModeCancellationPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-unlock-mode-cancellation-prompt-ready.json"
@@ -12470,6 +12891,10 @@ $lockMessagePromptCaptureRoot = Join-Path $fixtureRootResolved "lock-message-pro
 $lockMessagePromptExpectationsPath = Join-Path $fixtureRootResolved "lock-message-prompt-capture-expectations.json"
 $lockModePromptCaptureRoot = Join-Path $fixtureRootResolved "lock-mode-prompt-capture"
 $lockModePromptExpectationsPath = Join-Path $fixtureRootResolved "lock-mode-prompt-capture-expectations.json"
+$lockRecoveryMessagePromptCaptureRoot = Join-Path $fixtureRootResolved "lock-recovery-message-prompt-capture"
+$lockRecoveryMessagePromptExpectationsPath = Join-Path $fixtureRootResolved "lock-recovery-message-prompt-capture-expectations.json"
+$lockRecoveryModePromptCaptureRoot = Join-Path $fixtureRootResolved "lock-recovery-mode-prompt-capture"
+$lockRecoveryModePromptExpectationsPath = Join-Path $fixtureRootResolved "lock-recovery-mode-prompt-capture-expectations.json"
 $unlockModeCancellationPromptCaptureRoot = Join-Path $fixtureRootResolved "unlock-mode-cancellation-prompt-capture"
 $unlockModeCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "unlock-mode-cancellation-prompt-capture-expectations.json"
 $unlockModePromptCaptureRoot = Join-Path $fixtureRootResolved "unlock-mode-prompt-capture"
@@ -12490,7 +12915,7 @@ $resolveCancellationPromptCaptureRoot = Join-Path $fixtureRootResolved "resolve-
 $resolveCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "resolve-cancellation-prompt-capture-expectations.json"
 $cleanupPromptCaptureRoot = Join-Path $fixtureRootResolved "cleanup-prompt-capture"
 $cleanupPromptExpectationsPath = Join-Path $fixtureRootResolved "cleanup-prompt-capture-expectations.json"
-New-Item -ItemType Directory -Force -Path $userDataRoot, $extensionsRoot, $captureRoot, $noRepositoryWelcomeRendererCaptureRoot, $partialFreshnessRendererCaptureRoot, $staleFreshnessRendererCaptureRoot, $fullReconcileCancellationCaptureRoot, $multiRepositoryRefreshPromptCaptureRoot, $deletePromptCaptureRoot, $deleteLoadPromptCaptureRoot, $removePromptCaptureRoot, $removeCancellationPromptCaptureRoot, $removeKeepLocalPromptCaptureRoot, $movePromptCaptureRoot, $moveCancellationPromptCaptureRoot, $checkoutCancellationPromptCaptureRoot, $checkoutExistingTargetFailureUrlPromptCaptureRoot, $checkoutExistingTargetFailureTargetPromptCaptureRoot, $checkoutExistingTargetFailureRevisionPromptCaptureRoot, $checkoutExistingTargetFailureDepthPromptCaptureRoot, $checkoutExistingTargetFailureExternalsPromptCaptureRoot, $checkoutExistingTargetFailureNotificationCaptureRoot, $checkoutInvalidUrlFailureUrlPromptCaptureRoot, $checkoutInvalidUrlFailureTargetPromptCaptureRoot, $checkoutInvalidUrlFailureRevisionPromptCaptureRoot, $checkoutInvalidUrlFailureDepthPromptCaptureRoot, $checkoutInvalidUrlFailureExternalsPromptCaptureRoot, $checkoutInvalidUrlFailureNotificationCaptureRoot, $checkoutExistingDirectoryUrlPromptCaptureRoot, $checkoutExistingDirectoryTargetPromptCaptureRoot, $checkoutExistingDirectoryRevisionPromptCaptureRoot, $checkoutExistingDirectoryDepthPromptCaptureRoot, $checkoutExistingDirectoryExternalsPromptCaptureRoot, $checkoutExistingDirectoryObstructionUrlPromptCaptureRoot, $checkoutExistingDirectoryObstructionTargetPromptCaptureRoot, $checkoutExistingDirectoryObstructionRevisionPromptCaptureRoot, $checkoutExistingDirectoryObstructionDepthPromptCaptureRoot, $checkoutExistingDirectoryObstructionExternalsPromptCaptureRoot, $checkoutUrlPromptCaptureRoot, $checkoutTargetPromptCaptureRoot, $checkoutRevisionPromptCaptureRoot, $checkoutDepthPromptCaptureRoot, $checkoutExternalsPromptCaptureRoot, $updateRevisionPromptCaptureRoot, $updateCancellationRevisionPromptCaptureRoot, $updateDepthPromptCaptureRoot, $updateStickyDepthPromptCaptureRoot, $updateExternalsPromptCaptureRoot, $branchCreateSourcePromptCaptureRoot, $branchCreateDestinationPromptCaptureRoot, $branchCreateRevisionPromptCaptureRoot, $branchCreateMessagePromptCaptureRoot, $branchCreateParentsPromptCaptureRoot, $branchCreateExternalsPromptCaptureRoot, $branchCreateSwitchPromptCaptureRoot, $switchUrlPromptCaptureRoot, $switchRevisionPromptCaptureRoot, $switchDepthPromptCaptureRoot, $switchStickyDepthPromptCaptureRoot, $switchExternalsPromptCaptureRoot, $switchAncestryPromptCaptureRoot, $lockMessageCancellationPromptCaptureRoot, $lockMessagePromptCaptureRoot, $lockModePromptCaptureRoot, $unlockModeCancellationPromptCaptureRoot, $unlockModePromptCaptureRoot, $changelistSetPromptCaptureRoot, $changelistRevertPromptCaptureRoot, $revertPromptCaptureRoot, $revertCancellationPromptCaptureRoot, $resolveUpdateWarningCaptureRoot, $resolvePromptCaptureRoot, $resolveCancellationPromptCaptureRoot, $cleanupPromptCaptureRoot, (Join-Path $userDataRoot "User") | Out-Null
+New-Item -ItemType Directory -Force -Path $userDataRoot, $extensionsRoot, $captureRoot, $noRepositoryWelcomeRendererCaptureRoot, $partialFreshnessRendererCaptureRoot, $staleFreshnessRendererCaptureRoot, $fullReconcileCancellationCaptureRoot, $multiRepositoryRefreshPromptCaptureRoot, $deletePromptCaptureRoot, $deleteLoadPromptCaptureRoot, $removePromptCaptureRoot, $removeCancellationPromptCaptureRoot, $removeKeepLocalPromptCaptureRoot, $movePromptCaptureRoot, $moveCancellationPromptCaptureRoot, $checkoutCancellationPromptCaptureRoot, $checkoutExistingTargetFailureUrlPromptCaptureRoot, $checkoutExistingTargetFailureTargetPromptCaptureRoot, $checkoutExistingTargetFailureRevisionPromptCaptureRoot, $checkoutExistingTargetFailureDepthPromptCaptureRoot, $checkoutExistingTargetFailureExternalsPromptCaptureRoot, $checkoutExistingTargetFailureNotificationCaptureRoot, $checkoutInvalidUrlFailureUrlPromptCaptureRoot, $checkoutInvalidUrlFailureTargetPromptCaptureRoot, $checkoutInvalidUrlFailureRevisionPromptCaptureRoot, $checkoutInvalidUrlFailureDepthPromptCaptureRoot, $checkoutInvalidUrlFailureExternalsPromptCaptureRoot, $checkoutInvalidUrlFailureNotificationCaptureRoot, $checkoutExistingDirectoryUrlPromptCaptureRoot, $checkoutExistingDirectoryTargetPromptCaptureRoot, $checkoutExistingDirectoryRevisionPromptCaptureRoot, $checkoutExistingDirectoryDepthPromptCaptureRoot, $checkoutExistingDirectoryExternalsPromptCaptureRoot, $checkoutExistingDirectoryObstructionUrlPromptCaptureRoot, $checkoutExistingDirectoryObstructionTargetPromptCaptureRoot, $checkoutExistingDirectoryObstructionRevisionPromptCaptureRoot, $checkoutExistingDirectoryObstructionDepthPromptCaptureRoot, $checkoutExistingDirectoryObstructionExternalsPromptCaptureRoot, $checkoutUrlPromptCaptureRoot, $checkoutTargetPromptCaptureRoot, $checkoutRevisionPromptCaptureRoot, $checkoutDepthPromptCaptureRoot, $checkoutExternalsPromptCaptureRoot, $updateRevisionPromptCaptureRoot, $updateCancellationRevisionPromptCaptureRoot, $updateDepthPromptCaptureRoot, $updateStickyDepthPromptCaptureRoot, $updateExternalsPromptCaptureRoot, $branchCreateSourcePromptCaptureRoot, $branchCreateDestinationPromptCaptureRoot, $branchCreateRevisionPromptCaptureRoot, $branchCreateMessagePromptCaptureRoot, $branchCreateParentsPromptCaptureRoot, $branchCreateExternalsPromptCaptureRoot, $branchCreateSwitchPromptCaptureRoot, $switchUrlPromptCaptureRoot, $switchRevisionPromptCaptureRoot, $switchDepthPromptCaptureRoot, $switchStickyDepthPromptCaptureRoot, $switchExternalsPromptCaptureRoot, $switchAncestryPromptCaptureRoot, $lockMessageCancellationPromptCaptureRoot, $lockMessagePromptCaptureRoot, $lockModePromptCaptureRoot, $lockRecoveryMessagePromptCaptureRoot, $lockRecoveryModePromptCaptureRoot, $unlockModeCancellationPromptCaptureRoot, $unlockModePromptCaptureRoot, $changelistSetPromptCaptureRoot, $changelistRevertPromptCaptureRoot, $revertPromptCaptureRoot, $revertCancellationPromptCaptureRoot, $resolveUpdateWarningCaptureRoot, $resolvePromptCaptureRoot, $resolveCancellationPromptCaptureRoot, $cleanupPromptCaptureRoot, (Join-Path $userDataRoot "User") | Out-Null
 New-Item -ItemType Directory -Force -Path @($commitPromptCaptureSpecs | ForEach-Object { $_.root }) | Out-Null
 New-Item -ItemType Directory -Force -Path $repositoryHistoryInitialCaptureRoot, $repositoryHistoryLoadedCaptureRoot, $repositoryHistoryStaleCaptureRoot | Out-Null
 @'
@@ -12642,6 +13067,8 @@ $harness = Write-HarnessPackage `
   -LockMessagePromptDonePath $harnessLockMessagePromptDonePath `
   -LockModePromptReadyPath $harnessLockModePromptReadyPath `
   -LockModePromptDonePath $harnessLockModePromptDonePath `
+  -LockFailureObservedReadyPath $harnessLockFailureObservedReadyPath `
+  -LockFailureRecoveredDonePath $harnessLockFailureRecoveredDonePath `
   -LockHeldOracleReadyPath $harnessLockHeldOracleReadyPath `
   -LockHeldOracleDonePath $harnessLockHeldOracleDonePath `
   -UnlockModeCancellationPromptReadyPath $harnessUnlockModeCancellationPromptReadyPath `
@@ -12731,6 +13158,17 @@ $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MOVE_CANCELLATION_PROMPT_READY 
 $commitDiagnosticsToken = [Guid]::NewGuid().ToString("N")
 $env:SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN = $commitDiagnosticsToken
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_DIAGNOSTICS_TOKEN = $commitDiagnosticsToken
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_REDACTION_FORBIDDEN_JSON = ([ordered]@{
+    mainWorkingCopyRoot = $lockFixture.workingCopyRoot
+    mainWorkingCopyPath = $lockFixture.lockWorkingCopyPath
+    contenderWorkingCopyRoot = $lockFixture.lockContenderWorkingCopyRoot
+    contenderWorkingCopyPath = $lockFixture.lockContenderWorkingCopyPath
+    repositoryUrl = $lockFixture.repoUrl
+    resourceUrl = $lockFixture.lockRepositoryUrl
+    username = $lockFixture.lockOwner
+    workflowSecret = $commitDiagnosticsToken
+    lockToken = $lockFixture.lockToken
+  } | ConvertTo-Json -Compress)
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_READY = $harness.CommitPromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_COMMIT_PROMPT_DONE = $harness.CommitPromptDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CHECKOUT_CANCELLATION_PROMPT_READY = $harness.CheckoutCancellationPromptReadyPath
@@ -12831,6 +13269,8 @@ $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MESSAGE_PROMPT_READY = $ha
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MESSAGE_PROMPT_DONE = $harness.LockMessagePromptDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MODE_PROMPT_READY = $harness.LockModePromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MODE_PROMPT_DONE = $harness.LockModePromptDonePath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_FAILURE_OBSERVED_READY = $harness.LockFailureObservedReadyPath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_FAILURE_RECOVERED_DONE = $harness.LockFailureRecoveredDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_HELD_ORACLE_READY = $harness.LockHeldOracleReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_HELD_ORACLE_DONE = $harness.LockHeldOracleDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_UNLOCK_MODE_CANCELLATION_PROMPT_READY = $harness.UnlockModeCancellationPromptReadyPath
@@ -13340,6 +13780,48 @@ try {
     -ExpectationsPath $lockModePromptExpectationsPath `
     -CaptureRoot $lockModePromptCaptureRoot `
     -Description "Installed Source Control UI E2E Lock mode prompt ready sentinel" `
+    -ExpectedCommand "subversionr.lockResource" `
+    -DriverPath $rendererCaptureDriverResolved `
+    -Port $RemoteDebuggingPort `
+    -Target $Target
+
+  Wait-File -Path $harness.LockFailureObservedReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E competing Lock failure sentinel"
+  $lockFailureObserved = Get-Content -Raw -LiteralPath $harness.LockFailureObservedReadyPath | ConvertFrom-Json
+  if ($lockFailureObserved.ok -ne $true -or
+    $lockFailureObserved.command -ne "subversionr.lockResource" -or
+    $lockFailureObserved.code -ne "SVN_OPERATION_LOCK_FAILED" -or
+    $lockFailureObserved.resultCategory -ne "failed") {
+    throw "Installed Source Control UI E2E competing Lock failure sentinel did not prove the stable native failure."
+  }
+  Invoke-CheckedTool -Path $svnExeResolved -Arguments @(
+    "unlock",
+    $lockFixture.lockContenderWorkingCopyPath,
+    "--non-interactive",
+    "--no-auth-cache",
+    "--config-dir",
+    $lockFixture.svnCliConfigRoot
+  ) -Description "svn release competing Lock fixture lock for scheduler recovery" | Out-Null
+  [pscustomobject]@{
+    ok = $true
+    completedAt = (Get-Date).ToUniversalTime().ToString("o")
+  } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $harness.LockFailureRecoveredDonePath -Encoding utf8
+
+  Invoke-HarnessPromptCapture `
+    -ReadyPath $harness.LockMessagePromptReadyPath `
+    -DonePath $harness.LockMessagePromptDonePath `
+    -ExpectationsPath $lockRecoveryMessagePromptExpectationsPath `
+    -CaptureRoot $lockRecoveryMessagePromptCaptureRoot `
+    -Description "Installed Source Control UI E2E Lock recovery message prompt ready sentinel" `
+    -ExpectedCommand "subversionr.lockResource" `
+    -DriverPath $rendererCaptureDriverResolved `
+    -Port $RemoteDebuggingPort `
+    -Target $Target
+  Invoke-HarnessPromptCapture `
+    -ReadyPath $harness.LockModePromptReadyPath `
+    -DonePath $harness.LockModePromptDonePath `
+    -ExpectationsPath $lockRecoveryModePromptExpectationsPath `
+    -CaptureRoot $lockRecoveryModePromptCaptureRoot `
+    -Description "Installed Source Control UI E2E Lock recovery mode prompt ready sentinel" `
     -ExpectedCommand "subversionr.lockResource" `
     -DriverPath $rendererCaptureDriverResolved `
     -Port $RemoteDebuggingPort `
@@ -14331,6 +14813,7 @@ finally {
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MESSAGE_PROMPT_DONE -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MODE_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_MODE_PROMPT_DONE -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_REDACTION_FORBIDDEN_JSON -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_HELD_ORACLE_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_LOCK_HELD_ORACLE_DONE -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_UNLOCK_MODE_CANCELLATION_PROMPT_READY -ErrorAction SilentlyContinue
@@ -15000,6 +15483,7 @@ $report = [pscustomObject]@{
     hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eCurrentSurfaceReportCommand
     hasInstalledSourceControlUiE2eFreshnessReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eFreshnessReportCommand
     hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand
+    hasInstalledSourceControlUiE2eExecuteResourceCommand = [bool]$harnessResult.hasInstalledSourceControlUiE2eExecuteResourceCommand
     hasShowRepositoryLogCommand = [bool]$harnessResult.hasShowRepositoryLogCommand
     hasShowRepositoryPropertiesCommand = [bool]$harnessResult.hasShowRepositoryPropertiesCommand
     hasShowResourcePropertiesCommand = [bool]$harnessResult.hasShowResourcePropertiesCommand

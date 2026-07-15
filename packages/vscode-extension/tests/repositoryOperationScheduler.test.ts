@@ -71,6 +71,40 @@ describe("RepositoryOperationScheduler", () => {
     expect(events).toEqual(["first:start", "second:start"]);
   });
 
+  it("settles a cancelled queued operation without running it or bypassing the active tail", async () => {
+    const scheduler = new RepositoryOperationScheduler();
+    const releaseFirst = deferred<void>();
+    const cancelledTask = vi.fn(async () => "cancelled task ran");
+    const events: string[] = [];
+    const cancellation = new AbortController();
+
+    const first = scheduler.run("repo-a", async () => {
+      events.push("first:start");
+      await releaseFirst.promise;
+      events.push("first:end");
+    });
+    const cancelled = scheduler.run("repo-a", cancelledTask, { signal: cancellation.signal });
+    const third = scheduler.run("repo-a", async () => {
+      events.push("third:start");
+    });
+
+    await flushMicrotasks();
+    cancellation.abort();
+
+    await expect(cancelled).rejects.toMatchObject({
+      code: "SUBVERSIONR_OPERATION_SCHEDULER_CANCELLED",
+      category: "cancelled",
+    });
+    expect(cancelledTask).not.toHaveBeenCalled();
+    expect(events).toEqual(["first:start"]);
+
+    releaseFirst.resolve();
+    await Promise.all([first, third]);
+
+    expect(cancelledTask).not.toHaveBeenCalled();
+    expect(events).toEqual(["first:start", "first:end", "third:start"]);
+  });
+
   it.each(["", "   ", " repo-a", "repo-a "])("fails fast for invalid repository id %j", async (repositoryId) => {
     const scheduler = new RepositoryOperationScheduler();
     const task = vi.fn(async () => undefined);

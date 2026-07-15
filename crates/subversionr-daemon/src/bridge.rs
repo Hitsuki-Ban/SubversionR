@@ -360,6 +360,10 @@ impl BridgeFailure {
         &self.code
     }
 
+    pub fn safe_args(&self) -> &Value {
+        &self.args
+    }
+
     pub fn diagnostics(&self) -> Option<&OperationFailureDiagnostics> {
         self.diagnostics.as_deref()
     }

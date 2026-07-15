@@ -16,6 +16,7 @@ export interface SourceControlProjectionPresenter {
   registerRepository(repository: SourceControlProjectionRepository): void;
   updateRepository(projection: ScmRepositoryProjection): void;
   unregisterRepository(repositoryId: string): void;
+  isCurrentResourceState(resourceState: unknown): boolean;
 }
 
 export type SourceControlProjectionChange =
@@ -157,6 +158,10 @@ export class SourceControlProjectionService {
     pathCase: PathCasePolicy,
   ): ScmProjectedResourceLookup | undefined {
     return this.store.getProjectedResource(repositoryId, path, pathCase);
+  }
+
+  public isCurrentResourceState(resourceState: unknown): boolean {
+    return this.presenter.isCurrentResourceState(resourceState);
   }
 
   private fireProjectionChange(event: SourceControlProjectionChange): void {

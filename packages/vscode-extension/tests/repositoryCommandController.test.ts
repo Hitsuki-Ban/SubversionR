@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   RepositoryCommandController,
+  type RepositoryCommandControllerOptions,
   type RepositoryCommandUi,
 } from "../src/repository/repositoryCommandController";
 import { RepositoryCommitMessageHistory } from "../src/repository/repositoryCommitMessageHistory";
@@ -6706,14 +6707,20 @@ describe("RepositoryCommandController", () => {
       resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
     });
 
-    expect(ui.promptLockOptions).toHaveBeenCalledWith(["src/main.c"]);
-    expect(operationClient.lock).toHaveBeenCalledWith({
-      repositoryId: "repo-uuid:C:/workspace",
-      epoch: 7,
-      paths: ["src/main.c"],
-      comment: "coordinating beta edit",
-      stealLock: true,
-    });
+    expect(ui.promptLockOptions).toHaveBeenCalledWith(
+      ["src/main.c"],
+      expect.objectContaining({ isCancellationRequested: false }),
+    );
+    expect(operationClient.lock).toHaveBeenCalledWith(
+      {
+        repositoryId: "repo-uuid:C:/workspace",
+        epoch: 7,
+        paths: ["src/main.c"],
+        comment: "coordinating beta edit",
+        stealLock: true,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(refreshService.refreshTargets).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -6763,13 +6770,19 @@ describe("RepositoryCommandController", () => {
       resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
     });
 
-    expect(ui.promptUnlockOptions).toHaveBeenCalledWith(["src/main.c"]);
-    expect(operationClient.unlock).toHaveBeenCalledWith({
-      repositoryId: "repo-uuid:C:/workspace",
-      epoch: 7,
-      paths: ["src/main.c"],
-      breakLock: true,
-    });
+    expect(ui.promptUnlockOptions).toHaveBeenCalledWith(
+      ["src/main.c"],
+      expect.objectContaining({ isCancellationRequested: false }),
+    );
+    expect(operationClient.unlock).toHaveBeenCalledWith(
+      {
+        repositoryId: "repo-uuid:C:/workspace",
+        epoch: 7,
+        paths: ["src/main.c"],
+        breakLock: true,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(refreshService.refreshTargets).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -6808,14 +6821,20 @@ describe("RepositoryCommandController", () => {
       resourceUri: { fsPath: "C:\\workspace\\src\\needs-lock.c" },
     });
 
-    expect(ui.promptLockOptions).toHaveBeenCalledWith(["src/needs-lock.c"]);
-    expect(operationClient.lock).toHaveBeenCalledWith({
-      repositoryId: "repo-uuid:C:/workspace",
-      epoch: 7,
-      paths: ["src/needs-lock.c"],
-      comment: "coordinate metadata-only file edit",
-      stealLock: false,
-    });
+    expect(ui.promptLockOptions).toHaveBeenCalledWith(
+      ["src/needs-lock.c"],
+      expect.objectContaining({ isCancellationRequested: false }),
+    );
+    expect(operationClient.lock).toHaveBeenCalledWith(
+      {
+        repositoryId: "repo-uuid:C:/workspace",
+        epoch: 7,
+        paths: ["src/needs-lock.c"],
+        comment: "coordinate metadata-only file edit",
+        stealLock: false,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(refreshService.refreshTargets).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -6863,13 +6882,19 @@ describe("RepositoryCommandController", () => {
       resourceUri: { fsPath: "C:\\workspace\\src\\locked.c" },
     });
 
-    expect(ui.promptUnlockOptions).toHaveBeenCalledWith(["src/locked.c"]);
-    expect(operationClient.unlock).toHaveBeenCalledWith({
-      repositoryId: "repo-uuid:C:/workspace",
-      epoch: 7,
-      paths: ["src/locked.c"],
-      breakLock: false,
-    });
+    expect(ui.promptUnlockOptions).toHaveBeenCalledWith(
+      ["src/locked.c"],
+      expect.objectContaining({ isCancellationRequested: false }),
+    );
+    expect(operationClient.unlock).toHaveBeenCalledWith(
+      {
+        repositoryId: "repo-uuid:C:/workspace",
+        epoch: 7,
+        paths: ["src/locked.c"],
+        breakLock: false,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(refreshService.refreshTargets).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -6900,7 +6925,10 @@ describe("RepositoryCommandController", () => {
       resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
     });
 
-    expect(ui.promptLockOptions).toHaveBeenCalledWith(["src/main.c"]);
+    expect(ui.promptLockOptions).toHaveBeenCalledWith(
+      ["src/main.c"],
+      expect.objectContaining({ isCancellationRequested: false }),
+    );
     expect(operationClient.lock).not.toHaveBeenCalled();
   });
 
@@ -6941,8 +6969,621 @@ describe("RepositoryCommandController", () => {
       resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
     });
 
-    expect(ui.promptUnlockOptions).toHaveBeenCalledWith(["src/main.c"]);
+    expect(ui.promptUnlockOptions).toHaveBeenCalledWith(
+      ["src/main.c"],
+      expect.objectContaining({ isCancellationRequested: false }),
+    );
     expect(operationClient.unlock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a synthetic lock resource identity before prompting or calling native code", async () => {
+    const currentResource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+      isCurrentResourceState: (resourceState) => resourceState === currentResource,
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await controller.lockResource({ ...currentResource });
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.",
+      "Show Log",
+    );
+    expect(ui.promptLockOptions).not.toHaveBeenCalled();
+    expect(operationClient.lock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a synthetic lock identity before the no-repository warning path", async () => {
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [] }),
+      ui,
+      {
+        operationClient,
+        sourceControlProjection: fakeSourceControlProjection({ isCurrentResourceState: () => false }),
+      },
+    );
+
+    await controller.lockResource({
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    });
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.",
+      "Show Log",
+    );
+    expect(ui.showWarningMessage).not.toHaveBeenCalled();
+    expect(ui.promptLockOptions).not.toHaveBeenCalled();
+    expect(operationClient.lock).not.toHaveBeenCalled();
+  });
+
+  it("settles lock and unlock without arguments as stable invalid-target failures", async () => {
+    const operationClient = fakeOperationClient(operationResponse());
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient },
+    );
+
+    await expect(withTimeout(controller.lockResource(), 50)).resolves.toBeUndefined();
+    await expect(withTimeout(controller.unlockResource(), 50)).resolves.toBeUndefined();
+
+    expect(ui.showErrorMessage).toHaveBeenNthCalledWith(
+      1,
+      "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.",
+      "Show Log",
+    );
+    expect(ui.showErrorMessage).toHaveBeenNthCalledWith(
+      2,
+      "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.",
+      "Show Log",
+    );
+    expect(ui.promptLockOptions).not.toHaveBeenCalled();
+    expect(ui.promptUnlockOptions).not.toHaveBeenCalled();
+    expect(operationClient.lock).not.toHaveBeenCalled();
+    expect(operationClient.unlock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale unlock resource identity before prompting or calling native code", async () => {
+    const staleResource = {
+      contextValue: "subversionr.changedFile.baseDiffable.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const currentResource = {
+      contextValue: "subversionr.changedFile.baseDiffable.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "unlock", path: "src/main.c" }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({
+        resources: [scmProjectedResource({ path: "src/main.c", lock: svnLock() })],
+      }),
+      isCurrentResourceState: (resourceState) => resourceState === currentResource,
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { operationClient, sourceControlProjection },
+    );
+
+    await controller.unlockResource(staleResource);
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.",
+      "Show Log",
+    );
+    expect(ui.promptUnlockOptions).not.toHaveBeenCalled();
+    expect(operationClient.unlock).not.toHaveBeenCalled();
+  });
+
+  it("reports an outside lock target before identity validation and makes no native call", async () => {
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        sourceControlProjection: fakeSourceControlProjection({ isCurrentResourceState: () => false }),
+      },
+    );
+
+    await controller.lockResource({
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\outside\\main.c" },
+    });
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.",
+      "Show Log",
+    );
+    expect(ui.promptLockOptions).not.toHaveBeenCalled();
+    expect(operationClient.lock).not.toHaveBeenCalled();
+  });
+
+  it("cancels lock before and while prompting without calling native code", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+      isCurrentResourceState: (resourceState) => resourceState === resource,
+    });
+    const beforePromptCancellation = fakeCommandCancellation(true);
+    const beforePromptUi = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const beforePromptController = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      beforePromptUi,
+      { operationClient, sourceControlProjection, commandCancellation: beforePromptCancellation },
+    );
+
+    await beforePromptController.lockResource(resource);
+    expect(beforePromptUi.promptLockOptions).not.toHaveBeenCalled();
+
+    const whilePromptCancellation = fakeCommandCancellation(false);
+    const whilePromptUi = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    whilePromptUi.promptLockOptions.mockImplementationOnce(async () => {
+      whilePromptCancellation.isCancellationRequested = true;
+      return { comment: null, stealLock: false };
+    });
+    const whilePromptController = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      whilePromptUi,
+      { operationClient, sourceControlProjection, commandCancellation: whilePromptCancellation },
+    );
+
+    await whilePromptController.lockResource(resource);
+    expect(operationClient.lock).not.toHaveBeenCalled();
+  });
+
+  it("settles pending lock and unlock prompts when the extension lifetime is disposed", async () => {
+    const lockResource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const unlockResource = {
+      contextValue: "subversionr.changedFile.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\locked.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse());
+
+    const lockCancellation = fakeCommandCancellationSource();
+    const lockUi = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    lockUi.promptLockOptions.mockImplementationOnce(async (_paths, cancellation) =>
+      await new Promise<undefined>((resolve) => {
+        cancellation.onCancellationRequested(() => resolve(undefined));
+      })
+    );
+    const lockController = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      lockUi,
+      {
+        operationClient,
+        commandCancellation: lockCancellation.token,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+          isCurrentResourceState: (resourceState) => resourceState === lockResource,
+        }),
+      },
+    );
+    const lockCommand = lockController.lockResource(lockResource);
+    await vi.waitFor(() => expect(lockUi.promptLockOptions).toHaveBeenCalledTimes(1));
+    lockCancellation.dispose();
+    await expect(withTimeout(lockCommand, 50)).resolves.toBeUndefined();
+
+    const unlockCancellation = fakeCommandCancellationSource();
+    const unlockUi = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    unlockUi.promptUnlockOptions.mockImplementationOnce(async (_paths, cancellation) =>
+      await new Promise<undefined>((resolve) => {
+        cancellation.onCancellationRequested(() => resolve(undefined));
+      })
+    );
+    const unlockController = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      unlockUi,
+      {
+        operationClient,
+        commandCancellation: unlockCancellation.token,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({
+            resources: [scmProjectedResource({ path: "src/locked.c", lock: svnLock() })],
+          }),
+          isCurrentResourceState: (resourceState) => resourceState === unlockResource,
+        }),
+      },
+    );
+    const unlockCommand = unlockController.unlockResource(unlockResource);
+    await vi.waitFor(() => expect(unlockUi.promptUnlockOptions).toHaveBeenCalledTimes(1));
+    unlockCancellation.dispose();
+    await expect(withTimeout(unlockCommand, 50)).resolves.toBeUndefined();
+
+    expect(operationClient.lock).not.toHaveBeenCalled();
+    expect(operationClient.unlock).not.toHaveBeenCalled();
+  });
+
+  it("aborts a running lock RPC on extension disposal and releases the scheduler", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const cancellation = fakeCommandCancellationSource();
+    const scheduler = new RepositoryOperationScheduler();
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    operationClient.lock.mockImplementationOnce(async (_request, options) =>
+      await rejectWhenAborted(options?.signal)
+    );
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        operationScheduler: scheduler,
+        commandCancellation: cancellation.token,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    const command = controller.lockResource(resource);
+    await vi.waitFor(() => expect(operationClient.lock).toHaveBeenCalledTimes(1));
+    cancellation.dispose();
+
+    await expect(withTimeout(command, 50)).resolves.toBeUndefined();
+    await expect(withTimeout(scheduler.run("repo-uuid:C:/workspace", async () => "released"), 50)).resolves.toBe(
+      "released",
+    );
+  });
+
+  it("aborts a running unlock RPC on extension disposal and releases the scheduler", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const cancellation = fakeCommandCancellationSource();
+    const scheduler = new RepositoryOperationScheduler();
+    const operationClient = fakeOperationClient(operationResponse({ kind: "unlock", path: "src/main.c" }));
+    operationClient.unlock.mockImplementationOnce(async (_request, options) =>
+      await rejectWhenAborted(options?.signal)
+    );
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        operationScheduler: scheduler,
+        commandCancellation: cancellation.token,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c", lock: svnLock() })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    const command = controller.unlockResource(resource);
+    await vi.waitFor(() => expect(operationClient.unlock).toHaveBeenCalledTimes(1));
+    cancellation.dispose();
+
+    await expect(withTimeout(command, 50)).resolves.toBeUndefined();
+    await expect(withTimeout(scheduler.run("repo-uuid:C:/workspace", async () => "released"), 50)).resolves.toBe(
+      "released",
+    );
+  });
+
+  it("settles a queued lock on extension disposal without dispatching it after the active operation", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const cancellation = fakeCommandCancellationSource();
+    const scheduler = new RepositoryOperationScheduler();
+    const releaseActiveOperation = deferred<void>();
+    const activeOperation = scheduler.run("repo-uuid:C:/workspace", async () => {
+      await releaseActiveOperation.promise;
+    });
+    await Promise.resolve();
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        operationScheduler: scheduler,
+        commandCancellation: cancellation.token,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    const command = controller.lockResource(resource);
+    await vi.waitFor(() => expect(ui.promptLockOptions).toHaveBeenCalledTimes(1));
+    cancellation.dispose();
+
+    await expect(withTimeout(command, 50)).resolves.toBeUndefined();
+    expect(operationClient.lock).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).not.toHaveBeenCalled();
+
+    releaseActiveOperation.resolve();
+    await activeOperation;
+    await scheduler.run("repo-uuid:C:/workspace", async () => undefined);
+    expect(operationClient.lock).not.toHaveBeenCalled();
+  });
+
+  it("settles a queued unlock on extension disposal without dispatching it after the active operation", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const cancellation = fakeCommandCancellationSource();
+    const scheduler = new RepositoryOperationScheduler();
+    const releaseActiveOperation = deferred<void>();
+    const activeOperation = scheduler.run("repo-uuid:C:/workspace", async () => {
+      await releaseActiveOperation.promise;
+    });
+    await Promise.resolve();
+    const operationClient = fakeOperationClient(operationResponse({ kind: "unlock", path: "src/main.c" }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        operationScheduler: scheduler,
+        commandCancellation: cancellation.token,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c", lock: svnLock() })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    const command = controller.unlockResource(resource);
+    await vi.waitFor(() => expect(ui.promptUnlockOptions).toHaveBeenCalledTimes(1));
+    cancellation.dispose();
+
+    await expect(withTimeout(command, 50)).resolves.toBeUndefined();
+    expect(operationClient.unlock).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).not.toHaveBeenCalled();
+
+    releaseActiveOperation.resolve();
+    await activeOperation;
+    await scheduler.run("repo-uuid:C:/workspace", async () => undefined);
+    expect(operationClient.unlock).not.toHaveBeenCalled();
+  });
+
+  it("settles a native lock failure without awaiting notification and releases the scheduler", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c", reason: "operationLock" }));
+    operationClient.lock.mockRejectedValueOnce(new CodedError("SUBVERSIONR_OPERATION_LOCK_FAILED"));
+    const refreshService = fakeRefreshService();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    ui.showErrorMessage.mockImplementationOnce(() => new Promise(() => undefined));
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        refreshService,
+        operationScheduler: new RepositoryOperationScheduler(),
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    await expect(withTimeout(controller.lockResource(resource), 50)).resolves.toBeUndefined();
+    expect(refreshService.refreshTargets).not.toHaveBeenCalled();
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+
+    await expect(withTimeout(controller.lockResource(resource), 50)).resolves.toBeUndefined();
+    expect(operationClient.lock).toHaveBeenCalledTimes(2);
+    expect(refreshService.refreshTargets).toHaveBeenCalledTimes(1);
+    expect(ui.showInformationMessage).toHaveBeenCalledWith("SubversionR locked SVN resource: src/main.c");
+  });
+
+  it("settles a native unlock failure and releases the scheduler for the next unlock", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile.baseDiffable.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "unlock", path: "src/main.c", reason: "operationUnlock" }));
+    operationClient.unlock.mockRejectedValueOnce(new CodedError("SUBVERSIONR_OPERATION_UNLOCK_FAILED"));
+    const refreshService = fakeRefreshService();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        refreshService,
+        operationScheduler: new RepositoryOperationScheduler(),
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c", lock: svnLock() })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    await expect(withTimeout(controller.unlockResource(resource), 50)).resolves.toBeUndefined();
+    expect(refreshService.refreshTargets).not.toHaveBeenCalled();
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+
+    await expect(withTimeout(controller.unlockResource(resource), 50)).resolves.toBeUndefined();
+    expect(operationClient.unlock).toHaveBeenCalledTimes(2);
+    expect(refreshService.refreshTargets).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles exactly the selected lock targets when native reports a partial mutation", async () => {
+    const firstResource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\first.c" },
+    };
+    const secondResource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\second.c" },
+    };
+    const partialFailure = new CodedError("SVN_OPERATION_LOCK_FAILED", { mayHaveMutated: true });
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/first.c" }));
+    operationClient.lock.mockRejectedValueOnce(partialFailure);
+    const refreshService = fakeRefreshService();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        refreshService,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({
+            resources: [
+              scmProjectedResource({ path: "src/first.c" }),
+              scmProjectedResource({ path: "src/second.c" }),
+            ],
+          }),
+          isCurrentResourceState: (resourceState) => resourceState === firstResource || resourceState === secondResource,
+        }),
+      },
+    );
+
+    await controller.lockResource(firstResource, secondResource);
+
+    expect(refreshService.refreshTargets).toHaveBeenCalledWith({
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      targets: [
+        { path: "src/first.c", depth: "empty", reason: "operationLock" },
+        { path: "src/second.c", depth: "empty", reason: "operationLock" },
+      ],
+    });
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "SVN Repository Operation failed. Open the SubversionR log for details.",
+      "Show Log",
+    );
+  });
+
+  it("reconciles a lock cancelled after native mutation without showing a disposal error", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    operationClient.lock.mockRejectedValueOnce(
+      new CodedError("SVN_OPERATION_CANCELLED", { mayHaveMutated: true }),
+    );
+    const refreshService = fakeRefreshService();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        refreshService,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    await controller.lockResource(resource);
+
+    expect(refreshService.refreshTargets).toHaveBeenCalledWith({
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      targets: [{ path: "src/main.c", depth: "empty", reason: "operationLock" }],
+    });
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("reconciles exactly the selected unlock targets when native reports a partial mutation", async () => {
+    const firstResource = {
+      contextValue: "subversionr.changedFile.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\first.c" },
+    };
+    const secondResource = {
+      contextValue: "subversionr.changedFile.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\second.c" },
+    };
+    const partialFailure = new CodedError("SVN_OPERATION_UNLOCK_FAILED", { mayHaveMutated: true });
+    const operationClient = fakeOperationClient(operationResponse({ kind: "unlock", path: "src/first.c" }));
+    operationClient.unlock.mockRejectedValueOnce(partialFailure);
+    const refreshService = fakeRefreshService();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        refreshService,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({
+            resources: [
+              scmProjectedResource({ path: "src/first.c", lock: svnLock() }),
+              scmProjectedResource({ path: "src/second.c", lock: svnLock() }),
+            ],
+          }),
+          isCurrentResourceState: (resourceState) => resourceState === firstResource || resourceState === secondResource,
+        }),
+      },
+    );
+
+    await controller.unlockResource(firstResource, secondResource);
+
+    expect(refreshService.refreshTargets).toHaveBeenCalledWith({
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      targets: [
+        { path: "src/first.c", depth: "empty", reason: "operationUnlock" },
+        { path: "src/second.c", depth: "empty", reason: "operationUnlock" },
+      ],
+    });
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
   });
 
   it("rejects unlock for an unlocked resource even if the menu context is forged", async () => {
@@ -7346,6 +7987,7 @@ describe("RepositoryCommandController", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const sourceControlProjection = {
       getCommitAllTargets: vi.fn(() => commitAllTargets()),
+      isCurrentResourceState: vi.fn(() => true),
       getProjection: vi.fn(() => {
         throw unknownError;
       }),
@@ -10866,7 +11508,11 @@ function commandController(
     };
     historyClient?: Pick<HistoryClient, "getLog">;
     operationScheduler?: Pick<RepositoryOperationScheduler, "run">;
-    sourceControlProjection?: Pick<SourceControlProjectionService, "getCommitAllTargets" | "getProjection">;
+    sourceControlProjection?: Pick<
+      SourceControlProjectionService,
+      "getCommitAllTargets" | "getProjection" | "isCurrentResourceState"
+    >;
+    commandCancellation?: RepositoryCommandControllerOptions["commandCancellation"];
     commitMessageHistory?: Pick<RepositoryCommitMessageHistory, "messages" | "record">;
     includeMergedRevisions?: () => boolean;
     createRequestId?: () => string;
@@ -10890,6 +11536,10 @@ function commandController(
     historyClient: deps.historyClient ?? fakeHistoryClient(historyLog()),
     operationScheduler: deps.operationScheduler ?? fakeOperationScheduler(),
     sourceControlProjection: deps.sourceControlProjection ?? fakeSourceControlProjection(),
+    commandCancellation: deps.commandCancellation ?? {
+      isCancellationRequested: false,
+      onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })),
+    },
     commitMessageHistory: deps.commitMessageHistory ?? new RepositoryCommitMessageHistory(),
     includeMergedRevisions: deps.includeMergedRevisions ?? (() => false),
     createRequestId: deps.createRequestId ?? (() => "11111111-1111-4111-8111-111111111111"),
@@ -10904,16 +11554,93 @@ function commandController(
 function fakeSourceControlProjection(options: {
   targets?: ScmCommitAllTargets | undefined;
   projection?: ScmRepositoryProjection | undefined;
+  isCurrentResourceState?: boolean | ((resourceState: unknown) => boolean);
 } = {}): Pick<
   SourceControlProjectionService,
-  "getCommitAllTargets" | "getProjection"
+  "getCommitAllTargets" | "getProjection" | "isCurrentResourceState"
 > & {
   getCommitAllTargets: ReturnType<typeof vi.fn<(repositoryId: string) => ScmCommitAllTargets | undefined>>;
   getProjection: ReturnType<typeof vi.fn<(repositoryId: string) => ScmRepositoryProjection | undefined>>;
+  isCurrentResourceState: ReturnType<typeof vi.fn<(resourceState: unknown) => boolean>>;
 } {
   return {
     getCommitAllTargets: vi.fn(() => options.targets ?? commitAllTargets()),
     getProjection: vi.fn(() => ("projection" in options ? options.projection : scmProjection())),
+    isCurrentResourceState: vi.fn((resourceState: unknown) =>
+      typeof options.isCurrentResourceState === "function"
+        ? options.isCurrentResourceState(resourceState)
+        : options.isCurrentResourceState ?? true,
+    ),
+  };
+}
+
+function fakeCommandCancellation(isCancellationRequested: boolean): {
+  isCancellationRequested: boolean;
+  onCancellationRequested: RepositoryCommandControllerOptions["commandCancellation"]["onCancellationRequested"];
+} {
+  return {
+    isCancellationRequested,
+    onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })),
+  };
+}
+
+function fakeCommandCancellationSource(): {
+  token: RepositoryCommandControllerOptions["commandCancellation"];
+  cancel(): void;
+  dispose(): void;
+} {
+  const listeners = new Set<(event: void) => unknown>();
+  let cancelled = false;
+  const cancel = (): void => {
+    if (cancelled) {
+      return;
+    }
+    cancelled = true;
+    for (const listener of [...listeners]) {
+      listener();
+    }
+  };
+  return {
+    token: {
+      get isCancellationRequested() {
+        return cancelled;
+      },
+      onCancellationRequested: (listener) => {
+        if (cancelled) {
+          listener();
+          return { dispose: () => undefined };
+        }
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+    },
+    cancel,
+    dispose: () => {
+      cancel();
+      listeners.clear();
+    },
+  };
+}
+
+function rejectWhenAborted(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const rejectCancelled = (): void => reject(new CodedError("SVN_OPERATION_CANCELLED"));
+    if (signal?.aborted) {
+      rejectCancelled();
+      return;
+    }
+    signal?.addEventListener("abort", rejectCancelled, { once: true });
+  });
+}
+
+function svnLock(): NonNullable<StatusEntry["lock"]> {
+  return {
+    token: "opaquelocktoken:1",
+    owner: "alice",
+    comment: "editing",
+    createdDate: "2026-06-25T00:00:00Z",
+    expiresDate: null,
+    isRemote: false,
   };
 }
 
@@ -11439,8 +12166,8 @@ interface FakeCommandUi {
   confirmDeleteUnversionedResources: ReturnType<typeof vi.fn<(paths: readonly string[]) => Promise<boolean>>>;
   promptResolveChoice: ReturnType<typeof vi.fn<(path: string) => Promise<FakeResolveChoice | undefined>>>;
   promptChangelistName: ReturnType<typeof vi.fn<(paths: readonly string[]) => Promise<string | undefined>>>;
-  promptLockOptions: ReturnType<typeof vi.fn<(paths: readonly string[]) => Promise<FakeLockOptions | undefined>>>;
-  promptUnlockOptions: ReturnType<typeof vi.fn<(paths: readonly string[]) => Promise<FakeUnlockOptions | undefined>>>;
+  promptLockOptions: ReturnType<typeof vi.fn<RepositoryCommandUi["promptLockOptions"]>>;
+  promptUnlockOptions: ReturnType<typeof vi.fn<RepositoryCommandUi["promptUnlockOptions"]>>;
   promptCleanupOptions: ReturnType<typeof vi.fn<(workingCopyRoot: string) => Promise<FakeCleanupOptions | undefined>>>;
   promptUpdateOptions: ReturnType<typeof vi.fn<(workingCopyRoot: string) => Promise<FakeUpdateOptions | undefined>>>;
   promptCheckoutOptions: ReturnType<typeof vi.fn<() => Promise<FakeCheckoutOptions | undefined>>>;
@@ -11902,7 +12629,10 @@ function repositorySession(
 }
 
 class CodedError extends Error {
-  public constructor(public readonly code: string) {
+  public constructor(
+    public readonly code: string,
+    public readonly safeArgs: Record<string, unknown> = {},
+  ) {
     super(code);
   }
 }

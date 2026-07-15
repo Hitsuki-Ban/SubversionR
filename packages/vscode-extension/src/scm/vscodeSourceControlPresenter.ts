@@ -115,6 +115,8 @@ interface RegisteredSourceControl {
   freshness: ScmProjectionFreshness | undefined;
   groupOrder: string[];
   quickDiffPaths: Map<string, string>;
+  currentResourceStates: Set<VscodeSourceControlResourceState>;
+  currentResourceStatesByGroupAndPath: Map<string, VscodeSourceControlResourceState>;
 }
 
 const GROUP_LABELS = {
@@ -209,6 +211,8 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
       freshness: undefined,
       groupOrder: [...SCM_RESOURCE_GROUP_IDS],
       quickDiffPaths: new Map(),
+      currentResourceStates: new Set(),
+      currentResourceStatesByGroupAndPath: new Map(),
     });
   }
 
@@ -259,11 +263,16 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
         throw new Error(`Source control projection is missing fixed resource group: ${fixedGroupId}`);
       }
     }
+    const currentResourceStates = new Set<VscodeSourceControlResourceState>();
+    const currentResourceStatesByGroupAndPath = new Map<string, VscodeSourceControlResourceState>();
     for (const group of projection.groups) {
       const resourceGroup = ensureSourceControlGroup(this.api, registered, group);
-      resourceGroup.resourceStates = group.resources.map((resource) =>
-        resourceState(this.api, projection.workingCopyRoot, projection.generation, resource),
-      );
+      resourceGroup.resourceStates = group.resources.map((resource) => {
+        const state = resourceState(this.api, projection.workingCopyRoot, projection.generation, resource);
+        currentResourceStates.add(state);
+        currentResourceStatesByGroupAndPath.set(resourceStateKey(group.id, resource.path), state);
+        return state;
+      });
     }
     for (const [groupId, resourceGroup] of registered.groups.entries()) {
       if (!projectedGroupIds.has(groupId)) {
@@ -272,6 +281,30 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
       }
     }
     registered.groupOrder = projection.groups.map((group) => group.id);
+    registered.currentResourceStates = currentResourceStates;
+    registered.currentResourceStatesByGroupAndPath = currentResourceStatesByGroupAndPath;
+  }
+
+  public isCurrentResourceState(resourceState: unknown): boolean {
+    for (const registered of this.repositories.values()) {
+      if (registered.currentResourceStates.has(resourceState as VscodeSourceControlResourceState)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public currentResourceState(
+    repositoryId: string,
+    epoch: number,
+    groupId: string,
+    path: string,
+  ): VscodeSourceControlResourceState | undefined {
+    const registered = this.repositories.get(repositoryId);
+    if (!registered || registered.epoch !== epoch) {
+      return undefined;
+    }
+    return registered.currentResourceStatesByGroupAndPath.get(resourceStateKey(groupId, path));
   }
 
   public snapshotRepository(repositoryId: string): VscodeSourceControlSnapshot | undefined {
@@ -364,6 +397,10 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
       }),
     );
   }
+}
+
+function resourceStateKey(groupId: string, path: string): string {
+  return `${groupId}\0${path}`;
 }
 
 function freshnessStatusBarCommands(

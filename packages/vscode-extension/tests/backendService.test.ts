@@ -167,6 +167,76 @@ describe("BackendService", () => {
     expect(connection.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects pending initialize immediately when the service is disposed", async () => {
+    const service = new BackendService({
+      readConfig: () => launchConfig(),
+      start: vi.fn<BackendStarter>(() => new Promise(() => undefined)),
+      ...backendLifecycleDefaults(),
+    });
+
+    const initialize = service.initialize();
+    service.dispose();
+
+    await expect(withTestTimeout(initialize, 50)).rejects.toThrow("backend service disposed");
+  });
+
+  it("settles shutdown and initialize while startup is pending and disposes a late connection", async () => {
+    const connection = fakeConnection();
+    let resolveStart: (connection: BackendConnection) => void = () => undefined;
+    const service = new BackendService({
+      readConfig: () => launchConfig(),
+      start: vi.fn<BackendStarter>(() => new Promise((resolve) => {
+        resolveStart = resolve;
+      })),
+      ...backendLifecycleDefaults(),
+    });
+
+    const initialize = service.initialize();
+    await expect(withTestTimeout(service.shutdown(), 50)).resolves.toBeUndefined();
+    await expect(withTestTimeout(initialize, 50)).rejects.toThrow("backend service shutdown during startup");
+
+    resolveStart(connection);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a cancelled startup clear an immediate post-shutdown startup", async () => {
+    const lateConnection = fakeConnection();
+    const activeConnection = fakeConnection();
+    let resolveFirstStart: (connection: BackendConnection) => void = () => undefined;
+    const start = vi
+      .fn<BackendStarter>()
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstStart = resolve;
+      }))
+      .mockResolvedValueOnce(activeConnection);
+    const service = new BackendService({
+      readConfig: () => launchConfig(),
+      start,
+      ...backendLifecycleDefaults(),
+    });
+
+    const cancelledInitialize = service.initialize();
+    const cancelledSettlement = cancelledInitialize.catch((error: unknown) => error);
+    await service.shutdown();
+    const activeInitialize = service.initialize();
+
+    await expect(cancelledSettlement).resolves.toMatchObject({
+      name: "BackendStartupCancellationError",
+      message: "backend service shutdown during startup",
+    });
+    await expect(activeInitialize).resolves.toBe(activeConnection);
+    await expect(service.initialize()).resolves.toBe(activeConnection);
+
+    resolveFirstStart(lateConnection);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(lateConnection.dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("allows a new sidecar lifecycle after shutdown completes", async () => {
     const firstConnection = fakeConnection();
     const secondConnection = fakeConnection();
@@ -551,6 +621,15 @@ describe("BackendService", () => {
     });
   });
 });
+
+function withTestTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(new Error(`test promise did not settle within ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]);
+}
 
 function launchConfig(): BackendLaunchConfig {
   return {
