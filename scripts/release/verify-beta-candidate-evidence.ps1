@@ -524,6 +524,10 @@ function Assert-ObjectKind([object]$Record, [string]$Name, [string]$ExpectedKind
 
 function Assert-InstalledSourceControlUiE2eSemantics([object]$Record) {
   $context = "installedSourceControlUiE2e"
+  $trustedProfile = Get-RequiredProperty $Record "trustedProfile" $context
+  Assert-RequiredBooleanTrue $trustedProfile "extensionHostTrusted" "$context.trustedProfile"
+  Assert-RequiredBooleanTrue $trustedProfile "openReportTrusted" "$context.trustedProfile"
+
   foreach ($traceId in @(
     "BRM-001",
     "BRM-005",
