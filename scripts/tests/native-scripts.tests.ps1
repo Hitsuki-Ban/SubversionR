@@ -1052,6 +1052,24 @@ try {
   $ciWorkflowText = Get-Content -Raw -LiteralPath $ciWorkflow
   $fastPrWorkflowText = Get-Content -Raw -LiteralPath $fastPrWorkflow
   Assert-True ($ciWorkflowText.Contains("pnpm native:build-daemon:release")) "CI should use the deterministic release daemon build entrypoint."
+  $releaseSidecarStepIndex = $ciWorkflowText.IndexOf("- name: Build release sidecar", [StringComparison]::Ordinal)
+  $releaseSidecarStepEndIndex = $ciWorkflowText.IndexOf("`n      - name:", $releaseSidecarStepIndex + 1, [StringComparison]::Ordinal)
+  Assert-True ($releaseSidecarStepIndex -ge 0 -and $releaseSidecarStepEndIndex -gt $releaseSidecarStepIndex) "CI should expose one bounded release-sidecar step."
+  $releaseSidecarStep = $ciWorkflowText.Substring($releaseSidecarStepIndex, $releaseSidecarStepEndIndex - $releaseSidecarStepIndex)
+  $cargoHomeRemoval = "Remove-Item -LiteralPath Env:CARGO_HOME -ErrorAction Stop"
+  $cargoHomeRemovalIndex = $releaseSidecarStep.IndexOf($cargoHomeRemoval, [StringComparison]::Ordinal)
+  $cargoHomePostcondition = 'throw "CARGO_HOME must be absent before the repository-owned release daemon build."'
+  $cargoHomePostconditionIndex = $releaseSidecarStep.IndexOf($cargoHomePostcondition, [StringComparison]::Ordinal)
+  $releaseDaemonBuild = "pnpm native:build-daemon:release"
+  $releaseDaemonBuildIndex = $releaseSidecarStep.IndexOf($releaseDaemonBuild, [StringComparison]::Ordinal)
+  Assert-Equal 1 ([regex]::Matches($releaseSidecarStep, [regex]::Escape($cargoHomeRemoval)).Count) "The release-sidecar step should normalize the runner Cargo home exactly once."
+  Assert-Equal 1 ([regex]::Matches($releaseSidecarStep, [regex]::Escape($cargoHomePostcondition)).Count) "The release-sidecar step should prove the runner Cargo home is absent exactly once."
+  Assert-Equal 1 ([regex]::Matches($releaseSidecarStep, [regex]::Escape($releaseDaemonBuild)).Count) "The release-sidecar step should invoke the deterministic build exactly once."
+  Assert-True (
+    $cargoHomeRemovalIndex -ge 0 -and
+    $cargoHomePostconditionIndex -gt $cargoHomeRemovalIndex -and
+    $releaseDaemonBuildIndex -gt $cargoHomePostconditionIndex
+  ) "CI should remove and verify the runner Cargo home inside one release-sidecar step before invoking the deterministic build."
   Assert-True (-not $ciWorkflowText.Contains("cargo build -p subversionr-daemon --release")) "CI must not bypass deterministic daemon validation with a raw Cargo release build."
   Assert-True ($ciWorkflowText.Contains("toolchain: 1.96.0")) "Heavy CI should install the repository-pinned Rust release."
   Assert-True ($fastPrWorkflowText.Contains("toolchain: 1.96.0")) "PR Fast should install the repository-pinned Rust release."
