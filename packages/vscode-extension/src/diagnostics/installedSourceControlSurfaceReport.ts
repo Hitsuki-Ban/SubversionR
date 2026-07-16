@@ -103,6 +103,12 @@ export interface InstalledSourceControlUiE2eOpenReport {
       height: 900;
     };
     scmActionSurface: {
+      layout: {
+        prepareCommand: "workbench.action.increaseViewSize";
+        incrementCount: 1;
+        minimumProviderWidth: 280;
+        minimumActionsContainerWidth: 120;
+      };
       primaryActions: { label: string; codicon: string }[];
       overflowSubmenus: { label: string; commands: string[] }[];
       resource: {
@@ -999,6 +1005,12 @@ function buildUiE2eOpenReport(options: {
         height: 900,
       },
       scmActionSurface: {
+        layout: {
+          prepareCommand: "workbench.action.increaseViewSize",
+          incrementCount: 1,
+          minimumProviderWidth: 280,
+          minimumActionsContainerWidth: 120,
+        },
         primaryActions: [
           { label: "SubversionR: Refresh", codicon: "refresh" },
           { label: "SubversionR: Commit Changes", codicon: "check" },

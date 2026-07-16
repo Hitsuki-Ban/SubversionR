@@ -3566,6 +3566,7 @@ function conflictArtifactSurfaceCaptureExpectations(scmActionSurface, artifactPa
     requiredScreenshot: true,
     viewport: { width: 1440, height: 900 },
     scmActionSurface: {
+      layout: scmActionSurface.layout,
       primaryActions: scmActionSurface.primaryActions,
       overflowSubmenus: scmActionSurface.overflowSubmenus,
       forbiddenNotificationTokens: scmActionSurface.forbiddenNotificationTokens,
@@ -10954,11 +10955,26 @@ async function run() {
     if (!openReport.rendererCaptureExpectations || openReport.rendererCaptureExpectations.viewCommand !== "workbench.view.scm") {
       throw new Error("Installed Source Control UI E2E open report must include renderer capture expectations for the SCM view.");
     }
+    const scmActionLayout = openReport.rendererCaptureExpectations.scmActionSurface?.layout;
+    if (
+      !scmActionLayout ||
+      scmActionLayout.prepareCommand !== "workbench.action.increaseViewSize" ||
+      scmActionLayout.incrementCount !== 1 ||
+      scmActionLayout.minimumProviderWidth !== 280 ||
+      scmActionLayout.minimumActionsContainerWidth !== 120
+    ) {
+      throw new Error("Installed Source Control UI E2E SCM action layout contract must require one workbench.action.increaseViewSize command and exact 280/120 pixel minimum widths.");
+    }
 
     phase = "focusingSourceControlView";
     await withTimeout(
       vscode.commands.executeCommand(openReport.rendererCaptureExpectations.viewCommand),
       openReport.rendererCaptureExpectations.viewCommand,
+      30000
+    );
+    await withTimeout(
+      vscode.commands.executeCommand(scmActionLayout.prepareCommand),
+      scmActionLayout.prepareCommand,
       30000
     );
     await withTimeout(
@@ -11557,6 +11573,7 @@ async function run() {
       "subversionr.diagnostics.installedSourceControlUiE2eDirtyGenerationCancellationReport",
       "subversionr.diagnostics.installedSourceControlUiE2eDirtyEvent",
       openReport.rendererCaptureExpectations.viewCommand,
+      openReport.rendererCaptureExpectations.scmActionSurface.layout.prepareCommand,
       noRepositoryWelcomeRendererCaptureExpectations.viewCommand,
         "subversionr.fullReconcile",
         "subversionr.refreshRepository",
@@ -12031,6 +12048,16 @@ function Assert-HarnessResult(
   }
   if ($Result.openReport.kind -ne "subversionr.installedSourceControlUiE2eOpenReport") {
     throw "Installed Source Control UI E2E result must include an open report."
+  }
+  $scmActionLayout = $Result.openReport.rendererCaptureExpectations.scmActionSurface.layout
+  if (
+    $scmActionLayout.prepareCommand -ne "workbench.action.increaseViewSize" -or
+    [int]$scmActionLayout.incrementCount -ne 1 -or
+    [int]$scmActionLayout.minimumProviderWidth -ne 280 -or
+    [int]$scmActionLayout.minimumActionsContainerWidth -ne 120 -or
+    @($Result.invokedCommands | Where-Object { $_ -eq "workbench.action.increaseViewSize" }).Count -ne 1
+  ) {
+    throw "Installed Source Control UI E2E result must preserve the exact SCM action layout contract and execute its prepare command exactly once."
   }
   if (@($Result.openReport.sourceControl.inputBox.acceptInputCommandArguments)[0] -ne $Result.openReport.repository.repositoryId) {
     throw "Installed Source Control UI E2E open report must expose the repository id through SourceControl accept input command arguments."
@@ -13053,6 +13080,39 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
   if ($captureExpectations.PSObject.Properties.Name -contains "scmActionSurface") {
     if ($Capture.interaction.kind -ne "scmActionSurface") {
       throw "Renderer capture must include the SCM action surface interaction."
+    }
+    $expectedLayout = $captureExpectations.scmActionSurface.layout
+    $actualLayout = $Capture.interaction.layout
+    if (
+      $expectedLayout.prepareCommand -ne "workbench.action.increaseViewSize" -or
+      [int]$expectedLayout.incrementCount -ne 1 -or
+      [int]$expectedLayout.minimumProviderWidth -ne 280 -or
+      [int]$expectedLayout.minimumActionsContainerWidth -ne 120
+    ) {
+      throw "Renderer capture SCM action layout expectations must preserve the exact prepare command and 280/120 pixel minimum widths."
+    }
+    if (
+      $actualLayout.expected.prepareCommand -ne $expectedLayout.prepareCommand -or
+      [int]$actualLayout.expected.incrementCount -ne [int]$expectedLayout.incrementCount -or
+      [int]$actualLayout.expected.minimumProviderWidth -ne [int]$expectedLayout.minimumProviderWidth -or
+      [int]$actualLayout.expected.minimumActionsContainerWidth -ne [int]$expectedLayout.minimumActionsContainerWidth -or
+      [int]$actualLayout.observed.matchingTargetPaneCount -ne 1 -or
+      [int]$actualLayout.observed.matchingResourceRowCount -ne 1 -or
+      $null -eq $actualLayout.observed.targetRoot -or
+      $actualLayout.observed.targetRoot.scmEditorVisible -ne $true -or
+      [int]$actualLayout.observed.matchingProviderAndActionsContainerCount -ne 1 -or
+      [double]$actualLayout.observed.provider.width -lt [double]$expectedLayout.minimumProviderWidth -or
+      [double]$actualLayout.observed.actionsContainer.width -lt [double]$expectedLayout.minimumActionsContainerWidth -or
+      $actualLayout.assertions.uniqueTargetResourceRow -ne $true -or
+      $actualLayout.assertions.uniqueProviderAndActionsContainer -ne $true -or
+      $actualLayout.assertions.providerMinimumWidthReached -ne $true -or
+      $actualLayout.assertions.actionsContainerMinimumWidthReached -ne $true -or
+      $Capture.assertions.scmTargetResourceRowUnique -ne $true -or
+      $Capture.assertions.scmProviderAndActionsContainerUnique -ne $true -or
+      $Capture.assertions.scmProviderMinimumWidthReached -ne $true -or
+      $Capture.assertions.scmActionsContainerMinimumWidthReached -ne $true
+    ) {
+      throw "Renderer capture SCM action layout must prove one provider toolbar at or above the exact 280/120 pixel minimum widths."
     }
     $expectedPrimary = @($captureExpectations.scmActionSurface.primaryActions)
     $actualPrimary = @($Capture.interaction.primaryActions)
