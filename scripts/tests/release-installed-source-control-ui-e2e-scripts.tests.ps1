@@ -632,6 +632,12 @@ $openReport = [pscustomobject]@{
     requiredScreenshot = $true
     viewport = [pscustomobject]@{ width = 1440; height = 900 }
     scmActionSurface = [pscustomobject]@{
+      layout = [pscustomobject]@{
+        prepareCommand = "workbench.action.increaseViewSize"
+        incrementCount = 1
+        minimumProviderWidth = 280
+        minimumActionsContainerWidth = 120
+      }
       primaryActions = @(
         [pscustomobject]@{ label = "SubversionR: Refresh"; codicon = "refresh" },
         [pscustomobject]@{ label = "SubversionR: Commit Changes"; codicon = "check" },
@@ -4545,6 +4551,7 @@ $resolveArtifactExpectations = [pscustomobject]@{
   requiredScreenshot = $true
   viewport = [pscustomobject]@{ width = 1440; height = 900 }
   scmActionSurface = [pscustomobject]@{
+    layout = $openReport.rendererCaptureExpectations.scmActionSurface.layout
     primaryActions = $openReport.rendererCaptureExpectations.scmActionSurface.primaryActions
     overflowSubmenus = $openReport.rendererCaptureExpectations.scmActionSurface.overflowSubmenus
     forbiddenNotificationTokens = $openReport.rendererCaptureExpectations.scmActionSurface.forbiddenNotificationTokens
@@ -7162,6 +7169,7 @@ $lifecycleMoveReport = [pscustomobject]@{
     "subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
     "subversionr.diagnostics.installedSourceControlUiE2eCurrentSurfaceReport",
     "workbench.view.scm",
+    "workbench.action.increaseViewSize",
     "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport",
     "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
     "subversionr.diagnostics.installedSourceControlUiE2eExecuteResourceCommand",
@@ -7440,6 +7448,12 @@ const reportedForbiddenDomTokens = mode === "forbidden-dom-token-lie" ? [] : pre
 const reportedForbiddenAccessibilityTokens = mode === "forbidden-accessibility-token-lie" ? [] : presentForbiddenAccessibilityTokens;
 const reportedScreenshotNonBlank = mode === "blank-screenshot" ? false : true;
 const cancelSurface = expectations.cancelSurface || "quickInput";
+const scmLayoutProviderWidth = expectations.scmActionSurface
+  ? expectations.scmActionSurface.layout.minimumProviderWidth - (mode === "scm-layout-width-lie" ? 1 : 0)
+  : undefined;
+const scmLayoutActionsContainerWidth = expectations.scmActionSurface
+  ? expectations.scmActionSurface.layout.minimumActionsContainerWidth - (mode === "scm-layout-width-lie" ? 1 : 0)
+  : undefined;
 const report = {
   schemaVersion: 1,
   schema: "subversionr.release.installed-source-control-ui-renderer-capture.v1",
@@ -7514,6 +7528,10 @@ const report = {
     screenshotNonBlank: reportedScreenshotNonBlank,
     ...(expectations.viewport ? { viewportMatched: true } : {}),
     ...(expectations.scmActionSurface ? {
+      scmTargetResourceRowUnique: true,
+      scmProviderAndActionsContainerUnique: true,
+      scmProviderMinimumWidthReached: true,
+      scmActionsContainerMinimumWidthReached: true,
       scmPrimaryActionsRendered: true,
       scmOverflowSubmenusReachable: true,
       scmResourceInlineActionsReachable: true,
@@ -7546,6 +7564,25 @@ const report = {
   ...(expectations.scmActionSurface ? {
     interaction: {
       kind: "scmActionSurface",
+      layout: {
+        expected: expectations.scmActionSurface.layout,
+        observed: {
+          matchingTargetPaneCount: 1,
+          matchingResourceRowCount: 1,
+          globalMatchingResourceRowCount: 2,
+          targetRoot: { tagName: "DIV", role: "", className: "pane scm-view", scmEditorVisible: true, left: 0, top: 0, width: 300, height: 400, clientWidth: 300, clientHeight: 400 },
+          matchingProviderAndActionsContainerCount: 1,
+          provider: { left: 0, top: 0, width: scmLayoutProviderWidth, height: 200, clientWidth: scmLayoutProviderWidth, clientHeight: 200 },
+          actionsContainer: { left: 160, top: 0, width: scmLayoutActionsContainerWidth, height: 22, clientWidth: scmLayoutActionsContainerWidth, clientHeight: 22 },
+          matchedActionLabels: expectations.scmActionSurface.primaryActions.map(action => action.label)
+        },
+        assertions: {
+          uniqueTargetResourceRow: true,
+          uniqueProviderAndActionsContainer: true,
+          providerMinimumWidthReached: true,
+          actionsContainerMinimumWidthReached: true
+        }
+      },
       primaryActions: expectations.scmActionSurface.primaryActions.map(action => ({ ...action, rendered: mode !== "scm-primary-lie" })),
       overflowButton: { x: 100, y: 40, ariaLabel: "More Actions...", title: "More Actions...", className: "codicon-more" },
       overflowParentLabels: expectations.scmActionSurface.overflowSubmenus.map(submenu => submenu.label),
@@ -8131,6 +8168,14 @@ try {
   finally {
     Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
   }
+  $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "scm-action-layout"
+  try {
+    & node $driverScript
+    Assert-Equal 0 $LASTEXITCODE "Renderer capture SCM layout fake-CDP self-test should select the target resource pane despite a non-target provider, accept exact minimum widths, and reject insufficient widths."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
+  }
   $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "workbench-window-observation"
   try {
     & node $driverScript
@@ -8141,6 +8186,10 @@ try {
   }
   $driverText = Get-Content -Raw -LiteralPath $driverScript
   Assert-True ($driverText.Contains("waitForScmPrimaryActions") -and $driverText.Contains("REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS")) "Renderer capture should use the existing bounded state timeout for SCM primary actions."
+  Assert-True ($driverText -match '(?s)inspectScmActionSurface.*?inspectScmActionLayout\(.*?expectations\.resource\.pathToken.*?waitForScmPrimaryActions\(.*?expectations\.resource\.pathToken') "Renderer capture should validate the target resource pane's unique SCM provider/toolbar layout before checking primary actions in the same scope."
+  Assert-True ($driverText -match '\.scm-provider \.actions-container') "Renderer capture should scope successful SCM primary-action matching to one provider actions container."
+  Assert-True ($driverText -match '(?s)querySelectorAll\("\.pane"\).*?\.scm-editor-container, \.scm-input.*?resourceRows\.length === 1.*?pane\.pairs\.length > 0') "Renderer capture should identify the main SCM pane through its visible editor, unique target resource row, and expected provider actions instead of page order."
+  Assert-True ($driverText -match '(?s)function inspectScmActionLayout.*?querySelector\("\.label-name"\).*?=== resourcePathToken.*?function inspectScmPrimaryActions.*?querySelector\("\.label-name"\).*?=== resourcePathToken') "Renderer capture layout and primary-action scopes should match the visible SCM resource label exactly instead of accepting conflict-artifact prefixes."
   Assert-True ($driverText.Contains("SCM title actions were not rendered with expected codicons") -and $driverText.Contains("Observed:")) "Renderer capture should retain strict title-action failure reporting with the observed contract."
   $normalizeCallIndex = $driverText.IndexOf('windowBounds = await observeNormalizedWorkbenchWindow(cdp);')
   $viewportCallIndex = $driverText.IndexOf('await setExpectedViewport(cdp, expectedViewport);')
@@ -8251,6 +8300,12 @@ try {
   Assert-Equal "1600" ([string]$report.windowNormalization.trusted.observed.width) "Trusted-process native window evidence should record exact 1600px outer width."
   Assert-Equal "1000" ([string]$report.windowNormalization.restricted.observed.height) "Restricted Mode native window evidence should record exact 1000px outer height."
   Assert-Equal "renderer.observation" $report.rendererCapture.windowBounds.method "Renderer capture should independently observe the already-normalized native window."
+  Assert-Equal "workbench.action.increaseViewSize" $report.sourceControlUiOpenReport.rendererCaptureExpectations.scmActionSurface.layout.prepareCommand "Installed Source Control UI E2E evidence should retain the SCM layout prepare command."
+  Assert-Equal 1 @($report.extension.invokedCommands | Where-Object { $_ -eq "workbench.action.increaseViewSize" }).Count "Installed Source Control UI E2E evidence should record exactly one SCM layout prepare command invocation."
+  Assert-Equal "280" ([string]$report.rendererCapture.interaction.layout.observed.provider.width) "Renderer capture should prove the SCM provider reached its minimum width."
+  Assert-Equal "120" ([string]$report.rendererCapture.interaction.layout.observed.actionsContainer.width) "Renderer capture should prove the SCM actions container reached its minimum width."
+  Assert-Equal "True" ([string]$report.rendererCapture.assertions.scmProviderAndActionsContainerUnique) "Renderer capture should prove one unique SCM provider toolbar."
+  Assert-Equal "True" ([string]$report.rendererCapture.assertions.scmTargetResourceRowUnique) "Renderer capture should anchor the SCM provider toolbar to one unique target resource row."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Installed Source Control UI E2E evidence should record the extension id."
   Assert-Equal "complete" $report.extension.harnessPhase "Installed Source Control UI E2E evidence should record a completed harness phase."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.refreshResource" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the restored-path Refresh Resource command invocation."
@@ -9418,6 +9473,7 @@ try {
   $rendererDetailLieCases = @(
     [pscustomobject]@{ Mode = "window-bounds-lie"; Port = 32165; Expected = "Renderer capture must prove the exact 1600x1000 native workbench outer bounds."; Description = "native workbench outer bounds" },
     [pscustomobject]@{ Mode = "viewport-lie"; Port = 32155; Expected = "Renderer capture must prove an exact 1440x900 DOM viewport and PNG."; Description = "viewport detail" },
+    [pscustomobject]@{ Mode = "scm-layout-width-lie"; Port = 32164; Expected = "Renderer capture SCM action layout must prove one provider toolbar"; Description = "SCM provider and toolbar widths" },
     [pscustomobject]@{ Mode = "scm-primary-lie"; Port = 32156; Expected = "Renderer capture SCM primary action/codicon evidence did not match expectations."; Description = "SCM primary action detail" },
     [pscustomobject]@{ Mode = "scm-submenu-lie"; Port = 32157; Expected = "Renderer capture SCM overflow submenu reachability did not match expectations."; Description = "SCM submenu detail" },
     [pscustomobject]@{ Mode = "scm-inline-lie"; Port = 32158; Expected = "Renderer capture SCM resource inline action/codicon evidence did not match expectations."; Description = "SCM inline action detail" },
@@ -9503,6 +9559,9 @@ try {
   Assert-True ($workflowContent -match '(?s)vscode\.workspace\.isTrusted !== true \|\| openReport\.workspace\.trusted !== true.*?trusted profile was not established before renderer capture') "Installed Source Control UI E2E harness should fail fast unless Extension Host and open-report trust are both true."
   Assert-True ($workflowContent -match '(?s)workspaceTrust\.extensionHostTrusted -ne \$true.*?workspaceTrust\.openReportTrusted -ne \$true.*?ready sentinel did not prove a trusted profile before renderer capture') "Installed Source Control UI E2E PowerShell consumer should independently reject an untrusted ready sentinel."
   Assert-True ($workflowContent -match '(?s)executeCommand\("subversionr\.diagnostics\.installedSourceControlUiE2eShowOutput"\).*?invokedCommands:\s*\[.*?"subversionr\.diagnostics\.installedSourceControlUiE2eShowOutput"') "Installed Source Control UI E2E evidence should record the command that exposes the real SubversionR output channel."
+  Assert-True ($workflowContent -match '(?s)executeCommand\(openReport\.rendererCaptureExpectations\.viewCommand\).*?executeCommand\(scmActionLayout\.prepareCommand\)') "Installed Source Control UI E2E harness should execute the exact SCM layout prepare command only after focusing the SCM view."
+  Assert-True ($workflowContent -match '(?s)scmActionLayout\.incrementCount !== 1.*?scmActionLayout\.minimumProviderWidth !== 280.*?scmActionLayout\.minimumActionsContainerWidth !== 120') "Installed Source Control UI E2E harness should fail fast unless the SCM layout contract has the exact fixed count and widths."
+  Assert-True ($workflowContent -match '(?s)matchingProviderAndActionsContainerCount -ne 1.*?observed\.provider\.width.*?minimumProviderWidth.*?observed\.actionsContainer\.width.*?minimumActionsContainerWidth') "Installed Source Control UI E2E gate should independently verify the unique SCM provider and toolbar widths from renderer evidence."
   Assert-True ($workflowContent -match '(?s)waitForFile\(donePath, 120000\).*?executeCommand\("workbench\.action\.closePanel"\).*?executingInstalledSourceControlUiE2ePartialFreshnessReport') "Installed Source Control UI E2E should close the Output panel after the SCM screenshot so later notification-safety captures remain surface-local."
   Assert-True (($workflowContent -match 'function Normalize-RendererTokenText') -and ($workflowContent -match '-replace ''\\s\+'', '' ''') -and ($workflowContent -match '(?s)function Assert-TextContainsTokens.*?Normalize-RendererTokenText') -and ($workflowContent -match '(?s)function Assert-TextExcludesTokens.*?Normalize-RendererTokenText')) "Installed Source Control UI E2E gate should normalize renderer whitespace before independently checking required and forbidden artifact tokens."
   Assert-True ($workflowContent -match 'Get-UpdateConflictWorkingCopyOracle') "Installed Update conflict evidence should use the SVN status XML working-copy oracle."

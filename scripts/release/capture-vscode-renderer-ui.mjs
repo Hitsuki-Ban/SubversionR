@@ -23,6 +23,10 @@ if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "scm-primary-action-w
   await runScmPrimaryActionWaitSelfTest();
   return;
 }
+if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "scm-action-layout") {
+  await runScmActionLayoutSelfTest();
+  return;
+}
 if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "workbench-window-observation") {
   await runWorkbenchWindowObservationSelfTest();
   return;
@@ -202,6 +206,10 @@ try {
             screenshotInfo.height === expectedViewport.height,
         } : {}),
         ...(interaction && scmActionSurface ? {
+          scmTargetResourceRowUnique: interaction.layout.assertions.uniqueTargetResourceRow,
+          scmProviderAndActionsContainerUnique: interaction.layout.assertions.uniqueProviderAndActionsContainer,
+          scmProviderMinimumWidthReached: interaction.layout.assertions.providerMinimumWidthReached,
+          scmActionsContainerMinimumWidthReached: interaction.layout.assertions.actionsContainerMinimumWidthReached,
           scmPrimaryActionsRendered: interaction.primaryActions.every((action) => action.rendered === true),
           scmOverflowSubmenusReachable: interaction.overflowSubmenus.every((submenu) => submenu.reachable === true),
           scmResourceInlineActionsReachable: interaction.resource.inlineActions.every((action) => action.rendered === true),
@@ -480,6 +488,7 @@ function optionalScmActionSurface(value) {
   if (!value || typeof value !== "object") {
     throw new Error("scmActionSurface must be an object when provided.");
   }
+  const layout = requiredScmActionLayout(value.layout);
   const primaryActions = requiredActionArray(value.primaryActions, "scmActionSurface.primaryActions", true);
   const overflowSubmenus = requiredSubmenuArray(value.overflowSubmenus);
   if (!value.resource || typeof value.resource !== "object") {
@@ -509,6 +518,7 @@ function optionalScmActionSurface(value) {
     "scmActionSurface.forbiddenNotificationTokens",
   );
   return {
+    layout,
     primaryActions,
     overflowSubmenus,
     resource: {
@@ -518,6 +528,26 @@ function optionalScmActionSurface(value) {
       contextActions,
     },
     forbiddenNotificationTokens,
+  };
+}
+
+function requiredScmActionLayout(value) {
+  if (!value || typeof value !== "object") {
+    throw new Error("scmActionSurface.layout must be an object.");
+  }
+  if (
+    value.prepareCommand !== "workbench.action.increaseViewSize" ||
+    value.incrementCount !== 1 ||
+    value.minimumProviderWidth !== 280 ||
+    value.minimumActionsContainerWidth !== 120
+  ) {
+    throw new Error("scmActionSurface.layout must require one workbench.action.increaseViewSize command and exact 280/120 pixel minimum widths.");
+  }
+  return {
+    prepareCommand: value.prepareCommand,
+    incrementCount: value.incrementCount,
+    minimumProviderWidth: value.minimumProviderWidth,
+    minimumActionsContainerWidth: value.minimumActionsContainerWidth,
   };
 }
 
@@ -851,19 +881,201 @@ async function inspectTreeViewState(cdp, expectations) {
   }
 }
 
-async function inspectScmPrimaryActions(cdp, expectedActions) {
-  return evaluate(
+async function inspectScmActionLayout(cdp, expectedLayout, expectedActions, resourcePathToken) {
+  const observation = await evaluate(
     cdp,
     `(() => {
-      const expected = ${JSON.stringify(expectedActions)};
+      const expectedActions = ${JSON.stringify(expectedActions)};
+      const resourcePathToken = ${JSON.stringify(resourcePathToken)};
       const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
       const visible = element => {
         const rect = element.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
           rect.left < window.innerWidth && rect.top < window.innerHeight;
       };
-      const elements = Array.from(document.querySelectorAll("button, a, [role='button'], [aria-label], [title]"))
-        .filter(visible);
+      const label = element => normalize(
+        element.getAttribute("aria-label") || element.getAttribute("title") || element.textContent
+      );
+      const bounds = element => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          clientWidth: element.clientWidth,
+          clientHeight: element.clientHeight
+        };
+      };
+      const expectedLabel = candidateLabel => expectedActions.find(action =>
+        candidateLabel === action.label || candidateLabel.startsWith(action.label + " (")
+      )?.label;
+      const exactResourceRow = element => {
+        const resourceLabel = element.querySelector(".label-name");
+        return resourceLabel && visible(resourceLabel) && normalize(resourceLabel.innerText ?? resourceLabel.textContent) === resourcePathToken;
+      };
+      const panes = Array.from(document.querySelectorAll(".pane")).filter(visible).map(pane => {
+        const scmEditorVisible = Array.from(pane.querySelectorAll(".scm-editor-container, .scm-input")).some(visible);
+        const matchingRows = Array.from(pane.querySelectorAll(".monaco-list-row"))
+          .filter(element => visible(element) && exactResourceRow(element));
+        const resourceRows = matchingRows.filter(row =>
+          !matchingRows.some(candidate => candidate !== row && row.contains(candidate))
+        );
+        const actionElements = Array.from(pane.querySelectorAll(
+          ".scm-provider .actions-container button, .scm-provider .actions-container a, .scm-provider .actions-container [role='button'], .scm-provider .actions-container [aria-label], .scm-provider .actions-container [title]"
+        )).filter(visible);
+        const pairs = [];
+        for (const element of actionElements) {
+          const matchedLabel = expectedLabel(label(element));
+          if (!matchedLabel) continue;
+          const actionsContainer = element.closest(".actions-container");
+          const provider = element.closest(".scm-provider");
+          if (!actionsContainer || !provider || !pane.contains(provider) || !provider.contains(actionsContainer)) continue;
+          let pair = pairs.find(candidate =>
+            candidate.providerElement === provider && candidate.actionsContainerElement === actionsContainer
+          );
+          if (!pair) {
+            pair = { providerElement: provider, actionsContainerElement: actionsContainer, matchedActionLabels: [] };
+            pairs.push(pair);
+          }
+          if (!pair.matchedActionLabels.includes(matchedLabel)) pair.matchedActionLabels.push(matchedLabel);
+        }
+        return { paneElement: pane, scmEditorVisible, resourceRows, pairs };
+      });
+      const matchingPanes = panes.filter(pane =>
+        pane.scmEditorVisible && pane.resourceRows.length === 1 && pane.pairs.length > 0
+      );
+      const targetPane = matchingPanes.length === 1 ? matchingPanes[0] : null;
+      const pairs = targetPane ? targetPane.pairs : [];
+      const matchingPairs = pairs.map(pair => ({
+        provider: bounds(pair.providerElement),
+        actionsContainer: bounds(pair.actionsContainerElement),
+        matchedActionLabels: pair.matchedActionLabels,
+        visibleActionCandidates: Array.from(pair.actionsContainerElement.querySelectorAll(
+          "button, a, [role='button'], [aria-label], [title]"
+        )).filter(visible).map(element => ({
+          label: label(element),
+          className: typeof element.className === "string" ? element.className : ""
+        })).filter(candidate => candidate.label).slice(0, 40)
+      }));
+      const globalActionCandidates = Array.from(document.querySelectorAll(
+        "button, a, [role='button'], [aria-label], [title]"
+      )).filter(visible).map(element => ({
+        label: label(element),
+        className: typeof element.className === "string" ? element.className : ""
+      })).filter(candidate => expectedLabel(candidate.label)).slice(0, 40);
+      const globalMatchingResourceRows = Array.from(document.querySelectorAll(".monaco-list-row"))
+        .filter(element => visible(element) && exactResourceRow(element));
+      return {
+        matchingTargetPaneCount: matchingPanes.length,
+        matchingResourceRowCount: targetPane ? targetPane.resourceRows.length : 0,
+        globalMatchingResourceRowCount: globalMatchingResourceRows.length,
+        targetRoot: targetPane ? {
+          tagName: targetPane.paneElement.tagName,
+          role: normalize(targetPane.paneElement.getAttribute("role")),
+          className: typeof targetPane.paneElement.className === "string" ? targetPane.paneElement.className : "",
+          scmEditorVisible: targetPane.scmEditorVisible,
+          ...bounds(targetPane.paneElement)
+        } : null,
+        matchingPairCount: matchingPairs.length,
+        matchingPairs,
+        paneCandidates: panes.map(pane => ({
+          scmEditorVisible: pane.scmEditorVisible,
+          matchingResourceRowCount: pane.resourceRows.length,
+          matchingProviderAndActionsContainerCount: pane.pairs.length,
+          className: typeof pane.paneElement.className === "string" ? pane.paneElement.className : "",
+          ...bounds(pane.paneElement)
+        })),
+        globalActionCandidates
+      };
+    })()`,
+  );
+  const matchingPair = observation.matchingPairCount === 1 ? observation.matchingPairs[0] : undefined;
+  const result = {
+    expected: expectedLayout,
+    observed: {
+      matchingTargetPaneCount: observation.matchingTargetPaneCount,
+      matchingResourceRowCount: observation.matchingResourceRowCount,
+      globalMatchingResourceRowCount: observation.globalMatchingResourceRowCount,
+      targetRoot: observation.targetRoot,
+      matchingProviderAndActionsContainerCount: observation.matchingPairCount,
+      provider: matchingPair?.provider,
+      actionsContainer: matchingPair?.actionsContainer,
+      matchedActionLabels: matchingPair?.matchedActionLabels ?? [],
+    },
+    assertions: {
+      uniqueProviderAndActionsContainer: observation.matchingPairCount === 1,
+      uniqueTargetResourceRow:
+        observation.matchingTargetPaneCount === 1 &&
+        observation.matchingResourceRowCount === 1 &&
+        observation.targetRoot?.scmEditorVisible === true,
+      providerMinimumWidthReached:
+        observation.matchingPairCount === 1 &&
+        matchingPair.provider.width >= expectedLayout.minimumProviderWidth,
+      actionsContainerMinimumWidthReached:
+        observation.matchingPairCount === 1 &&
+        matchingPair.actionsContainer.width >= expectedLayout.minimumActionsContainerWidth,
+    },
+  };
+  if (
+    result.assertions.uniqueTargetResourceRow !== true ||
+    result.assertions.uniqueProviderAndActionsContainer !== true ||
+    result.assertions.providerMinimumWidthReached !== true ||
+    result.assertions.actionsContainerMinimumWidthReached !== true
+  ) {
+    throw new Error(`SCM action layout did not identify one provider toolbar in the unique visible resource pane for ${resourcePathToken} with minimum ${expectedLayout.minimumProviderWidth}/${expectedLayout.minimumActionsContainerWidth} pixel widths. Layout: ${JSON.stringify(result)}. Diagnostics: ${JSON.stringify(observation)}`);
+  }
+  return result;
+}
+
+async function inspectScmPrimaryActions(cdp, expectedActions, resourcePathToken) {
+  return evaluate(
+    cdp,
+    `(() => {
+      const expected = ${JSON.stringify(expectedActions)};
+      const resourcePathToken = ${JSON.stringify(resourcePathToken)};
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const expectedLabel = candidateLabel => expected.find(action =>
+        candidateLabel === action.label || candidateLabel.startsWith(action.label + " (")
+      )?.label;
+      const exactResourceRow = element => {
+        const resourceLabel = element.querySelector(".label-name");
+        return resourceLabel && visible(resourceLabel) && normalize(resourceLabel.innerText ?? resourceLabel.textContent) === resourcePathToken;
+      };
+      const matchingPanes = Array.from(document.querySelectorAll(".pane")).filter(visible).map(pane => {
+        const scmEditorVisible = Array.from(pane.querySelectorAll(".scm-editor-container, .scm-input")).some(visible);
+        const matchingRows = Array.from(pane.querySelectorAll(".monaco-list-row"))
+          .filter(element => visible(element) && exactResourceRow(element));
+        const resourceRows = matchingRows.filter(row =>
+          !matchingRows.some(candidate => candidate !== row && row.contains(candidate))
+        );
+        const scopedElements = Array.from(pane.querySelectorAll(
+          ".scm-provider .actions-container button, .scm-provider .actions-container a, .scm-provider .actions-container [role='button'], .scm-provider .actions-container [aria-label], .scm-provider .actions-container [title]"
+        )).filter(visible);
+        const pairs = [];
+        for (const element of scopedElements) {
+          const labels = [element.getAttribute("aria-label"), element.getAttribute("title"), element.textContent]
+            .map(normalize);
+          if (!labels.some(expectedLabel)) continue;
+          const actionsContainer = element.closest(".actions-container");
+          const provider = element.closest(".scm-provider");
+          if (!actionsContainer || !provider || !pane.contains(provider) || !provider.contains(actionsContainer)) continue;
+          if (!pairs.some(pair => pair.provider === provider && pair.actionsContainer === actionsContainer)) {
+            pairs.push({ provider, actionsContainer });
+          }
+        }
+        return { scmEditorVisible, resourceRows, pairs };
+      }).filter(pane => pane.scmEditorVisible && pane.resourceRows.length === 1 && pane.pairs.length > 0);
+      const pairs = matchingPanes.length === 1 ? matchingPanes[0].pairs : [];
+      const elements = pairs.length === 1
+        ? Array.from(pairs[0].actionsContainer.querySelectorAll("button, a, [role='button'], [aria-label], [title]"))
+          .filter(visible)
+        : [];
       return expected.map(action => {
         const element = elements.find(candidate => {
           const labels = [candidate.getAttribute("aria-label"), candidate.getAttribute("title"), candidate.textContent]
@@ -892,13 +1104,14 @@ async function inspectScmPrimaryActions(cdp, expectedActions) {
 async function waitForScmPrimaryActions(
   cdp,
   expectedActions,
+  resourcePathToken,
   timeoutMs = REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS,
   intervalMs = REQUIRED_TOKEN_CAPTURE_INTERVAL_MS,
 ) {
   const deadline = Date.now() + timeoutMs;
   let primaryActions = [];
   do {
-    primaryActions = await inspectScmPrimaryActions(cdp, expectedActions);
+    primaryActions = await inspectScmPrimaryActions(cdp, expectedActions, resourcePathToken);
     if (primaryActions.every((action) => action.rendered === true)) {
       return primaryActions;
     }
@@ -1055,7 +1268,17 @@ function scmPrimaryActionFailure(missingPrimary, primaryActions, diagnostics) {
 }
 
 async function inspectScmActionSurface(cdp, expectations, selectedTarget) {
-  const primaryActions = await waitForScmPrimaryActions(cdp, expectations.primaryActions);
+  const layout = await inspectScmActionLayout(
+    cdp,
+    expectations.layout,
+    expectations.primaryActions,
+    expectations.resource.pathToken,
+  );
+  const primaryActions = await waitForScmPrimaryActions(
+    cdp,
+    expectations.primaryActions,
+    expectations.resource.pathToken,
+  );
   const missingPrimary = primaryActions.filter((action) => action.rendered !== true);
   if (missingPrimary.length > 0) {
     const diagnostics = await inspectScmPrimaryActionFailureDiagnostics(cdp, selectedTarget, primaryActions);
@@ -1189,6 +1412,7 @@ async function inspectScmActionSurface(cdp, expectations, selectedTarget) {
 
   return {
     kind: "scmActionSurface",
+    layout,
     primaryActions,
     overflowButton,
     overflowParentLabels,
@@ -1571,7 +1795,7 @@ async function runScmPrimaryActionWaitSelfTest() {
       };
     },
   };
-  const delayedResult = await waitForScmPrimaryActions(delayedCdp, expectedActions, 500, 1);
+  const delayedResult = await waitForScmPrimaryActions(delayedCdp, expectedActions, "tracked.txt", 500, 1);
   if (delayedPollCount !== 3 || delayedResult.some((action) => action.rendered !== true)) {
     throw new Error(`Delayed SCM primary-action self-test failed after ${delayedPollCount} poll(s).`);
   }
@@ -1593,7 +1817,7 @@ async function runScmPrimaryActionWaitSelfTest() {
       };
     },
   };
-  const missingResult = await waitForScmPrimaryActions(missingCdp, expectedActions, 500, 1);
+  const missingResult = await waitForScmPrimaryActions(missingCdp, expectedActions, "tracked.txt", 500, 1);
   if (missingPollCount < 2 || missingResult.every((action) => action.rendered === true)) {
     throw new Error(`Missing SCM primary-action self-test did not preserve the failure contract after ${missingPollCount} poll(s).`);
   }
@@ -1648,6 +1872,68 @@ async function runScmPrimaryActionWaitSelfTest() {
     diagnosticError.diagnostics !== diagnostics
   ) {
     throw new Error(`SCM primary-action diagnostic self-test failed: ${diagnosticError.message}`);
+  }
+}
+
+async function runScmActionLayoutSelfTest() {
+  const expectedLayout = {
+    prepareCommand: "workbench.action.increaseViewSize",
+    incrementCount: 1,
+    minimumProviderWidth: 280,
+    minimumActionsContainerWidth: 120,
+  };
+  const expectedActions = [{ label: "SubversionR: Refresh", codicon: "refresh" }];
+  const observation = (providerWidth, actionsContainerWidth) => ({
+    matchingTargetPaneCount: 1,
+    matchingResourceRowCount: 1,
+    globalMatchingResourceRowCount: 2,
+    targetRoot: { tagName: "DIV", role: "", className: "pane scm-view", scmEditorVisible: true, left: 0, top: 0, width: 300, height: 400, clientWidth: 300, clientHeight: 400 },
+    matchingPairCount: 1,
+    matchingPairs: [{
+      provider: { left: 0, top: 0, width: providerWidth, height: 200, clientWidth: providerWidth, clientHeight: 200 },
+      actionsContainer: { left: 160, top: 0, width: actionsContainerWidth, height: 22, clientWidth: actionsContainerWidth, clientHeight: 22 },
+      matchedActionLabels: [expectedActions[0].label],
+      visibleActionCandidates: [{ label: expectedActions[0].label, className: "action-label codicon-refresh" }],
+    }],
+    globalActionCandidates: [
+      { label: expectedActions[0].label, className: "action-label codicon-refresh", scope: "non-target-repositories-view" },
+      { label: expectedActions[0].label, className: "action-label codicon-refresh", scope: "target-resource-pane" },
+    ],
+    paneCandidates: [
+      { scmEditorVisible: false, matchingResourceRowCount: 1, matchingProviderAndActionsContainerCount: 1, className: "pane repositories-view" },
+      { scmEditorVisible: true, matchingResourceRowCount: 1, matchingProviderAndActionsContainerCount: 1, className: "pane scm-view" },
+    ],
+  });
+  const cdpFor = value => ({
+    async send(method) {
+      if (method !== "Runtime.evaluate") {
+        throw new Error(`Unexpected fake CDP method: ${method}`);
+      }
+      return { result: { value } };
+    },
+  });
+
+  const sufficient = await inspectScmActionLayout(cdpFor(observation(280, 120)), expectedLayout, expectedActions, "tracked.txt");
+  if (
+    sufficient.assertions.uniqueTargetResourceRow !== true ||
+    sufficient.assertions.uniqueProviderAndActionsContainer !== true ||
+    sufficient.assertions.providerMinimumWidthReached !== true ||
+    sufficient.assertions.actionsContainerMinimumWidthReached !== true ||
+    sufficient.observed.globalMatchingResourceRowCount !== 2 ||
+    sufficient.observed.provider.width !== 280 ||
+    sufficient.observed.actionsContainer.width !== 120
+  ) {
+    throw new Error(`SCM action layout sufficient-width self-test failed: ${JSON.stringify(sufficient)}`);
+  }
+
+  let rejected = false;
+  try {
+    await inspectScmActionLayout(cdpFor(observation(279, 119)), expectedLayout, expectedActions, "tracked.txt");
+  } catch (error) {
+    rejected = String(error && error.message).includes("minimum 280/120 pixel widths");
+  }
+  if (!rejected) {
+    throw new Error("SCM action layout insufficient-width self-test did not fail closed.");
   }
 }
 

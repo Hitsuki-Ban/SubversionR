@@ -499,6 +499,12 @@ describe("collectInstalledSourceControlSurfaceReport", () => {
       requiredScreenshot: true,
       viewport: { width: 1440, height: 900 },
       scmActionSurface: {
+        layout: {
+          prepareCommand: "workbench.action.increaseViewSize",
+          incrementCount: 1,
+          minimumProviderWidth: 280,
+          minimumActionsContainerWidth: 120,
+        },
         primaryActions: [
           { label: "SubversionR: Refresh", codicon: "refresh" },
           { label: "SubversionR: Commit Changes", codicon: "check" },
