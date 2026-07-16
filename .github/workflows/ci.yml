@@ -286,7 +286,16 @@ jobs:
         shell: pwsh
         run: pnpm release:verify-native-remote-fuzz-fixed-seed-smoke:win32-x64
       - name: Build release sidecar
-        run: pnpm native:build-daemon:release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path -LiteralPath Env:CARGO_HOME) {
+            Remove-Item -LiteralPath Env:CARGO_HOME -ErrorAction Stop
+          }
+          if (Test-Path -LiteralPath Env:CARGO_HOME) {
+            throw "CARGO_HOME must be absent before the repository-owned release daemon build."
+          }
+          pnpm native:build-daemon:release
       - name: Native script tests
         shell: pwsh
         run: pnpm native:test-scripts
