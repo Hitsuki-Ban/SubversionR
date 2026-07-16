@@ -392,7 +392,13 @@ function cloneStoredEntry(entry: StatusEntry): StatusEntry {
 function cloneEntry(entry: StatusEntry): StatusEntry;
 function cloneEntry(entry: StatusEntry | undefined): StatusEntry | undefined;
 function cloneEntry(entry: StatusEntry | undefined): StatusEntry | undefined {
-  return entry ? { ...entry, lock: entry.lock ? { ...entry.lock } : null } : undefined;
+  return entry
+    ? {
+        ...entry,
+        lock: entry.lock ? { ...entry.lock } : null,
+        conflictArtifacts: [...entry.conflictArtifacts],
+      }
+    : undefined;
 }
 
 function isNonEmptyString(value: unknown): value is string {

@@ -163,7 +163,7 @@ impl DaemonState {
             libsvn_version: bridge_info.libsvn_version,
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 29,
+                minor: 30,
             },
             platform: current_platform(),
             cache_schema: default_cache_schema(),
@@ -519,6 +519,7 @@ impl DaemonState {
                     entry.generation = generation;
                 }
                 filter_snapshot_boundaries(&mut snapshot, &session.boundary_roots);
+                remove_conflict_artifact_entries(&mut snapshot.local_entries);
                 replace_session_local_entries(session, &snapshot.local_entries);
                 if snapshot.remote_entries.is_empty() {
                     snapshot.remote_entries = session.remote_entries.values().cloned().collect();
@@ -601,6 +602,7 @@ impl DaemonState {
                         entry.generation = generation;
                     }
                     filter_snapshot_boundaries(&mut snapshot, &boundary_roots);
+                    remove_conflict_artifact_entries(&mut snapshot.local_entries);
                     scans.push((target, snapshot));
                 }
                 Err(failure) => {
@@ -625,14 +627,35 @@ impl DaemonState {
         let mut next_entries = session.local_entries.clone();
         let next_remote_entries = session.remote_entries.clone();
         let mut coverage = Vec::with_capacity(target_count);
+        let mut artifact_paths = next_entries
+            .values()
+            .flat_map(|entry| entry.conflict_artifacts.iter())
+            .cloned()
+            .collect::<BTreeSet<_>>();
 
         for (target, snapshot) in scans {
-            let seen_paths = snapshot
+            artifact_paths.extend(
+                snapshot
+                    .local_entries
+                    .iter()
+                    .flat_map(|entry| entry.conflict_artifacts.iter())
+                    .cloned(),
+            );
+            next_entries.retain(|path, entry| {
+                entry.local_status != "unversioned" || !artifact_paths.contains(path)
+            });
+            let incoming_entries = snapshot
                 .local_entries
+                .into_iter()
+                .filter(|entry| {
+                    entry.local_status != "unversioned" || !artifact_paths.contains(&entry.path)
+                })
+                .collect::<Vec<_>>();
+            let seen_paths = incoming_entries
                 .iter()
                 .map(|entry| entry.path.clone())
                 .collect::<BTreeSet<_>>();
-            for entry in snapshot.local_entries {
+            for entry in incoming_entries {
                 if is_projectable_status(&entry) {
                     next_entries.insert(entry.path.clone(), entry.clone());
                 } else if next_entries.remove(&entry.path).is_some() {
@@ -4005,6 +4028,17 @@ fn replace_session_remote_entries(session: &mut RepositorySession, entries: &[St
     }
 }
 
+fn remove_conflict_artifact_entries(entries: &mut Vec<StatusEntry>) {
+    let artifact_paths = entries
+        .iter()
+        .flat_map(|entry| entry.conflict_artifacts.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    entries.retain(|entry| {
+        entry.local_status != "unversioned" || !artifact_paths.contains(&entry.path)
+    });
+}
+
 fn is_projectable_status(entry: &StatusEntry) -> bool {
     is_interesting_status(entry)
         || entry.switched
@@ -4095,10 +4129,18 @@ fn removed_paths(
 }
 
 fn summarize_entries<'a>(entries: impl Iterator<Item = &'a StatusEntry>) -> StatusSummary {
+    let entries = entries.collect::<Vec<_>>();
+    let artifact_paths = entries
+        .iter()
+        .flat_map(|entry| entry.conflict_artifacts.iter())
+        .collect::<BTreeSet<_>>();
     let mut local_changes = 0;
     let mut conflicts = 0;
     let mut unversioned = 0;
     for entry in entries {
+        if entry.local_status == "unversioned" && artifact_paths.contains(&entry.path) {
+            continue;
+        }
         if is_interesting_status(entry) {
             local_changes += 1;
         }

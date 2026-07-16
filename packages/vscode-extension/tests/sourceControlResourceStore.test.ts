@@ -26,6 +26,7 @@ describe("SourceControlResourceStore", () => {
 
     expect(projection.groups.map((group) => group.id)).toEqual(SCM_RESOURCE_GROUP_IDS);
     expect(groupPaths(projection, "conflicts")).toEqual(["src/conflict.c"]);
+    expect(groupPaths(projection, "conflictArtifacts")).toEqual([]);
     expect(groupPaths(projection, "changes")).toEqual(["src/modified.c"]);
     expect(groupContexts(projection, "changes")).toEqual(["subversionr.changedFile"]);
     expect(groupPaths(projection, "unversioned")).toEqual(["notes.txt"]);
@@ -33,6 +34,112 @@ describe("SourceControlResourceStore", () => {
     expect(groupContexts(projection, "incoming")).toEqual(["subversionr.incomingFile"]);
     expect(groupPaths(projection, "externals")).toEqual(["vendor/lib"]);
     expect(groupPaths(projection, "ignored")).toEqual(["target/out.log"]);
+  });
+
+  it("synthesizes read-only conflict artifacts from their conflicted owner and gives owner identity priority", () => {
+    const store = new SourceControlResourceStore({
+      countPolicy: { countUnversioned: true, ignoreChangelistsInCount: [] },
+    });
+    store.registerRepository(repository());
+
+    const projection = store.applySnapshot(
+      snapshotResponse({
+        localEntries: [
+          statusEntry({
+            path: "src/main.c",
+            kind: "directory",
+            localStatus: "conflicted",
+            conflict: "text",
+            conflictArtifacts: ["src/main.c.mine", "src/main.c.r7", "src/main.c.r8"],
+          }),
+          statusEntry({ path: "src/main.c.mine", localStatus: "unversioned" }),
+          statusEntry({ path: "notes.txt", localStatus: "unversioned" }),
+        ],
+      }),
+    );
+
+    expect(groupPaths(projection, "conflicts")).toEqual(["src/main.c"]);
+    expect(groupPaths(projection, "conflictArtifacts")).toEqual([
+      "src/main.c.mine",
+      "src/main.c.r7",
+      "src/main.c.r8",
+    ]);
+    expect(groupContexts(projection, "conflictArtifacts")).toEqual([
+      "subversionr.conflictArtifact",
+      "subversionr.conflictArtifact",
+      "subversionr.conflictArtifact",
+    ]);
+    expect(
+      projection.groups.find((group) => group.id === "conflictArtifacts")?.resources.map((resource) => resource.tooltipKey),
+    ).toEqual([
+      "scm.resource.conflictArtifact",
+      "scm.resource.conflictArtifact",
+      "scm.resource.conflictArtifact",
+    ]);
+    expect(
+      projection.groups.find((group) => group.id === "conflictArtifacts")?.resources.map((resource) => resource.entry.kind),
+    ).toEqual(["file", "file", "file"]);
+    expect(groupPaths(projection, "unversioned")).toEqual(["notes.txt"]);
+    expect(projection.count).toBe(2);
+    expect(store.getCommitAllTargets("repo-uuid:C:/wc")).toMatchObject({ hasConflicts: true, targets: [] });
+  });
+
+  it("incrementally replaces and removes synthesized conflict artifacts without changing unknown unversioned files", () => {
+    const store = sourceControlResourceStore();
+    store.registerRepository(repository());
+    store.applySnapshot(
+      snapshotResponse({
+        generation: 11,
+        localEntries: [
+          statusEntry({
+            path: "src/main.c",
+            localStatus: "conflicted",
+            conflict: "text",
+            conflictArtifacts: ["src/main.c.mine", "src/main.c.r7"],
+            generation: 11,
+          }),
+          statusEntry({ path: "src/main.c.mine", localStatus: "unversioned", generation: 11 }),
+          statusEntry({ path: "notes.txt", localStatus: "unversioned", generation: 11 }),
+        ],
+      }),
+    );
+
+    const replaced = store.applyDelta(
+      deltaResponse({
+        generation: 12,
+        upsert: [
+          statusEntry({
+            path: "src/main.c",
+            localStatus: "conflicted",
+            conflict: "text",
+            conflictArtifacts: ["src/main.c.r8"],
+            generation: 12,
+          }),
+          statusEntry({ path: "src/main.c.r8", localStatus: "unversioned", generation: 12 }),
+        ],
+      }),
+    );
+    expect(groupPaths(replaced, "conflictArtifacts")).toEqual(["src/main.c.r8"]);
+    expect(groupPaths(replaced, "unversioned")).toEqual(["notes.txt", "src/main.c.mine"]);
+
+    const resolved = store.applyDelta(
+      deltaResponse({
+        generation: 13,
+        remove: ["src/main.c.mine", "src/main.c.r8"],
+        upsert: [
+          statusEntry({
+            path: "src/main.c",
+            localStatus: "modified",
+            conflict: null,
+            conflictArtifacts: [],
+            generation: 13,
+          }),
+        ],
+      }),
+    );
+    expect(groupPaths(resolved, "conflictArtifacts")).toEqual([]);
+    expect(groupPaths(resolved, "changes")).toEqual(["src/main.c"]);
+    expect(groupPaths(resolved, "unversioned")).toEqual(["notes.txt"]);
   });
 
   it("counts committable local resources while excluding ignored, incoming, external, and ignored changelists", () => {
@@ -80,6 +187,7 @@ describe("SourceControlResourceStore", () => {
 
     expect(projection.groups.map((group) => group.id)).toEqual([
       "conflicts",
+      "conflictArtifacts",
       "changelist:review",
       "changelist:shelved",
       "changes",
@@ -318,6 +426,30 @@ describe("SourceControlResourceStore", () => {
 
     const currentLock = store.getProjection("repo-uuid:C:/wc")?.groups.find((group) => group.id === "metadata")?.resources[0]?.entry.lock;
     expect(currentLock?.owner).toBe("alice");
+  });
+
+  it("returns projection groups with independent conflict artifact clones", () => {
+    const store = sourceControlResourceStore();
+    store.registerRepository(repository());
+    const projection = store.applySnapshot(
+      snapshotResponse({
+        localEntries: [
+          statusEntry({
+            path: "src/main.c",
+            localStatus: "conflicted",
+            conflict: "text",
+            conflictArtifacts: ["src/main.c.mine"],
+          }),
+        ],
+      }),
+    );
+    const owner = projection.groups.find((group) => group.id === "conflicts")?.resources[0];
+    owner!.entry.conflictArtifacts.push("mutated");
+
+    expect(
+      store.getProjection("repo-uuid:C:/wc")?.groups.find((group) => group.id === "conflicts")?.resources[0]?.entry
+        .conflictArtifacts,
+    ).toEqual(["src/main.c.mine"]);
   });
 
   it("updates the case-insensitive projected resource index as local resources change", () => {
@@ -711,6 +843,7 @@ function statusEntry(overrides: Partial<StatusEntry> = {}): StatusEntry {
     switched: false,
     depth: "infinity",
     conflict: null,
+    conflictArtifacts: [],
     external: false,
     generation: 11,
     ...overrides,

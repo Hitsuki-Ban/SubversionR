@@ -494,7 +494,7 @@ function New-BetaCandidateFixture([string]$Root) {
       libsvnVersion = "1.14.5"
       protocol = [pscustomobject]@{
         major = 1
-        minor = 29
+        minor = 30
       }
     }
     inputs = [pscustomobject]@{

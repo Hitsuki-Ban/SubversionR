@@ -9481,6 +9481,41 @@ describe("RepositoryCommandController", () => {
     );
   });
 
+  it("uses singular resolve-all prompt, progress, and result text for one conflict", async () => {
+    const session = repositorySession();
+    const sessionService = fakeSessionService({ sessions: [session] });
+    const refreshService = fakeRefreshService();
+    const operationClient = fakeOperationClient(
+      operationResponse({ kind: "resolve", path: "src/conflicted.txt", reason: "operationResolve" }),
+    );
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({
+        resources: [scmConflictedProjectedResource({ path: "src/conflicted.txt" })],
+      }),
+    });
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"], resolveChoice: "working" });
+    const controller = commandController(fakeDiscoveryService({ candidates: [discoveryCandidate()] }), sessionService, ui, {
+      refreshService,
+      operationClient,
+      sourceControlProjection,
+    });
+
+    await controller.resolveAll("repo-uuid:C:/workspace");
+
+    expect(ui.promptResolveChoice).toHaveBeenCalledWith("1 SVN conflict");
+    expect(ui.runOperationWithProgress).toHaveBeenCalledWith("Resolving SVN conflict", expect.any(Function));
+    expect(operationClient.resolve).toHaveBeenCalledWith({
+      repositoryId: "repo-uuid:C:/workspace",
+      epoch: 7,
+      paths: ["src/conflicted.txt"],
+      depth: "empty",
+      choice: "working",
+    });
+    expect(ui.showInformationMessage).toHaveBeenCalledWith(
+      "SubversionR resolved SVN conflict with Working copy: src/conflicted.txt",
+    );
+  });
+
   it("commits a selected changed SCM resource with the repository input message", async () => {
     const session = repositorySession();
     const sessionService = fakeSessionService({ sessions: [session] });
@@ -12072,6 +12107,7 @@ function statusEntry(overrides: Partial<StatusEntry> = {}): StatusEntry {
     switched: overrides.switched ?? false,
     depth: overrides.depth ?? "infinity",
     conflict: overrides.conflict ?? null,
+    conflictArtifacts: overrides.conflictArtifacts ?? [],
     external: overrides.external ?? false,
     generation: overrides.generation ?? 11,
   };

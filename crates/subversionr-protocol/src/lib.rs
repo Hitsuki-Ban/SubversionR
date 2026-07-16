@@ -248,6 +248,7 @@ pub struct StatusEntry {
     pub switched: bool,
     pub depth: String,
     pub conflict: Option<String>,
+    pub conflict_artifacts: Vec<String>,
     pub external: bool,
     pub generation: u64,
 }
@@ -631,7 +632,7 @@ impl InitializeResponse {
         Self {
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 29,
+                minor: 30,
             },
             backend_version,
             bridge_version,

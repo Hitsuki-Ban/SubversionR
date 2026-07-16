@@ -84,6 +84,7 @@
     "onCommand:subversionr.refreshRepository",
     "onCommand:subversionr.checkRemoteChanges",
     "onCommand:subversionr.refreshResource",
+    "onCommand:subversionr.openConflictArtifact",
     "onCommand:subversionr.addResource",
     "onCommand:subversionr.addToIgnoreResource",
     "onCommand:subversionr.removeFromIgnoreResource",
@@ -253,6 +254,11 @@
       {
         "command": "subversionr.refreshResource",
         "title": "%command.refreshResource.title%"
+      },
+      {
+        "command": "subversionr.openConflictArtifact",
+        "title": "%command.openConflictArtifact.title%",
+        "icon": "$(go-to-file)"
       },
       {
         "command": "subversionr.addResource",
@@ -682,6 +688,11 @@
       ],
       "scm/resourceState/context": [
         {
+          "command": "subversionr.openConflictArtifact",
+          "when": "scmProvider == svn-r && scmResourceState == subversionr.conflictArtifact",
+          "group": "inline"
+        },
+        {
           "command": "subversionr.refreshResource",
           "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
           "group": "navigation"
@@ -738,7 +749,7 @@
         },
         {
           "command": "subversionr.diffWithBase",
-          "when": "scmProvider == svn-r && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
           "group": "inline@1"
         },
         {
@@ -818,22 +829,22 @@
         },
         {
           "command": "subversionr.revertResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
           "group": "inline@1"
         },
         {
           "command": "subversionr.revertResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
           "group": "inline@2"
         },
         {
           "command": "subversionr.commitResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
           "group": "inline@2"
         },
         {
           "command": "subversionr.setResourceChangelist",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile(\\.changelisted)?(\\.locked)?$/",
           "group": "inline@3"
         },
         {
@@ -853,7 +864,7 @@
         },
         {
           "command": "subversionr.commitResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedFile\\.baseDiffable(\\.changelisted)?(\\.locked)?$/",
           "group": "inline@3"
         },
         {
@@ -918,17 +929,17 @@
         },
         {
           "command": "subversionr.revertResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
           "group": "inline@1"
         },
         {
           "command": "subversionr.commitResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
           "group": "inline@2"
         },
         {
           "command": "subversionr.setResourceChangelist",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.changedDirectory(\\.changelisted)?$/",
           "group": "inline@3"
         },
         {
@@ -953,12 +964,12 @@
         },
         {
           "command": "subversionr.revertResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
           "group": "inline@2"
         },
         {
           "command": "subversionr.resolveResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.conflicted(\\.changelisted)?(\\.locked)?$/",
           "group": "inline@1"
         },
         {
@@ -1003,7 +1014,7 @@
         },
         {
           "command": "subversionr.addResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState == subversionr.unversioned",
           "group": "inline@1"
         },
         {
@@ -1028,17 +1039,17 @@
         },
         {
           "command": "subversionr.removeFromIgnoreResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState == subversionr.ignored",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState == subversionr.ignored",
           "group": "inline@1"
         },
         {
           "command": "subversionr.updateResource",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incoming(File)?(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incoming(File)?(\\.locked)?$/",
           "group": "inline@1"
         },
         {
           "command": "subversionr.diffWithHead",
-          "when": "scmProvider == svn-r && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incomingFile(\\.locked)?$/",
+          "when": "scmProvider == svn-r && scmResourceGroup != conflictArtifacts && isWorkspaceTrusted && scmResourceState =~ /^subversionr\\.incomingFile(\\.locked)?$/",
           "group": "inline@2"
         },
         {
@@ -1187,6 +1198,10 @@
         },
         {
           "command": "subversionr.refreshResource",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.openConflictArtifact",
           "when": "false"
         },
         {

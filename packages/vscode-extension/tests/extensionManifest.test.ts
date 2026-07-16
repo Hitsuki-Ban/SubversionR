@@ -90,6 +90,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.refreshRepository",
       "onCommand:subversionr.checkRemoteChanges",
       "onCommand:subversionr.refreshResource",
+      "onCommand:subversionr.openConflictArtifact",
       "onCommand:subversionr.addResource",
       "onCommand:subversionr.addToIgnoreResource",
       "onCommand:subversionr.removeFromIgnoreResource",
@@ -260,6 +261,10 @@ describe("extension manifest", () => {
       {
         command: "subversionr.refreshResource",
         title: "%command.refreshResource.title%",
+      },
+      {
+        command: "subversionr.openConflictArtifact",
+        title: "%command.openConflictArtifact.title%",
       },
       {
         command: "subversionr.addResource",
@@ -919,6 +924,10 @@ describe("extension manifest", () => {
           when: "false",
         },
         {
+          command: "subversionr.openConflictArtifact",
+          when: "false",
+        },
+        {
           command: "subversionr.checkRemoteChanges",
           when: "false",
         },
@@ -1244,6 +1253,7 @@ describe("extension manifest", () => {
       "subversionr.conflicted.changelisted",
       "subversionr.conflicted.locked",
       "subversionr.conflicted.changelisted.locked",
+      "subversionr.conflictArtifact",
       "subversionr.changedFile",
       "subversionr.changedFile.changelisted",
       "subversionr.changedFile.locked",
@@ -1288,6 +1298,27 @@ describe("extension manifest", () => {
           .map((entry) => entry.command),
         state,
       ).toContain("subversionr.showBlame");
+    }
+    const conflictArtifactEntries = resourceContext.filter((entry) =>
+      resourceStateWhenMatches(entry.when ?? "", "subversionr.conflictArtifact")
+    );
+    expect(
+      conflictArtifactEntries
+        .filter((entry) => !entry.group?.startsWith("inline"))
+        .map((entry) => entry.command),
+    ).toEqual([]);
+    expect(conflictArtifactEntries.filter((entry) => entry.group?.startsWith("inline"))).toEqual([
+      {
+        command: "subversionr.openConflictArtifact",
+        when: "scmProvider == svn-r && scmResourceState == subversionr.conflictArtifact",
+        group: "inline",
+      },
+    ]);
+    for (const entry of resourceInline) {
+      if (entry.command === "subversionr.openConflictArtifact") {
+        continue;
+      }
+      expect(entry.when, entry.command).toContain("scmResourceGroup != conflictArtifacts");
     }
     for (const entry of inlineEntries) {
       expect(commands.get(entry.command!)?.icon, entry.command).toMatch(/^\$\([^)]+\)$/);
@@ -1720,6 +1751,9 @@ describe("extension manifest", () => {
       expect(bundle).toHaveProperty("Remove");
       expect(bundle).toHaveProperty("Delete");
       expect(bundle).toHaveProperty("Resolve");
+      expect(bundle).toHaveProperty("Conflict Artifacts");
+      expect(bundle).toHaveProperty("SVN conflict artifact (read-only)");
+      expect(bundle).toHaveProperty("The SVN conflict artifact is no longer available.");
       expect(bundle).toHaveProperty("Move");
       expect(bundle).toHaveProperty("Commit");
       expect(bundle).toHaveProperty("SVN commit message");
@@ -1903,6 +1937,7 @@ describe("extension manifest", () => {
       expect(bundle).toHaveProperty("Use incoming changes for conflicted hunks");
       expect(bundle).toHaveProperty("Resolve SVN conflict");
       expect(bundle).toHaveProperty("Resolving SVN conflicts");
+      expect(bundle).toHaveProperty("{0} SVN conflict");
       expect(bundle).toHaveProperty("{0} SVN conflicts");
       expect(bundle).toHaveProperty("No SVN conflicts to resolve.");
       expect(bundle).toHaveProperty("Choose how to resolve {0}");
@@ -1984,6 +2019,21 @@ describe("extension manifest", () => {
     expect(readJson("l10n/bundle.l10n.zh-cn.json")).toMatchObject({
       "SVN Properties: {0}": "SVN 属性：{0}",
       "SVN Mergeinfo: {0}": "SVN 合并信息：{0}",
+    });
+  });
+
+  it("localizes singular and plural SVN conflict counts in priority languages", () => {
+    expect(readJson("l10n/bundle.l10n.json")).toMatchObject({
+      "{0} SVN conflict": "{0} SVN conflict",
+      "{0} SVN conflicts": "{0} SVN conflicts",
+    });
+    expect(readJson("l10n/bundle.l10n.ja.json")).toMatchObject({
+      "{0} SVN conflict": "{0} 件の SVN 競合",
+      "{0} SVN conflicts": "{0} 件の SVN 競合",
+    });
+    expect(readJson("l10n/bundle.l10n.zh-cn.json")).toMatchObject({
+      "{0} SVN conflict": "{0} 个 SVN 冲突",
+      "{0} SVN conflicts": "{0} 个 SVN 冲突",
     });
   });
 
@@ -2079,6 +2129,9 @@ function runtimeLocalizationKeys(): string[] {
     "Remove",
     "Delete",
     "Resolve",
+    "Conflict Artifacts",
+    "SVN conflict artifact (read-only)",
+    "The SVN conflict artifact is no longer available.",
     "Working copy",
     "Working Copy Metadata",
     "Use the current working copy file",
@@ -2094,6 +2147,7 @@ function runtimeLocalizationKeys(): string[] {
     "Use incoming changes for conflicted hunks",
     "Resolve SVN conflict",
     "Resolving SVN conflicts",
+    "{0} SVN conflict",
     "{0} SVN conflicts",
     "No SVN conflicts to resolve.",
     "Choose how to resolve {0}",

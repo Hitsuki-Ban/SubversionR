@@ -9,6 +9,8 @@ export interface StatusSnapshotRequest {
 
 export type StatusSnapshotCompleteness = "complete" | "partial" | "stale";
 
+export const MAX_CONFLICT_ARTIFACTS_PER_ENTRY = 4;
+
 export interface RepositoryIdentity {
   repositoryUuid: string;
   repositoryRootUrl: string;
@@ -37,6 +39,7 @@ export interface StatusEntry {
   switched: boolean;
   depth: string;
   conflict: string | null;
+  conflictArtifacts: string[];
   external: boolean;
   generation: number;
 }
@@ -128,8 +131,8 @@ function parseStatusSnapshot(rawResponse: unknown): StatusSnapshot {
     generation,
     completeness: requireCompleteness(response.completeness, "completeness"),
     identity: parseRepositoryIdentity(response.identity, "identity"),
-    localEntries: parseStatusEntries(response.localEntries, "localEntries", generation),
-    remoteEntries: parseStatusEntries(response.remoteEntries, "remoteEntries", generation),
+    localEntries: parseStatusEntries(response.localEntries, "localEntries", generation, "local"),
+    remoteEntries: parseStatusEntries(response.remoteEntries, "remoteEntries", generation, "remote"),
     summary: parseStatusSummary(response.summary, "summary"),
     timestamp: requireString(response.timestamp, "timestamp"),
     source: requireString(response.source, "source"),
@@ -163,14 +166,28 @@ function parseRepositoryIdentity(rawIdentity: unknown, field: string): Repositor
   };
 }
 
-function parseStatusEntries(rawEntries: unknown, field: string, generation: number): StatusEntry[] {
+function parseStatusEntries(
+  rawEntries: unknown,
+  field: string,
+  generation: number,
+  source: "local" | "remote",
+): StatusEntry[] {
   if (!Array.isArray(rawEntries)) {
     throw invalidSnapshotResponse(field);
   }
-  return rawEntries.map((entry, index) => parseStatusEntry(entry, `${field}.${index}`, generation));
+  const entries = rawEntries.map((entry, index) => parseStatusEntry(entry, `${field}.${index}`, generation, source));
+  if (source === "local") {
+    requireNoConflictArtifactEntries(entries, field);
+  }
+  return entries;
 }
 
-function parseStatusEntry(rawEntry: unknown, field: string, snapshotGeneration: number): StatusEntry {
+function parseStatusEntry(
+  rawEntry: unknown,
+  field: string,
+  snapshotGeneration: number,
+  source: "local" | "remote",
+): StatusEntry {
   const entry = requireRecord(rawEntry, field);
   requireExactKeys(entry, field, [
     "path",
@@ -192,6 +209,7 @@ function parseStatusEntry(rawEntry: unknown, field: string, snapshotGeneration: 
     "switched",
     "depth",
     "conflict",
+    "conflictArtifacts",
     "external",
     "generation",
   ]);
@@ -199,13 +217,26 @@ function parseStatusEntry(rawEntry: unknown, field: string, snapshotGeneration: 
   if (generation !== snapshotGeneration) {
     throw invalidSnapshotResponse(`${field}.generation`);
   }
+  const path = requireRepositoryRelativePath(entry.path, `${field}.path`);
+  const conflict = requireNullableString(entry.conflict, `${field}.conflict`);
+  const localStatus = requireString(entry.localStatus, `${field}.localStatus`);
+  const nodeStatus = requireString(entry.nodeStatus, `${field}.nodeStatus`);
+  const textStatus = requireString(entry.textStatus, `${field}.textStatus`);
+  const propertyStatus = requireString(entry.propertyStatus, `${field}.propertyStatus`);
+  const conflictArtifacts = parseConflictArtifacts(entry.conflictArtifacts, `${field}.conflictArtifacts`, path);
+  if (
+    conflictArtifacts.length > 0 &&
+    (source !== "local" || !hasConflict(conflict, localStatus, nodeStatus, textStatus, propertyStatus))
+  ) {
+    throw invalidSnapshotResponse(`${field}.conflictArtifacts`);
+  }
   return {
-    path: requireRepositoryRelativePath(entry.path, `${field}.path`),
+    path,
     kind: requireString(entry.kind, `${field}.kind`),
-    nodeStatus: requireString(entry.nodeStatus, `${field}.nodeStatus`),
-    textStatus: requireString(entry.textStatus, `${field}.textStatus`),
-    propertyStatus: requireString(entry.propertyStatus, `${field}.propertyStatus`),
-    localStatus: requireString(entry.localStatus, `${field}.localStatus`),
+    nodeStatus,
+    textStatus,
+    propertyStatus,
+    localStatus,
     remoteStatus: requireString(entry.remoteStatus, `${field}.remoteStatus`),
     revision: requireInteger(entry.revision, `${field}.revision`),
     changedRevision: requireInteger(entry.changedRevision, `${field}.changedRevision`),
@@ -218,10 +249,75 @@ function parseStatusEntry(rawEntry: unknown, field: string, snapshotGeneration: 
     move: requireNullableString(entry.move, `${field}.move`),
     switched: requireBoolean(entry.switched, `${field}.switched`),
     depth: requireString(entry.depth, `${field}.depth`),
-    conflict: requireNullableString(entry.conflict, `${field}.conflict`),
+    conflict,
+    conflictArtifacts,
     external: requireBoolean(entry.external, `${field}.external`),
     generation,
   };
+}
+
+function parseConflictArtifacts(rawArtifacts: unknown, field: string, entryPath: string): string[] {
+  if (!Array.isArray(rawArtifacts) || rawArtifacts.length > MAX_CONFLICT_ARTIFACTS_PER_ENTRY) {
+    throw invalidSnapshotResponse(field);
+  }
+  const seen = new Set<string>();
+  const entryPathKey = canonicalStatusPathKey(entryPath);
+  let previous: string | undefined;
+  return rawArtifacts.map((artifact, index) => {
+    const path = requireRepositoryRelativePath(artifact, `${field}.${index}`);
+    const pathKey = canonicalStatusPathKey(path);
+    if (
+      path === "." ||
+      pathKey === entryPathKey ||
+      hasWorkingCopyAdminComponent(path) ||
+      seen.has(pathKey) ||
+      (previous !== undefined && compareUtf8(previous, path) >= 0)
+    ) {
+      throw invalidSnapshotResponse(`${field}.${index}`);
+    }
+    seen.add(pathKey);
+    previous = path;
+    return path;
+  });
+}
+
+function hasWorkingCopyAdminComponent(path: string): boolean {
+  return path.split("/").some((component) => component.toLowerCase() === ".svn");
+}
+
+function compareUtf8(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+
+function requireNoConflictArtifactEntries(entries: StatusEntry[], field: string): void {
+  const artifactPaths = new Set(
+    entries.flatMap((entry) => entry.conflictArtifacts).map(canonicalStatusPathKey),
+  );
+  entries.forEach((entry, index) => {
+    if (artifactPaths.has(canonicalStatusPathKey(entry.path))) {
+      throw invalidSnapshotResponse(`${field}.${index}.path`);
+    }
+  });
+}
+
+function canonicalStatusPathKey(path: string): string {
+  return process.platform === "win32" ? path.replace(/[A-Z]/g, (character) => character.toLowerCase()) : path;
+}
+
+function hasConflict(
+  conflict: string | null,
+  localStatus: string,
+  nodeStatus: string,
+  textStatus: string,
+  propertyStatus: string,
+): boolean {
+  return (
+    conflict !== null ||
+    localStatus === "conflicted" ||
+    nodeStatus === "conflicted" ||
+    textStatus === "conflicted" ||
+    propertyStatus === "conflicted"
+  );
 }
 
 function parseLockInfo(rawLock: unknown, field: string): LockInfo | null {

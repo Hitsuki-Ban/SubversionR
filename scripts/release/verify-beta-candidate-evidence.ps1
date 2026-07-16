@@ -1308,7 +1308,7 @@ Assert-OrdinalEqual "subversionr-svn-bridge/$extensionVersion" (Get-RequiredStri
 $packagedLibsvnVersion = Get-RequiredString $nativeCompatibility "libsvnVersion" "vsixPackage.nativeCompatibility"
 $nativeProtocol = Get-RequiredProperty $nativeCompatibility "protocol" "vsixPackage.nativeCompatibility"
 Assert-Equal 1 ([int](Get-RequiredProperty $nativeProtocol "major" "vsixPackage.nativeCompatibility.protocol")) "vsixPackage native compatibility protocol major must match the release contract."
-Assert-True ([int](Get-RequiredProperty $nativeProtocol "minor" "vsixPackage.nativeCompatibility.protocol") -ge 29) "vsixPackage native compatibility protocol minor must be at least 29."
+Assert-True ([int](Get-RequiredProperty $nativeProtocol "minor" "vsixPackage.nativeCompatibility.protocol") -ge 30) "vsixPackage native compatibility protocol minor must be at least 30."
 $vsixPackageRootPath = Assert-Directory (Resolve-RepoPath (Get-RequiredString $vsixPackageJson.inputs "packageRoot" "vsixPackage.inputs")) "vsixPackage input packageRoot"
 $vsixPackageBackendManifestPath = Assert-File (Join-Path $vsixPackageRootPath "resources\backend\$Target\subversionr-backend-package-manifest.json") "vsixPackage input backend manifest"
 $vsixPackageBackendManifestSha256 = Get-Sha256 $vsixPackageBackendManifestPath

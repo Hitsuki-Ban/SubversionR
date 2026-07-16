@@ -3,6 +3,7 @@ import type { StatusEntry } from "../status/statusSnapshotRpcClient";
 export type ChangelistResourceGroupId = `changelist:${string}`;
 export type ScmResourceGroupId =
   | "conflicts"
+  | "conflictArtifacts"
   | "changes"
   | "unversioned"
   | "metadata"

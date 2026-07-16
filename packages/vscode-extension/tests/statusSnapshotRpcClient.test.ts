@@ -73,6 +73,80 @@ describe("StatusSnapshotRpcClient", () => {
     ],
     ["localEntries.0.generation", (response: StatusSnapshot) => (response.localEntries[0].generation = 10)],
     ["localEntries.0.path", (response: StatusSnapshot) => (response.localEntries[0].path = "../main.c")],
+    [
+      "localEntries.0.conflictArtifacts",
+      (response: StatusSnapshot) => (response.localEntries[0].conflictArtifacts = ["main.c.mine"]),
+    ],
+    [
+      "localEntries.0.conflictArtifacts.0",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = ["src/main.c"];
+      },
+    ],
+    [
+      "localEntries.0.conflictArtifacts.0",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = ["."];
+      },
+    ],
+    [
+      "localEntries.0.conflictArtifacts.1",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = ["src/main.c.mine", "src/main.c.mine"];
+      },
+    ],
+    [
+      "localEntries.0.conflictArtifacts.0",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = [".svn/text-base/main.c.svn-base"];
+      },
+    ],
+    [
+      "localEntries.0.conflictArtifacts.0",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = ["src/.SvN/text-base/main.c.svn-base"];
+      },
+    ],
+    [
+      "localEntries.0.conflictArtifacts.1",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = ["src/main.c.r8", "src/main.c.r7"];
+      },
+    ],
+    [
+      "localEntries.0.conflictArtifacts.1",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = ["src/\u{10000}", "src/\uE000"];
+      },
+    ],
+    [
+      "localEntries.1.path",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = ["src/main.c.mine"];
+        response.localEntries.push({
+          ...response.localEntries[0],
+          path: "src/main.c.mine",
+          localStatus: "unversioned",
+          conflict: null,
+          conflictArtifacts: [],
+        });
+      },
+    ],
+    [
+      "localEntries.0.conflictArtifacts",
+      (response: StatusSnapshot) => {
+        response.localEntries[0].localStatus = "conflicted";
+        response.localEntries[0].conflictArtifacts = ["a", "b", "c", "d", "e"];
+      },
+    ],
     ["localEntries.0.needsLock", (response: StatusSnapshot) => ((response.localEntries[0] as { needsLock: unknown }).needsLock = "yes")],
     [
       "localEntries.0.lock.extra",
@@ -91,6 +165,12 @@ describe("StatusSnapshotRpcClient", () => {
       "remoteEntries.0.path",
       (response: StatusSnapshot) => {
         response.remoteEntries = [{ ...response.localEntries[0], path: "C:/escape.c" }];
+      },
+    ],
+    [
+      "remoteEntries.0.conflictArtifacts",
+      (response: StatusSnapshot) => {
+        response.remoteEntries = [{ ...response.localEntries[0], conflictArtifacts: ["src/main.c.mine"] }];
       },
     ],
   ])("rejects inconsistent snapshot response field: %s", async (field, mutate) => {
@@ -112,6 +192,81 @@ describe("StatusSnapshotRpcClient", () => {
       messageKey: "error.status.snapshotResponseInvalid",
       safeArgs: { field },
     });
+  });
+
+  it.runIf(process.platform === "win32")(
+    "rejects Windows case aliases across conflict artifact owners, duplicates, and entries",
+    async () => {
+      const cases: Array<[string, (response: StatusSnapshot) => void]> = [
+        [
+          "localEntries.0.conflictArtifacts.0",
+          (response) => {
+            response.localEntries[0].localStatus = "conflicted";
+            response.localEntries[0].conflictArtifacts = ["SRC/MAIN.C"];
+          },
+        ],
+        [
+          "localEntries.0.conflictArtifacts.1",
+          (response) => {
+            response.localEntries[0].localStatus = "conflicted";
+            response.localEntries[0].conflictArtifacts = ["SRC/MAIN.C.MINE", "src/main.c.mine"];
+          },
+        ],
+        [
+          "localEntries.1.path",
+          (response) => {
+            response.localEntries[0].localStatus = "conflicted";
+            response.localEntries[0].conflictArtifacts = ["src/main.c.mine"];
+            response.localEntries.push({
+              ...response.localEntries[0],
+              path: "SRC/MAIN.C.MINE",
+              localStatus: "unversioned",
+              conflict: null,
+              conflictArtifacts: [],
+            });
+          },
+        ],
+      ];
+
+      for (const [field, mutate] of cases) {
+        const response = snapshotResponse();
+        mutate(response);
+        const client = new StatusSnapshotRpcClient({ sendRequest: vi.fn().mockResolvedValue(response) });
+        await expect(
+          client.getSnapshot({ repositoryId: "repo-uuid:C:/wc", epoch: 7 }),
+        ).rejects.toMatchObject({
+          code: "SUBVERSIONR_STATUS_SNAPSHOT_RESPONSE_INVALID",
+          safeArgs: { field },
+        });
+      }
+    },
+  );
+
+  it("preserves bounded libsvn conflict artifact paths on conflicted local entries", async () => {
+    const response = snapshotResponse();
+    response.localEntries[0].localStatus = "conflicted";
+    response.localEntries[0].conflict = "text";
+    response.localEntries[0].conflictArtifacts = ["src/main.c.mine", "src/main.c.r7", "src/main.c.r8"];
+    const client = new StatusSnapshotRpcClient({ sendRequest: vi.fn().mockResolvedValue(response) });
+
+    const snapshot = await client.getSnapshot({ repositoryId: "repo-uuid:C:/wc", epoch: 7 });
+
+    expect(snapshot.localEntries[0].conflictArtifacts).toEqual([
+      "src/main.c.mine",
+      "src/main.c.r7",
+      "src/main.c.r8",
+    ]);
+  });
+
+  it("accepts canonical conflict artifact order by UTF-8 bytes for non-BMP paths", async () => {
+    const response = snapshotResponse();
+    response.localEntries[0].localStatus = "conflicted";
+    response.localEntries[0].conflictArtifacts = ["src/\uE000", "src/\u{10000}"];
+    const client = new StatusSnapshotRpcClient({ sendRequest: vi.fn().mockResolvedValue(response) });
+
+    const snapshot = await client.getSnapshot({ repositoryId: "repo-uuid:C:/wc", epoch: 7 });
+
+    expect(snapshot.localEntries[0].conflictArtifacts).toEqual(["src/\uE000", "src/\u{10000}"]);
   });
 
   it("carries opaque SVN tokens and signed unknown revisions", async () => {
@@ -280,6 +435,7 @@ function snapshotResponse(): StatusSnapshot {
         switched: false,
         depth: "infinity",
         conflict: null,
+        conflictArtifacts: [],
         external: false,
         generation: 11,
       },

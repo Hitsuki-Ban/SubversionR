@@ -121,6 +121,7 @@ interface RegisteredSourceControl {
 
 const GROUP_LABELS = {
   conflicts: "Conflicts",
+  conflictArtifacts: "Conflict Artifacts",
   changes: "Changes",
   unversioned: "Unversioned",
   metadata: "Working Copy Metadata",
@@ -131,6 +132,7 @@ const GROUP_LABELS = {
 
 const RESOURCE_TOOLTIPS: Record<string, string> = {
   "scm.resource.conflicted": "SVN conflict",
+  "scm.resource.conflictArtifact": "SVN conflict artifact (read-only)",
   "scm.resource.changed": "SVN local change",
   "scm.resource.changedUnknown": "SVN local change",
   "scm.resource.workingCopyMetadata": "SVN working copy metadata",
@@ -169,7 +171,6 @@ const LOCKED_CONTEXT_VALUES = new Set([
 
 export class VscodeSourceControlPresenter implements SourceControlProjectionPresenter {
   private readonly repositories = new Map<string, RegisteredSourceControl>();
-
   public constructor(private readonly api: VscodeSourceControlPresenterApi) {}
 
   public registerRepository(repository: SourceControlProjectionRepository): void {
@@ -292,6 +293,24 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
       }
     }
     return false;
+  }
+
+  public currentConflictArtifactResourceUri(resourceState: unknown): unknown | undefined {
+    if (
+      !this.isCurrentResourceState(resourceState) ||
+      typeof resourceState !== "object" ||
+      resourceState === null
+    ) {
+      return undefined;
+    }
+    const state = resourceState as VscodeSourceControlResourceState;
+    if (
+      state.contextValue !== "subversionr.conflictArtifact" ||
+      state.subversionrResourceKind !== "file"
+    ) {
+      return undefined;
+    }
+    return state.resourceUri;
   }
 
   public currentResourceState(

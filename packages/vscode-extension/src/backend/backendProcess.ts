@@ -11,7 +11,7 @@ import {
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const MINIMUM_PROTOCOL_MINOR = 29;
+const MINIMUM_PROTOCOL_MINOR = 30;
 const EXPECTED_CACHE_SCHEMA_ID = "subversionr.cache.v1";
 const EXPECTED_CACHE_SCHEMA_VERSION = 1;
 const EXPECTED_CACHE_SCHEMA_ROLLBACK = "delete-and-reconcile";

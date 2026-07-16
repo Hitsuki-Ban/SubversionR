@@ -656,6 +656,7 @@ function statusEntry(overrides: Partial<StatusEntry> = {}): StatusEntry {
     switched: overrides.switched ?? false,
     depth: overrides.depth ?? "infinity",
     conflict: overrides.conflict ?? null,
+    conflictArtifacts: overrides.conflictArtifacts ?? [],
     external: overrides.external ?? false,
     generation: overrides.generation ?? 11,
   };

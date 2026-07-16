@@ -13,6 +13,7 @@ import {
 
 export const SCM_RESOURCE_GROUP_IDS = [
   "conflicts",
+  "conflictArtifacts",
   "changes",
   "unversioned",
   "metadata",
@@ -104,6 +105,9 @@ interface RepositoryProjectionState {
   workingCopyRoot: string;
   generation: number | undefined;
   freshness: ScmProjectionFreshness | undefined;
+  localEntriesByPath: Map<string, StatusEntry>;
+  conflictArtifactPathsByOwner: Map<string, Set<string>>;
+  conflictArtifactOwnersByPath: Map<string, Set<string>>;
   localResourcesByPath: Map<string, ScmProjectedResource>;
   localResourcesByCaseInsensitivePath: Map<string, ScmProjectedResource>;
   remoteResourcesByPath: Map<string, ScmProjectedResource>;
@@ -154,6 +158,9 @@ export class SourceControlResourceStore {
       workingCopyRoot: repository.workingCopyRoot,
       generation: undefined,
       freshness: undefined,
+      localEntriesByPath: new Map(),
+      conflictArtifactPathsByOwner: new Map(),
+      conflictArtifactOwnersByPath: new Map(),
       localResourcesByPath: new Map(),
       localResourcesByCaseInsensitivePath: new Map(),
       remoteResourcesByPath: new Map(),
@@ -213,12 +220,22 @@ export class SourceControlResourceStore {
       lastRefreshKind: "snapshot",
     };
     state.workingCopyRoot = snapshot.identity.workingCopyRoot;
+    state.localEntriesByPath = new Map(snapshot.localEntries.map((entry) => [entry.path, cloneStatusEntry(entry)]));
+    state.conflictArtifactPathsByOwner = new Map();
+    state.conflictArtifactOwnersByPath = new Map();
     state.localResourcesByPath = new Map();
     state.localResourcesByCaseInsensitivePath = new Map();
     state.remoteResourcesByPath = new Map();
     state.groups = emptyGroupMaps();
-    for (const entry of snapshot.localEntries) {
-      this.upsertLocalEntry(state, entry);
+    for (const entry of state.localEntriesByPath.values()) {
+      addConflictArtifactOwner(state, entry);
+    }
+    const localPaths = new Set([
+      ...state.localEntriesByPath.keys(),
+      ...state.conflictArtifactOwnersByPath.keys(),
+    ]);
+    for (const path of localPaths) {
+      this.projectLocalPath(state, path);
     }
     for (const entry of snapshot.remoteEntries) {
       this.upsertRemoteEntry(state, entry);
@@ -250,12 +267,24 @@ export class SourceControlResourceStore {
       );
     }
 
+    const affectedLocalPaths = new Set<string>();
     for (const path of delta.remove) {
-      this.removeLocalPath(state, path);
+      this.removeLocalEntry(state, path, affectedLocalPaths);
     }
     for (const entry of delta.upsert) {
-      this.removeLocalPath(state, entry.path);
-      this.upsertLocalEntry(state, entry);
+      this.removeLocalEntry(state, entry.path, affectedLocalPaths);
+      state.localEntriesByPath.set(entry.path, cloneStatusEntry(entry));
+      addConflictArtifactOwner(state, entry);
+      affectedLocalPaths.add(entry.path);
+      for (const artifactPath of entry.conflictArtifacts) {
+        affectedLocalPaths.add(artifactPath);
+      }
+    }
+    for (const path of affectedLocalPaths) {
+      this.removeProjectedLocalPath(state, path);
+    }
+    for (const path of affectedLocalPaths) {
+      this.projectLocalPath(state, path);
     }
     for (const path of delta.remoteRemove) {
       this.removeRemotePath(state, path);
@@ -367,11 +396,43 @@ export class SourceControlResourceStore {
     );
   }
 
-  private upsertLocalEntry(state: RepositoryProjectionState, entry: StatusEntry): void {
+  private projectLocalPath(state: RepositoryProjectionState, path: string): void {
+    const artifactOwners = state.conflictArtifactOwnersByPath.get(path);
+    const ownerPath = artifactOwners ? Array.from(artifactOwners).sort(comparePaths)[0] : undefined;
+    const ownerEntry = ownerPath ? state.localEntriesByPath.get(ownerPath) : undefined;
+    if (ownerEntry) {
+      this.upsertProjectedLocalEntry(
+        state,
+        {
+          ...cloneStatusEntry(ownerEntry),
+          path,
+          kind: "file",
+          conflictArtifacts: [],
+        },
+        {
+          groupId: "conflictArtifacts",
+          contextValue: "subversionr.conflictArtifact",
+          tooltipKey: "scm.resource.conflictArtifact",
+        },
+      );
+      return;
+    }
+    const entry = state.localEntriesByPath.get(path);
+    if (!entry) {
+      return;
+    }
     const classification = classifyLocalStatusEntry(entry);
     if (!classification) {
       return;
     }
+    this.upsertProjectedLocalEntry(state, entry, classification);
+  }
+
+  private upsertProjectedLocalEntry(
+    state: RepositoryProjectionState,
+    entry: StatusEntry,
+    classification: ScmResourceClassification,
+  ): void {
     const resource = projectedResource(state.repositoryId, "local", entry, classification);
     state.localResourcesByPath.set(entry.path, resource);
     state.localResourcesByCaseInsensitivePath.set(caseInsensitivePath(entry.path), resource);
@@ -388,7 +449,28 @@ export class SourceControlResourceStore {
     upsertGroupResource(state, resource);
   }
 
-  private removeLocalPath(state: RepositoryProjectionState, path: string): void {
+  private removeLocalEntry(
+    state: RepositoryProjectionState,
+    path: string,
+    affectedPaths: Set<string>,
+  ): void {
+    affectedPaths.add(path);
+    const artifacts = state.conflictArtifactPathsByOwner.get(path);
+    if (artifacts) {
+      for (const artifactPath of artifacts) {
+        affectedPaths.add(artifactPath);
+        const owners = state.conflictArtifactOwnersByPath.get(artifactPath);
+        owners?.delete(path);
+        if (owners?.size === 0) {
+          state.conflictArtifactOwnersByPath.delete(artifactPath);
+        }
+      }
+      state.conflictArtifactPathsByOwner.delete(path);
+    }
+    state.localEntriesByPath.delete(path);
+  }
+
+  private removeProjectedLocalPath(state: RepositoryProjectionState, path: string): void {
     const existing = state.localResourcesByPath.get(path);
     if (!existing) {
       return;
@@ -444,7 +526,11 @@ function cloneProjectedResource(resource: ScmProjectedResource): ScmProjectedRes
 }
 
 function cloneStatusEntry(entry: StatusEntry): StatusEntry {
-  return { ...entry, lock: entry.lock ? { ...entry.lock } : null };
+  return {
+    ...entry,
+    lock: entry.lock ? { ...entry.lock } : null,
+    conflictArtifacts: [...entry.conflictArtifacts],
+  };
 }
 
 function projectionFromState(
@@ -473,6 +559,7 @@ function projectionFromState(
 function projectionGroupsFromState(state: RepositoryProjectionState): ScmProjectedResourceGroup[] {
   return [
     fixedProjectionGroup(state, "conflicts"),
+    fixedProjectionGroup(state, "conflictArtifacts"),
     ...changelistProjectionGroups(state),
     fixedProjectionGroup(state, "changes"),
     fixedProjectionGroup(state, "unversioned"),
@@ -481,6 +568,26 @@ function projectionGroupsFromState(state: RepositoryProjectionState): ScmProject
     fixedProjectionGroup(state, "externals"),
     fixedProjectionGroup(state, "ignored"),
   ];
+}
+
+function addConflictArtifactOwner(state: RepositoryProjectionState, entry: StatusEntry): void {
+  if (entry.conflictArtifacts.length === 0) {
+    return;
+  }
+  const artifacts = new Set(entry.conflictArtifacts);
+  state.conflictArtifactPathsByOwner.set(entry.path, artifacts);
+  for (const artifactPath of artifacts) {
+    let owners = state.conflictArtifactOwnersByPath.get(artifactPath);
+    if (!owners) {
+      owners = new Set();
+      state.conflictArtifactOwnersByPath.set(artifactPath, owners);
+    }
+    owners.add(entry.path);
+  }
+}
+
+function comparePaths(left: string, right: string): number {
+  return left.localeCompare(right, "en-US");
 }
 
 function fixedProjectionGroup(state: RepositoryProjectionState, groupId: (typeof SCM_RESOURCE_GROUP_IDS)[number]): ScmProjectedResourceGroup {
