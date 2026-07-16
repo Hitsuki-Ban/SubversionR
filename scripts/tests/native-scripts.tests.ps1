@@ -601,12 +601,21 @@ try {
   New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
   New-TestPeFile -Path $releaseDaemonPath -DebugType 16
   $lockedReleaseDaemon = [IO.File]::Open($releaseDaemonPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  $savedStaleOutputCargoHomeExists = Test-Path -LiteralPath "Env:CARGO_HOME"
+  $savedStaleOutputCargoHome = [Environment]::GetEnvironmentVariable("CARGO_HOME")
   try {
+    Remove-Item -LiteralPath "Env:CARGO_HOME" -ErrorAction SilentlyContinue
     Assert-NativeCommandFailsContaining {
       & pwsh -NoProfile -ExecutionPolicy Bypass -File $buildDaemonScript
     } "subversionr-daemon.exe" "Release daemon build should fail before Cargo when the stale fixed-path output cannot be deleted."
   }
   finally {
+    if ($savedStaleOutputCargoHomeExists) {
+      Set-Item -LiteralPath "Env:CARGO_HOME" -Value $savedStaleOutputCargoHome
+    }
+    else {
+      Remove-Item -LiteralPath "Env:CARGO_HOME" -ErrorAction SilentlyContinue
+    }
     $lockedReleaseDaemon.Dispose()
     if ($null -ne $savedReleaseDaemonBytes) {
       [IO.File]::WriteAllBytes($releaseDaemonPath, $savedReleaseDaemonBytes)
