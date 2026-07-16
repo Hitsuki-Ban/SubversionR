@@ -207,6 +207,94 @@ if ($env:SUBVERSIONR_FAKE_CODE_HANG_EXTENSION_HOST -eq "1") {
 $resultPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESULT
 $readyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_READY
 $donePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_DONE
+$harnessMode = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MODE
+if ($harnessMode -eq "restricted-active-editor-palette") {
+  $workingCopyRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_WORKING_COPY
+  if ([string]::IsNullOrWhiteSpace($resultPath) -or [string]::IsNullOrWhiteSpace($readyPath) -or [string]::IsNullOrWhiteSpace($donePath) -or [string]::IsNullOrWhiteSpace($workingCopyRoot)) {
+    throw "restricted fake code CLI requires result, ready, done, and working-copy paths."
+  }
+  function Wait-RestrictedFakeRendererDone([string]$Path, [string]$Description) {
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    while (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+      if ([DateTimeOffset]::UtcNow -gt $deadline) {
+        throw "restricted fake code CLI timed out waiting for $Description renderer completion sentinel."
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  }
+  $restrictedRepositoryId = "repo-uuid:$workingCopyRoot"
+  $restrictedCommands = @(
+    [pscustomobject]@{ id = "subversionr.diffWithBase"; title = "SubversionR: Diff with BASE"; slug = "diff-base"; visible = $true },
+    [pscustomobject]@{ id = "subversionr.diffWithHead"; title = "SubversionR: Diff with HEAD"; slug = "diff-head"; visible = $false },
+    [pscustomobject]@{ id = "subversionr.diffWithPrevious"; title = "SubversionR: Compare with PREV"; slug = "compare-prev"; visible = $false },
+    [pscustomobject]@{ id = "subversionr.showFileHistory"; title = "SubversionR: File History"; slug = "file-history"; visible = $false },
+    [pscustomobject]@{ id = "subversionr.showLineHistory"; title = "SubversionR: Line History"; slug = "line-history"; visible = $false },
+    [pscustomobject]@{ id = "subversionr.showBlame"; title = "SubversionR: Blame"; slug = "blame"; visible = $false }
+  )
+  $restrictedVisibility = @()
+  foreach ($command in $restrictedCommands) {
+    $expectations = if ($command.visible) {
+      [pscustomobject]@{
+        requiredDomTokens = @($command.title)
+        requiredAccessibilityTokens = @($command.title)
+        requiredScreenshot = $true
+        quickPickItemText = $command.title
+      }
+    }
+    else {
+      [pscustomobject]@{
+        requiredDomTokens = @("Restricted Mode")
+        requiredAccessibilityTokens = @("Restricted Mode")
+        requiredScreenshot = $true
+        quickPickAbsentItemText = $command.title
+      }
+    }
+    [pscustomobject]@{
+      ok = $true
+      phase = "restrictedActiveEditorPaletteCommandReady"
+      command = [pscustomobject]@{ id = $command.id; title = $command.title }
+      target = [pscustomobject]@{ repositoryId = $restrictedRepositoryId; epoch = 1; workingCopyRoot = $workingCopyRoot; path = "src/tracked.txt" }
+      rendererCaptureExpectations = $expectations
+    } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.palette-$($command.slug)" -Encoding utf8
+    Wait-RestrictedFakeRendererDone -Path "$donePath.palette-$($command.slug)" -Description $command.title
+    $entry = [ordered]@{
+      command = [pscustomobject]@{ id = $command.id; title = $command.title }
+      visible = $command.visible
+      rendererCaptureExpectations = $expectations
+    }
+    if ($command.visible) {
+      $entry.effect = [pscustomobject]@{ scheme = "svn-r-base"; repositoryId = $restrictedRepositoryId; epoch = 1; generation = 1; path = "src/tracked.txt"; revision = "base" }
+    }
+    $restrictedVisibility += [pscustomobject]$entry
+  }
+  $restrictedActivity = [pscustomobject]@{ statusRefreshRequestCount = 1; reconcileRequestCount = 0; remoteStatusRequestCount = 0 }
+  $restrictedDirectCalls = @($restrictedCommands | Select-Object -Skip 1 | ForEach-Object {
+    $diagnostic = [pscustomobject]@{ code = "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION"; messageKey = "error.workspace.untrustedOperation"; args = [pscustomobject]@{} }
+    $failures = @($diagnostic)
+    if ($env:SUBVERSIONR_FAKE_RESTRICTED_EXTRA_FAILURE -eq "1") {
+      $failures += [pscustomobject]@{ code = "SUBVERSIONR_UNEXPECTED_EXTRA_FAILURE"; messageKey = "error.unexpected"; args = [pscustomobject]@{} }
+    }
+    [pscustomobject]@{
+      command = [pscustomobject]@{ id = $_.id; title = $_.title }
+      diagnostic = $diagnostic
+      failures = $failures
+    }
+  })
+  [pscustomobject]@{
+    ok = $true
+    kind = "subversionr.installedSourceControlUiE2eRestrictedActiveEditorPaletteEvidence"
+    generatedAt = "2026-06-25T00:00:00Z"
+    workspaceTrusted = $false
+    target = [pscustomobject]@{ repositoryId = $restrictedRepositoryId; epoch = 1; workingCopyRoot = $workingCopyRoot; path = "src/tracked.txt"; contextValue = "subversionr.changedFile.baseDiffable" }
+    visibility = $restrictedVisibility
+    directCalls = $restrictedDirectCalls
+    activityBefore = $restrictedActivity
+    activityAfter = $restrictedActivity
+    closeReport = [pscustomobject]@{ kind = "subversionr.installedSourceControlUiE2eCloseReport"; repositoryId = $restrictedRepositoryId; epoch = 1; repositoryClosed = $true }
+    assertions = [pscustomobject]@{ genuinelyRestricted = $true; baseVisibleAndExecuted = $true; trustedOnlyCommandsAbsent = $true; directCallsBlockedByStableCode = $true; statusActivityUnchanged = $true }
+  } | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $resultPath -Encoding utf8
+  exit 0
+}
 $noRepositoryWelcomeRendererReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_NO_REPOSITORY_WELCOME_RENDERER_READY
 $noRepositoryWelcomeRendererDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_NO_REPOSITORY_WELCOME_RENDERER_DONE
 $partialFreshnessRendererReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_PARTIAL_FRESHNESS_RENDERER_READY
@@ -543,6 +631,7 @@ function Wait-FakeRendererDone([string]$Path, [string]$Description) {
     Start-Sleep -Milliseconds 100
   }
 }
+$paletteRepositoryId = "repo-uuid:$multiRepositoryRefreshWorkingCopyRoot"
 $historyInitialExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN History")
   requiredAccessibilityTokens = @("SVN History")
@@ -671,6 +760,59 @@ $repositoryHistoryReport = [pscustomobject]@{
     statusRefreshNotRequested = $true
     reconcileNotRequested = $true
     remoteStatusPollingNotRequested = $true
+  }
+}
+$paletteCommands = @(
+  [pscustomobject]@{ id = "subversionr.diffWithBase"; title = "SubversionR: Diff with BASE"; slug = "diff-base"; effect = [pscustomobject]@{ scheme = "svn-r-base"; repositoryId = $paletteRepositoryId; epoch = 2; generation = 1; path = "src/tracked.txt"; revision = "base" } },
+  [pscustomobject]@{ id = "subversionr.diffWithHead"; title = "SubversionR: Diff with HEAD"; slug = "diff-head"; effect = [pscustomobject]@{ scheme = "svn-r-head"; repositoryId = $paletteRepositoryId; epoch = 2; generation = 1; path = "src/tracked.txt"; revision = "head" } },
+  [pscustomobject]@{ id = "subversionr.diffWithPrevious"; title = "SubversionR: Compare with PREV"; slug = "compare-prev"; effect = [pscustomobject]@{ scheme = "svn-r-revision"; repositoryId = $paletteRepositoryId; epoch = 2; path = "src/tracked.txt"; revisions = @("r1", "r4") } },
+  [pscustomobject]@{ id = "subversionr.showFileHistory"; title = "SubversionR: File History"; slug = "file-history"; effect = [pscustomobject]@{ kind = "file"; repositoryId = $paletteRepositoryId; epoch = 2; path = "src/tracked.txt"; label = "src/tracked.txt" } },
+  [pscustomobject]@{ id = "subversionr.showLineHistory"; title = "SubversionR: Line History"; slug = "line-history"; effect = [pscustomobject]@{ kind = "line"; repositoryId = $paletteRepositoryId; epoch = 2; path = "src/tracked.txt"; label = "src/tracked.txt:1"; lineStart = 1; lineEnd = 1 } },
+  [pscustomobject]@{ id = "subversionr.showBlame"; title = "SubversionR: Blame"; slug = "blame"; effect = [pscustomobject]@{ scheme = "svn-r-blame"; repositoryId = $paletteRepositoryId; epoch = 2; generation = 1; path = "src/tracked.txt" } }
+)
+$paletteExecutions = @()
+foreach ($paletteCommand in $paletteCommands) {
+  $paletteExpectations = [pscustomobject]@{
+    requiredDomTokens = @($paletteCommand.title)
+    requiredAccessibilityTokens = @($paletteCommand.title)
+    requiredScreenshot = $true
+    quickPickItemText = $paletteCommand.title
+  }
+  [pscustomobject]@{
+    ok = $true
+    phase = "activeEditorPaletteCommandReady"
+    command = [pscustomobject]@{ id = $paletteCommand.id; title = $paletteCommand.title }
+    target = [pscustomobject]@{ repositoryId = $paletteRepositoryId; epoch = 2; workingCopyRoot = $multiRepositoryRefreshWorkingCopyRoot; path = "src/tracked.txt" }
+    unrelatedRepository = [pscustomobject]@{ repositoryId = $openReport.repository.repositoryId; epoch = $openReport.repository.epoch; workingCopyRoot = $workingCopyRoot }
+    rendererCaptureExpectations = $paletteExpectations
+  } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.palette-$($paletteCommand.slug)" -Encoding utf8
+  Wait-FakeRendererDone -Path "$donePath.palette-$($paletteCommand.slug)" -Description "active-editor palette $($paletteCommand.title)"
+  $paletteExecutions += [pscustomobject]@{
+    command = [pscustomobject]@{ id = $paletteCommand.id; title = $paletteCommand.title }
+    rendererCaptureExpectations = $paletteExpectations
+    effect = $paletteCommand.effect
+  }
+}
+$paletteActivity = [pscustomobject]@{ statusRefreshRequestCount = 1; reconcileRequestCount = 0; remoteStatusRequestCount = 0 }
+$activeEditorPaletteReport = [pscustomobject]@{
+  kind = "subversionr.installedSourceControlUiE2eActiveEditorPaletteWorkflow"
+  generatedAt = "2026-06-25T00:00:00Z"
+  trusted = $true
+  target = [pscustomobject]@{ repositoryId = $paletteRepositoryId; epoch = 2; workingCopyRoot = $multiRepositoryRefreshWorkingCopyRoot; path = "src/tracked.txt"; contextValue = "subversionr.changedFile.baseDiffable" }
+  unrelatedRepository = [pscustomobject]@{ repositoryId = $openReport.repository.repositoryId; epoch = $openReport.repository.epoch; workingCopyRoot = $workingCopyRoot }
+  activityBefore = $paletteActivity
+  activityAfter = $paletteActivity
+  executions = $paletteExecutions
+  closeReport = [pscustomobject]@{ kind = "subversionr.installedSourceControlUiE2eCloseReport"; repositoryId = $paletteRepositoryId; epoch = 2; repositoryClosed = $true }
+  assertions = [pscustomobject]@{
+    workspaceTrusted = $true
+    exactSixCommandsObservedAndExecuted = $true
+    activeEditorRepositorySelected = $true
+    unrelatedRepositoryNotSelected = $true
+    propertyOnlyFileSupportsAllSixCommands = $true
+    statusRefreshRequestCountUnchanged = $true
+    reconcileRequestCountUnchanged = $true
+    remoteStatusRequestCountUnchanged = $true
   }
 }
 $partialFreshnessReport = [pscustomobject]@{
@@ -6957,6 +7099,7 @@ $lifecycleMoveReport = [pscustomobject]@{
   openReport = $openReport
   partialFreshnessReport = $partialFreshnessReport
   staleFreshnessReport = $staleFreshnessReport
+  activeEditorPaletteReport = $activeEditorPaletteReport
   repositoryHistoryReport = $repositoryHistoryReport
   initializeSettlementReport = [pscustomobject]@{
     kind = "subversionr.installedSourceControlUiE2eInitializeSettlementReport"
@@ -7165,6 +7308,7 @@ const report = {
     ...(expectations.inputText ? { inputTextSubmitted: true } : {}),
     ...(expectations.quickInputSubmitKey ? { quickInputSubmitted: true } : {}),
     ...(expectations.quickPickItemText ? { quickPickItemSelected: true } : {}),
+    ...(expectations.quickPickAbsentItemText ? { quickPickItemAbsent: true } : {}),
     ...(expectations.cancelKey || expectations.cancelAction ? {
       interactionCancelled: true,
       ...(cancelSurface === "dialog"
@@ -7246,6 +7390,16 @@ const report = {
       tagName: "DIV",
       className: "monaco-list-row",
       ariaLabel: expectations.quickPickItemText
+    }
+  } : {}),
+  ...(expectations.quickPickAbsentItemText ? {
+    interaction: {
+      absent: true,
+      surface: "quickPick",
+      requestedText: expectations.quickPickAbsentItemText,
+      inputValue: `>${expectations.quickPickAbsentItemText}`,
+      availableTexts: ["SubversionR: Diff with BASE", "File: Compare Active File with Saved"],
+      matchedTexts: []
     }
   } : {}),
   ...(expectations.cancelKey ? {
@@ -7445,6 +7599,9 @@ public static class Program {
         if (!File.Exists(targetPath)) {
           File.WriteAllText(targetPath, "needs lock\n");
         }
+        return 0;
+      }
+      if (exe == "svn.exe" && args.Length >= 4 && args[0] == "propset" && args[1] == "subversionr:active-editor-palette") {
         return 0;
       }
       if (exe == "svn.exe" && args.Length >= 4 && args[0] == "propset" && args[1] == "svn:externals") {
@@ -7714,7 +7871,8 @@ public static class Program {
   Copy-Item -LiteralPath $toolAssembly -Destination (Join-Path $Root "svnadmin.exe") -Force
 }
 
-$tempRoot = Join-Path $repoRoot "target\tests\release-installed-source-control-ui-e2e-scripts\s $([Guid]::NewGuid().ToString('N'))"
+$runId = [Guid]::NewGuid().ToString("N").Substring(0, 4)
+$tempRoot = Join-Path $repoRoot "target\tests\release-installed-source-control-ui-e2e-scripts\$runId"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
@@ -7737,8 +7895,8 @@ try {
   New-FakeRendererCaptureDriver -Path $fakeDriverPath
   $fakeSvnRoot = Join-Path $tempRoot "fake-svn"
   New-FakeSvnTools -Root $fakeSvnRoot
-  $fixtureRoot = Join-Path $tempRoot "installed-source-control-ui-e2e\win32-x64"
-  $evidencePath = Join-Path $tempRoot "evidence\installed-source-control-ui-e2e.json"
+  $fixtureRoot = Join-Path $tempRoot "f"
+  $evidencePath = Join-Path $tempRoot "e.json"
 
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
     -Target win32-x64 `
@@ -7776,6 +7934,18 @@ try {
   Assert-Equal "True" ([string]$report.extension.hasShowRepositoryPropertiesCommand) "Installed Source Control UI E2E evidence should prove repository Properties command registration."
   Assert-Equal "True" ([string]$report.extension.hasShowResourcePropertiesCommand) "Installed Source Control UI E2E evidence should prove resource Properties command registration."
   Assert-Equal "subversionr.installedSourceControlUiE2eRepositoryHistoryWorkflow" $report.sourceControlUiRepositoryHistoryWorkflow.kind "Installed Source Control UI E2E evidence should publish the Repository Log workflow."
+  Assert-Equal "subversionr.installedSourceControlUiE2eActiveEditorPaletteWorkflow" $report.sourceControlUiActiveEditorPaletteWorkflow.kind "Installed Source Control UI E2E evidence should publish the trusted active-editor palette workflow."
+  Assert-Equal 6 @($report.activeEditorPaletteCaptures).Count "Installed Source Control UI E2E evidence should publish one trusted renderer capture per canonical active-editor palette command."
+  Assert-Equal "subversionr.diffWithBase|subversionr.diffWithHead|subversionr.diffWithPrevious|subversionr.showFileHistory|subversionr.showLineHistory|subversionr.showBlame" (@($report.sourceControlUiActiveEditorPaletteWorkflow.executions.command.id) -join "|") "Trusted active-editor palette evidence should preserve the exact canonical command set and order."
+  Assert-Equal "True" ([string]$report.sourceControlUiActiveEditorPaletteWorkflow.assertions.statusRefreshRequestCountUnchanged) "Trusted active-editor palette evidence should prove status refresh visibility remained side-effect free."
+  Assert-Equal "subversionr.installedSourceControlUiE2eRestrictedActiveEditorPaletteEvidence" $report.restrictedActiveEditorPaletteEvidence.kind "Installed Source Control UI E2E evidence should publish the independent Restricted Mode palette workflow."
+  Assert-Equal 6 @($report.restrictedActiveEditorPaletteCaptures).Count "Installed Source Control UI E2E evidence should publish BASE visibility and five no-match Restricted Mode captures."
+  Assert-Equal 5 @($report.restrictedActiveEditorPaletteCaptures | Where-Object { $_.expectedVisible -eq $false -and $_.report.assertions.quickPickItemAbsent -eq $true -and $_.report.interaction.absent -eq $true }).Count "Restricted Mode renderer evidence should prove the five exact trusted-only QuickPick rows are absent."
+  Assert-Equal "False" ([string]$report.restrictedActiveEditorPaletteEvidence.workspaceTrusted) "Restricted palette evidence should come from a genuinely untrusted workspace."
+  Assert-Equal "True" ([string]$report.restrictedActiveEditorPaletteEvidence.assertions.baseVisibleAndExecuted) "Restricted palette evidence should preserve BASE execution."
+  Assert-Equal "True" ([string]$report.restrictedActiveEditorPaletteEvidence.assertions.trustedOnlyCommandsAbsent) "Restricted palette evidence should hide every trusted-only active-editor command."
+  Assert-True (@($report.restrictedActiveEditorPaletteEvidence.directCalls.diagnostic.code | Where-Object { $_ -ne "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION" }).Count -eq 0) "Restricted zero-argument direct calls should all record the stable workspace trust code."
+  Assert-True (@($report.restrictedActiveEditorPaletteEvidence.directCalls | Where-Object { @($_.failures).Count -ne 1 -or $_.failures[0].code -ne "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION" }).Count -eq 0) "Restricted zero-argument direct calls should record the workspace trust failure as their only diagnostic."
   Assert-Equal "SUBVERSIONR_HISTORY_REPOSITORY_SESSION_STALE" $report.sourceControlUiRepositoryHistoryWorkflow.staleReport.diagnostics.latestHistoryTargetingError.code "Installed Repository Log stale-target evidence should preserve the stable lifecycle code."
   Assert-Equal "True" ([string]$report.sourceControlUiRepositoryHistoryWorkflow.assertions.remoteStatusPollingNotRequested) "Installed Repository Log evidence should prove remote polling stayed idle."
   Assert-Equal "True" ([string]$report.repositoryHistoryLoadedRendererCapture.assertions.treeViewFocused) "Installed Repository Log renderer evidence should prove History view focus."
@@ -8540,6 +8710,12 @@ try {
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "UX-007" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace UX-007."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "COM-001" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace COM-001."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "COM-002" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace COM-002."
+  Assert-True (@($report.traceIds | Where-Object { $_ -eq "DIF-001" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace DIF-001."
+  Assert-True (@($report.traceIds | Where-Object { $_ -eq "DIF-002" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace DIF-002."
+  Assert-True (@($report.traceIds | Where-Object { $_ -eq "DIF-003" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace DIF-003."
+  Assert-True (@($report.traceIds | Where-Object { $_ -eq "HIS-002" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace HIS-002."
+  Assert-True (@($report.traceIds | Where-Object { $_ -eq "HIS-003" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace HIS-003."
+  Assert-True (@($report.traceIds | Where-Object { $_ -eq "HIS-004" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace HIS-004."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "REP-002" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace REP-002."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "REP-004" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace REP-004."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "DIR-003" }).Count -eq 1) "Installed Source Control UI E2E evidence should trace DIR-003."
@@ -8644,6 +8820,26 @@ try {
   Assert-True ([string]$report.fixtureRoots.revertCancellationFixture -like "*revert-cancellation-fixture*") "Installed Source Control UI E2E evidence should record the Revert cancellation workflow fixture root."
   Assert-True ([string]$report.fixtureRoots.resolveFixture -like "*resolve-fixture*") "Installed Source Control UI E2E evidence should record the Resolve workflow fixture root."
   Assert-True ([string]$report.fixtureRoots.resolveCancellationFixture -like "*resolve-cancellation-fixture*") "Installed Source Control UI E2E evidence should record the Resolve cancellation workflow fixture root."
+
+  $env:SUBVERSIONR_FAKE_RESTRICTED_EXTRA_FAILURE = "1"
+  try {
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+        -Target win32-x64 `
+        -VsixPath $vsixPath `
+        -CodeCliPath $fakeCodeCliPath `
+        -SvnToolsRoot $fakeSvnRoot `
+        -RendererCaptureDriverPath $fakeDriverPath `
+        -FixtureRoot (Join-Path $tempRoot "x") `
+        -EvidencePath (Join-Path $tempRoot "x.json") `
+        -RemoteDebuggingPort 32161 `
+        -ExtensionHostTimeoutSeconds 30 `
+        -UiReadyTimeoutSeconds 10
+    } "Restricted direct-call cardinality invalid" "Installed Restricted Mode evidence should reject an extra diagnostic beside the workspace trust failure."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_FAKE_RESTRICTED_EXTRA_FAILURE -ErrorAction SilentlyContinue
+  }
 
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
@@ -8845,6 +9041,8 @@ try {
   Assert-True ($driverContent -match "window\.innerWidth") "Renderer capture driver should ignore offscreen notification accessibility mirrors when looking for clickable actions."
   Assert-True ($driverContent -match "selectedItemStillVisible") "Renderer capture driver should treat a multi-step QuickPick item as selected once the original item disappears."
   Assert-True ($driverContent -match "nextQuickInputVisible") "Renderer capture driver should record when a follow-up QuickInput remains visible after a QuickPick selection."
+  Assert-True ($driverContent -match '(?s)quickPickAbsentItemText.*?inspectAbsentQuickPickItem.*?quickPickItemAbsent') "Renderer capture driver should expose a dedicated exact QuickPick-row absence contract."
+  Assert-True ($driverContent -match '(?s)async function inspectAbsentQuickPickItem.*?candidate\.label === expected.*?stableSamples >= 3') "Renderer QuickPick absence evidence should compare exact labels and wait for a stable result set."
   Assert-True ($driverContent -match "targetTokens\.every") "Renderer capture driver should anchor notification cancellation to every required DOM token."
   Assert-True ($driverContent -match '(?s)async function closeNotification.*?Input\.dispatchMouseEvent.*?type: "mousePressed".*?closeButtonDetails\.x.*?type: "mouseReleased"') "Renderer capture driver should click the matched notification clear affordance through real mouse input."
   $notificationCleanupHelper = [regex]::Match($workflowContent, '(?s)async function clearWorkbenchNotificationsBeforePrompt\(label\) \{.*?\r?\n\}\r?\n\r?\nfunction isTransientSourceControlSurfaceMismatch').Value

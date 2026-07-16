@@ -316,7 +316,8 @@ function New-SourceControlUiFixture(
   [ValidateRange(1, 4096)]
   [int]$UnversionedItemCount = 1,
   [ValidateRange(0, 4096)]
-  [int]$ModifiedLoadItemCount = 0
+  [int]$ModifiedLoadItemCount = 0,
+  [switch]$PropertyOnlyTracked
 ) {
   $repoPath = Join-Path $Root "repo"
   $importRoot = Join-Path $Root "import"
@@ -432,7 +433,33 @@ store-auth-creds = no
     $emptyAuthorValuePath
   ) -Description "svnadmin set empty svn:author on history fixture revision" | Out-Null
 
-  Set-Content -LiteralPath (Join-Path $wcRoot "src\tracked.txt") -Value "modified by M7j3`n" -NoNewline -Encoding utf8
+  if ($PropertyOnlyTracked) {
+    $paletteTrackedPath = Join-Path $wcRoot "src\tracked.txt"
+    Set-Content -LiteralPath $paletteTrackedPath -Value "active-editor palette history revision`n" -NoNewline -Encoding utf8
+    Invoke-CheckedTool -Path $SvnExe -Arguments @(
+      "commit",
+      $paletteTrackedPath,
+      "-m",
+      "seed active-editor palette PREV history",
+      "--non-interactive",
+      "--no-auth-cache",
+      "--config-dir",
+      $svnCliConfigRoot
+    ) -Description "svn commit active-editor palette PREV history" | Out-Null
+    Invoke-CheckedTool -Path $SvnExe -Arguments @(
+      "propset",
+      "subversionr:active-editor-palette",
+      "enabled",
+      $paletteTrackedPath,
+      "--non-interactive",
+      "--no-auth-cache",
+      "--config-dir",
+      $svnCliConfigRoot
+    ) -Description "svn propset property-only active-editor palette fixture" | Out-Null
+  }
+  else {
+    Set-Content -LiteralPath (Join-Path $wcRoot "src\tracked.txt") -Value "modified by M7j3`n" -NoNewline -Encoding utf8
+  }
   foreach ($relativePath in $modifiedLoadPaths) {
     Set-Content -LiteralPath (Join-Path $wcRoot $relativePath.Replace("/", "\")) -Value "modified load item $relativePath by M7j3`n" -NoNewline -Encoding utf8
   }
@@ -463,6 +490,8 @@ store-auth-creds = no
     unversionedPaths = $unversionedPaths
     modifiedLoadItemCount = $ModifiedLoadItemCount
     modifiedLoadPaths = $modifiedLoadPaths
+    propertyOnlyTracked = [bool]$PropertyOnlyTracked
+    paletteTrackedChangedRevision = $(if ($PropertyOnlyTracked) { 4 } else { $null })
     missingAuthorRevision = $missingAuthorRevision
     missingAuthorRelativePath = $missingAuthorRelativePath
     emptyAuthorRevision = $emptyAuthorRevision
@@ -1691,6 +1720,11 @@ function Write-HarnessPackage(
   "engines": {
     "vscode": "^1.101.0"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "main": "./dist/extension.js",
   "activationEvents": []
 }
@@ -2382,6 +2416,234 @@ async function runRefreshWorkflow(openReport) {
       sourceControlSurfaceAfterRefresh: postRefreshFreshnessReport.freshnessWorkflow.sourceControlSurface === true
     }
   };
+}
+
+async function waitForActiveEditorPaletteEffect(label, readEffect, timeoutMs = 60000) {
+  const startedAt = Date.now();
+  let lastValue;
+  for (;;) {
+    lastValue = await readEffect();
+    if (lastValue !== undefined) {
+      return lastValue;
+    }
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`${label} timed out; last observed value: ${JSON.stringify(lastValue)}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+}
+
+function activeEditorPaletteUriEffect(scheme, repositoryId, resourcePath) {
+  for (const editor of vscode.window.visibleTextEditors) {
+    const uri = editor.document.uri;
+    if (uri.scheme !== scheme) {
+      continue;
+    }
+    const query = new URLSearchParams(uri.query);
+    if (query.get("repositoryId") === repositoryId && query.get("path") === resourcePath) {
+      return {
+        scheme: uri.scheme,
+        repositoryId: query.get("repositoryId"),
+        epoch: Number.parseInt(query.get("epoch") || "", 10),
+        generation: query.has("generation") ? Number.parseInt(query.get("generation") || "", 10) : null,
+        path: query.get("path"),
+        revision: query.get("revision")
+      };
+    }
+  }
+  return undefined;
+}
+
+function activeEditorPaletteRevisionPairEffect(repositoryId, epoch, resourcePath) {
+  const revisions = vscode.window.visibleTextEditors.flatMap(editor => {
+    const uri = editor.document.uri;
+    if (uri.scheme !== "svn-r-revision") {
+      return [];
+    }
+    const query = new URLSearchParams(uri.query);
+    return query.get("repositoryId") === repositoryId &&
+      Number.parseInt(query.get("epoch") || "", 10) === epoch &&
+      query.get("path") === resourcePath &&
+      typeof query.get("revision") === "string"
+      ? [query.get("revision")]
+      : [];
+  });
+  const distinct = [...new Set(revisions)].sort();
+  return distinct.length === 2
+    ? { scheme: "svn-r-revision", repositoryId, epoch, path: resourcePath, revisions: distinct }
+    : undefined;
+}
+
+async function runActiveEditorPaletteWorkflow(openReport, paletteWorkingCopyRoot, readyPath, donePath) {
+  const commands = [
+    { id: "subversionr.diffWithBase", title: "SubversionR: Diff with BASE", slug: "diff-base", effect: "uri", scheme: "svn-r-base" },
+    { id: "subversionr.diffWithHead", title: "SubversionR: Diff with HEAD", slug: "diff-head", effect: "uri", scheme: "svn-r-head" },
+    { id: "subversionr.diffWithPrevious", title: "SubversionR: Compare with PREV", slug: "compare-prev", effect: "revisionPair" },
+    { id: "subversionr.showFileHistory", title: "SubversionR: File History", slug: "file-history", effect: "history", historyKind: "file" },
+    { id: "subversionr.showLineHistory", title: "SubversionR: Line History", slug: "line-history", effect: "history", historyKind: "line" },
+    { id: "subversionr.showBlame", title: "SubversionR: Blame", slug: "blame", effect: "uri", scheme: "svn-r-blame" }
+  ];
+  let paletteOpenReport;
+  let paletteCloseReport;
+  try {
+    paletteOpenReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eOpenReport", { path: paletteWorkingCopyRoot }),
+      "subversionr.diagnostics.installedSourceControlUiE2eOpenReport/activeEditorPalette",
+      60000
+    );
+    if (!paletteOpenReport || paletteOpenReport.kind !== "subversionr.installedSourceControlUiE2eOpenReport") {
+      throw new Error(`Unexpected active-editor palette open report kind: ${paletteOpenReport && paletteOpenReport.kind}`);
+    }
+    if (paletteOpenReport.repository.repositoryId === openReport.repository.repositoryId) {
+      throw new Error("Active-editor palette fixture must be distinct from the initially opened repository.");
+    }
+    if (path.resolve(paletteOpenReport.repository.identity.workingCopyRoot).toLowerCase() !== path.resolve(paletteWorkingCopyRoot).toLowerCase()) {
+      throw new Error("Active-editor palette open report did not target the exact palette fixture root.");
+    }
+    const resourcePath = "src/tracked.txt";
+    const resource = findAnyResource(paletteOpenReport, resourcePath);
+    if (!resource || resource.contextValue !== "subversionr.changedFile.baseDiffable") {
+      throw new Error(`Active-editor palette fixture did not expose the required base-diffable property-only file: ${sourceControlResourceSummary(paletteOpenReport)}.`);
+    }
+    const filePath = path.join(paletteWorkingCopyRoot, "src", "tracked.txt");
+    const beforeReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport", {
+        repositoryId: paletteOpenReport.repository.repositoryId,
+        epoch: paletteOpenReport.repository.epoch
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport/activeEditorPaletteBefore",
+      30000
+    );
+    const activityBefore = repositoryHistoryActivity(beforeReport, "active-editor palette before");
+    const executions = [];
+    for (const command of commands) {
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+      const editor = await vscode.window.showTextDocument(document, { preview: false });
+      editor.selection = new vscode.Selection(0, 0, 0, 0);
+      await new Promise(resolve => setTimeout(resolve, 750));
+      await withTimeout(
+        vscode.commands.executeCommand("workbench.action.quickOpen", `>${command.title}`),
+        `workbench.action.quickOpen/${command.slug}`,
+        30000
+      );
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const rendererCaptureExpectations = {
+        requiredDomTokens: [command.title],
+        requiredAccessibilityTokens: [command.title],
+        requiredScreenshot: true,
+        quickPickItemText: command.title
+      };
+      await publishCheckoutPromptReadyAndWait(`${readyPath}.palette-${command.slug}`, `${donePath}.palette-${command.slug}`, {
+        ok: true,
+        phase: "activeEditorPaletteCommandReady",
+        command: { id: command.id, title: command.title },
+        target: {
+          repositoryId: paletteOpenReport.repository.repositoryId,
+          epoch: paletteOpenReport.repository.epoch,
+          workingCopyRoot: paletteOpenReport.repository.identity.workingCopyRoot,
+          path: resourcePath
+        },
+        unrelatedRepository: {
+          repositoryId: openReport.repository.repositoryId,
+          epoch: openReport.repository.epoch,
+          workingCopyRoot: openReport.repository.identity.workingCopyRoot
+        },
+        rendererCaptureExpectations
+      });
+
+      let effect;
+      if (command.effect === "history") {
+        effect = await waitForActiveEditorPaletteEffect(command.title, async () => {
+          const report = await vscode.commands.executeCommand(
+            "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+            {
+              repositoryId: paletteOpenReport.repository.repositoryId,
+              epoch: paletteOpenReport.repository.epoch
+            }
+          );
+          const target = report && report.history && report.history.target;
+          return target &&
+            target.kind === command.historyKind &&
+            target.repositoryId === paletteOpenReport.repository.repositoryId &&
+            target.epoch === paletteOpenReport.repository.epoch &&
+            target.path === resourcePath
+            ? { ...target }
+            : undefined;
+        });
+      } else if (command.effect === "revisionPair") {
+        effect = await waitForActiveEditorPaletteEffect(
+          command.title,
+          async () => activeEditorPaletteRevisionPairEffect(
+            paletteOpenReport.repository.repositoryId,
+            paletteOpenReport.repository.epoch,
+            resourcePath
+          )
+        );
+      } else {
+        effect = await waitForActiveEditorPaletteEffect(
+          command.title,
+          async () => activeEditorPaletteUriEffect(command.scheme, paletteOpenReport.repository.repositoryId, resourcePath)
+        );
+      }
+      executions.push({
+        command: { id: command.id, title: command.title },
+        rendererCaptureExpectations,
+        effect
+      });
+    }
+
+    const afterReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport", {
+        repositoryId: paletteOpenReport.repository.repositoryId,
+        epoch: paletteOpenReport.repository.epoch
+      }),
+      "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport/activeEditorPaletteAfter",
+      30000
+    );
+    const activityAfter = repositoryHistoryActivity(afterReport, "active-editor palette after");
+    if (JSON.stringify(activityAfter) !== JSON.stringify(activityBefore)) {
+      throw new Error(`Active-editor palette visibility or commands changed status activity: before=${JSON.stringify(activityBefore)} after=${JSON.stringify(activityAfter)}.`);
+    }
+    paletteCloseReport = await closeOpenReport(paletteOpenReport);
+    if (!paletteCloseReport || paletteCloseReport.repositoryClosed !== true) {
+      throw new Error("Active-editor palette fixture close report did not prove repository closure.");
+    }
+    return {
+      kind: "subversionr.installedSourceControlUiE2eActiveEditorPaletteWorkflow",
+      generatedAt: new Date().toISOString(),
+      trusted: vscode.workspace.isTrusted,
+      target: {
+        repositoryId: paletteOpenReport.repository.repositoryId,
+        epoch: paletteOpenReport.repository.epoch,
+        workingCopyRoot: paletteOpenReport.repository.identity.workingCopyRoot,
+        path: resourcePath,
+        contextValue: resource.contextValue
+      },
+      unrelatedRepository: {
+        repositoryId: openReport.repository.repositoryId,
+        epoch: openReport.repository.epoch,
+        workingCopyRoot: openReport.repository.identity.workingCopyRoot
+      },
+      activityBefore,
+      activityAfter,
+      executions,
+      closeReport: paletteCloseReport,
+      assertions: {
+        workspaceTrusted: vscode.workspace.isTrusted === true,
+        exactSixCommandsObservedAndExecuted: executions.length === 6,
+        activeEditorRepositorySelected: true,
+        unrelatedRepositoryNotSelected: true,
+        propertyOnlyFileSupportsAllSixCommands: true,
+        statusRefreshRequestCountUnchanged: activityAfter.statusRefreshRequestCount === activityBefore.statusRefreshRequestCount,
+        reconcileRequestCountUnchanged: activityAfter.reconcileRequestCount === activityBefore.reconcileRequestCount,
+        remoteStatusRequestCountUnchanged: activityAfter.remoteStatusRequestCount === activityBefore.remoteStatusRequestCount
+      }
+    };
+  } finally {
+    if (paletteOpenReport && (!paletteCloseReport || paletteCloseReport.repositoryClosed !== true)) {
+      try { await closeOpenReport(paletteOpenReport); } catch {}
+    }
+  }
 }
 
 async function runMultiRepositoryRefreshWorkflow(openReport, multiRepositoryRefreshWorkingCopyRoot, promptReadyPath) {
@@ -9574,6 +9836,189 @@ async function runReadonlyPropertyReportWorkflow(repositoryWorkingCopyRoot, reso
   }
 }
 
+function diagnosticFailuresSince(lines, startIndex) {
+  return lines.slice(startIndex).flatMap(line => {
+    try {
+      const value = JSON.parse(line);
+      return value && typeof value.code === "string" ? [value] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+async function runRestrictedActiveEditorPaletteEvidence(resultPath, readyPath, donePath, workingCopyRoot) {
+  const commands = [
+    { id: "subversionr.diffWithBase", title: "SubversionR: Diff with BASE", slug: "diff-base", base: true },
+    { id: "subversionr.diffWithHead", title: "SubversionR: Diff with HEAD", slug: "diff-head" },
+    { id: "subversionr.diffWithPrevious", title: "SubversionR: Compare with PREV", slug: "compare-prev" },
+    { id: "subversionr.showFileHistory", title: "SubversionR: File History", slug: "file-history" },
+    { id: "subversionr.showLineHistory", title: "SubversionR: Line History", slug: "line-history" },
+    { id: "subversionr.showBlame", title: "SubversionR: Blame", slug: "blame" }
+  ];
+  let openReport;
+  let closeReport;
+  try {
+    if (vscode.workspace.isTrusted !== false) {
+      throw new Error("Restricted active-editor palette evidence requires a genuinely untrusted VS Code workspace.");
+    }
+    const extension = vscode.extensions.getExtension("hitsuki-ban.subversionr");
+    if (!extension) {
+      throw new Error("Restricted active-editor palette evidence could not find the installed SubversionR extension.");
+    }
+    if (!extension.isActive) {
+      await withTimeout(extension.activate(), "hitsuki-ban.subversionr.activate/restrictedActiveEditorPalette", 60000);
+    }
+    openReport = await withTimeout(
+      vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eOpenReport", { path: workingCopyRoot }),
+      "subversionr.diagnostics.installedSourceControlUiE2eOpenReport/restrictedActiveEditorPalette",
+      60000
+    );
+    if (
+      !openReport ||
+      openReport.kind !== "subversionr.installedSourceControlUiE2eOpenReport" ||
+      openReport.workspace.trusted !== false
+    ) {
+      throw new Error("Restricted active-editor palette open report did not preserve the untrusted workspace state.");
+    }
+    const resourcePath = "src/tracked.txt";
+    const resource = findAnyResource(openReport, resourcePath);
+    if (!resource || resource.contextValue !== "subversionr.changedFile.baseDiffable") {
+      throw new Error(`Restricted active-editor palette fixture did not expose the required BASE-diffable file: ${sourceControlResourceSummary(openReport)}.`);
+    }
+    const filePath = path.join(workingCopyRoot, "src", "tracked.txt");
+    const beforeReport = await vscode.commands.executeCommand(
+      "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+      { repositoryId: openReport.repository.repositoryId, epoch: openReport.repository.epoch }
+    );
+    const activityBefore = repositoryHistoryActivity(beforeReport, "restricted active-editor palette before");
+    const visibility = [];
+    for (const command of commands) {
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+      await vscode.window.showTextDocument(document, { preview: false });
+      await new Promise(resolve => setTimeout(resolve, 750));
+      await withTimeout(
+        vscode.commands.executeCommand("workbench.action.quickOpen", `>${command.title}`),
+        `workbench.action.quickOpen/restricted-${command.slug}`,
+        30000
+      );
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const rendererCaptureExpectations = command.base
+        ? {
+            requiredDomTokens: [command.title],
+            requiredAccessibilityTokens: [command.title],
+            requiredScreenshot: true,
+            quickPickItemText: command.title
+          }
+        : {
+            requiredDomTokens: ["Restricted Mode"],
+            requiredAccessibilityTokens: ["Restricted Mode"],
+            requiredScreenshot: true,
+            quickPickAbsentItemText: command.title
+          };
+      await publishCheckoutPromptReadyAndWait(
+        `${readyPath}.palette-${command.slug}`,
+        `${donePath}.palette-${command.slug}`,
+        {
+          ok: true,
+          phase: "restrictedActiveEditorPaletteCommandReady",
+          command: { id: command.id, title: command.title },
+          target: {
+            repositoryId: openReport.repository.repositoryId,
+            epoch: openReport.repository.epoch,
+            workingCopyRoot: openReport.repository.identity.workingCopyRoot,
+            path: resourcePath
+          },
+          rendererCaptureExpectations
+        }
+      );
+      if (command.base) {
+        const effect = await waitForActiveEditorPaletteEffect(
+          command.title,
+          async () => activeEditorPaletteUriEffect("svn-r-base", openReport.repository.repositoryId, resourcePath)
+        );
+        visibility.push({ command: { id: command.id, title: command.title }, visible: true, effect, rendererCaptureExpectations });
+      } else {
+        await withTimeout(
+          vscode.commands.executeCommand("workbench.action.closeQuickOpen"),
+          `workbench.action.closeQuickOpen/restricted-${command.slug}`,
+          5000
+        );
+        visibility.push({ command: { id: command.id, title: command.title }, visible: false, rendererCaptureExpectations });
+      }
+    }
+
+    const directCalls = [];
+    for (const command of commands.filter(candidate => !candidate.base)) {
+      const before = await vscode.commands.executeCommand(
+        "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+        { repositoryId: openReport.repository.repositoryId, epoch: openReport.repository.epoch }
+      );
+      await withTimeout(
+        vscode.commands.executeCommand(command.id),
+        `${command.id}/restrictedDirectCall`,
+        30000
+      );
+      const after = await vscode.commands.executeCommand(
+        "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+        { repositoryId: openReport.repository.repositoryId, epoch: openReport.repository.epoch }
+      );
+      const failures = diagnosticFailuresSince(after.diagnostics.lines, before.diagnostics.lines.length);
+      if (failures.length !== 1 || failures[0]?.code !== "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION") {
+        throw new Error(`Restricted direct call ${command.id} did not record SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION as its only diagnostic.`);
+      }
+      directCalls.push({
+        command: { id: command.id, title: command.title },
+        diagnostic: {
+          code: failures[0].code,
+          messageKey: failures[0].messageKey,
+          args: failures[0].args
+        },
+        failures
+      });
+    }
+    const afterReport = await vscode.commands.executeCommand(
+      "subversionr.diagnostics.installedSourceControlUiE2eRepositoryHistoryReport",
+      { repositoryId: openReport.repository.repositoryId, epoch: openReport.repository.epoch }
+    );
+    const activityAfter = repositoryHistoryActivity(afterReport, "restricted active-editor palette after");
+    if (JSON.stringify(activityAfter) !== JSON.stringify(activityBefore)) {
+      throw new Error(`Restricted active-editor palette evidence changed status activity: before=${JSON.stringify(activityBefore)} after=${JSON.stringify(activityAfter)}.`);
+    }
+    closeReport = await closeOpenReport(openReport);
+    const result = {
+      ok: true,
+      kind: "subversionr.installedSourceControlUiE2eRestrictedActiveEditorPaletteEvidence",
+      generatedAt: new Date().toISOString(),
+      workspaceTrusted: vscode.workspace.isTrusted,
+      target: {
+        repositoryId: openReport.repository.repositoryId,
+        epoch: openReport.repository.epoch,
+        workingCopyRoot: openReport.repository.identity.workingCopyRoot,
+        path: resourcePath,
+        contextValue: resource.contextValue
+      },
+      visibility,
+      directCalls,
+      activityBefore,
+      activityAfter,
+      closeReport,
+      assertions: {
+        genuinelyRestricted: vscode.workspace.isTrusted === false,
+        baseVisibleAndExecuted: visibility[0]?.visible === true && visibility[0]?.effect?.scheme === "svn-r-base",
+        trustedOnlyCommandsAbsent: visibility.slice(1).every(entry => entry.visible === false),
+        directCallsBlockedByStableCode: directCalls.length === 5 && directCalls.every(entry => entry.diagnostic.code === "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION"),
+        statusActivityUnchanged: JSON.stringify(activityAfter) === JSON.stringify(activityBefore)
+      }
+    };
+    fs.writeFileSync(resultPath, JSON.stringify(result, null, 2));
+  } finally {
+    if (openReport && (!closeReport || closeReport.repositoryClosed !== true)) {
+      try { await closeOpenReport(openReport); } catch {}
+    }
+  }
+}
+
 async function closeOpenReport(openReport) {
   if (!openReport) {
     return undefined;
@@ -9778,6 +10223,17 @@ async function run() {
   const deleteWorkingCopyRoot = process.env.SUBVERSIONR_INSTALLED_REPOSITORY_LIFECYCLE_DELETE_WORKING_COPY;
   const moveWorkingCopyRoot = process.env.SUBVERSIONR_INSTALLED_REPOSITORY_LIFECYCLE_MOVE_WORKING_COPY;
   const moveDestinationRoot = process.env.SUBVERSIONR_INSTALLED_REPOSITORY_LIFECYCLE_MOVE_DESTINATION;
+  const harnessMode = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MODE || "full";
+  if (harnessMode === "restricted-active-editor-palette") {
+    if (!resultPath || !readyPath || !donePath || !workingCopyRoot) {
+      throw new Error("Restricted active-editor palette harness mode requires result, ready, done, and working-copy paths.");
+    }
+    await runRestrictedActiveEditorPaletteEvidence(resultPath, readyPath, donePath, workingCopyRoot);
+    return;
+  }
+  if (harnessMode !== "full") {
+    throw new Error(`Unsupported installed Source Control UI E2E harness mode: ${harnessMode}`);
+  }
   if (
     !resultPath ||
     !readyPath ||
@@ -9990,6 +10446,7 @@ async function run() {
   let noRepositoryWelcomeRendererCaptureExpectations;
   let partialFreshnessRendererCaptureExpectations;
   let staleFreshnessRendererCaptureExpectations;
+  let activeEditorPaletteReport;
   let repositoryHistoryReport;
   let initializeSettlementReport;
   let fullReconcileCancellationReport;
@@ -10050,6 +10507,7 @@ async function run() {
       openReport,
       partialFreshnessReport,
       staleFreshnessReport,
+      activeEditorPaletteReport,
       repositoryHistoryReport,
       initializeSettlementReport,
       noRepositoryWelcomeRendererCaptureExpectations,
@@ -10290,6 +10748,15 @@ async function run() {
 
     phase = "executingInstalledRepositoryHistoryWorkflow";
     repositoryHistoryReport = await runRepositoryHistoryWorkflow(openReport, readyPath, donePath);
+    writeResult(partialResult());
+
+    phase = "executingInstalledActiveEditorPaletteWorkflow";
+    activeEditorPaletteReport = await runActiveEditorPaletteWorkflow(
+      openReport,
+      multiRepositoryRefreshWorkingCopyRoot,
+      readyPath,
+      donePath
+    );
     writeResult(partialResult());
 
     phase = "executingInstalledSourceControlUiE2ePartialFreshnessReport";
@@ -10901,6 +11368,7 @@ async function run() {
       openReport,
       partialFreshnessReport,
       staleFreshnessReport,
+      activeEditorPaletteReport,
       repositoryHistoryReport,
       initializeSettlementReport,
       noRepositoryWelcomeRendererCaptureExpectations,
@@ -11297,6 +11765,41 @@ function Assert-HarnessResult(
   }
   if (@($Result.openReport.sourceControl.inputBox.acceptInputCommandArguments)[0] -ne $Result.openReport.repository.repositoryId) {
     throw "Installed Source Control UI E2E open report must expose the repository id through SourceControl accept input command arguments."
+  }
+  $paletteWorkflow = $Result.activeEditorPaletteReport
+  $expectedPaletteCommands = @(
+    "subversionr.diffWithBase",
+    "subversionr.diffWithHead",
+    "subversionr.diffWithPrevious",
+    "subversionr.showFileHistory",
+    "subversionr.showLineHistory",
+    "subversionr.showBlame"
+  )
+  if (
+    $paletteWorkflow.kind -ne "subversionr.installedSourceControlUiE2eActiveEditorPaletteWorkflow" -or
+    $paletteWorkflow.trusted -ne $true -or
+    $paletteWorkflow.target.contextValue -ne "subversionr.changedFile.baseDiffable" -or
+    $paletteWorkflow.target.repositoryId -eq $Result.openReport.repository.repositoryId -or
+    @($paletteWorkflow.executions).Count -ne 6 -or
+    (@($paletteWorkflow.executions.command.id) -join "|") -ne ($expectedPaletteCommands -join "|") -or
+    $paletteWorkflow.executions[0].effect.scheme -ne "svn-r-base" -or
+    $paletteWorkflow.executions[1].effect.scheme -ne "svn-r-head" -or
+    $paletteWorkflow.executions[2].effect.scheme -ne "svn-r-revision" -or
+    $paletteWorkflow.executions[3].effect.kind -ne "file" -or
+    $paletteWorkflow.executions[4].effect.kind -ne "line" -or
+    $paletteWorkflow.executions[5].effect.scheme -ne "svn-r-blame" -or
+    @($paletteWorkflow.executions.effect.repositoryId | Where-Object { $_ -ne $paletteWorkflow.target.repositoryId }).Count -ne 0 -or
+    @($paletteWorkflow.executions.effect.path | Where-Object { $_ -ne "src/tracked.txt" }).Count -ne 0 -or
+    $paletteWorkflow.assertions.workspaceTrusted -ne $true -or
+    $paletteWorkflow.assertions.exactSixCommandsObservedAndExecuted -ne $true -or
+    $paletteWorkflow.assertions.activeEditorRepositorySelected -ne $true -or
+    $paletteWorkflow.assertions.unrelatedRepositoryNotSelected -ne $true -or
+    $paletteWorkflow.assertions.propertyOnlyFileSupportsAllSixCommands -ne $true -or
+    $paletteWorkflow.assertions.statusRefreshRequestCountUnchanged -ne $true -or
+    $paletteWorkflow.assertions.reconcileRequestCountUnchanged -ne $true -or
+    $paletteWorkflow.assertions.remoteStatusRequestCountUnchanged -ne $true
+  ) {
+    throw "Installed Source Control UI E2E result must prove all six canonical active-editor Command Palette actions target the exact active property-only file without scheduling status work."
   }
   Assert-FreshnessReport -Report $Result.partialFreshnessReport -Scenario "partial" -OpenReport $Result.openReport
   Assert-FreshnessReport -Report $Result.staleFreshnessReport -Scenario "stale" -OpenReport $Result.openReport
@@ -12505,7 +13008,7 @@ $refreshLoadModifiedItemCount = 64
 $boundaryLoadParentModifiedItemCount = 128
 $boundaryLoadBoundaryModifiedItemCount = 128
 $fixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "svn-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
-$multiRepositoryRefreshFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "multi-repository-refresh-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
+$multiRepositoryRefreshFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "multi-repository-refresh-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved -PropertyOnlyTracked
 $lazyExternalProviderFixture = New-SourceControlUiLazyExternalProviderFixture -Root (Join-Path $fixtureRootResolved "lazy-external-provider-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved
 $boundaryLoadFixture = New-SourceControlUiLazyExternalProviderFixture -Root (Join-Path $fixtureRootResolved "boundary-load-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved -ParentModifiedLoadItemCount $boundaryLoadParentModifiedItemCount -ExternalModifiedLoadItemCount $boundaryLoadBoundaryModifiedItemCount
 $refreshLoadFixture = New-SourceControlUiFixture -Root (Join-Path $fixtureRootResolved "refresh-load-fixture") -SvnExe $svnExeResolved -SvnAdminExe $svnAdminExeResolved -ModifiedLoadItemCount $refreshLoadModifiedItemCount
@@ -13384,6 +13887,7 @@ $cleanupPromptDriverError = $null
 $repositoryHistoryInitialDriverError = $null
 $repositoryHistoryLoadedDriverError = $null
 $repositoryHistoryStaleDriverError = $null
+$activeEditorPaletteCaptures = @()
 try {
   $codeProcess = Start-CodeCliProcess -Path $codeCliResolved -Arguments @(
     "--user-data-dir",
@@ -13444,6 +13948,14 @@ try {
   $rendererCapture = Get-Content -Raw -LiteralPath (Join-Path $captureRoot "renderer-capture.json") | ConvertFrom-Json
   Assert-RendererCaptureReport -Capture $rendererCapture -CaptureRoot $captureRoot -Target $Target -OpenReport $ready.openReport
 
+  $activeEditorPaletteCaptureSpecs = @(
+    [pscustomobject]@{ id = "subversionr.diffWithBase"; title = "SubversionR: Diff with BASE"; slug = "diff-base" },
+    [pscustomobject]@{ id = "subversionr.diffWithHead"; title = "SubversionR: Diff with HEAD"; slug = "diff-head" },
+    [pscustomobject]@{ id = "subversionr.diffWithPrevious"; title = "SubversionR: Compare with PREV"; slug = "compare-prev" },
+    [pscustomobject]@{ id = "subversionr.showFileHistory"; title = "SubversionR: File History"; slug = "file-history" },
+    [pscustomobject]@{ id = "subversionr.showLineHistory"; title = "SubversionR: Line History"; slug = "line-history" },
+    [pscustomobject]@{ id = "subversionr.showBlame"; title = "SubversionR: Blame"; slug = "blame" }
+  )
   $repositoryHistoryInitialReadyPath = "$($harness.ReadyPath).history-initial"
   $repositoryHistoryInitialDonePath = "$($harness.DonePath).history-initial"
   Wait-File -Path $repositoryHistoryInitialReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Repository Log initial collapsed renderer ready sentinel"
@@ -13574,6 +14086,61 @@ try {
   })
   if ($repositoryHistoryStaleCapture.assertions.notificationCancelled -ne $true) {
     throw "Installed Repository Log stale-target renderer capture did not close the captured actionable notification."
+  }
+
+  foreach ($paletteSpec in $activeEditorPaletteCaptureSpecs) {
+    $paletteReadyPath = "$($harness.ReadyPath).palette-$($paletteSpec.slug)"
+    $paletteDonePath = "$($harness.DonePath).palette-$($paletteSpec.slug)"
+    $paletteCaptureRoot = Join-Path $fixtureRootResolved "active-editor-palette-$($paletteSpec.slug)-capture"
+    $paletteExpectationsPath = Join-Path $fixtureRootResolved "active-editor-palette-$($paletteSpec.slug)-capture-expectations.json"
+    Wait-File -Path $paletteReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed active-editor palette $($paletteSpec.title) ready sentinel"
+    $paletteReady = Get-Content -Raw -LiteralPath $paletteReadyPath | ConvertFrom-Json
+    if (
+      $paletteReady.ok -ne $true -or
+      $paletteReady.phase -ne "activeEditorPaletteCommandReady" -or
+      $paletteReady.command.id -ne $paletteSpec.id -or
+      $paletteReady.command.title -ne $paletteSpec.title
+    ) {
+      throw "Installed active-editor palette sentinel did not identify the expected canonical command $($paletteSpec.id)."
+    }
+    $paletteReady.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $paletteExpectationsPath -Encoding utf8
+    $paletteDriverError = $null
+    try {
+      Invoke-RendererCaptureDriver `
+        -DriverPath $rendererCaptureDriverResolved `
+        -Port $RemoteDebuggingPort `
+        -CaptureRoot $paletteCaptureRoot `
+        -ExpectationsPath $paletteExpectationsPath `
+        -Target $Target
+    }
+    catch {
+      $paletteDriverError = $_
+    }
+    finally {
+      [pscustomobject]@{
+        ok = $null -eq $paletteDriverError
+        completedAt = (Get-Date).ToUniversalTime().ToString("o")
+      } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $paletteDonePath -Encoding utf8
+    }
+    if ($null -ne $paletteDriverError) {
+      throw $paletteDriverError
+    }
+    $paletteCapture = Get-Content -Raw -LiteralPath (Join-Path $paletteCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+    Assert-RendererCaptureReport -Capture $paletteCapture -CaptureRoot $paletteCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+      rendererCaptureExpectations = $paletteReady.rendererCaptureExpectations
+    })
+    if (
+      $paletteCapture.assertions.quickPickItemSelected -ne $true -or
+      $paletteCapture.interaction.selected -ne $true -or
+      [string]$paletteCapture.interaction.selectedText -notlike "*$($paletteSpec.title)*"
+    ) {
+      throw "Installed active-editor palette capture did not select $($paletteSpec.title) through the real Command Palette."
+    }
+    $activeEditorPaletteCaptures += [pscustomobject]@{
+      command = [pscustomobject]@{ id = $paletteSpec.id; title = $paletteSpec.title }
+      root = $paletteCaptureRoot
+      report = $paletteCapture
+    }
   }
 
   Wait-File -Path $harness.PartialFreshnessRendererReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E partial freshness renderer ready sentinel"
@@ -15087,6 +15654,190 @@ foreach ($commitPromptCaptureSpec in $commitPromptCaptureSpecs) {
 }
 $harnessResult = Get-Content -Raw -LiteralPath $harnessResultPath | ConvertFrom-Json
 Assert-HarnessResult -Result $harnessResult -ExpectedVersion $extensionVersion -ExtensionsRoot $extensionsRoot -InstalledPackageRoot $installedPackageRoot -WorkingCopyRoot $fixture.workingCopyRoot
+
+$restrictedPaletteRoot = Join-Path $fixtureRootResolved "restricted-active-editor-palette"
+$restrictedPaletteUserDataRoot = Join-Path $restrictedPaletteRoot "user-data"
+$restrictedPaletteResultPath = Join-Path $restrictedPaletteRoot "result.json"
+$restrictedPaletteReadyPath = Join-Path $restrictedPaletteRoot "ready.json"
+$restrictedPaletteDonePath = Join-Path $restrictedPaletteRoot "done.json"
+New-Item -ItemType Directory -Force -Path (Join-Path $restrictedPaletteUserDataRoot "User") | Out-Null
+@'
+{
+  "security.workspace.trust.enabled": true,
+  "security.workspace.trust.startupPrompt": "never",
+  "security.workspace.trust.banner": "never",
+  "security.workspace.trust.untrustedFiles": "open",
+  "telemetry.telemetryLevel": "off"
+}
+'@ | Set-Content -LiteralPath (Join-Path $restrictedPaletteUserDataRoot "User\settings.json") -NoNewline -Encoding utf8
+
+$restrictedPaletteCaptureSpecs = @(
+  [pscustomobject]@{ id = "subversionr.diffWithBase"; title = "SubversionR: Diff with BASE"; slug = "diff-base"; visible = $true },
+  [pscustomobject]@{ id = "subversionr.diffWithHead"; title = "SubversionR: Diff with HEAD"; slug = "diff-head"; visible = $false },
+  [pscustomobject]@{ id = "subversionr.diffWithPrevious"; title = "SubversionR: Compare with PREV"; slug = "compare-prev"; visible = $false },
+  [pscustomobject]@{ id = "subversionr.showFileHistory"; title = "SubversionR: File History"; slug = "file-history"; visible = $false },
+  [pscustomobject]@{ id = "subversionr.showLineHistory"; title = "SubversionR: Line History"; slug = "line-history"; visible = $false },
+  [pscustomobject]@{ id = "subversionr.showBlame"; title = "SubversionR: Blame"; slug = "blame"; visible = $false }
+)
+$restrictedPaletteCaptures = @()
+$restrictedPaletteProcess = $null
+$restrictedPaletteOriginalAppData = $env:APPDATA
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MODE = "restricted-active-editor-palette"
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESULT = $restrictedPaletteResultPath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_READY = $restrictedPaletteReadyPath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_DONE = $restrictedPaletteDonePath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_WORKING_COPY = $multiRepositoryRefreshFixture.workingCopyRoot
+$env:APPDATA = $multiRepositoryRefreshFixture.svnRuntimeAppDataRoot
+try {
+  Assert-TcpPortAvailable $RemoteDebuggingPort
+  $restrictedPaletteProcess = Start-CodeCliProcess -Path $codeCliResolved -Arguments @(
+    "--user-data-dir",
+    $restrictedPaletteUserDataRoot,
+    "--extensions-dir",
+    $extensionsRoot,
+    "--disable-updates",
+    "--disable-telemetry",
+    "--skip-welcome",
+    "--skip-release-notes",
+    "--new-window",
+    "--locale",
+    "en",
+    "--remote-debugging-port=$RemoteDebuggingPort",
+    "--extensionDevelopmentPath=$($harness.Root)",
+    "--extensionTestsPath=$($harness.TestsPath)",
+    "--log",
+    "trace",
+    "--wait",
+    $multiRepositoryRefreshFixture.workingCopyRoot
+  ) -Description "VS Code installed Restricted Mode active-editor palette smoke"
+
+  foreach ($restrictedSpec in $restrictedPaletteCaptureSpecs) {
+    $restrictedReadyPath = "$restrictedPaletteReadyPath.palette-$($restrictedSpec.slug)"
+    $restrictedDonePath = "$restrictedPaletteDonePath.palette-$($restrictedSpec.slug)"
+    $restrictedCaptureRoot = Join-Path $restrictedPaletteRoot "$($restrictedSpec.slug)-capture"
+    $restrictedExpectationsPath = Join-Path $restrictedPaletteRoot "$($restrictedSpec.slug)-capture-expectations.json"
+    Wait-File -Path $restrictedReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Restricted Mode active-editor palette $($restrictedSpec.title) ready sentinel"
+    $restrictedReady = Get-Content -Raw -LiteralPath $restrictedReadyPath | ConvertFrom-Json
+    if (
+      $restrictedReady.ok -ne $true -or
+      $restrictedReady.phase -ne "restrictedActiveEditorPaletteCommandReady" -or
+      $restrictedReady.command.id -ne $restrictedSpec.id -or
+      $restrictedReady.command.title -ne $restrictedSpec.title
+    ) {
+      throw "Installed Restricted Mode palette sentinel did not identify $($restrictedSpec.id)."
+    }
+    $restrictedReady.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $restrictedExpectationsPath -Encoding utf8
+    $restrictedDriverError = $null
+    try {
+      Invoke-RendererCaptureDriver `
+        -DriverPath $rendererCaptureDriverResolved `
+        -Port $RemoteDebuggingPort `
+        -CaptureRoot $restrictedCaptureRoot `
+        -ExpectationsPath $restrictedExpectationsPath `
+        -Target $Target
+    }
+    catch {
+      $restrictedDriverError = $_
+    }
+    finally {
+      [pscustomobject]@{
+        ok = $null -eq $restrictedDriverError
+        completedAt = (Get-Date).ToUniversalTime().ToString("o")
+      } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $restrictedDonePath -Encoding utf8
+    }
+    if ($null -ne $restrictedDriverError) {
+      throw $restrictedDriverError
+    }
+    $restrictedCapture = Get-Content -Raw -LiteralPath (Join-Path $restrictedCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+    Assert-RendererCaptureReport -Capture $restrictedCapture -CaptureRoot $restrictedCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+      rendererCaptureExpectations = $restrictedReady.rendererCaptureExpectations
+    })
+    if ($restrictedSpec.visible) {
+      if (
+        $restrictedCapture.assertions.quickPickItemSelected -ne $true -or
+        $restrictedCapture.interaction.selected -ne $true -or
+        [string]$restrictedCapture.interaction.selectedText -notlike "*$($restrictedSpec.title)*"
+      ) {
+        throw "Installed Restricted Mode palette did not execute the visible BASE command."
+      }
+    }
+    elseif (
+      $restrictedCapture.assertions.quickPickItemAbsent -ne $true -or
+      $restrictedCapture.interaction.absent -ne $true -or
+      $restrictedCapture.interaction.requestedText -ne $restrictedSpec.title -or
+      @($restrictedCapture.interaction.matchedTexts).Count -ne 0
+    ) {
+      throw "Installed Restricted Mode palette did not prove the exact $($restrictedSpec.title) QuickPick row was absent."
+    }
+    $restrictedPaletteCaptures += [pscustomobject]@{
+      command = [pscustomobject]@{ id = $restrictedSpec.id; title = $restrictedSpec.title }
+      expectedVisible = $restrictedSpec.visible
+      root = $restrictedCaptureRoot
+      report = $restrictedCapture
+    }
+  }
+
+  Wait-ProcessOrKill -Process $restrictedPaletteProcess -TimeoutSeconds $ExtensionHostTimeoutSeconds -Description "VS Code installed Restricted Mode active-editor palette smoke"
+  $restrictedPaletteProcess = $null
+}
+finally {
+  if ($null -ne $restrictedPaletteProcess) {
+    Stop-ProcessTreeBestEffort $restrictedPaletteProcess
+  }
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MODE -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESULT -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_READY -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_DONE -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_WORKING_COPY -ErrorAction SilentlyContinue
+  if ($null -eq $restrictedPaletteOriginalAppData) {
+    Remove-Item Env:APPDATA -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:APPDATA = $restrictedPaletteOriginalAppData
+  }
+}
+
+if (-not (Test-Path -LiteralPath $restrictedPaletteResultPath -PathType Leaf)) {
+  throw "Installed Restricted Mode active-editor palette harness did not write its result."
+}
+$restrictedPaletteResult = Get-Content -Raw -LiteralPath $restrictedPaletteResultPath | ConvertFrom-Json
+$expectedRestrictedDirectCallIds = @(
+  "subversionr.diffWithHead",
+  "subversionr.diffWithPrevious",
+  "subversionr.showFileHistory",
+  "subversionr.showLineHistory",
+  "subversionr.showBlame"
+)
+$invalidRestrictedDirectCalls = @(
+  $restrictedPaletteResult.directCalls | Where-Object {
+    @($_.failures).Count -ne 1 -or
+    $_.failures[0].code -ne "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION"
+  }
+)
+if ($invalidRestrictedDirectCalls.Count -ne 0) {
+  throw "Restricted direct-call cardinality invalid: each trusted-only command must record exactly one stable workspace trust failure."
+}
+if (
+  $restrictedPaletteResult.ok -ne $true -or
+  $restrictedPaletteResult.kind -ne "subversionr.installedSourceControlUiE2eRestrictedActiveEditorPaletteEvidence" -or
+  $restrictedPaletteResult.workspaceTrusted -ne $false -or
+  $restrictedPaletteResult.target.contextValue -ne "subversionr.changedFile.baseDiffable" -or
+  @($restrictedPaletteResult.visibility).Count -ne 6 -or
+  $restrictedPaletteResult.visibility[0].visible -ne $true -or
+  $restrictedPaletteResult.visibility[0].effect.scheme -ne "svn-r-base" -or
+  @($restrictedPaletteResult.visibility | Select-Object -Skip 1 | Where-Object { $_.visible -ne $false }).Count -ne 0 -or
+  @($restrictedPaletteResult.directCalls).Count -ne 5 -or
+  (@($restrictedPaletteResult.directCalls.command.id) -join "|") -ne ($expectedRestrictedDirectCallIds -join "|") -or
+  @($restrictedPaletteResult.directCalls.diagnostic.code | Where-Object { $_ -ne "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION" }).Count -ne 0 -or
+  $restrictedPaletteResult.assertions.genuinelyRestricted -ne $true -or
+  $restrictedPaletteResult.assertions.baseVisibleAndExecuted -ne $true -or
+  $restrictedPaletteResult.assertions.trustedOnlyCommandsAbsent -ne $true -or
+  $restrictedPaletteResult.assertions.directCallsBlockedByStableCode -ne $true -or
+  $restrictedPaletteResult.assertions.statusActivityUnchanged -ne $true -or
+  @($restrictedPaletteCaptures).Count -ne 6
+) {
+  throw "Installed Restricted Mode active-editor palette evidence must prove BASE remains available while the five trusted-only commands are hidden and fail direct calls with the stable trust code."
+}
 $commitPromptCaptures = @($commitPromptCaptureSpecs | ForEach-Object {
   $capture = Get-Content -Raw -LiteralPath (Join-Path $_.root "renderer-capture.json") | ConvertFrom-Json
   $expectations = Get-Content -Raw -LiteralPath $_.expectations | ConvertFrom-Json
@@ -15454,7 +16205,7 @@ $report = [pscustomObject]@{
   schema = "subversionr.release.installed-source-control-ui-e2e.win32-x64.v1"
   publicReadinessClaim = $false
   target = $Target
-  traceIds = @("BRM-001", "BRM-005", "COM-001", "COM-002", "COM-003", "DIR-003", "DIR-009", "DIR-010", "DIR-012", "DIR-013", "HIS-001", "REP-002", "REP-004", "MIG-009", "OPS-001", "OPS-002", "OPS-003", "OPS-004", "OPS-005", "OPS-006", "OPS-007", "OPS-008", "OPS-010", "OPS-011", "OPS-013", "OPS-014", "OPS-015", "STA-003", "STA-009", "STA-013", "STA-014", "STA-016", "SYN-003", "SYN-004", "SYN-005", "TST-018", "TST-024", "UX-001", "UX-002", "UX-007")
+  traceIds = @("BRM-001", "BRM-005", "COM-001", "COM-002", "COM-003", "DIF-001", "DIF-002", "DIF-003", "DIR-003", "DIR-009", "DIR-010", "DIR-012", "DIR-013", "HIS-001", "HIS-002", "HIS-003", "HIS-004", "REP-002", "REP-004", "MIG-009", "OPS-001", "OPS-002", "OPS-003", "OPS-004", "OPS-005", "OPS-006", "OPS-007", "OPS-008", "OPS-010", "OPS-011", "OPS-013", "OPS-014", "OPS-015", "STA-003", "STA-009", "STA-013", "STA-014", "STA-016", "SYN-003", "SYN-004", "SYN-005", "TST-018", "TST-024", "UX-001", "UX-002", "UX-007")
   nonClaims = @(
     "This gate does not prove Marketplace publication.",
     "This gate does not prove VSIX signing or supply-chain provenance publication.",
@@ -15522,6 +16273,23 @@ $report = [pscustomObject]@{
   sourceControlUiOpenReport = $harnessResult.openReport
   sourceControlUiPartialFreshnessReport = $harnessResult.partialFreshnessReport
   sourceControlUiStaleFreshnessReport = $harnessResult.staleFreshnessReport
+  sourceControlUiActiveEditorPaletteWorkflow = $harnessResult.activeEditorPaletteReport
+  activeEditorPaletteCaptures = @($activeEditorPaletteCaptures | ForEach-Object {
+    [pscustomobject]@{
+      command = $_.command
+      root = Get-RepoRelativePath $_.root
+      report = $_.report
+    }
+  })
+  restrictedActiveEditorPaletteEvidence = $restrictedPaletteResult
+  restrictedActiveEditorPaletteCaptures = @($restrictedPaletteCaptures | ForEach-Object {
+    [pscustomobject]@{
+      command = $_.command
+      expectedVisible = $_.expectedVisible
+      root = Get-RepoRelativePath $_.root
+      report = $_.report
+    }
+  })
   partialFreshnessRendererCapture = $partialFreshnessRendererCapture
   staleFreshnessRendererCapture = $staleFreshnessRendererCapture
   sourceControlUiFullReconcileCancellationWorkflow = $harnessResult.fullReconcileCancellationReport
@@ -15735,6 +16503,9 @@ $report = [pscustomObject]@{
     extensions = Get-RepoRelativePath $extensionsRoot
     harness = Get-RepoRelativePath $harnessRoot
     rendererCapture = Get-RepoRelativePath $captureRoot
+    activeEditorPaletteCaptures = @($activeEditorPaletteCaptures | ForEach-Object { Get-RepoRelativePath $_.root })
+    restrictedActiveEditorPalette = Get-RepoRelativePath $restrictedPaletteRoot
+    restrictedActiveEditorPaletteCaptures = @($restrictedPaletteCaptures | ForEach-Object { Get-RepoRelativePath $_.root })
     noRepositoryWelcomeRendererCapture = Get-RepoRelativePath $noRepositoryWelcomeRendererCaptureRoot
     partialFreshnessRendererCapture = Get-RepoRelativePath $partialFreshnessRendererCaptureRoot
     staleFreshnessRendererCapture = Get-RepoRelativePath $staleFreshnessRendererCaptureRoot
@@ -15859,6 +16630,9 @@ $report = [pscustomObject]@{
   multiRepositoryRefreshWorkingCopy = [pscustomobject]@{
     root = Get-RepoRelativePath $multiRepositoryRefreshFixture.workingCopyRoot
     repositoryUrl = $multiRepositoryRefreshFixture.repoUrl
+    propertyOnlyTracked = $multiRepositoryRefreshFixture.propertyOnlyTracked
+    paletteTrackedChangedRevision = $multiRepositoryRefreshFixture.paletteTrackedChangedRevision
+    activeEditorPaletteWorkflow = $harnessResult.activeEditorPaletteReport
     workflow = $harnessResult.multiRepositoryRefreshReport
   }
   deleteUnversionedLoadWorkingCopy = [pscustomobject]@{

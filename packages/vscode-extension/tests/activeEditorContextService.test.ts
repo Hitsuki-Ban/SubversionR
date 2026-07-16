@@ -21,6 +21,11 @@ describe("ActiveEditorContextService", () => {
     expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorBaseDiffable", true);
     expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorPreviousDiffable", true);
     expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorLineHistoryFile", false);
+    expect(service.commandTarget()).toEqual({
+      scheme: "file",
+      fsPath: "C:\\workspace\\SRC\\MAIN.C",
+      subversionrProjectionGeneration: 11,
+    });
   });
 
   it("sets file inspection context keys for a projected changelisted active file", async () => {
@@ -113,6 +118,35 @@ describe("ActiveEditorContextService", () => {
     expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorLineHistoryFile", true);
   });
 
+  it("sets all inspection contexts for a text-stable property-only active file", async () => {
+    const api = fakeApi(textDocument("C:\\workspace\\src\\main.c"));
+    const service = activeEditorContextService({
+      api,
+      projections: new Map([
+        [
+          "repo-uuid:C:/workspace",
+          scmProjection({
+            resources: [
+              scmProjectedResource({
+                localStatus: "modified",
+                nodeStatus: "modified",
+                textStatus: "normal",
+                propertyStatus: "modified",
+              }),
+            ],
+          }),
+        ],
+      ]),
+    });
+
+    await service.refresh();
+
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorHistoryFile", true);
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorBaseDiffable", true);
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorPreviousDiffable", true);
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorLineHistoryFile", true);
+  });
+
   it("clears only previous-diffable context when a projected file has no previous revision candidate", async () => {
     const api = fakeApi(textDocument("C:\\workspace\\src\\main.c"));
     const service = activeEditorContextService({
@@ -140,7 +174,7 @@ describe("ActiveEditorContextService", () => {
     const getProjectedResource = vi.fn<SourceControlProjectionService["getProjectedResource"]>();
     const service = activeEditorContextService({
       api,
-      sourceControlProjection: { getProjectedResource },
+      sourceControlProjection: { getProjection: vi.fn(() => undefined), getProjectedResource },
     });
 
     await service.refresh();
@@ -150,6 +184,165 @@ describe("ActiveEditorContextService", () => {
     expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorBaseDiffable", false);
     expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorPreviousDiffable", false);
     expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorLineHistoryFile", false);
+    expect(service.commandTarget()).toBeUndefined();
+  });
+
+  it.each([
+    ["no editor", undefined],
+    ["non-file editor", textDocument("C:\\workspace\\src\\main.c", { scheme: "untitled" })],
+  ])("does not expose an active-editor command target for %s", async (_label, document) => {
+    const api = fakeApi(document);
+    const service = activeEditorContextService({ api });
+
+    await service.refresh();
+
+    expect(service.commandTarget()).toBeUndefined();
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorHistoryFile", false);
+  });
+
+  it("rejects a projected resource from a stale generation", async () => {
+    const projection = scmProjection();
+    const resource = projection.groups.flatMap((group) => group.resources)[0]!;
+    const api = fakeApi(textDocument("C:\\workspace\\src\\main.c"));
+    const service = activeEditorContextService({
+      api,
+      sourceControlProjection: {
+        getProjection: vi.fn(() => projection),
+        getProjectedResource: vi.fn(() => ({ ...lookup(projection, resource), generation: 12 })),
+      },
+    });
+
+    await service.refresh();
+
+    expect(service.commandTarget()).toBeUndefined();
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorHistoryFile", false);
+  });
+
+  it("clears active-editor command contexts for a stale projection", async () => {
+    const projection = scmProjection();
+    projection.freshness = {
+      repositoryCompleteness: "stale",
+      lastRefreshCompleteness: "stale",
+      lastRefreshKind: "stale",
+    };
+    const api = fakeApi(textDocument("C:\\workspace\\src\\main.c"));
+    const service = activeEditorContextService({
+      api,
+      projections: new Map([[projection.repositoryId, projection]]),
+    });
+
+    await service.refresh();
+
+    expect(service.commandTarget()).toBeUndefined();
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorHistoryFile", false);
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorBaseDiffable", false);
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorPreviousDiffable", false);
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorLineHistoryFile", false);
+  });
+
+  it("targets the most specific projected working copy when repositories are nested", async () => {
+    const parent = repositorySession();
+    const child = repositorySession({
+      repositoryId: "repo-child:C:/workspace/vendor",
+      workingCopyRoot: "C:\\workspace\\vendor",
+    });
+    const parentProjection = scmProjection({
+      resources: [scmProjectedResource({ path: "vendor/src/main.c" })],
+    });
+    const childResource = scmProjectedResource({ path: "src/main.c" });
+    childResource.repositoryId = child.repositoryId;
+    const childProjection = scmProjection({
+      repositoryId: child.repositoryId,
+      workingCopyRoot: child.identity.workingCopyRoot,
+      resources: [childResource],
+    });
+    const service = activeEditorContextService({
+      api: fakeApi(textDocument("C:\\workspace\\vendor\\src\\main.c")),
+      sessions: [parent, child],
+      projections: new Map([
+        [parent.repositoryId, parentProjection],
+        [child.repositoryId, childProjection],
+      ]),
+    });
+
+    expect(service.commandTarget()).toEqual({
+      scheme: "file",
+      fsPath: "C:\\workspace\\vendor\\src\\main.c",
+      subversionrProjectionGeneration: 11,
+    });
+  });
+
+  it("does not fall back to a parent projection when the most specific working copy has no resource", async () => {
+    const parent = repositorySession();
+    const child = repositorySession({
+      repositoryId: "repo-child:C:/workspace/vendor",
+      workingCopyRoot: "C:\\workspace\\vendor",
+    });
+    const api = fakeApi(textDocument("C:\\workspace\\vendor\\src\\main.c"));
+    const getProjectedResource = vi.fn((repositoryId: string) => {
+      if (repositoryId === parent.repositoryId) {
+        const projection = scmProjection({ resources: [scmProjectedResource({ path: "vendor/src/main.c" })] });
+        const resource = projection.groups.flatMap((group) => group.resources)[0]!;
+        return lookup(projection, resource);
+      }
+      return undefined;
+    });
+    const service = activeEditorContextService({
+      api,
+      sessions: [parent, child],
+      sourceControlProjection: {
+        getProjection: vi.fn(() => undefined),
+        getProjectedResource,
+      },
+    });
+
+    await service.refresh();
+
+    expect(getProjectedResource).toHaveBeenCalledTimes(1);
+    expect(getProjectedResource).toHaveBeenNthCalledWith(
+      1,
+      child.repositoryId,
+      "src/main.c",
+      "case-insensitive",
+    );
+    expect(service.commandTarget()).toBeUndefined();
+    expect(api.setContext).toHaveBeenCalledWith("subversionr.activeEditorHistoryFile", false);
+  });
+
+  it("serializes overlapping refreshes so the newest active editor state wins", async () => {
+    let document: ActiveEditorTextDocument | undefined = textDocument("C:\\workspace\\src\\main.c");
+    let releaseFirst!: () => void;
+    const firstContextWrite = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let writeCount = 0;
+    const values: Array<[string, boolean]> = [];
+    const api: FakeApi = {
+      activeTextDocument: vi.fn(() => document),
+      setContext: vi.fn(async (key, value) => {
+        writeCount += 1;
+        if (writeCount <= 4) {
+          await firstContextWrite;
+        }
+        values.push([key, value]);
+      }),
+    };
+    const service = activeEditorContextService({ api });
+
+    const first = service.refresh();
+    await vi.waitFor(() => expect(api.setContext).toHaveBeenCalledTimes(4));
+    document = undefined;
+    const second = service.refresh();
+    expect(api.setContext).toHaveBeenCalledTimes(4);
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(values.slice(-4)).toEqual([
+      ["subversionr.activeEditorHistoryFile", false],
+      ["subversionr.activeEditorBaseDiffable", false],
+      ["subversionr.activeEditorPreviousDiffable", false],
+      ["subversionr.activeEditorLineHistoryFile", false],
+    ]);
   });
 
   it.each([
@@ -191,7 +384,7 @@ function activeEditorContextService(options: {
   settings?: LensSettings;
   sessions?: RepositorySession[];
   projections?: Map<string, ScmRepositoryProjection | undefined>;
-  sourceControlProjection?: Pick<SourceControlProjectionService, "getProjectedResource">;
+  sourceControlProjection?: Pick<SourceControlProjectionService, "getProjectedResource" | "getProjection">;
 } = {}): ActiveEditorContextService {
   const projections = options.projections ?? new Map([["repo-uuid:C:/workspace", scmProjection()]]);
   return new ActiveEditorContextService({
@@ -217,8 +410,9 @@ function fakeSessionService(sessions: RepositorySession[]): Pick<RepositorySessi
 
 function fakeSourceControlProjection(
   projections: Map<string, ScmRepositoryProjection | undefined>,
-): Pick<SourceControlProjectionService, "getProjectedResource"> {
+): Pick<SourceControlProjectionService, "getProjectedResource" | "getProjection"> {
   return {
+    getProjection: (repositoryId) => projections.get(repositoryId),
     getProjectedResource: (repositoryId, path, pathCase) => {
       const projection = projections.get(repositoryId);
       if (!projection) {

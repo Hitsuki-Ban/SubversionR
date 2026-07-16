@@ -317,11 +317,42 @@ describe("FileHeaderCodeLensProvider", () => {
     });
   });
 
+  it("exposes BASE and HEAD compare lenses for the libsvn property-only file shape", async () => {
+    const provider = fileHeaderProvider({
+      projections: new Map([
+        [
+          "repo-uuid:C:/workspace",
+          scmProjection({
+            resources: [
+              scmProjectedResource({
+                localStatus: "modified",
+                nodeStatus: "modified",
+                textStatus: "normal",
+                propertyStatus: "modified",
+              }),
+            ],
+          }),
+        ],
+      ]),
+    });
+
+    const resolved = [];
+    for (const lens of provider.provideCodeLenses(textDocument("C:\\workspace\\src\\main.c"))) {
+      resolved.push(await provider.resolveCodeLens(lens, { isCancellationRequested: false }));
+    }
+
+    expect(resolved.map((lens) => lens.command?.command)).toEqual([
+      "subversionr.showFileHistory",
+      "subversionr.diffWithPrevious",
+      "subversionr.diffWithBase",
+      "subversionr.diffWithHead",
+      "subversionr.showFileHistory",
+      "subversionr.showBlame",
+      "subversionr.showRepositoryLog",
+    ]);
+  });
+
   it.each([
-    [
-      "property-only change",
-      scmProjectedResource({ localStatus: "normal", textStatus: "normal", propertyStatus: "modified" }),
-    ],
     [
       "conflicted file",
       scmProjectedResource(

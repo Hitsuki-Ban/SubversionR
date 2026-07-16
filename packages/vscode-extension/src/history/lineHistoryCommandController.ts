@@ -5,7 +5,11 @@ import type { LensSettings } from "../lens/lensSettings";
 import type { RepositorySession, RepositorySessionService } from "../repository/repositorySessionService";
 import { isChangelistResourceGroupId } from "../scm/resourceStateClassifier";
 import type { SourceControlProjectionService } from "../scm/sourceControlProjectionService";
-import type { ScmProjectedResource, ScmProjectedResourceLookup } from "../scm/sourceControlResourceStore";
+import type {
+  ScmProjectedResource,
+  ScmProjectedResourceLookup,
+  ScmRepositoryProjection,
+} from "../scm/sourceControlResourceStore";
 import { requireTrustedWorkspace } from "../security/workspaceTrust";
 import type { PathCasePolicy } from "../status/types";
 
@@ -14,7 +18,7 @@ export interface LineHistoryCommandControllerOptions {
   includeMergedRevisions(): boolean;
   historyClient: HistoryBlameClient & HistoryLogClient;
   sessionService: Pick<RepositorySessionService, "listOpenSessions">;
-  sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource">;
+  sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource" | "getProjection">;
   workspaceTrusted(): boolean;
   diagnostics: {
     recordFailure(operation: string, error: unknown): void;
@@ -56,6 +60,7 @@ export interface LineHistorySelection {
 interface ResourceMatch {
   session: RepositorySession;
   lookup: ScmProjectedResourceLookup;
+  relativePath: string;
   rootLength: number;
 }
 
@@ -150,7 +155,10 @@ export class LineHistoryCommandController {
     }
     const range = selectionLineRange(editor.selection, editor.document.lineCount);
     const match = this.matchDocument(editor.document.uri.fsPath);
-    if (!match || match.lookup.epoch !== match.session.epoch || match.lookup.repositoryId !== match.session.repositoryId) {
+    const projection = match
+      ? this.options.sourceControlProjection.getProjection(match.session.repositoryId)
+      : undefined;
+    if (!match || !projection || !isCurrentResourceMatch(match, projection)) {
       throw invalidLineHistoryTarget();
     }
     const resource = match.lookup.resource;
@@ -167,25 +175,49 @@ export class LineHistoryCommandController {
   }
 
   private matchDocument(fsPath: string): ResourceMatch | undefined {
-    return this.options.sessionService
+    const match = this.options.sessionService
       .listOpenSessions()
       .flatMap((session) => {
         const relativePath = repositoryRelativePath(session, fsPath);
-        const lookup = relativePath
-          ? this.options.sourceControlProjection.getProjectedResource(
-              session.repositoryId,
-              relativePath,
-              session.watchScope.pathCase,
-            )
-          : undefined;
-        return lookup ? [{ session, lookup, rootLength: rootKey(session).length }] : [];
+        return relativePath ? [{ session, relativePath, rootLength: rootKey(session).length }] : [];
       })
       .sort(
         (left, right) =>
           right.rootLength - left.rootLength ||
           left.session.repositoryId.localeCompare(right.session.repositoryId),
       )[0];
+    if (!match) {
+      return undefined;
+    }
+    const lookup = this.options.sourceControlProjection.getProjectedResource(
+      match.session.repositoryId,
+      match.relativePath,
+      match.session.watchScope.pathCase,
+    );
+    return lookup ? { ...match, lookup } : undefined;
   }
+}
+
+function isCurrentResourceMatch(match: ResourceMatch, projection: ScmRepositoryProjection): boolean {
+  const { lookup, relativePath, session } = match;
+  const pathCase = session.watchScope.pathCase;
+  return (
+    projection.repositoryId === session.repositoryId &&
+    projection.epoch === session.epoch &&
+    projection.generation === lookup.generation &&
+    projection.freshness.repositoryCompleteness !== "stale" &&
+    lookup.repositoryId === session.repositoryId &&
+    lookup.epoch === session.epoch &&
+    lookup.resource.repositoryId === session.repositoryId &&
+    lookup.resource.entry.generation === lookup.generation &&
+    absolutePathKey(pathCase, projection.workingCopyRoot) === absolutePathKey(pathCase, session.identity.workingCopyRoot) &&
+    absolutePathKey(pathCase, lookup.workingCopyRoot) === absolutePathKey(pathCase, session.identity.workingCopyRoot) &&
+    comparisonKey(pathCase, lookup.resource.path) === comparisonKey(pathCase, relativePath)
+  );
+}
+
+function absolutePathKey(pathCase: PathCasePolicy, path: string): string {
+  return comparisonKey(pathCase, normalizeAbsolutePath(path));
 }
 
 function selectionLineRange(selection: LineHistorySelection, lineCount: number): { lineStart: number; lineLimit: number } {
@@ -264,8 +296,15 @@ function isLineHistoryResource(resource: ScmProjectedResource): boolean {
     resource.entry.localStatus !== "ignored" &&
     !hasDeletedStatus(resource) &&
     !hasUnsafeLocalStatus(resource) &&
-    resource.entry.nodeStatus === "normal" &&
+    hasTextStableNodeStatus(resource) &&
     resource.entry.textStatus === "normal"
+  );
+}
+
+function hasTextStableNodeStatus(resource: ScmProjectedResource): boolean {
+  return (
+    resource.entry.nodeStatus === "normal" ||
+    (resource.entry.nodeStatus === "modified" && resource.entry.propertyStatus === "modified")
   );
 }
 

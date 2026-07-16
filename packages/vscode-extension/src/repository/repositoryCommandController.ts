@@ -65,6 +65,7 @@ import { requireTrustedWorkspace as requireTrustedWorkspaceState } from "../secu
 
 export interface RepositoryCommandUi {
   workspaceRoots(): string[];
+  activeEditorResource(): unknown | undefined;
   pathCasePolicy(): PathCasePolicy;
   pickRepositoryCandidate(candidates: RepositoryDiscoveryCandidate[]): Promise<RepositoryDiscoveryCandidate | undefined>;
   pickOpenRepository(sessions: RepositorySession[]): Promise<RepositorySession | undefined>;
@@ -1952,11 +1953,13 @@ export class RepositoryCommandController {
 
   public async diffWithBaseResource(...resourceStates: unknown[]): Promise<void> {
     try {
-      const target = await this.resourceTarget(resourceStates, {
+      const activeEditorInvocation = resourceStates.length === 0;
+      const target = await this.resourceTarget(this.activeEditorResourceArgs(resourceStates), {
         contexts: LOCAL_BASE_DIFFABLE_CONTEXT_VALUES,
         invalid: invalidDiffBaseTarget,
         outside: invalidDiffBaseTargetOutsideRepository,
         allowEditorUri: true,
+        validateEditorProjectionGeneration: activeEditorInvocation,
       });
       if (!target) {
         return;
@@ -1971,6 +1974,9 @@ export class RepositoryCommandController {
       }
       if (projection.repositoryId !== target.repositoryId || projection.epoch !== target.epoch) {
         throw diffBaseStateStale(target.repositoryId, target.epoch, projection.epoch);
+      }
+      if (activeEditorInvocation && !isCurrentActiveEditorProjection(target, projection)) {
+        throw invalidDiffBaseTarget();
       }
       const resource = findProjectionResource(projection, target);
       if (!resource || !isBaseDiffableProjectedResource(resource)) {
@@ -2044,11 +2050,13 @@ export class RepositoryCommandController {
   public async diffWithHeadResource(...resourceStates: unknown[]): Promise<void> {
     try {
       this.requireTrustedWorkspace();
-      const target = await this.resourceTarget(resourceStates, {
+      const activeEditorInvocation = resourceStates.length === 0;
+      const target = await this.resourceTarget(this.activeEditorResourceArgs(resourceStates), {
         contexts: HEAD_CONTENT_CONTEXT_VALUES,
         invalid: invalidDiffHeadTarget,
         outside: invalidDiffHeadTargetOutsideRepository,
         allowEditorUri: true,
+        validateEditorProjectionGeneration: activeEditorInvocation,
       });
       if (!target) {
         return;
@@ -2063,6 +2071,9 @@ export class RepositoryCommandController {
       }
       if (projection.repositoryId !== target.repositoryId || projection.epoch !== target.epoch) {
         throw diffHeadStateStale(target.repositoryId, target.epoch, projection.epoch);
+      }
+      if (activeEditorInvocation && !isCurrentActiveEditorProjection(target, projection)) {
+        throw invalidDiffHeadTarget();
       }
       const resource = findProjectionResource(projection, target);
       if (!resource || !isHeadContentProjectedResource(resource)) {
@@ -2139,11 +2150,13 @@ export class RepositoryCommandController {
   public async diffWithPreviousResource(...resourceStates: unknown[]): Promise<void> {
     try {
       this.requireTrustedWorkspace();
-      const target = await this.resourceTarget(resourceStates, {
+      const activeEditorInvocation = resourceStates.length === 0;
+      const target = await this.resourceTarget(this.activeEditorResourceArgs(resourceStates), {
         contexts: LOCAL_HISTORY_FILE_CONTEXT_VALUES,
         invalid: invalidDiffPreviousTarget,
         outside: invalidDiffPreviousTargetOutsideRepository,
         allowEditorUri: true,
+        validateEditorProjectionGeneration: activeEditorInvocation,
       });
       if (!target) {
         return;
@@ -2159,7 +2172,14 @@ export class RepositoryCommandController {
       if (projection.repositoryId !== target.repositoryId || projection.epoch !== target.epoch) {
         throw diffPreviousStateStale(target.repositoryId, target.epoch, projection.epoch);
       }
-      if (target.projectionGeneration !== undefined && projection.generation !== target.projectionGeneration) {
+      if (activeEditorInvocation && !isCurrentActiveEditorProjection(target, projection)) {
+        throw invalidDiffPreviousTarget();
+      }
+      if (
+        !activeEditorInvocation &&
+        target.projectionGeneration !== undefined &&
+        projection.generation !== target.projectionGeneration
+      ) {
         throw diffPreviousGenerationStale(target.repositoryId, target.projectionGeneration, projection.generation);
       }
       const resource = findProjectionResource(projection, target);
@@ -2234,11 +2254,13 @@ export class RepositoryCommandController {
   public async showFileHistoryResource(...resourceStates: unknown[]): Promise<void> {
     try {
       this.requireTrustedWorkspace();
-      const target = await this.resourceTarget(resourceStates, {
+      const activeEditorInvocation = resourceStates.length === 0;
+      const target = await this.resourceTarget(this.activeEditorResourceArgs(resourceStates), {
         contexts: LOCAL_HISTORY_FILE_CONTEXT_VALUES,
         invalid: invalidHistoryFileTarget,
         outside: invalidHistoryFileTargetOutsideRepository,
         allowEditorUri: true,
+        validateEditorProjectionGeneration: activeEditorInvocation,
       });
       if (!target) {
         return;
@@ -2253,6 +2275,9 @@ export class RepositoryCommandController {
       }
       if (projection.repositoryId !== target.repositoryId || projection.epoch !== target.epoch) {
         throw historyFileStateStale(target.repositoryId, target.epoch, projection.epoch);
+      }
+      if (activeEditorInvocation && !isCurrentActiveEditorProjection(target, projection)) {
+        throw invalidHistoryFileTarget();
       }
       const resource = findProjectionResource(projection, target);
       if (!resource || !isHistoryFileProjectedResource(resource)) {
@@ -2273,11 +2298,13 @@ export class RepositoryCommandController {
   public async showBlameResource(...resourceStates: unknown[]): Promise<void> {
     try {
       this.requireTrustedWorkspace();
-      const target = await this.resourceTarget(resourceStates, {
+      const activeEditorInvocation = resourceStates.length === 0;
+      const target = await this.resourceTarget(this.activeEditorResourceArgs(resourceStates), {
         contexts: LOCAL_BLAME_FILE_CONTEXT_VALUES,
         invalid: invalidBlameFileTarget,
         outside: invalidBlameFileTargetOutsideRepository,
         allowEditorUri: true,
+        validateEditorProjectionGeneration: activeEditorInvocation,
       });
       if (!target) {
         return;
@@ -2292,6 +2319,9 @@ export class RepositoryCommandController {
       }
       if (projection.repositoryId !== target.repositoryId || projection.epoch !== target.epoch) {
         throw blameFileStateStale(target.repositoryId, target.epoch, projection.epoch);
+      }
+      if (activeEditorInvocation && !isCurrentActiveEditorProjection(target, projection)) {
+        throw invalidBlameFileTarget();
       }
       const resource = findProjectionResource(projection, target);
       if (!resource || !isHistoryFileProjectedResource(resource)) {
@@ -3758,6 +3788,10 @@ export class RepositoryCommandController {
     });
   }
 
+  private activeEditorResourceArgs(resourceStates: unknown[]): unknown[] {
+    return resourceStates.length === 0 ? [this.options.ui.activeEditorResource()] : resourceStates;
+  }
+
   private async resourceTarget(
     resourceStateArgs: unknown[],
     options: {
@@ -3765,6 +3799,7 @@ export class RepositoryCommandController {
       invalid(): RepositoryCommandError;
       outside(fsPath: string): RepositoryCommandError;
       allowEditorUri?: boolean;
+      validateEditorProjectionGeneration?: boolean;
     },
   ): Promise<RepositoryCommandResourceTarget | undefined> {
     const resourceStates = normalizeResourceStateArgs(resourceStateArgs);
@@ -3776,7 +3811,12 @@ export class RepositoryCommandController {
       if (!options.allowEditorUri) {
         throw options.invalid();
       }
-      return this.editorUriResourceTarget(resourceState, options.invalid, options.outside);
+      return this.editorUriResourceTarget(
+        resourceState,
+        options.invalid,
+        options.outside,
+        options.validateEditorProjectionGeneration === true,
+      );
     }
     const contextValue = requireResourceContext(resourceState, options.contexts, options.invalid);
     const fsPath = requireResourceFsPath(resourceState, options.invalid);
@@ -3809,6 +3849,7 @@ export class RepositoryCommandController {
     uri: EditorUriLike,
     invalid: () => RepositoryCommandError,
     outside: (fsPath: string) => RepositoryCommandError,
+    validateProjectionGeneration: boolean,
   ): Promise<RepositoryCommandResourceTarget | undefined> {
     if (uri.scheme !== "file") {
       throw invalid();
@@ -3831,7 +3872,7 @@ export class RepositoryCommandController {
       source: "uri",
       contextValue: undefined,
       resourceKind: "file",
-      projectionGeneration: undefined,
+      projectionGeneration: validateProjectionGeneration ? requireOptionalProjectionGeneration(uri, invalid) : undefined,
       pathCase: match.session.watchScope.pathCase,
     };
   }
@@ -5085,6 +5126,17 @@ function hasDuplicateResourcePaths(targets: readonly RepositoryCommandResourceTa
     seen.add(key);
   }
   return false;
+}
+
+function isCurrentActiveEditorProjection(
+  target: RepositoryCommandResourceTarget,
+  projection: ScmRepositoryProjection,
+): boolean {
+  return (
+    projection.freshness.repositoryCompleteness !== "stale" &&
+    target.projectionGeneration !== undefined &&
+    projection.generation === target.projectionGeneration
+  );
 }
 
 function findProjectionResource(

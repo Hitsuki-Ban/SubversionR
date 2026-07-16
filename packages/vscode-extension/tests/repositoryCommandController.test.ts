@@ -4268,6 +4268,160 @@ describe("RepositoryCommandController", () => {
     );
   });
 
+  it("runs the five resource-backed palette commands against the current active file without arguments", async () => {
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({
+        resources: [
+          scmProjectedResource({
+            path: "src/main.c",
+            changedRevision: 3,
+            localStatus: "modified",
+            nodeStatus: "modified",
+            textStatus: "normal",
+            propertyStatus: "modified",
+          }),
+        ],
+      }),
+    });
+    const historyClient = fakeHistoryClient(
+      historyLog({ entries: [historyEntry(3), historyEntry(2)] }),
+    );
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      activeEditorResource: {
+        scheme: "file",
+        fsPath: "C:\\workspace\\SRC\\MAIN.C",
+        subversionrProjectionGeneration: 11,
+      },
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        sourceControlProjection,
+        historyClient,
+        createRequestId: () => "11111111-1111-4111-8111-111111111111",
+      },
+    );
+
+    await controller.diffWithBaseResource();
+    await controller.diffWithHeadResource();
+    await controller.diffWithPreviousResource();
+    await controller.showFileHistoryResource();
+    await controller.showBlameResource();
+
+    expect(ui.activeEditorResource).toHaveBeenCalledTimes(5);
+    expect(ui.diffWithBase).toHaveBeenCalledWith(
+      expect.objectContaining({ scheme: "svn-r-base" }),
+      { fsPath: "C:/workspace/src/main.c" },
+      "SVN BASE <-> Working Copy: src/main.c",
+    );
+    expect(ui.diffWithHead).toHaveBeenCalledWith(
+      expect.objectContaining({ scheme: "svn-r-head" }),
+      { fsPath: "C:/workspace/src/main.c" },
+      "SVN HEAD <-> Working Copy: src/main.c",
+    );
+    expect(ui.diffRevisions).toHaveBeenCalledTimes(1);
+    expect(ui.showHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "file", repositoryId: "repo-uuid:C:/workspace", path: "src/main.c" }),
+    );
+    expect(ui.showBlame).toHaveBeenCalledWith(
+      expect.objectContaining({ repositoryId: "repo-uuid:C:/workspace", generation: 11, path: "src/main.c" }),
+    );
+    expect(ui.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects stale active-editor generations for all five resource-backed palette commands", async () => {
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({
+        generation: 12,
+        resources: [scmProjectedResource({ changedRevision: 3 })],
+      }),
+    });
+    const historyClient = fakeHistoryClient(historyLog());
+    const ui = fakeCommandUi({
+      workspaceRoots: ["C:\\workspace"],
+      activeEditorResource: {
+        scheme: "file",
+        fsPath: "C:\\workspace\\src\\main.c",
+        subversionrProjectionGeneration: 11,
+      },
+    });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { sourceControlProjection, historyClient },
+    );
+
+    await controller.diffWithBaseResource();
+    await controller.diffWithHeadResource();
+    await controller.diffWithPreviousResource();
+    await controller.showFileHistoryResource();
+    await controller.showBlameResource();
+
+    expect(ui.diffWithBase).not.toHaveBeenCalled();
+    expect(ui.diffWithHead).not.toHaveBeenCalled();
+    expect(ui.diffRevisions).not.toHaveBeenCalled();
+    expect(ui.showHistory).not.toHaveBeenCalled();
+    expect(ui.showBlame).not.toHaveBeenCalled();
+    expect(historyClient.getLog).not.toHaveBeenCalled();
+    expect(ui.showErrorMessage).toHaveBeenCalledTimes(5);
+  });
+
+  it("preserves explicit editor URI behavior without applying active-editor freshness metadata", async () => {
+    const projection = scmProjection({
+      resources: [
+        scmProjectedResource({
+          path: "src/main.c",
+          changedRevision: 3,
+          localStatus: "modified",
+          nodeStatus: "modified",
+          textStatus: "normal",
+          propertyStatus: "modified",
+        }),
+      ],
+    });
+    projection.freshness = {
+      repositoryCompleteness: "stale",
+      lastRefreshCompleteness: "stale",
+      lastRefreshKind: "stale",
+    };
+    const sourceControlProjection = fakeSourceControlProjection({ projection });
+    const historyClient = fakeHistoryClient(historyLog({ entries: [historyEntry(3), historyEntry(2)] }));
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        sourceControlProjection,
+        historyClient,
+        createRequestId: () => "11111111-1111-4111-8111-111111111111",
+      },
+    );
+    const explicitUri = {
+      scheme: "file",
+      fsPath: "C:\\workspace\\SRC\\MAIN.C",
+      subversionrProjectionGeneration: "not-active-editor-metadata",
+    };
+
+    await controller.diffWithBaseResource(explicitUri);
+    await controller.diffWithHeadResource(explicitUri);
+    await controller.diffWithPreviousResource(explicitUri);
+    await controller.showFileHistoryResource(explicitUri);
+    await controller.showBlameResource(explicitUri);
+
+    expect(ui.activeEditorResource).not.toHaveBeenCalled();
+    expect(ui.diffWithBase).toHaveBeenCalledTimes(1);
+    expect(ui.diffWithHead).toHaveBeenCalledTimes(1);
+    expect(ui.diffRevisions).toHaveBeenCalledTimes(1);
+    expect(ui.showHistory).toHaveBeenCalledTimes(1);
+    expect(ui.showBlame).toHaveBeenCalledTimes(1);
+    expect(ui.showErrorMessage).not.toHaveBeenCalled();
+  });
+
   it("opens BASE content for a selected changed SVN file using the projection canonical path", async () => {
     const sourceControlProjection = fakeSourceControlProjection({
       projection: scmProjection({
@@ -4707,10 +4861,40 @@ describe("RepositoryCommandController", () => {
     );
   });
 
+  it("opens a BASE diff for the libsvn property-only file shape", async () => {
+    const sourceControlProjection = fakeSourceControlProjection({
+      projection: scmProjection({
+        resources: [
+          scmProjectedResource({
+            path: "src/main.c",
+            localStatus: "modified",
+            nodeStatus: "modified",
+            textStatus: "normal",
+            propertyStatus: "modified",
+          }),
+        ],
+      }),
+    });
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      { sourceControlProjection },
+    );
+
+    await controller.diffWithBaseResource({
+      contextValue: "subversionr.changedFile.baseDiffable",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    });
+
+    expect(ui.diffWithBase).toHaveBeenCalledTimes(1);
+    expect(ui.showErrorMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["obstructed", { localStatus: "obstructed", nodeStatus: "obstructed" }],
     ["incomplete", { localStatus: "incomplete", nodeStatus: "incomplete" }],
-    ["property-only", { localStatus: "normal", textStatus: "normal", propertyStatus: "modified" }],
   ])("rejects %s SVN files for BASE diff until safe rendering is supported", async (_label, entry) => {
     const sourceControlProjection = fakeSourceControlProjection({
       projection: scmProjection({
@@ -12139,6 +12323,7 @@ function sequenceNumber(values: number[]): () => number {
 
 interface FakeCommandUi {
   workspaceRoots: ReturnType<typeof vi.fn<() => string[]>>;
+  activeEditorResource: ReturnType<typeof vi.fn<() => unknown | undefined>>;
   pathCasePolicy: ReturnType<typeof vi.fn<() => PathCasePolicy>>;
   pickRepositoryCandidate: ReturnType<
     typeof vi.fn<(candidates: RepositoryDiscoveryCandidate[]) => Promise<RepositoryDiscoveryCandidate | undefined>>
@@ -12302,6 +12487,7 @@ interface FakeCleanupOptions {
 
 function fakeCommandUi(options: {
   workspaceRoots: string[];
+  activeEditorResource?: unknown;
   pathCase?: PathCasePolicy;
   pickedCandidate?: RepositoryDiscoveryCandidate;
   pickedSession?: RepositorySession;
@@ -12338,6 +12524,7 @@ function fakeCommandUi(options: {
   const dirtyTextDocumentFsPaths = new Set(options.dirtyTextDocumentFsPaths ?? []);
   return {
     workspaceRoots: vi.fn(() => options.workspaceRoots),
+    activeEditorResource: vi.fn(() => options.activeEditorResource),
     pathCasePolicy: vi.fn(() => options.pathCase ?? "case-insensitive"),
     pickRepositoryCandidate: vi.fn(async () => options.pickedCandidate),
     pickOpenRepository: vi.fn(async () => options.pickedSession),

@@ -1291,7 +1291,7 @@
         },
         {
           "command": "subversionr.diffWithBase",
-          "when": "false"
+          "when": "resourceScheme == file && subversionr.activeEditorBaseDiffable"
         },
         {
           "command": "subversionr.openBase",
@@ -1299,7 +1299,7 @@
         },
         {
           "command": "subversionr.diffWithHead",
-          "when": "false"
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorBaseDiffable"
         },
         {
           "command": "subversionr.openHead",
@@ -1307,19 +1307,19 @@
         },
         {
           "command": "subversionr.diffWithPrevious",
-          "when": "false"
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorPreviousDiffable"
         },
         {
           "command": "subversionr.showFileHistory",
-          "when": "false"
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile"
         },
         {
           "command": "subversionr.showLineHistory",
-          "when": "false"
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorLineHistoryFile"
         },
         {
           "command": "subversionr.showBlame",
-          "when": "false"
+          "when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile"
         },
         {
           "command": "subversionr.mergeRangeRepository",
