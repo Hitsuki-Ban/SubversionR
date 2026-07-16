@@ -29,6 +29,12 @@ function Assert-Equal($Expected, $Actual, [string]$Message) {
   }
 }
 
+function Assert-PathEqual([string]$Expected, [string]$Actual, [string]$Message) {
+  $expectedFull = [IO.Path]::GetFullPath($Expected).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  $actualFull = [IO.Path]::GetFullPath($Actual).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  Assert-True ([StringComparer]::OrdinalIgnoreCase.Equals($expectedFull, $actualFull)) "$Message Expected '$expectedFull', got '$actualFull'."
+}
+
 function Assert-ThrowsContaining([scriptblock]$Action, [string]$ExpectedText, [string]$Message) {
   $errorMessage = $null
   try {
@@ -82,7 +88,156 @@ function New-TestPeFile([string]$Path, [uint32]$DebugType, [switch]$InvalidSigna
   [IO.File]::WriteAllBytes($Path, $bytes)
 }
 
+function Invoke-FixtureGit([string]$WorkingDirectory, [string[]]$Arguments) {
+  $git = @((Get-Command git -CommandType Application -ErrorAction Stop))[0]
+  Push-Location $WorkingDirectory
+  try {
+    $output = @(& $git.Source @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+  }
+  finally {
+    Pop-Location
+  }
+  if ($exitCode -ne 0) {
+    throw "Fixture Git command failed ($($Arguments -join ' ')): $($output -join ' ')"
+  }
+  return @($output)
+}
+
+function New-DaemonBuildWorktreeFixture([string]$Root, [string]$BuildScript, [string]$NativeModule) {
+  $primaryRoot = Join-Path $Root "primary"
+  $toolsRoot = Join-Path $Root "tools"
+  $userProfile = Join-Path $Root "user-profile"
+  foreach ($directory in @(
+    $primaryRoot,
+    $toolsRoot,
+    $userProfile,
+    (Join-Path $primaryRoot ".cargo"),
+    (Join-Path $primaryRoot "scripts\native"),
+    (Join-Path $primaryRoot "crates\subversionr-daemon\src")
+  )) {
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+  }
+
+  Copy-Item -LiteralPath $BuildScript -Destination (Join-Path $primaryRoot "scripts\native\build-daemon.ps1")
+  Copy-Item -LiteralPath $NativeModule -Destination (Join-Path $primaryRoot "scripts\native\SubversionR.Native.psm1")
+  "[target.x86_64-pc-windows-msvc]`nrustflags = [`"-C`", `"link-arg=/Brepro`"]`n" |
+    Set-Content -LiteralPath (Join-Path $primaryRoot ".cargo\config.toml") -Encoding ascii -NoNewline
+  @'
+[workspace]
+members = ["crates/subversionr-daemon"]
+resolver = "2"
+'@ | Set-Content -LiteralPath (Join-Path $primaryRoot "Cargo.toml") -Encoding ascii -NoNewline
+  @'
+[package]
+name = "subversionr-daemon"
+version = "0.0.0"
+edition = "2024"
+'@ | Set-Content -LiteralPath (Join-Path $primaryRoot "crates\subversionr-daemon\Cargo.toml") -Encoding ascii -NoNewline
+  "fn main() {}`n" | Set-Content -LiteralPath (Join-Path $primaryRoot "crates\subversionr-daemon\src\main.rs") -Encoding ascii -NoNewline
+
+  Invoke-FixtureGit -WorkingDirectory $primaryRoot -Arguments @("init", "-b", "main") | Out-Null
+  Invoke-FixtureGit -WorkingDirectory $primaryRoot -Arguments @("config", "core.autocrlf", "false") | Out-Null
+  Invoke-FixtureGit -WorkingDirectory $primaryRoot -Arguments @("config", "user.name", "SubversionR Test") | Out-Null
+  Invoke-FixtureGit -WorkingDirectory $primaryRoot -Arguments @("config", "user.email", "subversionr-test@example.invalid") | Out-Null
+  Invoke-FixtureGit -WorkingDirectory $primaryRoot -Arguments @("add", ".") | Out-Null
+  Invoke-FixtureGit -WorkingDirectory $primaryRoot -Arguments @("commit", "-m", "fixture") | Out-Null
+
+  $linkedRoot = Join-Path $primaryRoot ".worktree\accepted"
+  Invoke-FixtureGit -WorkingDirectory $primaryRoot -Arguments @("worktree", "add", "--detach", $linkedRoot, "HEAD") | Out-Null
+
+  @'
+[CmdletBinding()]
+param()
+
+if ($env:SUBVERSIONR_TEST_TOOL_ARGUMENTS -cne "-vV") {
+  Write-Error "Unexpected fake rustc arguments: $env:SUBVERSIONR_TEST_TOOL_ARGUMENTS"
+  exit 2
+}
+[pscustomobject]@{
+  cwd = $env:SUBVERSIONR_TEST_TOOL_CWD
+  rawArguments = $env:SUBVERSIONR_TEST_TOOL_ARGUMENTS
+} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $env:SUBVERSIONR_TEST_RUSTC_LOG -Encoding utf8
+Write-Output "release: 1.96.0"
+Write-Output "host: x86_64-pc-windows-msvc"
+'@ | Set-Content -LiteralPath (Join-Path $toolsRoot "fake-rustc.ps1") -Encoding utf8 -NoNewline
+  @'
+@echo off
+set "SUBVERSIONR_TEST_TOOL_CWD=%CD%"
+set "SUBVERSIONR_TEST_TOOL_ARGUMENTS=%*"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-rustc.ps1"
+exit /b %ERRORLEVEL%
+'@ | Set-Content -LiteralPath (Join-Path $toolsRoot "rustc.cmd") -Encoding ascii -NoNewline
+
+  @'
+[CmdletBinding()]
+param()
+
+[pscustomobject]@{
+  cwd = $env:SUBVERSIONR_TEST_TOOL_CWD
+  rawArguments = $env:SUBVERSIONR_TEST_TOOL_ARGUMENTS
+} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $env:SUBVERSIONR_TEST_CARGO_LOG -Encoding utf8
+
+$daemonPath = $env:SUBVERSIONR_TEST_DAEMON_PATH
+if ([string]::IsNullOrWhiteSpace($daemonPath)) {
+  Write-Error "SUBVERSIONR_TEST_DAEMON_PATH is required."
+  exit 2
+}
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $daemonPath) | Out-Null
+$bytes = [byte[]]::new(0x400)
+$bytes[0] = 0x4d
+$bytes[1] = 0x5a
+[BitConverter]::GetBytes([uint32]0x80).CopyTo($bytes, 0x3c)
+$bytes[0x80] = 0x50
+$bytes[0x81] = 0x45
+[BitConverter]::GetBytes([uint16]1).CopyTo($bytes, 0x86)
+[BitConverter]::GetBytes([uint16]0xf0).CopyTo($bytes, 0x94)
+[BitConverter]::GetBytes([uint16]0x20b).CopyTo($bytes, 0x98)
+[BitConverter]::GetBytes([uint32]16).CopyTo($bytes, 0x104)
+[BitConverter]::GetBytes([uint32]0x1000).CopyTo($bytes, 0x138)
+[BitConverter]::GetBytes([uint32]28).CopyTo($bytes, 0x13c)
+[BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x190)
+[BitConverter]::GetBytes([uint32]0x1000).CopyTo($bytes, 0x194)
+[BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x198)
+[BitConverter]::GetBytes([uint32]0x200).CopyTo($bytes, 0x19c)
+[BitConverter]::GetBytes([uint32]16).CopyTo($bytes, 0x20c)
+[IO.File]::WriteAllBytes($daemonPath, $bytes)
+'@ | Set-Content -LiteralPath (Join-Path $toolsRoot "fake-cargo.ps1") -Encoding utf8 -NoNewline
+  @'
+@echo off
+set "SUBVERSIONR_TEST_TOOL_CWD=%CD%"
+set "SUBVERSIONR_TEST_TOOL_ARGUMENTS=%*"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-cargo.ps1"
+exit /b %ERRORLEVEL%
+'@ | Set-Content -LiteralPath (Join-Path $toolsRoot "cargo.cmd") -Encoding ascii -NoNewline
+
+  return [pscustomobject]@{
+    primaryRoot = $primaryRoot
+    linkedRoot = $linkedRoot
+    outsideLinkedRoot = Join-Path $Root "outside-linked"
+    toolsRoot = $toolsRoot
+    userProfile = $userProfile
+    cargoLog = Join-Path $Root "cargo-log.json"
+    rustcLog = Join-Path $Root "rustc-log.json"
+  }
+}
+
+function Invoke-DaemonBuildFixture([object]$Fixture, [string]$WorktreeRoot) {
+  $env:SUBVERSIONR_TEST_DAEMON_PATH = Join-Path $WorktreeRoot "target\release\subversionr-daemon.exe"
+  $env:SUBVERSIONR_TEST_CARGO_LOG = $Fixture.cargoLog
+  $env:SUBVERSIONR_TEST_RUSTC_LOG = $Fixture.rustcLog
+  Remove-Item -LiteralPath $Fixture.cargoLog, $Fixture.rustcLog -Force -ErrorAction SilentlyContinue
+  $output = @(& pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $WorktreeRoot "scripts\native\build-daemon.ps1") 2>&1)
+  return [pscustomobject]@{
+    exitCode = $LASTEXITCODE
+    output = ($output | Out-String)
+    cargoRan = Test-Path -LiteralPath $Fixture.cargoLog -PathType Leaf
+    rustcRan = Test-Path -LiteralPath $Fixture.rustcLog -PathType Leaf
+  }
+}
+
 $tempRoot = Join-Path $repoRoot ".cache\tests\native-scripts\$([Guid]::NewGuid().ToString('N'))"
+$worktreeFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) "subversionr-native-worktree-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
@@ -183,11 +338,18 @@ try {
   }
   Assert-True ($buildDaemonText.Contains('host: x86_64-pc-windows-msvc')) "Release daemon build should require the exact Windows MSVC Rust host."
   Assert-True ($buildDaemonText.Contains('release: 1.96.0')) "Release daemon build should require the repository-pinned Rust release."
-  Assert-True ($buildDaemonText.Contains('build -p subversionr-daemon --release --locked --target-dir $targetRoot')) "Release daemon build should invoke the exact Cargo package, locked resolution, profile, and repository output directory."
+  Assert-True ($buildDaemonText.Contains('build --manifest-path $manifestPath -p subversionr-daemon --release --locked --target-dir $targetRoot')) "Release daemon build should invoke the linked manifest with the exact Cargo package, locked resolution, profile, and worktree output directory."
+  Assert-True ($buildDaemonText.Contains('Push-Location $primaryRoot')) "Release daemon rustc and Cargo commands should execute from the verified primary worktree root."
+  Assert-True ($buildDaemonText.Contains('worktree", "list", "--porcelain", "-z"')) "Release daemon builds should verify linked worktree registration through Git's stable porcelain format."
+  Assert-True ($buildDaemonText.Contains('ls-files", "--stage", "--", ".cargo/config.toml"')) "Release daemon builds should require one tracked regular Cargo config in each participating worktree."
+  Assert-True ($buildDaemonText.Contains('ls-tree", "HEAD", "--", ".cargo/config.toml"')) "Release daemon builds should require the Cargo config index entry to match HEAD."
+  Assert-True ($buildDaemonText.Contains('status", "--porcelain=v1", "--untracked-files=all", "--", ".cargo/config.toml"')) "Release daemon builds should reject staged and unstaged Cargo config drift."
+  Assert-True ($buildDaemonText.Contains('hash-object", "--no-filters", "--", ".cargo/config.toml"')) "Release daemon builds should compare raw working-tree Cargo config bytes with the tracked blob."
+  Assert-True ($buildDaemonText.Contains('must reference the same tracked Git blob') -and $buildDaemonText.Contains('must be byte-identical')) "Release daemon builds should require linked and primary Cargo configs to have identical tracked and working-tree bytes."
   Assert-True ($buildDaemonText.Contains('$legacyRepositoryCargoConfig')) "Release daemon build should reject a legacy repository Cargo config that would override config.toml."
-  Assert-True ($buildDaemonText.Contains('[Environment]::GetEnvironmentVariable("CARGO_HOME")')) "Release daemon build should inspect Cargo's configured home directory."
+  Assert-True ($buildDaemonText.Contains('"CARGO_HOME"') -and $buildDaemonText.Contains('$variableName must be unset')) "Release daemon build should reject an explicit Cargo home instead of accepting alternate configuration discovery."
   Assert-True ($buildDaemonText.Contains('[Environment]::GetEnvironmentVariable("USERPROFILE")')) "Release daemon build should use Cargo's Windows default home resolution."
-  Assert-True ($buildDaemonText.Contains('[Environment+SpecialFolder]::UserProfile')) "Release daemon build should inspect the default Cargo home for external configuration."
+  Assert-True (-not $buildDaemonText.Contains('[Environment+SpecialFolder]::UserProfile')) "Release daemon build should fail instead of guessing a missing USERPROFILE."
   Assert-True ($buildDaemonText.Contains('[IO.Directory]::GetParent($repoRoot)')) "Release daemon build should inspect parent directories for merged Cargo configuration."
   Assert-True ($buildDaemonText.Contains('Remove-Item -LiteralPath $staleOutput -Force')) "Release daemon build should fail on fixed-path output deletion errors."
   Assert-True (-not $buildDaemonText.Contains('Remove-Item -LiteralPath $daemonPath, $daemonPdbPath -Force -ErrorAction SilentlyContinue')) "Release daemon build must not suppress fixed-path output deletion errors."
@@ -218,6 +380,7 @@ try {
   }
 
   $targetRustFlagsName = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS"
+  $savedTargetRustFlagsExists = Test-Path -LiteralPath "Env:$targetRustFlagsName"
   $savedTargetRustFlags = [Environment]::GetEnvironmentVariable($targetRustFlagsName)
   try {
     [Environment]::SetEnvironmentVariable($targetRustFlagsName, "-C link-arg=/DEBUG")
@@ -226,7 +389,12 @@ try {
     } "$targetRustFlagsName must be unset" "Release daemon build should reject a target-specific linker-policy override."
   }
   finally {
-    [Environment]::SetEnvironmentVariable($targetRustFlagsName, $savedTargetRustFlags)
+    if ($savedTargetRustFlagsExists) {
+      Set-Item -LiteralPath "Env:$targetRustFlagsName" -Value $savedTargetRustFlags
+    }
+    else {
+      Remove-Item -LiteralPath "Env:$targetRustFlagsName" -ErrorAction SilentlyContinue
+    }
   }
 
   $savedCargoHome = $env:CARGO_HOME
@@ -246,6 +414,180 @@ try {
   finally {
     $env:CARGO_HOME = $savedCargoHome
     $env:USERPROFILE = $savedUserProfile
+  }
+
+  $gitLocalEnvironmentNames = @(
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR"
+  )
+  $savedGitEnvironment = @{}
+  $savedFixturePath = $env:PATH
+  $savedFixtureCargoHome = $env:CARGO_HOME
+  $savedFixtureUserProfile = $env:USERPROFILE
+  $savedFixtureDaemonPath = $env:SUBVERSIONR_TEST_DAEMON_PATH
+  $savedFixtureCargoLog = $env:SUBVERSIONR_TEST_CARGO_LOG
+  $savedFixtureRustcLog = $env:SUBVERSIONR_TEST_RUSTC_LOG
+  foreach ($variableName in $gitLocalEnvironmentNames) {
+    $savedGitEnvironment[$variableName] = [pscustomobject]@{
+      exists = Test-Path -LiteralPath "Env:$variableName"
+      value = [Environment]::GetEnvironmentVariable($variableName)
+    }
+    Remove-Item -LiteralPath "Env:$variableName" -ErrorAction SilentlyContinue
+  }
+  try {
+    $daemonBuildFixture = New-DaemonBuildWorktreeFixture `
+      -Root $worktreeFixtureRoot `
+      -BuildScript $buildDaemonScript `
+      -NativeModule $modulePath
+    $env:PATH = "$($daemonBuildFixture.toolsRoot)$([IO.Path]::PathSeparator)$savedFixturePath"
+    $env:CARGO_HOME = $null
+    $env:USERPROFILE = $daemonBuildFixture.userProfile
+
+    $primaryBuild = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.primaryRoot
+    Assert-Equal 0 $primaryBuild.exitCode "Release daemon fixture should build from the primary worktree. $($primaryBuild.output)"
+    Assert-True $primaryBuild.cargoRan "Primary worktree fixture should invoke Cargo."
+    Assert-True $primaryBuild.rustcRan "Primary worktree fixture should invoke rustc."
+    $primaryCargo = Get-Content -Raw -LiteralPath $daemonBuildFixture.cargoLog | ConvertFrom-Json
+    $primaryRustc = Get-Content -Raw -LiteralPath $daemonBuildFixture.rustcLog | ConvertFrom-Json
+    Assert-PathEqual $daemonBuildFixture.primaryRoot $primaryCargo.cwd "Primary worktree Cargo should run from the primary root."
+    Assert-PathEqual $daemonBuildFixture.primaryRoot $primaryRustc.cwd "Primary worktree rustc should run from the primary root."
+    $expectedPrimaryCargoArguments = "build --manifest-path $($daemonBuildFixture.primaryRoot)\Cargo.toml -p subversionr-daemon --release --locked --target-dir $($daemonBuildFixture.primaryRoot)\target"
+    Assert-Equal $expectedPrimaryCargoArguments $primaryCargo.rawArguments "Primary worktree Cargo arguments should bind the primary manifest and target."
+
+    $linkedBuild = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-Equal 0 $linkedBuild.exitCode "Release daemon fixture should accept the registered repository-owned linked worktree. $($linkedBuild.output)"
+    Assert-True $linkedBuild.cargoRan "Accepted linked worktree fixture should invoke Cargo."
+    Assert-True $linkedBuild.rustcRan "Accepted linked worktree fixture should invoke rustc."
+    $linkedCargo = Get-Content -Raw -LiteralPath $daemonBuildFixture.cargoLog | ConvertFrom-Json
+    $linkedRustc = Get-Content -Raw -LiteralPath $daemonBuildFixture.rustcLog | ConvertFrom-Json
+    Assert-PathEqual $daemonBuildFixture.primaryRoot $linkedCargo.cwd "Linked worktree Cargo should run from the primary root."
+    Assert-PathEqual $daemonBuildFixture.primaryRoot $linkedRustc.cwd "Linked worktree rustc should run from the primary root."
+    $expectedLinkedCargoArguments = "build --manifest-path $($daemonBuildFixture.linkedRoot)\Cargo.toml -p subversionr-daemon --release --locked --target-dir $($daemonBuildFixture.linkedRoot)\target"
+    Assert-Equal $expectedLinkedCargoArguments $linkedCargo.rawArguments "Linked worktree Cargo arguments should bind the linked manifest and target."
+
+    $primaryCargoConfig = Join-Path $daemonBuildFixture.primaryRoot ".cargo\config.toml"
+    $linkedCargoConfig = Join-Path $daemonBuildFixture.linkedRoot ".cargo\config.toml"
+    $repositoryCargoConfigText = "[target.x86_64-pc-windows-msvc]`nrustflags = [`"-C`", `"link-arg=/Brepro`"]`n"
+    "[target.x86_64-pc-windows-msvc]`nrustflags = [`"-C`", `"target-cpu=native`"]`n" |
+      Set-Content -LiteralPath $primaryCargoConfig -Encoding ascii -NoNewline
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.primaryRoot -Arguments @("add", ".cargo/config.toml") | Out-Null
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.primaryRoot -Arguments @("commit", "-m", "primary config drift") | Out-Null
+    $primaryDrift = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($primaryDrift.exitCode -ne 0 -and $primaryDrift.output.Contains("must reference the same tracked Git blob")) "Linked builds should reject a clean but differing primary Cargo config before Cargo."
+    Assert-True (-not $primaryDrift.cargoRan -and -not $primaryDrift.rustcRan) "Primary Cargo config drift should fail before rustc or Cargo runs."
+    $repositoryCargoConfigText | Set-Content -LiteralPath $primaryCargoConfig -Encoding ascii -NoNewline
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.primaryRoot -Arguments @("add", ".cargo/config.toml") | Out-Null
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.primaryRoot -Arguments @("commit", "-m", "restore primary config") | Out-Null
+
+    "# unstaged drift`n" | Add-Content -LiteralPath $linkedCargoConfig -Encoding ascii
+    $unstagedDrift = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($unstagedDrift.exitCode -ne 0 -and $unstagedDrift.output.Contains("must match its Git index and HEAD")) "Linked builds should reject unstaged linked Cargo config drift."
+    Assert-True (-not $unstagedDrift.cargoRan -and -not $unstagedDrift.rustcRan) "Unstaged linked config drift should fail before rustc or Cargo runs."
+    $repositoryCargoConfigText | Set-Content -LiteralPath $linkedCargoConfig -Encoding ascii -NoNewline
+
+    "# staged drift`n" | Add-Content -LiteralPath $linkedCargoConfig -Encoding ascii
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.linkedRoot -Arguments @("add", ".cargo/config.toml") | Out-Null
+    $stagedDrift = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($stagedDrift.exitCode -ne 0 -and $stagedDrift.output.Contains("must match its Git index and HEAD")) "Linked builds should reject staged linked Cargo config drift."
+    Assert-True (-not $stagedDrift.cargoRan -and -not $stagedDrift.rustcRan) "Staged linked config drift should fail before rustc or Cargo runs."
+    $repositoryCargoConfigText | Set-Content -LiteralPath $linkedCargoConfig -Encoding ascii -NoNewline
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.linkedRoot -Arguments @("add", ".cargo/config.toml") | Out-Null
+
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.linkedRoot -Arguments @("update-index", "--chmod=+x", ".cargo/config.toml") | Out-Null
+    $modeDrift = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($modeDrift.exitCode -ne 0 -and $modeDrift.output.Contains("tracked regular 100644 file")) "Linked builds should reject a non-100644 Cargo config index mode."
+    Assert-True (-not $modeDrift.cargoRan -and -not $modeDrift.rustcRan) "Cargo config mode drift should fail before rustc or Cargo runs."
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.linkedRoot -Arguments @("update-index", "--chmod=-x", ".cargo/config.toml") | Out-Null
+
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.linkedRoot -Arguments @("update-index", "--assume-unchanged", ".cargo/config.toml") | Out-Null
+    "# hidden assume-unchanged drift`n" | Add-Content -LiteralPath $linkedCargoConfig -Encoding ascii
+    $assumeUnchangedDrift = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($assumeUnchangedDrift.exitCode -ne 0 -and $assumeUnchangedDrift.output.Contains("must match its tracked Git blob byte-for-byte")) "Linked builds should reject Cargo config drift hidden by assume-unchanged."
+    Assert-True (-not $assumeUnchangedDrift.cargoRan -and -not $assumeUnchangedDrift.rustcRan) "Assume-unchanged Cargo config drift should fail before rustc or Cargo runs."
+    $repositoryCargoConfigText | Set-Content -LiteralPath $linkedCargoConfig -Encoding ascii -NoNewline
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.linkedRoot -Arguments @("update-index", "--no-assume-unchanged", ".cargo/config.toml") | Out-Null
+
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.linkedRoot -Arguments @("update-index", "--skip-worktree", ".cargo/config.toml") | Out-Null
+    "# hidden skip-worktree drift`n" | Add-Content -LiteralPath $linkedCargoConfig -Encoding ascii
+    $skipWorktreeDrift = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($skipWorktreeDrift.exitCode -ne 0 -and $skipWorktreeDrift.output.Contains("must match its tracked Git blob byte-for-byte")) "Linked builds should reject Cargo config drift hidden by skip-worktree."
+    Assert-True (-not $skipWorktreeDrift.cargoRan -and -not $skipWorktreeDrift.rustcRan) "Skip-worktree Cargo config drift should fail before rustc or Cargo runs."
+    $repositoryCargoConfigText | Set-Content -LiteralPath $linkedCargoConfig -Encoding ascii -NoNewline
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.linkedRoot -Arguments @("update-index", "--no-skip-worktree", ".cargo/config.toml") | Out-Null
+
+    "legacy" | Set-Content -LiteralPath (Join-Path $daemonBuildFixture.linkedRoot ".cargo\config") -Encoding ascii -NoNewline
+    $linkedLegacy = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($linkedLegacy.exitCode -ne 0 -and $linkedLegacy.output.Contains("reject external Cargo configuration")) "Linked builds should reject a linked legacy Cargo config."
+    Assert-True (-not $linkedLegacy.cargoRan) "A linked legacy Cargo config should fail before Cargo runs."
+    Remove-Item -LiteralPath (Join-Path $daemonBuildFixture.linkedRoot ".cargo\config") -Force
+
+    "legacy" | Set-Content -LiteralPath (Join-Path $daemonBuildFixture.primaryRoot ".cargo\config") -Encoding ascii -NoNewline
+    $primaryLegacy = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($primaryLegacy.exitCode -ne 0 -and $primaryLegacy.output.Contains("reject external Cargo configuration")) "Linked builds should reject a primary legacy Cargo config."
+    Assert-True (-not $primaryLegacy.cargoRan) "A primary legacy Cargo config should fail before Cargo runs."
+    Remove-Item -LiteralPath (Join-Path $daemonBuildFixture.primaryRoot ".cargo\config") -Force
+
+    $intermediateCargoDirectory = Join-Path $daemonBuildFixture.primaryRoot ".worktree\.cargo"
+    New-Item -ItemType Directory -Force -Path $intermediateCargoDirectory | Out-Null
+    "[build]`ntarget-dir = 'redirected'`n" | Set-Content -LiteralPath (Join-Path $intermediateCargoDirectory "config.toml") -Encoding ascii -NoNewline
+    $parentConfig = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($parentConfig.exitCode -ne 0 -and $parentConfig.output.Contains("reject external Cargo configuration")) "Linked builds should reject another parent Cargo config."
+    Assert-True (-not $parentConfig.cargoRan) "A differing parent Cargo config should fail before Cargo runs."
+    Remove-Item -LiteralPath $intermediateCargoDirectory -Recurse -Force
+
+    $profileCargoDirectory = Join-Path $daemonBuildFixture.userProfile ".cargo"
+    New-Item -ItemType Directory -Force -Path $profileCargoDirectory | Out-Null
+    "[build]`ntarget-dir = 'redirected'`n" | Set-Content -LiteralPath (Join-Path $profileCargoDirectory "config.toml") -Encoding ascii -NoNewline
+    $profileConfig = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($profileConfig.exitCode -ne 0 -and $profileConfig.output.Contains("reject external Cargo configuration")) "Linked builds should reject the default USERPROFILE Cargo config."
+    Assert-True (-not $profileConfig.cargoRan) "A USERPROFILE Cargo config should fail before Cargo runs."
+    Remove-Item -LiteralPath $profileCargoDirectory -Recurse -Force
+
+    $env:CARGO_HOME = Join-Path $worktreeFixtureRoot "alternate-cargo-home"
+    $explicitCargoHome = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($explicitCargoHome.exitCode -ne 0 -and $explicitCargoHome.output.Contains("CARGO_HOME must be unset")) "Linked builds should reject an explicit Cargo home."
+    Assert-True (-not $explicitCargoHome.cargoRan) "An explicit Cargo home should fail before Cargo runs."
+    $env:CARGO_HOME = $null
+
+    $env:GIT_DIR = "spoofed-git-directory"
+    $ambientGit = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.linkedRoot
+    Assert-True ($ambientGit.exitCode -ne 0 -and $ambientGit.output.Contains("GIT_DIR must be unset")) "Linked builds should reject ambient Git ownership overrides."
+    Assert-True (-not $ambientGit.cargoRan) "An ambient Git directory should fail before Cargo runs."
+    $env:GIT_DIR = $null
+
+    Invoke-FixtureGit -WorkingDirectory $daemonBuildFixture.primaryRoot -Arguments @("worktree", "add", "--detach", $daemonBuildFixture.outsideLinkedRoot, "HEAD") | Out-Null
+    $outsideLinked = Invoke-DaemonBuildFixture -Fixture $daemonBuildFixture -WorktreeRoot $daemonBuildFixture.outsideLinkedRoot
+    Assert-True ($outsideLinked.exitCode -ne 0 -and $outsideLinked.output.Contains("primaryRoot/.worktree/<name>")) "Registered linked worktrees outside primaryRoot/.worktree should be rejected."
+    Assert-True (-not $outsideLinked.cargoRan) "A linked worktree outside the owned layout should fail before Cargo runs."
+  }
+  finally {
+    $env:PATH = $savedFixturePath
+    $env:CARGO_HOME = $savedFixtureCargoHome
+    $env:USERPROFILE = $savedFixtureUserProfile
+    $env:SUBVERSIONR_TEST_DAEMON_PATH = $savedFixtureDaemonPath
+    $env:SUBVERSIONR_TEST_CARGO_LOG = $savedFixtureCargoLog
+    $env:SUBVERSIONR_TEST_RUSTC_LOG = $savedFixtureRustcLog
+    foreach ($variableName in $gitLocalEnvironmentNames) {
+      if ($savedGitEnvironment[$variableName].exists) {
+        Set-Item -LiteralPath "Env:$variableName" -Value $savedGitEnvironment[$variableName].value
+      }
+      else {
+        Remove-Item -LiteralPath "Env:$variableName" -ErrorAction SilentlyContinue
+      }
+    }
   }
 
   $releaseDirectory = Join-Path $repoRoot "target\release"
@@ -1719,4 +2061,9 @@ EndProject
 }
 finally {
   Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  $fixtureRootFull = [IO.Path]::GetFullPath($worktreeFixtureRoot)
+  $systemTempFull = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+  if ($fixtureRootFull.StartsWith($systemTempFull, [StringComparison]::OrdinalIgnoreCase)) {
+    Remove-Item -LiteralPath $worktreeFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
