@@ -204,6 +204,57 @@ if ($null -eq $testArg) {
 if ($env:SUBVERSIONR_FAKE_CODE_HANG_EXTENSION_HOST -eq "1") {
   Start-Sleep -Seconds 60
 }
+Add-Type -TypeDefinition @"
+using System.Runtime.InteropServices;
+
+public static class FakeJsonCoordinationFileNativeMethods
+{
+    public const uint MOVEFILE_REPLACE_EXISTING = 0x1;
+    public const uint MOVEFILE_WRITE_THROUGH = 0x8;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool MoveFileExW(string existingFileName, string newFileName, uint flags);
+}
+"@
+function Write-FakeJsonCoordinationFile {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory, ValueFromPipeline)]
+    [string]$Json,
+    [Parameter(Mandatory)]
+    [string]$Path
+  )
+  process {
+    if ($Path -notmatch '^[A-Za-z]:\\') {
+      throw "fake code CLI coordination path must be a canonical local-drive absolute path: $Path"
+    }
+    $fullDestinationPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not [string]::Equals($Path, $fullDestinationPath, [System.StringComparison]::Ordinal)) {
+      throw "fake code CLI coordination path must be a canonical local-drive absolute path: $Path"
+    }
+    $directory = Split-Path -Parent $fullDestinationPath
+    if ([string]::IsNullOrWhiteSpace($directory) -or -not (Test-Path -LiteralPath $directory -PathType Container)) {
+      throw "fake code CLI coordination directory does not exist: $directory"
+    }
+    $temporaryPath = Join-Path $directory (".{0}.{1}.tmp" -f ([System.IO.Path]::GetFileName($Path)), [Guid]::NewGuid().ToString("N"))
+    try {
+      Set-Content -LiteralPath $temporaryPath -Value $Json -NoNewline -Encoding utf8
+      $moveFlags = [FakeJsonCoordinationFileNativeMethods]::MOVEFILE_REPLACE_EXISTING -bor [FakeJsonCoordinationFileNativeMethods]::MOVEFILE_WRITE_THROUGH
+      $nativeTemporaryPath = "\\?\$([System.IO.Path]::GetFullPath($temporaryPath))"
+      $nativeDestinationPath = "\\?\$fullDestinationPath"
+      if (-not [FakeJsonCoordinationFileNativeMethods]::MoveFileExW($nativeTemporaryPath, $nativeDestinationPath, $moveFlags)) {
+        $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw [System.ComponentModel.Win32Exception]::new($errorCode)
+      }
+    }
+    finally {
+      if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+        Remove-Item -LiteralPath $temporaryPath -Force
+      }
+    }
+  }
+}
 $resultPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESULT
 $readyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_READY
 $donePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_DONE
@@ -255,7 +306,7 @@ if ($harnessMode -eq "restricted-active-editor-palette") {
       command = [pscustomobject]@{ id = $command.id; title = $command.title }
       target = [pscustomobject]@{ repositoryId = $restrictedRepositoryId; epoch = 1; workingCopyRoot = $workingCopyRoot; path = "src/tracked.txt" }
       rendererCaptureExpectations = $expectations
-    } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.palette-$($command.slug)" -Encoding utf8
+    } | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path "$readyPath.palette-$($command.slug)"
     Wait-RestrictedFakeRendererDone -Path "$donePath.palette-$($command.slug)" -Description $command.title
     $entry = [ordered]@{
       command = [pscustomobject]@{ id = $command.id; title = $command.title }
@@ -292,7 +343,7 @@ if ($harnessMode -eq "restricted-active-editor-palette") {
     activityAfter = $restrictedActivity
     closeReport = [pscustomobject]@{ kind = "subversionr.installedSourceControlUiE2eCloseReport"; repositoryId = $restrictedRepositoryId; epoch = 1; repositoryClosed = $true }
     assertions = [pscustomobject]@{ genuinelyRestricted = $true; baseVisibleAndExecuted = $true; trustedOnlyCommandsAbsent = $true; directCallsBlockedByStableCode = $true; statusActivityUnchanged = $true }
-  } | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $resultPath -Encoding utf8
+  } | ConvertTo-Json -Depth 14 | Write-FakeJsonCoordinationFile -Path $resultPath
   exit 0
 }
 $noRepositoryWelcomeRendererReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_NO_REPOSITORY_WELCOME_RENDERER_READY
@@ -625,7 +676,7 @@ $ready = [pscustomobject]@{
   }
   rendererCaptureExpectations = $openReport.rendererCaptureExpectations
 }
-$ready | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $readyPath -Encoding utf8
+$ready | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $readyPath
 $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
 while (-not (Test-Path -LiteralPath $donePath -PathType Leaf)) {
   if ([DateTimeOffset]::UtcNow -gt $deadline) {
@@ -658,7 +709,7 @@ $historyInitialExpectations = [pscustomobject]@{
   ok = $true
   phase = "repositoryHistoryInitialCollapsed"
   rendererCaptureExpectations = $historyInitialExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.history-initial" -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path "$readyPath.history-initial"
 Wait-FakeRendererDone -Path "$donePath.history-initial" -Description "Repository Log initial"
 
 $historyLoadedExpectations = [pscustomobject]@{
@@ -679,7 +730,7 @@ $historyLoadedExpectations = [pscustomobject]@{
   ok = $true
   phase = "repositoryHistoryLoaded"
   rendererCaptureExpectations = $historyLoadedExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.history-loaded" -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path "$readyPath.history-loaded"
 Wait-FakeRendererDone -Path "$donePath.history-loaded" -Description "Repository Log loaded"
 
 $historyStaleExpectations = [pscustomobject]@{
@@ -695,7 +746,7 @@ $historyStaleExpectations = [pscustomobject]@{
   ok = $true
   phase = "repositoryHistoryStaleNotification"
   rendererCaptureExpectations = $historyStaleExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.history-stale" -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path "$readyPath.history-stale"
 Wait-FakeRendererDone -Path "$donePath.history-stale" -Description "Repository Log stale notification"
 
 $historyActivity = [pscustomobject]@{
@@ -796,7 +847,7 @@ foreach ($paletteCommand in $paletteCommands) {
     target = [pscustomobject]@{ repositoryId = $paletteRepositoryId; epoch = 2; workingCopyRoot = $multiRepositoryRefreshWorkingCopyRoot; path = "src/tracked.txt" }
     unrelatedRepository = [pscustomobject]@{ repositoryId = $openReport.repository.repositoryId; epoch = $openReport.repository.epoch; workingCopyRoot = $workingCopyRoot }
     rendererCaptureExpectations = $paletteExpectations
-  } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$readyPath.palette-$($paletteCommand.slug)" -Encoding utf8
+  } | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path "$readyPath.palette-$($paletteCommand.slug)"
   Wait-FakeRendererDone -Path "$donePath.palette-$($paletteCommand.slug)" -Description "active-editor palette $($paletteCommand.title)"
   $paletteExecutions += [pscustomobject]@{
     command = [pscustomobject]@{ id = $paletteCommand.id; title = $paletteCommand.title }
@@ -874,7 +925,7 @@ $partialFreshnessRendererExpectations = [pscustomobject]@{
     workingCopyRoot = $partialFreshnessReport.repository.identity.workingCopyRoot
   }
   rendererCaptureExpectations = $partialFreshnessRendererExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $partialFreshnessRendererReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $partialFreshnessRendererReadyPath
 Wait-FakeRendererDone -Path $partialFreshnessRendererDonePath -Description "partial freshness"
 $staleFreshnessReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eFreshnessReport"
@@ -924,7 +975,7 @@ $staleFreshnessRendererExpectations = [pscustomobject]@{
     workingCopyRoot = $staleFreshnessReport.repository.identity.workingCopyRoot
   }
   rendererCaptureExpectations = $staleFreshnessRendererExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $staleFreshnessRendererReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $staleFreshnessRendererReadyPath
 Wait-FakeRendererDone -Path $staleFreshnessRendererDonePath -Description "stale freshness"
 $fullReconcileCancellationExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN-R", "Reconciling SVN working copy status", "Cancel")
@@ -952,7 +1003,7 @@ $fullReconcileCancellationArmReport = [pscustomobject]@{
   command = "subversionr.fullReconcile"
   armReport = $fullReconcileCancellationArmReport
   rendererCaptureExpectations = $fullReconcileCancellationExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $fullReconcileCancellationReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $fullReconcileCancellationReadyPath
 Wait-FakeRendererDone -Path $fullReconcileCancellationDonePath -Description "full reconcile cancellation"
 $fullReconcileCancellationProbeReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eFullReconcileCancellationReport"
@@ -1491,7 +1542,7 @@ $multiRepositoryRefreshPromptExpectations = [pscustomobject]@{
     workingCopyRoot = $multiRepositoryRefreshWorkingCopyRoot
   }
   rendererCaptureExpectations = $multiRepositoryRefreshPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $multiRepositoryRefreshPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $multiRepositoryRefreshPromptReadyPath
 $multiRepositoryPostRefreshFreshnessReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eFreshnessReport"
   generatedAt = "2026-06-25T00:00:03Z"
@@ -1856,7 +1907,7 @@ $deletePromptExpectations = [pscustomobject]@{
     generation = 2
   }
   rendererCaptureExpectations = $deletePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $deletePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $deletePromptReadyPath
 $scratchPath = Join-Path $workingCopyRoot "scratch.txt"
 $fileExistedBefore = Test-Path -LiteralPath $scratchPath -PathType Leaf
 Remove-Item -LiteralPath $scratchPath -Force -ErrorAction SilentlyContinue
@@ -1998,7 +2049,7 @@ $deleteLoadPromptExpectations = [pscustomobject]@{
   repositoryId = $loadOpenReport.repository.repositoryId
   loadItemCount = $loadItemCount
   rendererCaptureExpectations = $deleteLoadPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $deleteLoadPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $deleteLoadPromptReadyPath
 $commitPromptFakePhases = @(
   [pscustomobject]@{ phase = "commitAllMessagePrompt"; command = "subversionr.commitAll"; kind = "message"; text = "commit all eligible changed file resources from the explicit message prompt" },
   [pscustomobject]@{ phase = "reviewCommitInitialSelection"; command = "subversionr.reviewCommit"; kind = "selection" },
@@ -2038,7 +2089,7 @@ foreach ($commitPromptFakePhase in $commitPromptFakePhases) {
     phase = $commitPromptFakePhase.phase
     command = $commitPromptFakePhase.command
     rendererCaptureExpectations = $rendererCaptureExpectations
-  } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $commitPromptReadyPath -Encoding utf8
+  } | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $commitPromptReadyPath
   Wait-FakeRendererDone -Path $commitPromptDonePath -Description $commitPromptFakePhase.phase
   Remove-Item -LiteralPath $commitPromptReadyPath -Force
 }
@@ -3032,7 +3083,7 @@ $lockMessageCancellationPromptExpectations = [pscustomobject]@{
   }
   cancelKey = "Escape"
   rendererCaptureExpectations = $lockMessageCancellationPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockMessageCancellationPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $lockMessageCancellationPromptReadyPath
 Wait-FakeRendererDone -Path $lockMessageCancellationPromptDonePath -Description "lock message cancellation"
 $lockMessageCancellationSurfaceReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eCurrentSurfaceReport"
@@ -3091,7 +3142,7 @@ $lockMessagePromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $lockMessagePromptExpectations
   }
   rendererCaptureExpectations = $lockMessagePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockMessagePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $lockMessagePromptReadyPath
 Wait-FakeRendererDone -Path $lockMessagePromptDonePath -Description "lock message"
 $lockModePromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN lock mode", "Lock", "Steal lock")
@@ -3115,7 +3166,7 @@ $lockModePromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $lockModePromptExpectations
   }
   rendererCaptureExpectations = $lockModePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockModePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $lockModePromptReadyPath
 Wait-FakeRendererDone -Path $lockModePromptDonePath -Description "lock mode"
 [pscustomobject]@{
   ok = $true
@@ -3123,7 +3174,7 @@ Wait-FakeRendererDone -Path $lockModePromptDonePath -Description "lock mode"
   command = "subversionr.lockResource"
   code = "SVN_OPERATION_LOCK_FAILED"
   resultCategory = "failed"
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockFailureObservedReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $lockFailureObservedReadyPath
 Wait-FakeRendererDone -Path $lockFailureRecoveredDonePath -Description "competing lock failure recovery"
 Remove-Item -LiteralPath $lockMessagePromptDonePath, $lockModePromptDonePath -Force
 [pscustomobject]@{
@@ -3131,14 +3182,14 @@ Remove-Item -LiteralPath $lockMessagePromptDonePath, $lockModePromptDonePath -Fo
   phase = "lockRecoveryMessagePromptReady"
   command = "subversionr.lockResource"
   rendererCaptureExpectations = $lockMessagePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockMessagePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $lockMessagePromptReadyPath
 Wait-FakeRendererDone -Path $lockMessagePromptDonePath -Description "recovery lock message"
 [pscustomobject]@{
   ok = $true
   phase = "lockRecoveryModePromptReady"
   command = "subversionr.lockResource"
   rendererCaptureExpectations = $lockModePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockModePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $lockModePromptReadyPath
 Wait-FakeRendererDone -Path $lockModePromptDonePath -Description "recovery lock mode"
 $postLockFreshnessReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eFreshnessReport"
@@ -3195,7 +3246,7 @@ Set-Content -LiteralPath (Join-Path $lockWorkingCopyRoot ".svn\fake-lock-held") 
     kind = "file"
     generation = 1
   }
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $lockHeldOracleReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $lockHeldOracleReadyPath
 Wait-FakeRendererDone -Path $lockHeldOracleDonePath -Description "lock-held oracle"
 Remove-Item -LiteralPath (Join-Path $lockWorkingCopyRoot ".svn\fake-lock-held") -Force
 $unlockModeCancellationPromptExpectations = [pscustomobject]@{
@@ -3221,7 +3272,7 @@ $unlockModeCancellationPromptExpectations = [pscustomobject]@{
   }
   cancelKey = "Escape"
   rendererCaptureExpectations = $unlockModeCancellationPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $unlockModeCancellationPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $unlockModeCancellationPromptReadyPath
 Wait-FakeRendererDone -Path $unlockModeCancellationPromptDonePath -Description "unlock mode cancellation"
 $unlockModeCancellationSurfaceReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eCurrentSurfaceReport"
@@ -3281,7 +3332,7 @@ $unlockModePromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $unlockModePromptExpectations
   }
   rendererCaptureExpectations = $unlockModePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $unlockModePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $unlockModePromptReadyPath
 Wait-FakeRendererDone -Path $unlockModePromptDonePath -Description "unlock mode"
 $postUnlockFreshnessReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eFreshnessReport"
@@ -3446,7 +3497,7 @@ $changelistSetPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $changelistSetPromptExpectations
   }
   rendererCaptureExpectations = $changelistSetPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $changelistSetPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $changelistSetPromptReadyPath
 $changelistSetClearOpenReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eOpenReport"
   generatedAt = "2026-06-25T00:00:07Z"
@@ -3654,7 +3705,7 @@ $changelistRevertPromptExpectations = [pscustomobject]@{
   resource = [pscustomobject]@{ path = "src/tracked.txt"; contextValue = "subversionr.changedFile.baseDiffable.changelisted"; kind = "file"; generation = 1 }
   prompt = [pscustomobject]@{ clickButtonText = "Revert"; rendererCaptureExpectations = $changelistRevertPromptExpectations }
   rendererCaptureExpectations = $changelistRevertPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $changelistRevertPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $changelistRevertPromptReadyPath
 $revertChangelistOpenReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eOpenReport"
   generatedAt = "2026-06-25T00:00:07Z"
@@ -3885,7 +3936,7 @@ $movePromptExpectations = [pscustomobject]@{
   }
   destinationPath = "src/moved.txt"
   rendererCaptureExpectations = $movePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $movePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $movePromptReadyPath
 $moveSourcePath = Join-Path $moveWorkingCopyRoot "src\tracked.txt"
 $moveDestinationPath = Join-Path $moveWorkingCopyRoot "src\moved.txt"
 $moveSourceFileExistedBefore = Test-Path -LiteralPath $moveSourcePath -PathType Leaf
@@ -4092,7 +4143,7 @@ $moveCancellationPromptExpectations = [pscustomobject]@{
   }
   cancelKey = "Escape"
   rendererCaptureExpectations = $moveCancellationPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $moveCancellationPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $moveCancellationPromptReadyPath
 $moveCancellationSourcePath = Join-Path $moveCancellationWorkingCopyRoot "src\tracked.txt"
 $moveCancellationDestinationPath = Join-Path $moveCancellationWorkingCopyRoot "src\cancelled.txt"
 $moveCancellationSourceFileExistedBefore = Test-Path -LiteralPath $moveCancellationSourcePath -PathType Leaf
@@ -4196,7 +4247,7 @@ $removePromptExpectations = [pscustomobject]@{
     generation = 1
   }
   rendererCaptureExpectations = $removePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $removePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $removePromptReadyPath
 $removeTrackedPath = Join-Path $removeWorkingCopyRoot "src\tracked.txt"
 $removeFileExistedBefore = Test-Path -LiteralPath $removeTrackedPath -PathType Leaf
 Remove-Item -LiteralPath $removeTrackedPath -Force -ErrorAction SilentlyContinue
@@ -4336,7 +4387,7 @@ $removeCancellationPromptExpectations = [pscustomobject]@{
   }
   cancelAction = "notifications.clearAll"
   rendererCaptureExpectations = $removeCancellationPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $removeCancellationPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $removeCancellationPromptReadyPath
 Wait-FakeRendererDone -Path $removeCancellationPromptDonePath -Description "remove cancellation"
 $removeCancellationTrackedPath = Join-Path $removeCancellationWorkingCopyRoot "src\tracked.txt"
 $removeCancellationFileExistedBefore = Test-Path -LiteralPath $removeCancellationTrackedPath -PathType Leaf
@@ -4467,7 +4518,7 @@ $resolveUpdateWarningExpectations = [pscustomobject]@{
   conflictPaths = @("src/tracked.txt")
   updateNotificationCleanup = [pscustomobject]@{ command = "notifications.clearAll"; label = "updateRepositoryConflict"; cleared = $true }
   rendererCaptureExpectations = $resolveUpdateWarningExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $resolveUpdateWarningReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $resolveUpdateWarningReadyPath
 Wait-FakeRendererDone -Path $resolveUpdateWarningDonePath -Description "resolve update warning"
 
 $resolveArtifactPaths = @("src/tracked.txt.mine", "src/tracked.txt.r1", "src/tracked.txt.r2")
@@ -4508,7 +4559,7 @@ $resolveArtifactExpectations = [pscustomobject]@{
   phase = "conflictArtifactsReady"
   artifactSurface = $resolveArtifactSurface
   rendererCaptureExpectations = $resolveArtifactExpectations
-} | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $resolveConflictArtifactsReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 16 | Write-FakeJsonCoordinationFile -Path $resolveConflictArtifactsReadyPath
 Wait-FakeRendererDone -Path $resolveConflictArtifactsDonePath -Description "resolve conflict artifacts"
 
 $resolvePromptExpectations = [pscustomobject]@{
@@ -4528,7 +4579,7 @@ $resolvePromptExpectations = [pscustomobject]@{
     generation = 1
   }
   rendererCaptureExpectations = $resolvePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $resolvePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $resolvePromptReadyPath
 $resolveTrackedPath = Join-Path $resolveWorkingCopyRoot "src\tracked.txt"
 $resolveFileExistedBefore = Test-Path -LiteralPath $resolveTrackedPath -PathType Leaf
 $resolveContentBefore = "merged by M7j3 resolve`n"
@@ -4651,7 +4702,7 @@ $resolvedArtifactExpectations = [pscustomobject]@{
   phase = "resolvedConflictArtifactsReady"
   artifactSurface = $postResolveFreshnessReport.conflictArtifactSurface
   rendererCaptureExpectations = $resolvedArtifactExpectations
-} | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $resolvedConflictArtifactsReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 16 | Write-FakeJsonCoordinationFile -Path $resolvedConflictArtifactsReadyPath
 Wait-FakeRendererDone -Path $resolvedConflictArtifactsDonePath -Description "resolved conflict artifacts"
 $resolveReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eResolveWorkflow"
@@ -4753,7 +4804,7 @@ $resolveCancellationPromptExpectations = [pscustomobject]@{
     generation = 1
   }
   rendererCaptureExpectations = $resolveCancellationPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $resolveCancellationPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $resolveCancellationPromptReadyPath
 $resolveCancellationTrackedPath = Join-Path $resolveCancellationWorkingCopyRoot "src\tracked.txt"
 $resolveCancellationFileExistedBefore = Test-Path -LiteralPath $resolveCancellationTrackedPath -PathType Leaf
 $resolveCancellationContentBefore = "merged by M7j3 resolve`n"
@@ -4907,7 +4958,7 @@ $removeKeepLocalPromptExpectations = [pscustomobject]@{
     generation = 2
   }
   rendererCaptureExpectations = $removeKeepLocalPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $removeKeepLocalPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $removeKeepLocalPromptReadyPath
 $trackedPath = Join-Path $workingCopyRoot "src\tracked.txt"
 $trackedFileExistedBefore = Test-Path -LiteralPath $trackedPath -PathType Leaf
 $preRemoveKeepLocalFreshnessReport = [pscustomobject]@{
@@ -5066,7 +5117,7 @@ $revertPromptExpectations = [pscustomobject]@{
     generation = 1
   }
   rendererCaptureExpectations = $revertPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $revertPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $revertPromptReadyPath
 $revertTrackedPath = Join-Path $revertWorkingCopyRoot "src\tracked.txt"
 $revertFileExistedBefore = Test-Path -LiteralPath $revertTrackedPath -PathType Leaf
 Set-Content -LiteralPath $revertTrackedPath -Value "initial`n" -NoNewline -Encoding utf8
@@ -5198,7 +5249,7 @@ $revertCancellationPromptExpectations = [pscustomobject]@{
   }
   cancelAction = "notifications.clearAll"
   rendererCaptureExpectations = $revertCancellationPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $revertCancellationPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $revertCancellationPromptReadyPath
 Wait-FakeRendererDone -Path $revertCancellationPromptDonePath -Description "revert cancellation"
 $revertCancellationTrackedPath = Join-Path $revertCancellationWorkingCopyRoot "src\tracked.txt"
 $revertCancellationFileExistedBefore = Test-Path -LiteralPath $revertCancellationTrackedPath -PathType Leaf
@@ -5360,7 +5411,7 @@ $cleanupPromptExpectations = [pscustomobject]@{
   command = "subversionr.cleanupRepository"
   repositoryId = $openReport.repository.repositoryId
   rendererCaptureExpectations = $cleanupPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cleanupPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $cleanupPromptReadyPath
 $cleanupReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eCleanupWorkflow"
   generatedAt = "2026-06-25T00:00:10Z"
@@ -5420,7 +5471,7 @@ $noRepositoryWelcomeRendererExpectations = [pscustomobject]@{
     repositoryClosed = $closeReport.repositoryClosed
   }
   rendererCaptureExpectations = $noRepositoryWelcomeRendererExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $noRepositoryWelcomeRendererReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $noRepositoryWelcomeRendererReadyPath
 Wait-FakeRendererDone -Path $noRepositoryWelcomeRendererDonePath -Description "no-repository welcome"
 $checkoutCancellationPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("Checkout SVN repository", "Enter the SVN repository URL to checkout.")
@@ -5446,7 +5497,7 @@ $checkoutCancellationPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutCancellationPromptExpectations
   }
   rendererCaptureExpectations = $checkoutCancellationPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutCancellationPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutCancellationPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutCancellationPromptDonePath -Description "checkout cancellation"
 function New-FakeMissingCurrentSurfaceProbe([string]$Path) {
   [pscustomobject]@{
@@ -5534,7 +5585,7 @@ $checkoutExistingTargetFailureUrlPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutExistingTargetFailureUrlPromptExpectations
   }
   rendererCaptureExpectations = $checkoutExistingTargetFailureUrlPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingTargetFailureUrlPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingTargetFailureUrlPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingTargetFailureUrlPromptDonePath -Description "checkout existing-target failure URL"
 $checkoutExistingTargetFailureTargetPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout target folder", "Enter the absolute local folder path for the checkout.")
@@ -5548,7 +5599,7 @@ $checkoutExistingTargetFailureTargetPromptExpectations = [pscustomobject]@{
   phase = "checkoutExistingTargetFailureTargetPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingTargetFailureTargetPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingTargetFailureTargetPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingTargetFailureTargetPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingTargetFailureTargetPromptDonePath -Description "checkout existing-target failure target"
 $checkoutExistingTargetFailureRevisionPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout revision", "HEAD", "Revision number")
@@ -5561,7 +5612,7 @@ $checkoutExistingTargetFailureRevisionPromptExpectations = [pscustomobject]@{
   phase = "checkoutExistingTargetFailureRevisionPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingTargetFailureRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingTargetFailureRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingTargetFailureRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingTargetFailureRevisionPromptDonePath -Description "checkout existing-target failure revision"
 $checkoutExistingTargetFailureDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout depth", "Empty", "Files", "Immediates", "Infinity")
@@ -5574,7 +5625,7 @@ $checkoutExistingTargetFailureDepthPromptExpectations = [pscustomobject]@{
   phase = "checkoutExistingTargetFailureDepthPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingTargetFailureDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingTargetFailureDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingTargetFailureDepthPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingTargetFailureDepthPromptDonePath -Description "checkout existing-target failure depth"
 $checkoutExistingTargetFailureExternalsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout externals", "Ignore externals", "Include externals")
@@ -5587,7 +5638,7 @@ $checkoutExistingTargetFailureExternalsPromptExpectations = [pscustomobject]@{
   phase = "checkoutExistingTargetFailureExternalsPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingTargetFailureExternalsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingTargetFailureExternalsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingTargetFailureExternalsPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingTargetFailureExternalsPromptDonePath -Description "checkout existing-target failure externals"
 if (-not (Test-Path -LiteralPath $checkoutExistingTargetFailureTargetPath -PathType Leaf)) {
   throw "fake installed Checkout existing-target failure target path must be an existing file."
@@ -5637,7 +5688,7 @@ $checkoutExistingTargetFailureNotificationExpectations = [pscustomobject]@{
     }
   }
   rendererCaptureExpectations = $checkoutExistingTargetFailureNotificationExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingTargetFailureNotificationReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingTargetFailureNotificationReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingTargetFailureNotificationDonePath -Description "checkout existing-target failure notification"
 $checkoutExistingTargetFailureHashAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $checkoutExistingTargetFailureTargetPath).Hash.ToLowerInvariant()
 $checkoutExistingTargetFailureParentEntriesAfter = Get-FakeDirectoryEntries -Path $checkoutExistingTargetFailureParentPath
@@ -5726,7 +5777,7 @@ $checkoutInvalidUrlFailureUrlPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutInvalidUrlFailureUrlPromptExpectations
   }
   rendererCaptureExpectations = $checkoutInvalidUrlFailureUrlPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutInvalidUrlFailureUrlPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutInvalidUrlFailureUrlPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutInvalidUrlFailureUrlPromptDonePath -Description "checkout invalid URL failure URL"
 $checkoutInvalidUrlFailureTargetPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout target folder", "Enter the absolute local folder path for the checkout.")
@@ -5740,7 +5791,7 @@ $checkoutInvalidUrlFailureTargetPromptExpectations = [pscustomobject]@{
   phase = "checkoutInvalidUrlFailureTargetPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutInvalidUrlFailureTargetPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutInvalidUrlFailureTargetPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutInvalidUrlFailureTargetPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutInvalidUrlFailureTargetPromptDonePath -Description "checkout invalid URL failure target"
 $checkoutInvalidUrlFailureRevisionPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout revision", "HEAD", "Revision number")
@@ -5753,7 +5804,7 @@ $checkoutInvalidUrlFailureRevisionPromptExpectations = [pscustomobject]@{
   phase = "checkoutInvalidUrlFailureRevisionPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutInvalidUrlFailureRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutInvalidUrlFailureRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutInvalidUrlFailureRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutInvalidUrlFailureRevisionPromptDonePath -Description "checkout invalid URL failure revision"
 $checkoutInvalidUrlFailureDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout depth", "Empty", "Files", "Immediates", "Infinity")
@@ -5766,7 +5817,7 @@ $checkoutInvalidUrlFailureDepthPromptExpectations = [pscustomobject]@{
   phase = "checkoutInvalidUrlFailureDepthPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutInvalidUrlFailureDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutInvalidUrlFailureDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutInvalidUrlFailureDepthPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutInvalidUrlFailureDepthPromptDonePath -Description "checkout invalid URL failure depth"
 $checkoutInvalidUrlFailureExternalsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout externals", "Ignore externals", "Include externals")
@@ -5779,7 +5830,7 @@ $checkoutInvalidUrlFailureExternalsPromptExpectations = [pscustomobject]@{
   phase = "checkoutInvalidUrlFailureExternalsPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutInvalidUrlFailureExternalsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutInvalidUrlFailureExternalsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutInvalidUrlFailureExternalsPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutInvalidUrlFailureExternalsPromptDonePath -Description "checkout invalid URL failure externals"
 if (Test-Path -LiteralPath $checkoutInvalidUrlFailureTargetWorkingCopyRoot) {
   throw "fake installed Checkout invalid URL failure target path must not exist before failure."
@@ -5819,7 +5870,7 @@ $checkoutInvalidUrlFailureNotificationExpectations = [pscustomobject]@{
     }
   }
   rendererCaptureExpectations = $checkoutInvalidUrlFailureNotificationExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutInvalidUrlFailureNotificationReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutInvalidUrlFailureNotificationReadyPath
 Wait-FakeRendererDone -Path $checkoutInvalidUrlFailureNotificationDonePath -Description "checkout invalid URL failure notification"
 $checkoutInvalidUrlFailureParentEntriesAfter = Get-FakeDirectoryEntries -Path $checkoutInvalidUrlFailureParentPath
 $checkoutInvalidUrlFailureBaselineBeforeProbe = New-FakeMissingCurrentSurfaceProbe -Path $workingCopyRoot
@@ -5920,7 +5971,7 @@ $checkoutExistingDirectoryUrlPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutExistingDirectoryUrlPromptExpectations
   }
   rendererCaptureExpectations = $checkoutExistingDirectoryUrlPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryUrlPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryUrlPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryUrlPromptDonePath -Description "checkout existing-directory URL"
 $checkoutExistingDirectoryTargetPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout target folder", "Enter the absolute local folder path for the checkout.")
@@ -5934,7 +5985,7 @@ $checkoutExistingDirectoryTargetPromptExpectations = [pscustomobject]@{
   phase = "checkoutExistingDirectoryTargetPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingDirectoryTargetPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryTargetPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryTargetPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryTargetPromptDonePath -Description "checkout existing-directory target"
 $checkoutExistingDirectoryRevisionPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout revision", "HEAD", "Revision number")
@@ -5947,7 +5998,7 @@ $checkoutExistingDirectoryRevisionPromptExpectations = [pscustomobject]@{
   phase = "checkoutExistingDirectoryRevisionPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingDirectoryRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryRevisionPromptDonePath -Description "checkout existing-directory revision"
 $checkoutExistingDirectoryDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout depth", "Empty", "Files", "Immediates", "Infinity")
@@ -5960,7 +6011,7 @@ $checkoutExistingDirectoryDepthPromptExpectations = [pscustomobject]@{
   phase = "checkoutExistingDirectoryDepthPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingDirectoryDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryDepthPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryDepthPromptDonePath -Description "checkout existing-directory depth"
 $checkoutExistingDirectoryExternalsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout externals", "Ignore externals", "Include externals")
@@ -5973,7 +6024,7 @@ $checkoutExistingDirectoryExternalsPromptExpectations = [pscustomobject]@{
   phase = "checkoutExistingDirectoryExternalsPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingDirectoryExternalsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryExternalsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryExternalsPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryExternalsPromptDonePath -Description "checkout existing-directory externals"
 $checkoutExistingDirectoryTrackedPath = Join-Path $checkoutExistingDirectoryTargetWorkingCopyRoot "src\tracked.txt"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $checkoutExistingDirectoryTrackedPath), $checkoutExistingDirectorySvnMetadataPath | Out-Null
@@ -6127,7 +6178,7 @@ $checkoutExistingDirectoryObstructionUrlPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutExistingDirectoryObstructionUrlPromptExpectations
   }
   rendererCaptureExpectations = $checkoutExistingDirectoryObstructionUrlPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryObstructionUrlPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryObstructionUrlPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryObstructionUrlPromptDonePath -Description "checkout existing-directory obstruction URL"
 $checkoutExistingDirectoryObstructionTargetPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout target folder", "Enter the absolute local folder path for the checkout.")
@@ -6141,7 +6192,7 @@ $checkoutExistingDirectoryObstructionTargetPromptExpectations = [pscustomobject]
   phase = "checkoutExistingDirectoryObstructionTargetPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingDirectoryObstructionTargetPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryObstructionTargetPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryObstructionTargetPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryObstructionTargetPromptDonePath -Description "checkout existing-directory obstruction target"
 $checkoutExistingDirectoryObstructionRevisionPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout revision", "HEAD", "Revision number")
@@ -6154,7 +6205,7 @@ $checkoutExistingDirectoryObstructionRevisionPromptExpectations = [pscustomobjec
   phase = "checkoutExistingDirectoryObstructionRevisionPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingDirectoryObstructionRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryObstructionRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryObstructionRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryObstructionRevisionPromptDonePath -Description "checkout existing-directory obstruction revision"
 $checkoutExistingDirectoryObstructionDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout depth", "Empty", "Files", "Immediates", "Infinity")
@@ -6167,7 +6218,7 @@ $checkoutExistingDirectoryObstructionDepthPromptExpectations = [pscustomobject]@
   phase = "checkoutExistingDirectoryObstructionDepthPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingDirectoryObstructionDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryObstructionDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryObstructionDepthPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryObstructionDepthPromptDonePath -Description "checkout existing-directory obstruction depth"
 $checkoutExistingDirectoryObstructionExternalsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout externals", "Ignore externals", "Include externals")
@@ -6180,7 +6231,7 @@ $checkoutExistingDirectoryObstructionExternalsPromptExpectations = [pscustomobje
   phase = "checkoutExistingDirectoryObstructionExternalsPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExistingDirectoryObstructionExternalsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExistingDirectoryObstructionExternalsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExistingDirectoryObstructionExternalsPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExistingDirectoryObstructionExternalsPromptDonePath -Description "checkout existing-directory obstruction externals"
 New-Item -ItemType Directory -Force -Path $checkoutExistingDirectoryObstructionSvnMetadataPath | Out-Null
 Set-Content -LiteralPath (Join-Path $checkoutExistingDirectoryObstructionSvnMetadataPath "wc.db") -Value "SubversionR fake checkout existing-directory obstruction wc metadata`n" -NoNewline -Encoding utf8
@@ -6337,7 +6388,7 @@ $checkoutUrlPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $checkoutUrlPromptExpectations
   }
   rendererCaptureExpectations = $checkoutUrlPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutUrlPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutUrlPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutUrlPromptDonePath -Description "checkout URL"
 $checkoutTargetPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout target folder", "Enter the absolute local folder path for the checkout.")
@@ -6351,7 +6402,7 @@ $checkoutTargetPromptExpectations = [pscustomobject]@{
   phase = "checkoutTargetPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutTargetPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutTargetPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutTargetPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutTargetPromptDonePath -Description "checkout target"
 $checkoutRevisionPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout revision", "HEAD", "Revision number")
@@ -6364,7 +6415,7 @@ $checkoutRevisionPromptExpectations = [pscustomobject]@{
   phase = "checkoutRevisionPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutRevisionPromptDonePath -Description "checkout revision"
 $checkoutDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout depth", "Empty", "Files", "Immediates", "Infinity")
@@ -6377,7 +6428,7 @@ $checkoutDepthPromptExpectations = [pscustomobject]@{
   phase = "checkoutDepthPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutDepthPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutDepthPromptDonePath -Description "checkout depth"
 $checkoutExternalsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN checkout externals", "Ignore externals", "Include externals")
@@ -6390,7 +6441,7 @@ $checkoutExternalsPromptExpectations = [pscustomobject]@{
   phase = "checkoutExternalsPromptReady"
   command = "subversionr.checkoutRepository"
   rendererCaptureExpectations = $checkoutExternalsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $checkoutExternalsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $checkoutExternalsPromptReadyPath
 Wait-FakeRendererDone -Path $checkoutExternalsPromptDonePath -Description "checkout externals"
 New-Item -ItemType Directory -Force -Path (Join-Path $checkoutTargetWorkingCopyRoot "src"), (Join-Path $checkoutTargetWorkingCopyRoot ".svn") | Out-Null
 Set-Content -LiteralPath (Join-Path $checkoutTargetWorkingCopyRoot "src\tracked.txt") -Value "initial`n" -NoNewline -Encoding utf8
@@ -6512,7 +6563,7 @@ $updateCancellationRevisionPromptExpectations = [pscustomobject]@{
   }
   cancelKey = "Escape"
   rendererCaptureExpectations = $updateCancellationRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $updateCancellationRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $updateCancellationRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $updateCancellationRevisionPromptDonePath -Description "update cancellation revision"
 $updateCancellationCurrentSurfaceReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eCurrentSurfaceReport"
@@ -6607,7 +6658,7 @@ $updateRevisionPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $updateRevisionPromptExpectations
   }
   rendererCaptureExpectations = $updateRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $updateRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $updateRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $updateRevisionPromptDonePath -Description "update revision"
 $updateDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN update depth", "Working copy depth", "Empty", "Files", "Immediates", "Infinity")
@@ -6624,7 +6675,7 @@ $updateDepthPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $updateDepthPromptExpectations
   }
   rendererCaptureExpectations = $updateDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $updateDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $updateDepthPromptReadyPath
 Wait-FakeRendererDone -Path $updateDepthPromptDonePath -Description "update depth"
 $updateStickyDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN update sticky depth", "Keep depth non-sticky", "Make depth sticky")
@@ -6641,7 +6692,7 @@ $updateStickyDepthPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $updateStickyDepthPromptExpectations
   }
   rendererCaptureExpectations = $updateStickyDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $updateStickyDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $updateStickyDepthPromptReadyPath
 Wait-FakeRendererDone -Path $updateStickyDepthPromptDonePath -Description "update sticky depth"
 $updateExternalsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN update externals", "Ignore externals", "Include externals")
@@ -6658,7 +6709,7 @@ $updateExternalsPromptExpectations = [pscustomobject]@{
     rendererCaptureExpectations = $updateExternalsPromptExpectations
   }
   rendererCaptureExpectations = $updateExternalsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $updateExternalsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $updateExternalsPromptReadyPath
 Wait-FakeRendererDone -Path $updateExternalsPromptDonePath -Description "update externals"
 $updateTargetPath = Join-Path $updateWorkingCopyRoot $updateTargetRelativePath
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $updateTargetPath), (Join-Path $updateWorkingCopyRoot ".svn") | Out-Null
@@ -6767,7 +6818,7 @@ $branchCreateSourcePromptExpectations = [pscustomobject]@{
   phase = "branchCreateSourcePromptReady"
   command = "subversionr.branchCreateRepository"
   rendererCaptureExpectations = $branchCreateSourcePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $branchCreateSourcePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $branchCreateSourcePromptReadyPath
 Wait-FakeRendererDone -Path $branchCreateSourcePromptDonePath -Description "branch create source"
 $branchCreateDestinationPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN branch or tag destination", "Enter the SVN destination URL.")
@@ -6781,7 +6832,7 @@ $branchCreateDestinationPromptExpectations = [pscustomobject]@{
   phase = "branchCreateDestinationPromptReady"
   command = "subversionr.branchCreateRepository"
   rendererCaptureExpectations = $branchCreateDestinationPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $branchCreateDestinationPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $branchCreateDestinationPromptReadyPath
 Wait-FakeRendererDone -Path $branchCreateDestinationPromptDonePath -Description "branch create destination"
 $branchCreateRevisionPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN branch or tag source revision", "HEAD", "Revision number")
@@ -6794,7 +6845,7 @@ $branchCreateRevisionPromptExpectations = [pscustomobject]@{
   phase = "branchCreateRevisionPromptReady"
   command = "subversionr.branchCreateRepository"
   rendererCaptureExpectations = $branchCreateRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $branchCreateRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $branchCreateRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $branchCreateRevisionPromptDonePath -Description "branch create revision"
 $branchCreateMessagePromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN branch or tag log message", "Enter the SVN log message for the copy commit.")
@@ -6808,7 +6859,7 @@ $branchCreateMessagePromptExpectations = [pscustomobject]@{
   phase = "branchCreateMessagePromptReady"
   command = "subversionr.branchCreateRepository"
   rendererCaptureExpectations = $branchCreateMessagePromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $branchCreateMessagePromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $branchCreateMessagePromptReadyPath
 Wait-FakeRendererDone -Path $branchCreateMessagePromptDonePath -Description "branch create message"
 $branchCreateParentsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN branch or tag parents", "Require destination parent", "Create destination parents")
@@ -6821,7 +6872,7 @@ $branchCreateParentsPromptExpectations = [pscustomobject]@{
   phase = "branchCreateParentsPromptReady"
   command = "subversionr.branchCreateRepository"
   rendererCaptureExpectations = $branchCreateParentsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $branchCreateParentsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $branchCreateParentsPromptReadyPath
 Wait-FakeRendererDone -Path $branchCreateParentsPromptDonePath -Description "branch create parents"
 $branchCreateExternalsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN branch or tag externals", "Ignore externals", "Include externals")
@@ -6834,7 +6885,7 @@ $branchCreateExternalsPromptExpectations = [pscustomobject]@{
   phase = "branchCreateExternalsPromptReady"
   command = "subversionr.branchCreateRepository"
   rendererCaptureExpectations = $branchCreateExternalsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $branchCreateExternalsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $branchCreateExternalsPromptReadyPath
 Wait-FakeRendererDone -Path $branchCreateExternalsPromptDonePath -Description "branch create externals"
 $branchCreateSwitchPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN branch/tag switch", "Stay on the current SVN URL", "Create the branch or tag without switching this working copy", "Switch this working copy to the new branch/tag")
@@ -6847,7 +6898,7 @@ $branchCreateSwitchPromptExpectations = [pscustomobject]@{
   phase = "branchCreateSwitchPromptReady"
   command = "subversionr.branchCreateRepository"
   rendererCaptureExpectations = $branchCreateSwitchPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $branchCreateSwitchPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $branchCreateSwitchPromptReadyPath
 Wait-FakeRendererDone -Path $branchCreateSwitchPromptDonePath -Description "branch create switch"
 $branchCreateSourcePath = ([Uri]$branchCreateSourceUrl).LocalPath
 $branchCreateDestinationPath = ([Uri]$branchCreateDestinationUrl).LocalPath
@@ -6910,7 +6961,7 @@ $switchUrlPromptExpectations = [pscustomobject]@{
   phase = "switchUrlPromptReady"
   command = "subversionr.switchRepository"
   rendererCaptureExpectations = $switchUrlPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $switchUrlPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $switchUrlPromptReadyPath
 Wait-FakeRendererDone -Path $switchUrlPromptDonePath -Description "switch URL"
 $switchRevisionPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN switch revision", "HEAD", "Revision number")
@@ -6923,7 +6974,7 @@ $switchRevisionPromptExpectations = [pscustomobject]@{
   phase = "switchRevisionPromptReady"
   command = "subversionr.switchRepository"
   rendererCaptureExpectations = $switchRevisionPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $switchRevisionPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $switchRevisionPromptReadyPath
 Wait-FakeRendererDone -Path $switchRevisionPromptDonePath -Description "switch revision"
 $switchDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN switch depth", "Working copy depth", "Empty", "Files", "Immediates", "Infinity")
@@ -6936,7 +6987,7 @@ $switchDepthPromptExpectations = [pscustomobject]@{
   phase = "switchDepthPromptReady"
   command = "subversionr.switchRepository"
   rendererCaptureExpectations = $switchDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $switchDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $switchDepthPromptReadyPath
 Wait-FakeRendererDone -Path $switchDepthPromptDonePath -Description "switch depth"
 $switchStickyDepthPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN switch sticky depth", "Keep depth non-sticky", "Make depth sticky")
@@ -6949,7 +7000,7 @@ $switchStickyDepthPromptExpectations = [pscustomobject]@{
   phase = "switchStickyDepthPromptReady"
   command = "subversionr.switchRepository"
   rendererCaptureExpectations = $switchStickyDepthPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $switchStickyDepthPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $switchStickyDepthPromptReadyPath
 Wait-FakeRendererDone -Path $switchStickyDepthPromptDonePath -Description "switch sticky depth"
 $switchExternalsPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN switch externals", "Ignore externals", "Include externals")
@@ -6962,7 +7013,7 @@ $switchExternalsPromptExpectations = [pscustomobject]@{
   phase = "switchExternalsPromptReady"
   command = "subversionr.switchRepository"
   rendererCaptureExpectations = $switchExternalsPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $switchExternalsPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $switchExternalsPromptReadyPath
 Wait-FakeRendererDone -Path $switchExternalsPromptDonePath -Description "switch externals"
 $switchAncestryPromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("SVN switch ancestry", "Check ancestry", "Ignore ancestry")
@@ -6975,7 +7026,7 @@ $switchAncestryPromptExpectations = [pscustomobject]@{
   phase = "switchAncestryPromptReady"
   command = "subversionr.switchRepository"
   rendererCaptureExpectations = $switchAncestryPromptExpectations
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $switchAncestryPromptReadyPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $switchAncestryPromptReadyPath
 Wait-FakeRendererDone -Path $switchAncestryPromptDonePath -Description "switch ancestry"
 New-Item -ItemType Directory -Force -Path (Join-Path $switchWorkingCopyRoot ".svn") | Out-Null
 Set-Content -LiteralPath (Join-Path $switchWorkingCopyRoot ".svn\fake-switched-url.txt") -Value $switchTargetUrl -NoNewline -Encoding utf8
@@ -7275,7 +7326,7 @@ $lifecycleMoveReport = [pscustomobject]@{
       }
     }
   }
-} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $resultPath -Encoding utf8
+} | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $resultPath
 exit 0
 '@ | Set-Content -LiteralPath $scriptPath -NoNewline
   "@pwsh -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" %*" | Set-Content -LiteralPath $Path -NoNewline
@@ -8052,6 +8103,51 @@ try {
   New-TestVsix -Path $vsixPath -Version "0.2.0"
   $fakeCodeCliPath = Join-Path $tempRoot "fake-code\code.cmd"
   New-FakeCodeCli -Path $fakeCodeCliPath
+  $fakeCodeScriptContent = Get-Content -Raw -LiteralPath (Join-Path (Split-Path -Parent $fakeCodeCliPath) "fake-code.ps1")
+  $fakeJsonHelperSourceMatch = [regex]::Match($fakeCodeScriptContent, '(?s)(?<source>Add-Type -TypeDefinition @".*?function Write-FakeJsonCoordinationFile \{.*?\r?\n\})\r?\n\$resultPath')
+  Assert-True $fakeJsonHelperSourceMatch.Success "Generated fake Extension Host should contain the native atomic JSON coordination helper source."
+  $fakeJsonHelperSource = $fakeJsonHelperSourceMatch.Groups["source"].Value
+  Assert-True ($fakeJsonHelperSource -match '(?s)MOVEFILE_REPLACE_EXISTING = 0x1.*?MOVEFILE_WRITE_THROUGH = 0x8.*?DllImport\("kernel32\.dll", CharSet = CharSet\.Unicode, SetLastError = true\).*?MoveFileExW') "Fake Extension Host atomic publication should bind MoveFileExW with the exact replace-existing and write-through flags."
+  Assert-True ($fakeJsonHelperSource -match '(?s)\$Path -notmatch ''\^\[A-Za-z\]:\\\\''.*?GetFullPath\(\$Path\).*?\[string\]::Equals\(\$Path, \$fullDestinationPath, \[System\.StringComparison\]::Ordinal\).*?Split-Path -Parent \$fullDestinationPath.*?Join-Path \$directory.*?Set-Content -LiteralPath \$temporaryPath -Value \$Json -NoNewline -Encoding utf8.*?MOVEFILE_REPLACE_EXISTING -bor .*?MOVEFILE_WRITE_THROUGH.*?nativeTemporaryPath = "\\\\\?\\\$\(\[System\.IO\.Path\]::GetFullPath\(\$temporaryPath\)\)".*?nativeDestinationPath = "\\\\\?\\\$fullDestinationPath".*?MoveFileExW\(\$nativeTemporaryPath, \$nativeDestinationPath, \$moveFlags\).*?GetLastWin32Error\(\).*?Win32Exception') "Fake Extension Host JSON coordination should reject non-canonical local-drive paths before writing, then atomically publish normalized extended-length paths through one native call that fails with the Win32 error."
+  Assert-True (-not $fakeJsonHelperSource.Contains("Move-Item")) "Fake Extension Host atomic JSON publication should not use non-atomic Move-Item replacement."
+  Assert-True ($fakeCodeScriptContent -match '(?s)ConvertTo-Json -Depth 12 \| Write-FakeJsonCoordinationFile -Path "\$readyPath\.palette-\$\(\$command\.slug\)".*?ConvertTo-Json -Depth 14 \| Write-FakeJsonCoordinationFile -Path \$resultPath') "Restricted Mode ready sentinels and final result should use atomic JSON publication."
+  Assert-True (-not ($fakeCodeScriptContent -match '(?m)ConvertTo-Json[^\r\n]*\| Set-Content')) "Fake Extension Host should not publish externally consumed JSON coordination files directly with Set-Content."
+  . ([scriptblock]::Create($fakeJsonHelperSource))
+  $fakeJsonHelperSmokeRoot = Join-Path $tempRoot "fake-json-coordination-helper"
+  New-Item -ItemType Directory -Force -Path $fakeJsonHelperSmokeRoot | Out-Null
+  $fakeJsonHelperSmokePath = Join-Path $fakeJsonHelperSmokeRoot "ready.json"
+  [pscustomobject]@{ ok = $true; publication = "first"; payload = "first-publication-complete" } |
+    ConvertTo-Json -Depth 4 | Write-FakeJsonCoordinationFile -Path $fakeJsonHelperSmokePath
+  $fakeJsonFirstPublication = Get-Content -Raw -LiteralPath $fakeJsonHelperSmokePath | ConvertFrom-Json
+  Assert-Equal "True" ([string]$fakeJsonFirstPublication.ok) "Atomic JSON helper should publish a complete file when the destination does not exist."
+  Assert-Equal "first-publication-complete" $fakeJsonFirstPublication.payload "Atomic JSON helper first publication should preserve the complete payload."
+  $replacementPayload = "replacement-publication-complete-" * 2048
+  [pscustomobject]@{ ok = $true; publication = "replacement"; payload = $replacementPayload } |
+    ConvertTo-Json -Depth 4 | Write-FakeJsonCoordinationFile -Path $fakeJsonHelperSmokePath
+  $fakeJsonReplacementPublication = Get-Content -Raw -LiteralPath $fakeJsonHelperSmokePath | ConvertFrom-Json
+  Assert-Equal "replacement" $fakeJsonReplacementPublication.publication "Atomic JSON helper should replace an existing coordination file in one publication."
+  Assert-Equal $replacementPayload $fakeJsonReplacementPublication.payload "Atomic JSON helper replacement should expose only the complete final JSON payload."
+  $invalidFakeJsonCoordinationPaths = @(
+    [pscustomobject]@{ description = "relative"; path = "relative\ready.json" },
+    [pscustomobject]@{ description = "UNC"; path = "\\server\share\ready.json" },
+    [pscustomobject]@{ description = "extended device"; path = "\\?\$fakeJsonHelperSmokePath" }
+  )
+  foreach ($invalidPathCase in $invalidFakeJsonCoordinationPaths) {
+    $rejectedBeforePublication = $false
+    try {
+      [pscustomobject]@{ ok = $true; publication = "invalid" } |
+        ConvertTo-Json -Depth 4 | Write-FakeJsonCoordinationFile -Path $invalidPathCase.path
+    }
+    catch {
+      $rejectedBeforePublication = $_.Exception.Message.Contains("coordination path must be a canonical local-drive absolute path")
+    }
+    Assert-True $rejectedBeforePublication "Atomic JSON helper should reject a $($invalidPathCase.description) path before creating a temporary file or calling MoveFileExW."
+    Assert-Equal 0 @(Get-ChildItem -LiteralPath $fakeJsonHelperSmokeRoot -Filter ".ready.json.*.tmp" -Force).Count "Rejected $($invalidPathCase.description) input should not leave a temporary coordination file."
+  }
+  $fakeJsonAfterInvalidInputs = Get-Content -Raw -LiteralPath $fakeJsonHelperSmokePath | ConvertFrom-Json
+  Assert-Equal "replacement" $fakeJsonAfterInvalidInputs.publication "Rejected coordination paths should not modify the last atomically published JSON."
+  Assert-Equal $replacementPayload $fakeJsonAfterInvalidInputs.payload "Rejected coordination paths should preserve the complete existing JSON payload."
+  Assert-Equal 0 @(Get-ChildItem -LiteralPath $fakeJsonHelperSmokeRoot -Filter ".ready.json.*.tmp" -Force).Count "Atomic JSON helper should not leave a temporary file after first or replacement publication."
   $fakeDriverPath = Join-Path $tempRoot "fake-driver\fake-renderer-capture.mjs"
   New-FakeRendererCaptureDriver -Path $fakeDriverPath
   $fakeSvnRoot = Join-Path $tempRoot "fake-svn"
