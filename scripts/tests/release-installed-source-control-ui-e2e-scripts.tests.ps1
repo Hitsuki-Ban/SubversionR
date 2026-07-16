@@ -7990,6 +7990,17 @@ try {
   finally {
     Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
   }
+  $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "scm-primary-action-wait"
+  try {
+    & node $driverScript
+    Assert-Equal 0 $LASTEXITCODE "Renderer capture SCM primary-action fake-CDP self-test should poll delayed exact actions and preserve a bounded missing-action failure."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
+  }
+  $driverText = Get-Content -Raw -LiteralPath $driverScript
+  Assert-True ($driverText.Contains("waitForScmPrimaryActions") -and $driverText.Contains("REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS")) "Renderer capture should use the existing bounded state timeout for SCM primary actions."
+  Assert-True ($driverText.Contains("SCM title actions were not rendered with expected codicons") -and $driverText.Contains("Observed:")) "Renderer capture should retain strict title-action failure reporting with the observed contract."
 
   $rootPackage = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e-scripts".Contains("release-installed-source-control-ui-e2e-scripts.tests.ps1")) "Root package should expose M7j3 installed Source Control UI E2E script tests."
