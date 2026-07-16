@@ -1551,7 +1551,8 @@ $uploadPathBlock
       -Target win32-x64 `
       -CodeCliPath "%SUBVERSIONR_CODE_CLI%" `
       -SvnToolsRoot ".cache/native/stage/subversion-win-x64/bin" `
-      -RendererCaptureDriverPath "scripts/release/capture-vscode-renderer-ui.mjs"
+      -RendererCaptureDriverPath "scripts/release/capture-vscode-renderer-ui.mjs" `
+      -WindowNormalizerPath "scripts/release/normalize-vscode-window.ps1"
   } "CodeCliPath must be an explicit path" "Beta candidate orchestration should reject unresolved Code CLI placeholders before running release gates."
 
   $orchestration = Get-Content -Raw -LiteralPath $orchestrationScript
@@ -1595,6 +1596,7 @@ $uploadPathBlock
   Assert-True ($packageJson.scripts."release:prepare-beta-candidate:win32-x64".Contains("%SUBVERSIONR_CODE_CLI%")) "Beta candidate evidence orchestration should require an explicit Code CLI path."
   Assert-True ($packageJson.scripts."release:prepare-beta-candidate:win32-x64".Contains(".cache/native/stage/subversion-win-x64/bin")) "Beta candidate evidence orchestration should require the staged SVN tools root."
   Assert-True ($packageJson.scripts."release:prepare-beta-candidate:win32-x64".Contains("scripts/release/capture-vscode-renderer-ui.mjs")) "Beta candidate evidence orchestration should use the renderer capture driver."
+  Assert-True ($packageJson.scripts."release:prepare-beta-candidate:win32-x64".Contains("scripts/release/normalize-vscode-window.ps1")) "Beta candidate evidence orchestration should use the production native window normalizer."
   Assert-True ($packageJson.scripts."release:generate-beta-artifact-bundle-manifest:win32-x64".Contains("generate-beta-artifact-bundle-manifest.ps1")) "Root package should expose the Beta artifact bundle manifest generator."
   Assert-True ($packageJson.scripts."release:generate-beta-artifact-bundle-manifest:win32-x64".Contains("target/release-evidence/subversionr-beta-artifact-bundle-manifest-win32-x64.json")) "Beta artifact bundle manifest generator should write target release evidence."
   Assert-True ($packageJson.scripts."release:verify-beta-candidate:win32-x64".Contains("verify-beta-candidate-evidence.ps1")) "Root package should expose the Beta candidate consistency gate."

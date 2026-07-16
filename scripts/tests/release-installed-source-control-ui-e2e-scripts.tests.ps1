@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $workflowScript = Join-Path $repoRoot "scripts\release\test-vscode-installed-source-control-ui-e2e.ps1"
 $driverScript = Join-Path $repoRoot "scripts\release\capture-vscode-renderer-ui.mjs"
+$normalizerScript = Join-Path $repoRoot "scripts\release\normalize-vscode-window.ps1"
 $packageJsonPath = Join-Path $repoRoot "package.json"
 $ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
 $workflowContent = Get-Content -Raw -LiteralPath $workflowScript
@@ -7332,6 +7333,69 @@ exit 0
   "@pwsh -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" %*" | Set-Content -LiteralPath $Path -NoNewline
 }
 
+function New-FakeWindowNormalizer([string]$Path) {
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+  @'
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory = $true)][string]$UserDataRoot,
+  [Parameter(Mandatory = $true)][string]$EvidencePath,
+  [Parameter(Mandatory = $true)][string]$CodeExecutablePath,
+  [Parameter(Mandatory = $true)][int]$RemoteDebuggingPort,
+  [Parameter(Mandatory = $true)][string]$LaunchStartedAtUtc
+)
+$ErrorActionPreference = "Stop"
+$mode = $env:SUBVERSIONR_FAKE_WINDOW_NORMALIZER_MODE
+if ([string]::IsNullOrWhiteSpace($mode)) {
+  $mode = "success"
+}
+if ($mode -eq "missing") {
+  throw "VS Code window normalization did not find its unique native window: 0 listening owner processes."
+}
+if ($mode -eq "ambiguous") {
+  throw "RemoteDebuggingPort $RemoteDebuggingPort must have exactly one listening owner process; found 2."
+}
+if ($mode -notin @("success", "wrong-bounds")) {
+  throw "Unsupported fake window normalizer mode: $mode"
+}
+$observedWidth = if ($mode -eq "wrong-bounds") { 1599 } else { 1600 }
+[pscustomobject]@{
+  schemaVersion = 1
+  schema = "subversionr.release.vscode-window-normalization.v1"
+  generatedAt = "2026-06-25T00:00:09Z"
+  method = "win32.SetWindowPos(SWP_NOSENDCHANGING)"
+  identity = [pscustomobject]@{
+    userDataRoot = [System.IO.Path]::GetFullPath($UserDataRoot)
+    processId = 4242
+    hwnd = "0x1234"
+    executablePath = [System.IO.Path]::GetFullPath($CodeExecutablePath)
+    parsedUserDataRoot = [System.IO.Path]::GetFullPath($UserDataRoot)
+    remoteDebuggingPort = $RemoteDebuggingPort
+    listenerOwnerProcessId = 4242
+    launchStartedAtUtc = $LaunchStartedAtUtc
+    processStartedAtUtc = $LaunchStartedAtUtc
+  }
+  prior = [pscustomobject]@{ left = -8; top = 0; right = 1032; bottom = 736; width = 1040; height = 736; maximized = $true; minimized = $false; dpi = 96 }
+  restored = [pscustomobject]@{ left = 0; top = 0; right = 1024; bottom = 728; width = 1024; height = 728; maximized = $false; minimized = $false; dpi = 96 }
+  requested = [pscustomobject]@{ width = 1600; height = 1000; dpi = 96; setWindowPosFlags = 0x0416; setWindowPosFlagsHex = "0x0416" }
+  observed = [pscustomobject]@{ left = 0; top = 0; right = $observedWidth; bottom = 1000; width = $observedWidth; height = 1000; maximized = $false; minimized = $false; dpi = 96 }
+  assertions = [pscustomobject]@{
+    uniqueRootProcessWindow = $true
+    uniqueRemoteDebuggingListenerOwner = $true
+    executablePathMatched = $true
+    processStartedAfterLaunch = $true
+    rootProcessHasNoTypeArgument = $true
+    uniqueUserDataDirArgument = $true
+    userDataRootMatched = $true
+    restoredBeforeResize = $true
+    singleSetWindowPosCall = $true
+    exactOuterBounds = $mode -eq "success"
+    dpi96 = $true
+  }
+} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -NoNewline -Encoding utf8
+'@ | Set-Content -LiteralPath $Path -NoNewline -Encoding utf8
+}
+
 function New-FakeRendererCaptureDriver([string]$Path) {
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
   @'
@@ -7391,10 +7455,8 @@ const report = {
     }
   },
   windowBounds: {
-    method: "window.resizeTo",
-    initial: { outerWidth: 1456, outerHeight: 908, innerWidth: 1440, innerHeight: 900 },
-    requested: { outerWidth: 1600, outerHeight: 1000 },
-    applied: { resizeWidth: 1584, resizeHeight: 992, frameWidth: 16, frameHeight: 8 },
+    method: "renderer.observation",
+    expected: { outerWidth: 1600, outerHeight: 1000 },
     observed: {
       outerWidth: mode === "window-bounds-lie" ? 1599 : 1600,
       outerHeight: 1000,
@@ -8052,6 +8114,7 @@ try {
   Invoke-EmptyHistoryProbeOrderSmoke -WorkflowContent $workflowContent -TempRoot $tempRoot
   Assert-True (Test-Path -LiteralPath $workflowScript -PathType Leaf) "test-vscode-installed-source-control-ui-e2e.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $driverScript -PathType Leaf) "capture-vscode-renderer-ui.mjs should exist."
+  Assert-True (Test-Path -LiteralPath $normalizerScript -PathType Leaf) "normalize-vscode-window.ps1 should exist."
   $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "delayed-context-action"
   try {
     & node $driverScript
@@ -8068,10 +8131,10 @@ try {
   finally {
     Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
   }
-  $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "workbench-window-normalization"
+  $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "workbench-window-observation"
   try {
     & node $driverScript
-    Assert-Equal 0 $LASTEXITCODE "Renderer capture workbench-window fake-CDP self-test should preserve exact Electron resize semantics and reject clamped bounds."
+    Assert-Equal 0 $LASTEXITCODE "Renderer capture workbench-window fake-CDP self-test should observe exact native bounds and reject clamped bounds without resizing."
   }
   finally {
     Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
@@ -8079,23 +8142,31 @@ try {
   $driverText = Get-Content -Raw -LiteralPath $driverScript
   Assert-True ($driverText.Contains("waitForScmPrimaryActions") -and $driverText.Contains("REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS")) "Renderer capture should use the existing bounded state timeout for SCM primary actions."
   Assert-True ($driverText.Contains("SCM title actions were not rendered with expected codicons") -and $driverText.Contains("Observed:")) "Renderer capture should retain strict title-action failure reporting with the observed contract."
-  $normalizeCallIndex = $driverText.IndexOf('windowBounds = await normalizeWorkbenchWindow(cdp);')
+  $normalizeCallIndex = $driverText.IndexOf('windowBounds = await observeNormalizedWorkbenchWindow(cdp);')
   $viewportCallIndex = $driverText.IndexOf('await setExpectedViewport(cdp, expectedViewport);')
-  Assert-True ($normalizeCallIndex -ge 0 -and $viewportCallIndex -gt $normalizeCallIndex) "Renderer capture should normalize and verify the real workbench window before applying the exact emulated viewport."
-  Assert-True ($driverText -match '(?s)Emulation\.clearDeviceMetricsOverride.*?normalizeWorkbenchWindow\(cdp\).*?Emulation\.setDeviceMetricsOverride') "Renderer capture should clear prior emulation, normalize the real Electron window, and only then apply the exact capture viewport."
+  Assert-True ($normalizeCallIndex -ge 0 -and $viewportCallIndex -gt $normalizeCallIndex) "Renderer capture should observe the normalized real workbench window before applying the exact emulated viewport."
+  Assert-True ($driverText -match '(?s)Emulation\.clearDeviceMetricsOverride.*?observeNormalizedWorkbenchWindow\(cdp\).*?Emulation\.setDeviceMetricsOverride') "Renderer capture should clear prior emulation, observe the exact real Electron window, and only then apply the exact capture viewport."
   Assert-True ($driverText -match '(?s)WORKBENCH_OUTER_BOUNDS\s*=\s*Object\.freeze\(\{\s*width:\s*1600,\s*height:\s*1000') "Renderer capture should use the fixed 1600x1000 outer-window contract."
-  Assert-True ($driverText -match '(?s)frameWidth = initial\.outerWidth - initial\.innerWidth.*?window\.resizeTo\(\$\{resizeWidth\}, \$\{resizeHeight\}\).*?observed\.outerWidth === WORKBENCH_OUTER_BOUNDS\.width.*?observed\.outerHeight === WORKBENCH_OUTER_BOUNDS\.height') "Renderer capture should translate the exact outer-window contract through Electron window.resizeTo and verify observed outer bounds."
-  Assert-True ($driverText -match '(?s)const alreadyNormalized =.*?if \(!alreadyNormalized\).*?window\.resizeTo') "Renderer capture should avoid repeated native-window relayout only after the exact 1600x1000 outer bounds are already present."
-  Assert-True ($driverText -match '(?s)windowBounds,.*?viewport:') "Renderer capture report should record requested and observed native window bounds before viewport evidence."
+  Assert-True (-not $driverText.Contains("window.resizeTo")) "Renderer capture must not mutate the native workbench window through the clamped Chromium resize API."
+  Assert-True ($driverText -match '(?s)async function observeNormalizedWorkbenchWindow.*?method: "renderer\.observation".*?expected:.*?outerWidth: WORKBENCH_OUTER_BOUNDS\.width.*?observed') "Renderer capture should only observe and report the exact 1600x1000 native workbench bounds."
+  Assert-True ($driverText -match '(?s)windowBounds,.*?viewport:') "Renderer capture report should record independently observed native window bounds before viewport evidence."
   Assert-True ($driverText.Contains("restrictedMode") -and $driverText.Contains("scmRepositoryToolbar") -and $driverText.Contains("visiblePrimaryActionCandidates") -and $driverText.Contains("moreActionsCandidates") -and $driverText.Contains("overflowMenuLabels")) "Renderer capture SCM failure diagnostics should distinguish trust state, repository-toolbar layout, visible primary actions, and overflow contents."
   Assert-True ($driverText -match '(?s)renderedPrimaryElement\.closest\("\.actions-container, \.title-actions"\).*?renderedPrimaryElement\.closest\("\.scm-provider"\).*?scmRepositoryToolbar.*?anchoredMoreActionsCandidates.*?clickAt\(cdp, candidate\.x, candidate\.y, "left"\).*?overflowMenuLabels = await waitForAnyVisibleMenuLabels\(cdp\).*?pressEscape\(cdp\).*?throw scmPrimaryActionFailure') "Renderer capture should diagnose the exact Refresh-anchored SCM repository toolbar and overflow menu, close it, and still fail the exact primary-action contract."
   Assert-True ($driverText.Contains("error.diagnostics = diagnostics") -and $driverText -match '(?s)error:\s*\{.*?diagnostics: error\.diagnostics') "Renderer capture should preserve SCM failure diagnostics as structured error evidence."
-  Assert-True ($workflowContent -match '(?s)function Assert-RendererCaptureReport.*?windowBounds\.method -ne "window\.resizeTo".*?requested\.outerWidth -ne 1600.*?requested\.outerHeight -ne 1000.*?observed\.outerWidth -ne 1600.*?observed\.outerHeight -ne 1000') "Installed Source Control UI E2E evidence validation should require exact requested and observed native workbench outer bounds."
+  Assert-True ($workflowContent -match '(?s)function Assert-RendererCaptureReport.*?windowBounds\.method -ne "renderer\.observation".*?expected\.outerWidth -ne 1600.*?expected\.outerHeight -ne 1000.*?observed\.outerWidth -ne 1600.*?observed\.outerHeight -ne 1000') "Installed Source Control UI E2E evidence validation should require exact independently observed native workbench outer bounds."
+  $normalizerText = Get-Content -Raw -LiteralPath $normalizerScript
+  Assert-True ($normalizerText -match '(?s)Get-NetTCPConnection -LocalPort \$Port -State Listen.*?Sort-Object -Unique.*?Count -gt 1.*?exactly one listening owner process') "Production window normalizer should bind identity to the unique remote-debugging listener owner PID."
+  Assert-True ($normalizerText -match '(?s)ExecutablePath.*?CanonicalCodeExecutablePath.*?StartTime\.ToUniversalTime\(\).*?LaunchStarted.*?--type=.*?--user-data-dir') "Production window normalizer should verify executable path, launch time, root-process arguments, and the unique user-data root."
+  Assert-True ($normalizerText -match '(?s)EnumWindows.*?GetWindowThreadProcessId.*?IsWindowVisible.*?GetWindow\(hWnd, GW_OWNER\).*?Chrome_WidgetWin_1.*?windows\.Count -gt 1') "Production window normalizer should select one visible ownerless Chrome top-level HWND for the listener owner PID."
+  Assert-True ($normalizerText -match '(?s)GetDpiForWindow.*?expectedDpi = 96.*?ShowWindow\(\$handle, \$swRestore\).*?restored\.maximized.*?SetWindowPos\(.*?setWindowPosFlags.*?Get-WindowState') "Production window normalizer should restore a DPI-96 window, call SetWindowPos once, and only observe afterward."
+  Assert-True ($normalizerText -match '(?s)swpNoMove = 0x0002.*?swpNoZOrder = 0x0004.*?swpNoActivate = 0x0010.*?swpNoSendChanging = 0x0400.*?setWindowPosFlags = .*?-bor.*?-bor.*?-bor') "Production window normalizer should use exactly the non-moving, non-activating, no-z-order, no-send-changing SetWindowPos policy."
+  Assert-Equal 1 ([regex]::Matches($normalizerText, '\[SubversionRWindowNativeMethods\]::SetWindowPos\(').Count) "Production window normalizer should contain only one SetWindowPos call site and no resize retry path."
 
   $rootPackage = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e-scripts".Contains("release-installed-source-control-ui-e2e-scripts.tests.ps1")) "Root package should expose M7j3 installed Source Control UI E2E script tests."
   Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e:win32-x64".Contains("test-vscode-installed-source-control-ui-e2e.ps1")) "Root package should expose the installed Source Control UI E2E gate."
   Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e:win32-x64".Contains("capture-vscode-renderer-ui.mjs")) "Installed Source Control UI E2E gate should require the renderer capture driver."
+  Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e:win32-x64".Contains("normalize-vscode-window.ps1")) "Installed Source Control UI E2E gate should require the explicit production window normalizer."
   Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e:win32-x64".Contains("%SUBVERSIONR_CODE_CLI%")) "Installed Source Control UI E2E gate should require an explicit Code CLI path."
   Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e:win32-x64".Contains(".cache/native/stage/subversion-win-x64/bin")) "Installed Source Control UI E2E gate should require the source-built SVN fixture tools root."
 
@@ -8150,6 +8221,8 @@ try {
   Assert-Equal 0 @(Get-ChildItem -LiteralPath $fakeJsonHelperSmokeRoot -Filter ".ready.json.*.tmp" -Force).Count "Atomic JSON helper should not leave a temporary file after first or replacement publication."
   $fakeDriverPath = Join-Path $tempRoot "fake-driver\fake-renderer-capture.mjs"
   New-FakeRendererCaptureDriver -Path $fakeDriverPath
+  $fakeWindowNormalizerPath = Join-Path $tempRoot "fake-window-normalizer\fake-window-normalizer.ps1"
+  New-FakeWindowNormalizer -Path $fakeWindowNormalizerPath
   $fakeSvnRoot = Join-Path $tempRoot "fake-svn"
   New-FakeSvnTools -Root $fakeSvnRoot
   $fixtureRoot = Join-Path $tempRoot "f"
@@ -8161,6 +8234,7 @@ try {
     -CodeCliPath $fakeCodeCliPath `
     -SvnToolsRoot $fakeSvnRoot `
     -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
     -FixtureRoot $fixtureRoot `
     -EvidencePath $evidencePath `
     -RemoteDebuggingPort 32146
@@ -8172,6 +8246,11 @@ try {
   Assert-Equal "subversionr.release.installed-source-control-ui-e2e.win32-x64.v1" $report.schema "Installed Source Control UI E2E evidence should use the M7j3 schema."
   Assert-Equal "False" ([string]$report.publicReadinessClaim) "Installed Source Control UI E2E evidence must not claim public readiness."
   Assert-Equal "win32-x64" $report.target "Installed Source Control UI E2E evidence should record the target."
+  Assert-Equal "win32.SetWindowPos(SWP_NOSENDCHANGING)" $report.windowNormalization.trusted.method "Installed Source Control UI E2E evidence should record trusted-process native window normalization."
+  Assert-Equal "win32.SetWindowPos(SWP_NOSENDCHANGING)" $report.windowNormalization.restricted.method "Installed Source Control UI E2E evidence should record Restricted Mode native window normalization independently."
+  Assert-Equal "1600" ([string]$report.windowNormalization.trusted.observed.width) "Trusted-process native window evidence should record exact 1600px outer width."
+  Assert-Equal "1000" ([string]$report.windowNormalization.restricted.observed.height) "Restricted Mode native window evidence should record exact 1000px outer height."
+  Assert-Equal "renderer.observation" $report.rendererCapture.windowBounds.method "Renderer capture should independently observe the already-normalized native window."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Installed Source Control UI E2E evidence should record the extension id."
   Assert-Equal "complete" $report.extension.harnessPhase "Installed Source Control UI E2E evidence should record a completed harness phase."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.refreshResource" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the restored-path Refresh Resource command invocation."
@@ -9009,6 +9088,7 @@ try {
   Assert-True (@($report.nonClaims | Where-Object { $_ -like "*merge workflows*" }).Count -eq 1) "Installed Source Control UI E2E evidence should keep merge workflows as a Branch/Switch non-claim."
   Assert-True (@($report.nonClaims | Where-Object { $_ -like "*switched working-copy edge/load behavior*" }).Count -eq 1) "Installed Source Control UI E2E evidence should keep switched working-copy edge/load behavior as a Branch/Switch non-claim."
   Assert-True ($report.rendererCaptureDriver.sha256 -match '^[a-f0-9]{64}$') "Installed Source Control UI E2E evidence should hash the renderer capture driver."
+  Assert-True ($report.windowNormalizer.sha256 -match '^[a-f0-9]{64}$') "Installed Source Control UI E2E evidence should hash the production window normalizer dependency."
   Assert-True ($report.codeCli.sha256 -match '^[a-f0-9]{64}$') "Installed Source Control UI E2E evidence should record the Code CLI hash."
   Assert-True ([string]$report.fixtureRoots.rendererCapture -like "*renderer-capture*") "Installed Source Control UI E2E evidence should record the renderer capture root."
   Assert-True ([string]$report.fixtureRoots.noRepositoryWelcomeRendererCapture -like "*no-repository-welcome-renderer-capture*") "Installed Source Control UI E2E evidence should record the no-repository welcome renderer capture root."
@@ -9090,6 +9170,7 @@ try {
         -CodeCliPath $fakeCodeCliPath `
         -SvnToolsRoot $fakeSvnRoot `
         -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
         -FixtureRoot (Join-Path $tempRoot "x") `
         -EvidencePath (Join-Path $tempRoot "x.json") `
         -RemoteDebuggingPort 32161 `
@@ -9108,6 +9189,7 @@ try {
       -CodeCliPath "%SUBVERSIONR_CODE_CLI%" `
       -SvnToolsRoot $fakeSvnRoot `
       -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
       -FixtureRoot (Join-Path $tempRoot "literal-code-cli") `
       -EvidencePath (Join-Path $tempRoot "evidence\literal-code-cli.json") `
       -RemoteDebuggingPort 32147
@@ -9120,10 +9202,65 @@ try {
       -CodeCliPath $fakeCodeCliPath `
       -SvnToolsRoot $fakeSvnRoot `
       -RendererCaptureDriverPath "%SUBVERSIONR_RENDERER_DRIVER%" `
+      -WindowNormalizerPath $fakeWindowNormalizerPath `
       -FixtureRoot (Join-Path $tempRoot "literal-driver") `
       -EvidencePath (Join-Path $tempRoot "evidence\literal-driver.json") `
       -RemoteDebuggingPort 32148
   } "RendererCaptureDriverPath must be an explicit file path" "Installed Source Control UI E2E gate should reject unresolved renderer driver placeholders."
+
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+      -Target win32-x64 `
+      -VsixPath $vsixPath `
+      -CodeCliPath $fakeCodeCliPath `
+      -SvnToolsRoot $fakeSvnRoot `
+      -RendererCaptureDriverPath $fakeDriverPath `
+      -WindowNormalizerPath "%SUBVERSIONR_WINDOW_NORMALIZER%" `
+      -FixtureRoot (Join-Path $tempRoot "literal-window-normalizer") `
+      -EvidencePath (Join-Path $tempRoot "evidence\literal-window-normalizer.json") `
+      -RemoteDebuggingPort 32149
+  } "WindowNormalizerPath must be an explicit file path" "Installed Source Control UI E2E gate should reject unresolved window normalizer placeholders."
+
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+      -Target win32-x64 `
+      -VsixPath $vsixPath `
+      -CodeCliPath $fakeCodeCliPath `
+      -SvnToolsRoot $fakeSvnRoot `
+      -RendererCaptureDriverPath $fakeDriverPath `
+      -WindowNormalizerPath $packageJsonPath `
+      -FixtureRoot (Join-Path $tempRoot "outside-window-normalizer") `
+      -EvidencePath (Join-Path $tempRoot "evidence\outside-window-normalizer.json") `
+      -RemoteDebuggingPort 32150
+  } "WindowNormalizerPath must resolve inside" "Installed Source Control UI E2E gate should reject a window normalizer outside its explicit production or test dependency roots."
+
+  $windowNormalizerFailureCases = @(
+    [pscustomobject]@{ Mode = "missing"; Port = 32260; Expected = "did not find its unique native window"; Description = "missing native window" },
+    [pscustomobject]@{ Mode = "ambiguous"; Port = 32261; Expected = "must have exactly one listening owner process; found 2"; Description = "ambiguous remote-debugging owner" },
+    [pscustomobject]@{ Mode = "wrong-bounds"; Port = 32262; Expected = "did not prove the exact unique restored 1600x1000 DPI-96 contract"; Description = "wrong observed native bounds" }
+  )
+  foreach ($normalizerCase in $windowNormalizerFailureCases) {
+    $env:SUBVERSIONR_FAKE_WINDOW_NORMALIZER_MODE = $normalizerCase.Mode
+    try {
+      Assert-NativeCommandFailsContaining {
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+          -Target win32-x64 `
+          -VsixPath $vsixPath `
+          -CodeCliPath $fakeCodeCliPath `
+          -SvnToolsRoot $fakeSvnRoot `
+          -RendererCaptureDriverPath $fakeDriverPath `
+          -WindowNormalizerPath $fakeWindowNormalizerPath `
+          -FixtureRoot (Join-Path $tempRoot "window-normalizer-$($normalizerCase.Mode)\win32-x64") `
+          -EvidencePath (Join-Path $tempRoot "evidence\window-normalizer-$($normalizerCase.Mode).json") `
+          -RemoteDebuggingPort $normalizerCase.Port `
+          -ExtensionHostTimeoutSeconds 30 `
+          -UiReadyTimeoutSeconds 10
+      } $normalizerCase.Expected "Installed Source Control UI E2E gate should reject $($normalizerCase.Description) evidence."
+    }
+    finally {
+      Remove-Item Env:SUBVERSIONR_FAKE_WINDOW_NORMALIZER_MODE -ErrorAction SilentlyContinue
+    }
+  }
 
   $env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE = "missing-dom-token"
   try {
@@ -9134,6 +9271,7 @@ try {
         -CodeCliPath $fakeCodeCliPath `
         -SvnToolsRoot $fakeSvnRoot `
         -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
         -FixtureRoot (Join-Path $tempRoot "missing-dom-token\win32-x64") `
         -EvidencePath (Join-Path $tempRoot "evidence\missing-dom-token.json") `
         -RemoteDebuggingPort 32249 `
@@ -9154,6 +9292,7 @@ try {
         -CodeCliPath $fakeCodeCliPath `
         -SvnToolsRoot $fakeSvnRoot `
         -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
         -FixtureRoot (Join-Path $tempRoot "lying-dom-token\win32-x64") `
         -EvidencePath (Join-Path $tempRoot "evidence\lying-dom-token.json") `
         -RemoteDebuggingPort 32151 `
@@ -9174,6 +9313,7 @@ try {
         -CodeCliPath $fakeCodeCliPath `
         -SvnToolsRoot $fakeSvnRoot `
         -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
         -FixtureRoot (Join-Path $tempRoot "forbidden-dom-token-lie\win32-x64") `
         -EvidencePath (Join-Path $tempRoot "evidence\forbidden-dom-token-lie.json") `
         -RemoteDebuggingPort 32153 `
@@ -9194,6 +9334,7 @@ try {
         -CodeCliPath $fakeCodeCliPath `
         -SvnToolsRoot $fakeSvnRoot `
         -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
         -FixtureRoot (Join-Path $tempRoot "forbidden-accessibility-token-lie\win32-x64") `
         -EvidencePath (Join-Path $tempRoot "evidence\forbidden-accessibility-token-lie.json") `
         -RemoteDebuggingPort 32154 `
@@ -9214,6 +9355,7 @@ try {
         -CodeCliPath $fakeCodeCliPath `
         -SvnToolsRoot $fakeSvnRoot `
         -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
         -FixtureRoot (Join-Path $tempRoot "partial-accessibility\win32-x64") `
         -EvidencePath (Join-Path $tempRoot "evidence\partial-accessibility.json") `
         -RemoteDebuggingPort 32150 `
@@ -9234,6 +9376,7 @@ try {
         -CodeCliPath $fakeCodeCliPath `
         -SvnToolsRoot $fakeSvnRoot `
         -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
         -FixtureRoot (Join-Path $tempRoot "blank-screenshot-lie\win32-x64") `
         -EvidencePath (Join-Path $tempRoot "evidence\blank-screenshot-lie.json") `
         -RemoteDebuggingPort 32152 `
@@ -9259,6 +9402,7 @@ try {
           -CodeCliPath $fakeCodeCliPath `
           -SvnToolsRoot $fakeSvnRoot `
           -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
           -FixtureRoot (Join-Path $tempRoot "$($trustCase.Mode)\win32-x64") `
           -EvidencePath (Join-Path $tempRoot "evidence\$($trustCase.Mode).json") `
           -RemoteDebuggingPort $trustCase.Port `
@@ -9290,6 +9434,7 @@ try {
           -CodeCliPath $fakeCodeCliPath `
           -SvnToolsRoot $fakeSvnRoot `
           -RendererCaptureDriverPath $fakeDriverPath `
+        -WindowNormalizerPath $fakeWindowNormalizerPath `
           -FixtureRoot (Join-Path $tempRoot "$($lieCase.Mode)\win32-x64") `
           -EvidencePath (Join-Path $tempRoot "evidence\$($lieCase.Mode).json") `
           -RemoteDebuggingPort $lieCase.Port `

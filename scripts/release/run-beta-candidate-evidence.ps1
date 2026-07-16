@@ -13,6 +13,9 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$RendererCaptureDriverPath,
 
+  [Parameter(Mandatory = $true)]
+  [string]$WindowNormalizerPath,
+
   [ValidateRange(1024, 65535)]
   [int]$RemoteDebuggingPort = 32145
 )
@@ -131,6 +134,11 @@ $rendererCaptureResolved = Assert-RepoFile `
   -Name "RendererCaptureDriverPath" `
   -AllowedRoot ([System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release"))) `
   -Description "scripts/release"
+$windowNormalizerResolved = Assert-RepoFile `
+  -Path $WindowNormalizerPath `
+  -Name "WindowNormalizerPath" `
+  -AllowedRoot ([System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release"))) `
+  -Description "scripts/release"
 
 $vsixPath = "target/vsix/subversionr-win32-x64-0.2.4.vsix"
 $packageRoot = "target/vscode-package/subversionr-$Target"
@@ -216,6 +224,7 @@ Invoke-ReleaseScript `
     "-CodeCliPath", $codeCliResolved,
     "-SvnToolsRoot", $svnToolsResolved,
     "-RendererCaptureDriverPath", $rendererCaptureResolved,
+    "-WindowNormalizerPath", $windowNormalizerResolved,
     "-FixtureRoot", "$releaseEvidenceRoot/installed-source-control-ui-e2e/$Target",
     "-EvidencePath", "$releaseEvidenceRoot/subversionr-installed-source-control-ui-e2e-$Target.json",
     "-RemoteDebuggingPort", ([string]$RemoteDebuggingPort)
