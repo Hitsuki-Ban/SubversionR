@@ -108,7 +108,7 @@ describe("collectInstalledCoreWorkflowReport", () => {
       { path: "c:/FIXTURE/wc/" },
       {
         generatedAt: () => "2026-07-12T00:00:00Z",
-        extensionVersion: "0.2.4",
+        extensionVersion: "0.2.5",
         pathCasePolicy: () => "case-insensitive",
         workspaceTrusted: () => true,
         sessionService,
@@ -138,7 +138,7 @@ describe("collectInstalledCoreWorkflowReport", () => {
         { path: "C:\\fixture\\wc" },
         {
           generatedAt: () => "2026-07-12T00:00:00Z",
-          extensionVersion: "0.2.4",
+          extensionVersion: "0.2.5",
           pathCasePolicy: () => "case-insensitive",
           workspaceTrusted: () => true,
           sessionService,

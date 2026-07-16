@@ -14,6 +14,16 @@ In the VS Code Extensions view, search for `@id:hitsuki-ban.subversionr`, open *
 
 Pre-release versions may change between updates. Check the release notes before updating a working environment.
 
+## 0.2.5 pre-release highlights
+
+- Repository Log now targets the active working copy deterministically and reveals the focused SVN History view.
+- Empty commit messages open a prompt, including Review and Commit without losing the reviewed selection.
+- Local `file://` commits record the operating-system username as `svn:author`.
+- Initialize, Lock, and Unlock settle deterministically, and active-editor diff, history, and blame commands are available from the Command Palette.
+- Property reports reuse read-only editor tabs, while libsvn conflict artifacts appear in a dedicated read-only Source Control group.
+
+The 0.2.5 pre-release keeps the existing Windows x64, local file-backed Beta boundary. It does not add stable-channel, cross-platform, broad remote/authentication, merge, signing, public-install verification, previous-stable rollback, or overall public-readiness claims.
+
 ## Support and security
 
 For bugs and support requests, use [GitHub Issues](https://github.com/Hitsuki-Ban/SubversionR/issues) and follow the [support guide](https://github.com/Hitsuki-Ban/SubversionR/blob/main/SUPPORT.md). Do not report vulnerabilities in a public issue; follow the [security policy](https://github.com/Hitsuki-Ban/SubversionR/security/policy) instead.

@@ -423,6 +423,17 @@ Issue [#26](https://github.com/Hitsuki-Ban/SubversionR/issues/26) preserves the 
 - `docs/release/marketplace-pre-release-owner-exception-0.2.2.md` scopes the one automated publication authorization to the exact 0.2.2 bytes; and
 - [`docs/release/0.2.2-publication-evidence.md`](../release/0.2.2-publication-evidence.md) records the completed GitHub release, live custom-predicate attestation, Marketplace publish workflow, and public Gallery state. Signing, signed source-to-binary provenance, previous-stable rollback, final legal and vulnerability approval, and public readiness remain separate open gates.
 
+## 0.2.5 Workflow-completion Candidate
+
+The pending 0.2.5 candidate preserves the `SVN-R` Marketplace identity while packaging the completed history targeting, commit-message, local-author, command-settlement, active-editor palette, read-only report, conflict-artifact, and version-stamp slices:
+
+- root, extension, daemon, and protocol versions are `0.2.5`; the extension version remains plain `major.minor.patch`, while the planned GitHub pre-release tag is `v0.2.5-beta.1`;
+- `vsce package --target win32-x64 --pre-release` bakes exactly one `Microsoft.VisualStudio.Code.PreRelease=true` property into the candidate before its bytes are hashed;
+- the pending release subject is `subversionr-win32-x64-0.2.5.vsix` and is bound by `docs/release/github-attestation-candidate-contract.win32-x64.json` with `publicReadinessClaim=false`; and
+- `docs/release/marketplace-pre-release-owner-exception-0.2.5.md` authorizes only the exact bytes after the candidate is sealed.
+
+This candidate-preparation slice does not create the GitHub release, publish a live attestation, publish to the Marketplace, prove public installation, or claim public release readiness. The published 0.2.4 release, attestation, Marketplace workflow, and Gallery evidence remain historical facts recorded below.
+
 ## 0.2.4 Source Control Information-architecture Publication
 
 The published 0.2.4 candidate preserves the `SVN-R` Marketplace identity while packaging the completed Source Control information-architecture, runtime count-policy, working-copy metadata grouping, and installed UI-evidence hardening slices:

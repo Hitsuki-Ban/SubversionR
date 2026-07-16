@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.5
+
+- Makes Repository Log target the active working copy deterministically, reveal and focus SVN History, and label history with the working-copy root.
+- Prompts for a missing commit message while preserving Review and Commit selections through the prompt.
+- Records the local operating-system username as `svn:author` for `file://` commits.
+- Settles initialize, lock, and unlock command promises deterministically and reports lock failures instead of silently doing nothing.
+- Exposes active-editor diff, history, and blame commands in the Command Palette for trusted open working copies.
+- Opens property and hidden mergeinfo reports as reusable read-only documents and presents libsvn conflict artifacts in a dedicated read-only Source Control group.
+- Aligns extension, daemon, protocol, and native bridge version stamps and fails closed on build-time version drift.
+- Retains the `hitsuki-ban.subversionr` / `SVN-R` Windows `win32-x64` pre-release identity and existing public-readiness non-claim.
+
 ## 0.2.4
 
 - Hides deferred Merge, preview, and mergeinfo entry points until their native workflows are implemented.

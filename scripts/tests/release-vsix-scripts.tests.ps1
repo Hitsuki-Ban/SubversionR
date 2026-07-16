@@ -750,7 +750,7 @@ try {
   Assert-True ($ciWorkflow.Contains("Package VS Code win32-x64 VSIX")) "CI should package the win32-x64 VSIX."
   Assert-True ($ciWorkflow.Contains("Locate VS Code CLI")) "CI should locate the VS Code CLI explicitly before install."
   Assert-True ($ciWorkflow.Contains("Test VS Code CLI VSIX install")) "CI should run the real VS Code CLI install gate."
-  Assert-True ($ciWorkflow.Contains("target/vsix/subversionr-win32-x64-0.2.4.vsix")) "CI should upload the current 0.2.4 VSIX candidate."
+  Assert-True ($ciWorkflow.Contains("target/vsix/subversionr-win32-x64-0.2.5.vsix")) "CI should upload the current 0.2.5 VSIX candidate."
 
   Write-Host "Release VSIX script tests passed."
 }

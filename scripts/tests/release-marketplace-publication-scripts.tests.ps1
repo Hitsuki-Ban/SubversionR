@@ -52,13 +52,13 @@ function New-TestVsix([string]$Path, [bool]$PreRelease) {
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
   <Metadata>
-    <Identity Language="en-US" Id="subversionr" Version="0.2.4" Publisher="hitsuki-ban" TargetPlatform="win32-x64" />
+    <Identity Language="en-US" Id="subversionr" Version="0.2.5" Publisher="hitsuki-ban" TargetPlatform="win32-x64" />
     <DisplayName>SVN-R</DisplayName>
     $property
   </Metadata>
 </PackageManifest>
 "@ | Set-Content -LiteralPath (Join-Path $stagingRoot "extension.vsixmanifest") -NoNewline -Encoding utf8
-  @{ name = "subversionr"; publisher = "hitsuki-ban"; version = "0.2.4" } |
+  @{ name = "subversionr"; publisher = "hitsuki-ban"; version = "0.2.5" } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stagingRoot "extension\package.json") -Encoding utf8
   [System.IO.Compression.ZipFile]::CreateFromDirectory($stagingRoot, $Path)
   Remove-Item -LiteralPath $stagingRoot -Recurse -Force
@@ -66,7 +66,7 @@ function New-TestVsix([string]$Path, [bool]$PreRelease) {
 
 function New-Fixture([string]$Root, [bool]$PreRelease) {
   New-Item -ItemType Directory -Force -Path $Root | Out-Null
-  $vsixPath = Join-Path $Root "subversionr-win32-x64-0.2.4.vsix"
+  $vsixPath = Join-Path $Root "subversionr-win32-x64-0.2.5.vsix"
   New-TestVsix -Path $vsixPath -PreRelease $PreRelease
   $subjectSha = Get-Sha256 $vsixPath
   $contractPath = Join-Path $Root "github-attestation-candidate-contract.win32-x64.json"
@@ -76,11 +76,11 @@ function New-Fixture([string]$Root, [bool]$PreRelease) {
     publicReadinessClaim = $false
     target = "win32-x64"
     release = [pscustomobject]@{
-      tag = "v0.2.4-beta.1"
-      url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.4-beta.1"
+      tag = "v0.2.5-beta.1"
+      url = "https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.5-beta.1"
     }
     subject = [pscustomobject]@{
-      name = "subversionr-win32-x64-0.2.4.vsix"
+      name = "subversionr-win32-x64-0.2.5.vsix"
       size = [int64](Get-Item -LiteralPath $vsixPath).Length
       sha256 = $subjectSha
     }
@@ -154,9 +154,9 @@ function Invoke-Recorder([object]$Fixture, [string]$OutputPath = $Fixture.output
     -ContractPath $Fixture.contractPath `
     -AttestationVerificationResultPath $VerificationPath `
     -VsixPath $VsixPath `
-    -ReleaseTag v0.2.4-beta.1 `
+    -ReleaseTag v0.2.5-beta.1 `
     -ExtensionId hitsuki-ban.subversionr `
-    -ExtensionVersion 0.2.4 `
+    -ExtensionVersion 0.2.5 `
     -Repository Hitsuki-Ban/SubversionR `
     -WorkflowPath .github/workflows/publish-marketplace.yml `
     -RunId 789 `
@@ -184,8 +184,8 @@ try {
   foreach ($claim in @("publicReadinessClaim", "publicInstallClaim", "signingClaim", "rollbackClaim", "finalReviewClaim")) {
     Assert-Equal "False" ([string]$evidence.$claim) "Publication evidence $claim must remain false."
   }
-  Assert-Equal "v0.2.4-beta.1" $evidence.release.tag "Publication evidence should bind the candidate release."
-  Assert-Equal "0.2.4" $evidence.extension.version "Publication evidence should bind the extension version."
+  Assert-Equal "v0.2.5-beta.1" $evidence.release.tag "Publication evidence should bind the candidate release."
+  Assert-Equal "0.2.5" $evidence.extension.version "Publication evidence should bind the extension version."
   Assert-Equal $fixture.subjectSha $evidence.vsix.sha256 "Publication evidence should bind the exact VSIX hash."
   Assert-Equal "True" ([string]$evidence.vsix.marketplacePreReleaseProperty) "Publication evidence should record the packaged prerelease property."
   Assert-Equal "True" ([string]$evidence.attestation.verified) "Publication evidence should record runtime attestation verification."
@@ -227,7 +227,7 @@ try {
     Invoke-Recorder -Fixture $fixture -VerificationPath $mixedVerificationPath -OutputPath (Join-Path $fixture.root "mixed-output.json")
   } "signer SHA must match the publication commit" "Recorder should reject the complete set when any matching result violates policy."
 
-  $tamperedVsixPath = Join-Path $fixture.root "tampered\subversionr-win32-x64-0.2.4.vsix"
+  $tamperedVsixPath = Join-Path $fixture.root "tampered\subversionr-win32-x64-0.2.5.vsix"
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $tamperedVsixPath) | Out-Null
   Copy-Item -LiteralPath $fixture.vsixPath -Destination $tamperedVsixPath
   [System.IO.File]::AppendAllText($tamperedVsixPath, "tampered")
