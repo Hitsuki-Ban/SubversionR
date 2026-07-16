@@ -12880,6 +12880,16 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
   if ($Capture.target -ne $Target) {
     throw "Renderer capture target must be $Target."
   }
+  if (
+    -not ($Capture.PSObject.Properties.Name -contains "windowBounds") -or
+    $Capture.windowBounds.method -ne "window.resizeTo" -or
+    [int]$Capture.windowBounds.requested.outerWidth -ne 1600 -or
+    [int]$Capture.windowBounds.requested.outerHeight -ne 1000 -or
+    [int]$Capture.windowBounds.observed.outerWidth -ne 1600 -or
+    [int]$Capture.windowBounds.observed.outerHeight -ne 1000
+  ) {
+    throw "Renderer capture must prove the exact 1600x1000 native workbench outer bounds."
+  }
   $captureExpectations = $OpenReport.rendererCaptureExpectations
   $expectedDomTokens = Assert-TokenArray -Tokens $captureExpectations.requiredDomTokens -Name "Open report DOM expectations"
   $expectedAccessibilityTokens = Assert-TokenArray -Tokens $captureExpectations.requiredAccessibilityTokens -Name "Open report accessibility expectations"

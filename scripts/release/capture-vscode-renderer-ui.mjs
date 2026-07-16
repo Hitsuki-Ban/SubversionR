@@ -9,6 +9,10 @@ const CDP_CONNECT_RETRY_TIMEOUT_MS = 60000;
 const CDP_CONNECT_RETRY_INTERVAL_MS = 500;
 const REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS = 10000;
 const REQUIRED_TOKEN_CAPTURE_INTERVAL_MS = 250;
+const WORKBENCH_OUTER_BOUNDS = Object.freeze({
+  width: 1600,
+  height: 1000,
+});
 
 async function main() {
 if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "delayed-context-action") {
@@ -17,6 +21,10 @@ if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "delayed-context-acti
 }
 if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "scm-primary-action-wait") {
   await runScmPrimaryActionWaitSelfTest();
+  return;
+}
+if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "workbench-window-normalization") {
+  await runWorkbenchWindowNormalizationSelfTest();
   return;
 }
 const args = parseArgs(process.argv.slice(2));
@@ -69,11 +77,15 @@ const screenshotPath = path.join(outputRoot, "screenshot.png");
 const capturePath = path.join(outputRoot, "renderer-capture.json");
 
 let captureReport;
+let selectedTarget;
+let windowBounds;
 
 try {
-  const selectedTarget = await selectWorkbenchTarget(remoteDebuggingPort);
+  selectedTarget = await selectWorkbenchTarget(remoteDebuggingPort);
   const cdp = await CdpConnection.connect(selectedTarget.webSocketDebuggerUrl);
   try {
+    await cdp.send("Emulation.clearDeviceMetricsOverride");
+    windowBounds = await normalizeWorkbenchWindow(cdp);
     await cdp.send("Page.enable").catch(() => undefined);
     await cdp.send("Runtime.enable").catch(() => undefined);
     await cdp.send("Accessibility.enable").catch(() => undefined);
@@ -89,7 +101,7 @@ try {
     const interaction = treeViewState
       ? await inspectTreeViewState(cdp, treeViewState)
       : scmActionSurface
-      ? await inspectScmActionSurface(cdp, scmActionSurface)
+      ? await inspectScmActionSurface(cdp, scmActionSurface, selectedTarget)
       : clickButtonText !== undefined
         ? await clickButtonByText(cdp, clickButtonText, domTokens)
         : inputText !== undefined
@@ -142,6 +154,7 @@ try {
           url: selectedTarget.url,
         },
       },
+      windowBounds,
       viewport: {
         title: domState.title,
         url: domState.url,
@@ -287,7 +300,16 @@ try {
       capturedAt: new Date().toISOString(),
       remoteDebugging: {
         port: remoteDebuggingPort,
+        ...(selectedTarget ? {
+          selectedTarget: {
+            id: selectedTarget.id,
+            type: selectedTarget.type,
+            title: selectedTarget.title,
+            url: selectedTarget.url,
+          },
+        } : {}),
       },
+      ...(windowBounds ? { windowBounds } : {}),
       artifacts: {
         dom: failedArtifact(domPath, error),
         accessibility: failedArtifact(accessibilityPath, error),
@@ -303,6 +325,9 @@ try {
       },
       error: {
         message: error instanceof Error ? error.message : String(error),
+        ...(error && typeof error === "object" && error.diagnostics
+          ? { diagnostics: error.diagnostics }
+          : {}),
       },
     };
     await writeCaptureReport(capturePath, captureReport);
@@ -557,6 +582,76 @@ function requiredValueString(value, name) {
     throw new Error(`${name} must be a non-empty string.`);
   }
   return value;
+}
+
+async function inspectWorkbenchWindowGeometry(cdp) {
+  return evaluate(
+    cdp,
+    `({
+      outerWidth: window.outerWidth,
+      outerHeight: window.outerHeight,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      screenX: window.screenX,
+      screenY: window.screenY,
+      devicePixelRatio: window.devicePixelRatio
+    })`,
+  );
+}
+
+async function normalizeWorkbenchWindow(
+  cdp,
+  timeoutMs = CDP_REQUEST_TIMEOUT_MS,
+  intervalMs = 100,
+) {
+  const initial = await inspectWorkbenchWindowGeometry(cdp);
+  const alreadyNormalized =
+    initial.outerWidth === WORKBENCH_OUTER_BOUNDS.width &&
+    initial.outerHeight === WORKBENCH_OUTER_BOUNDS.height;
+  const frameWidth = initial.outerWidth - initial.innerWidth;
+  const frameHeight = initial.outerHeight - initial.innerHeight;
+  const resizeWidth = WORKBENCH_OUTER_BOUNDS.width - frameWidth;
+  const resizeHeight = WORKBENCH_OUTER_BOUNDS.height - frameHeight;
+  if (
+    !Number.isInteger(frameWidth) ||
+    !Number.isInteger(frameHeight) ||
+    frameWidth < 0 ||
+    frameHeight < 0 ||
+    resizeWidth <= 0 ||
+    resizeHeight <= 0
+  ) {
+    throw new Error(`VS Code workbench window frame geometry is invalid: ${JSON.stringify(initial)}.`);
+  }
+  if (!alreadyNormalized) {
+    await evaluate(cdp, `(() => {
+      window.resizeTo(${resizeWidth}, ${resizeHeight});
+      return true;
+    })()`);
+  }
+  const deadline = Date.now() + timeoutMs;
+  let observed;
+  do {
+    observed = await inspectWorkbenchWindowGeometry(cdp);
+    if (
+      observed.outerWidth === WORKBENCH_OUTER_BOUNDS.width &&
+      observed.outerHeight === WORKBENCH_OUTER_BOUNDS.height
+    ) {
+      return {
+        method: "window.resizeTo",
+        initial,
+        requested: {
+          outerWidth: WORKBENCH_OUTER_BOUNDS.width,
+          outerHeight: WORKBENCH_OUTER_BOUNDS.height,
+        },
+        applied: { resizeWidth, resizeHeight, frameWidth, frameHeight },
+        observed,
+      };
+    }
+    await sleep(intervalMs);
+  } while (Date.now() < deadline);
+  throw new Error(
+    `VS Code workbench outer bounds must be ${WORKBENCH_OUTER_BOUNDS.width}x${WORKBENCH_OUTER_BOUNDS.height}; observed ${JSON.stringify(observed)}.`,
+  );
 }
 
 async function setExpectedViewport(cdp, viewport) {
@@ -841,11 +936,156 @@ async function waitForScmPrimaryActions(
   return primaryActions;
 }
 
-async function inspectScmActionSurface(cdp, expectations) {
+async function inspectScmPrimaryActionFailureDiagnostics(cdp, selectedTarget, primaryActions) {
+  const documentDiagnostics = await evaluate(
+    cdp,
+    `(() => {
+      const renderedPrimaryLabels = ${JSON.stringify(primaryActions.filter(action => action.rendered === true).map(action => action.label))};
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const bounds = element => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          clientWidth: element.clientWidth,
+          clientHeight: element.clientHeight
+        };
+      };
+      const label = element => normalize(
+        element.getAttribute("aria-label") || element.getAttribute("title") || element.textContent
+      );
+      const sidebarRoots = Array.from(document.querySelectorAll(".pane-composite-part, .sidebar"))
+        .filter(visible);
+      const actionRoots = sidebarRoots.length > 0 ? sidebarRoots : [document.body];
+      const actionElements = actionRoots.flatMap(root =>
+        Array.from(root.querySelectorAll("button, a, [role='button'], .action-label"))
+      );
+      const visiblePrimaryActionCandidates = actionElements
+        .filter((element, index, all) => all.indexOf(element) === index && visible(element))
+        .map(element => {
+          const codicons = [element, ...element.querySelectorAll("[class*='codicon-']")]
+            .flatMap(candidate => Array.from(candidate.classList))
+            .filter(className => className.startsWith("codicon-"));
+          return {
+            label: label(element),
+            codicons: Array.from(new Set(codicons)),
+            className: typeof element.className === "string" ? element.className : ""
+          };
+        })
+        .filter(candidate => candidate.label || candidate.codicons.length > 0)
+        .slice(0, 80);
+      const renderedPrimaryElement = actionElements.find(element => {
+        if (!visible(element)) return false;
+        const candidateLabel = label(element);
+        return renderedPrimaryLabels.some(renderedLabel =>
+          candidateLabel === renderedLabel || candidateLabel.startsWith(renderedLabel + " (")
+        );
+      });
+      const renderedPrimaryActionsContainer = renderedPrimaryElement &&
+        renderedPrimaryElement.closest(".actions-container, .title-actions");
+      const scmProvider = renderedPrimaryElement && renderedPrimaryElement.closest(".scm-provider");
+      const scmRepositoryToolbar = renderedPrimaryActionsContainer
+        ? {
+            actionsContainer: bounds(renderedPrimaryActionsContainer),
+            provider: scmProvider ? bounds(scmProvider) : null
+          }
+        : null;
+      const anchoredMoreActionsCandidates = renderedPrimaryActionsContainer
+        ? Array.from(renderedPrimaryActionsContainer.querySelectorAll(
+            ".codicon-more, [aria-label*='More Actions'], [title*='More Actions']"
+          ))
+            .map(element => element.closest("button, a, [role='button'], .action-label") || element)
+            .filter((element, index, all) => all.indexOf(element) === index && visible(element))
+            .map(element => {
+              const rect = element.getBoundingClientRect();
+              return {
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2,
+                label: label(element),
+                className: typeof element.className === "string" ? element.className : "",
+                ...bounds(element)
+              };
+            })
+        : [];
+      const moreActionsCandidates = actionRoots.flatMap(root =>
+        Array.from(root.querySelectorAll(
+          ".codicon-more, [aria-label*='More Actions'], [title*='More Actions']"
+        ))
+      )
+        .map(element => element.closest("button, a, [role='button'], .action-label") || element)
+        .filter((element, index, all) => all.indexOf(element) === index && visible(element))
+        .map(element => ({
+          label: label(element),
+          className: typeof element.className === "string" ? element.className : "",
+          ...bounds(element)
+        }));
+      const restrictedModeElements = Array.from(document.querySelectorAll(
+        "[aria-label*='Restricted Mode'], [title*='Restricted Mode'], .statusbar-item"
+      ))
+        .filter(visible)
+        .map(element => label(element))
+        .filter(value => value.includes("Restricted Mode"));
+      return {
+        document: {
+          title: document.title,
+          url: location.href,
+          clientWidth: document.documentElement.clientWidth,
+          clientHeight: document.documentElement.clientHeight
+        },
+        restrictedMode: {
+          bodyTextPresent: normalize(document.body.innerText).includes("Restricted Mode"),
+          visibleLabels: Array.from(new Set(restrictedModeElements))
+        },
+        scmRepositoryToolbar,
+        visiblePrimaryActionCandidates,
+        anchoredMoreActionsCandidates,
+        moreActionsCandidates
+      };
+    })()`,
+  );
+  let overflowMenuLabels = [];
+  if (documentDiagnostics.anchoredMoreActionsCandidates.length > 0) {
+    const candidate = documentDiagnostics.anchoredMoreActionsCandidates[0];
+    await clickAt(cdp, candidate.x, candidate.y, "left");
+    try {
+      overflowMenuLabels = await waitForAnyVisibleMenuLabels(cdp);
+    } finally {
+      await pressEscape(cdp);
+    }
+  }
+  return {
+    target: {
+      id: selectedTarget.id,
+      type: selectedTarget.type,
+      title: selectedTarget.title,
+      url: selectedTarget.url,
+    },
+    ...documentDiagnostics,
+    overflowMenuLabels,
+  };
+}
+
+function scmPrimaryActionFailure(missingPrimary, primaryActions, diagnostics) {
+  const error = new Error(
+    `SCM title actions were not rendered with expected codicons: ${missingPrimary.map((action) => `${action.label}/$(${action.codicon})`).join(", ")}. Observed: ${JSON.stringify(primaryActions)}. Diagnostics: ${JSON.stringify(diagnostics)}`,
+  );
+  error.diagnostics = diagnostics;
+  return error;
+}
+
+async function inspectScmActionSurface(cdp, expectations, selectedTarget) {
   const primaryActions = await waitForScmPrimaryActions(cdp, expectations.primaryActions);
   const missingPrimary = primaryActions.filter((action) => action.rendered !== true);
   if (missingPrimary.length > 0) {
-    throw new Error(`SCM title actions were not rendered with expected codicons: ${missingPrimary.map((action) => `${action.label}/$(${action.codicon})`).join(", ")}. Observed: ${JSON.stringify(primaryActions)}`);
+    const diagnostics = await inspectScmPrimaryActionFailureDiagnostics(cdp, selectedTarget, primaryActions);
+    throw scmPrimaryActionFailure(missingPrimary, primaryActions, diagnostics);
   }
 
   const moreCandidates = await evaluate(
@@ -1226,6 +1466,19 @@ async function waitForVisibleMenuLabels(cdp, expectedLabels) {
   return labels;
 }
 
+async function waitForAnyVisibleMenuLabels(cdp) {
+  const deadline = Date.now() + CDP_REQUEST_TIMEOUT_MS;
+  let labels = [];
+  do {
+    labels = await visibleMenuLabels(cdp);
+    if (labels.length > 0) {
+      return labels;
+    }
+    await sleep(200);
+  } while (Date.now() < deadline);
+  return labels;
+}
+
 async function waitForNoVisibleMenuLabels(cdp, settleWindowMs = 1200) {
   const deadline = Date.now() + settleWindowMs;
   do {
@@ -1236,6 +1489,83 @@ async function waitForNoVisibleMenuLabels(cdp, settleWindowMs = 1200) {
     await sleep(100);
   } while (Date.now() < deadline);
   return [];
+}
+
+async function runWorkbenchWindowNormalizationSelfTest() {
+  const exactCalls = [];
+  const exactValues = [
+    { outerWidth: 1456, outerHeight: 908, innerWidth: 1440, innerHeight: 900, screenX: 10, screenY: 10, devicePixelRatio: 1 },
+    true,
+    { outerWidth: 1600, outerHeight: 1000, innerWidth: 1584, innerHeight: 992, screenX: 10, screenY: 10, devicePixelRatio: 1 },
+  ];
+  const exactCdp = {
+    async send(method, params) {
+      exactCalls.push({ method, params });
+      if (method !== "Runtime.evaluate") throw new Error(`Unexpected exact-window CDP method: ${method}`);
+      return { result: { value: exactValues.shift() } };
+    },
+  };
+  const exactResult = await normalizeWorkbenchWindow(exactCdp, 10, 1);
+  if (
+    exactCalls.length !== 3 ||
+    exactCalls.some(call => call.method !== "Runtime.evaluate") ||
+    !exactCalls[1].params.expression.includes("window.resizeTo(1584, 992)") ||
+    exactResult.method !== "window.resizeTo" ||
+    exactResult.requested.outerWidth !== 1600 ||
+    exactResult.requested.outerHeight !== 1000 ||
+    exactResult.observed.outerWidth !== 1600 ||
+    exactResult.observed.outerHeight !== 1000
+  ) {
+    throw new Error(`Workbench window normalization self-test observed invalid calls: ${JSON.stringify(exactCalls)}.`);
+  }
+
+  const normalizedCalls = [];
+  const normalizedCdp = {
+    async send(method, params) {
+      normalizedCalls.push({ method, params });
+      if (method !== "Runtime.evaluate") throw new Error(`Unexpected normalized-window CDP method: ${method}`);
+      return { result: { value: {
+        outerWidth: 1600,
+        outerHeight: 1000,
+        innerWidth: 1584,
+        innerHeight: 992,
+        screenX: 10,
+        screenY: 10,
+        devicePixelRatio: 1,
+      } } };
+    },
+  };
+  await normalizeWorkbenchWindow(normalizedCdp, 10, 1);
+  if (normalizedCalls.length !== 2 || normalizedCalls.some(call => call.params.expression.includes("window.resizeTo"))) {
+    throw new Error(`Normalized workbench window should not be resized again: ${JSON.stringify(normalizedCalls)}.`);
+  }
+
+  let clampedEvaluationCount = 0;
+  const clampedCdp = {
+    async send(method, params) {
+      if (method !== "Runtime.evaluate") throw new Error(`Unexpected clamped-window CDP method: ${method}`);
+      clampedEvaluationCount += 1;
+      if (params.expression.includes("window.resizeTo")) return { result: { value: true } };
+      return { result: { value: {
+        outerWidth: clampedEvaluationCount === 1 ? 1456 : 1599,
+        outerHeight: clampedEvaluationCount === 1 ? 908 : 1000,
+        innerWidth: clampedEvaluationCount === 1 ? 1440 : 1583,
+        innerHeight: clampedEvaluationCount === 1 ? 900 : 992,
+        screenX: 10,
+        screenY: 10,
+        devicePixelRatio: 1,
+      } } };
+    },
+  };
+  let clampedRejected = false;
+  try {
+    await normalizeWorkbenchWindow(clampedCdp, 5, 1);
+  } catch (error) {
+    clampedRejected = String(error && error.message).includes("1599");
+  }
+  if (!clampedRejected) {
+    throw new Error("Workbench window normalization self-test did not fail fast on clamped bounds.");
+  }
 }
 
 async function runDelayedContextActionSelfTest() {
@@ -1311,6 +1641,58 @@ async function runScmPrimaryActionWaitSelfTest() {
   const missingResult = await waitForScmPrimaryActions(missingCdp, expectedActions, 500, 1);
   if (missingPollCount < 2 || missingResult.every((action) => action.rendered === true)) {
     throw new Error(`Missing SCM primary-action self-test did not preserve the failure contract after ${missingPollCount} poll(s).`);
+  }
+
+  let diagnosticEvaluationCount = 0;
+  const diagnosticCdp = {
+    async send(method) {
+      if (method === "Runtime.evaluate") {
+        diagnosticEvaluationCount += 1;
+        return {
+          result: {
+            value: diagnosticEvaluationCount === 1
+              ? {
+                  document: { title: "fixture", url: "vscode-file://fixture", clientWidth: 1440, clientHeight: 900 },
+                  restrictedMode: { bodyTextPresent: false, visibleLabels: [] },
+                  scmRepositoryToolbar: {
+                    actionsContainer: { clientWidth: 320 },
+                    provider: { clientWidth: 340 },
+                  },
+                  visiblePrimaryActionCandidates: [{ label: expectedActions[0].label, codicons: ["codicon-refresh"] }],
+                  anchoredMoreActionsCandidates: [{ x: 120, y: 40, label: "More Actions..." }],
+                  moreActionsCandidates: [{ x: 120, y: 40, label: "More Actions..." }],
+                }
+              : ["SubversionR: Commit Changes", "SubversionR: Review & Commit"],
+          },
+        };
+      }
+      if (method.startsWith("Input.dispatch")) return {};
+      throw new Error(`Unexpected diagnostic fake CDP method: ${method}`);
+    },
+  };
+  const diagnosticPrimaryActions = expectedActions.map((action, index) => ({
+    ...action,
+    rendered: index === 0,
+  }));
+  const diagnostics = await inspectScmPrimaryActionFailureDiagnostics(
+    diagnosticCdp,
+    { id: "target", type: "page", title: "workbench", url: "vscode-file://workbench" },
+    diagnosticPrimaryActions,
+  );
+  const diagnosticError = scmPrimaryActionFailure(
+    diagnosticPrimaryActions.filter(action => action.rendered !== true),
+    diagnosticPrimaryActions,
+    diagnostics,
+  );
+  if (
+    diagnostics.overflowMenuLabels.length !== 2 ||
+    diagnostics.restrictedMode.bodyTextPresent !== false ||
+    diagnostics.scmRepositoryToolbar.actionsContainer.clientWidth !== 320 ||
+    !diagnosticError.message.includes("Diagnostics:") ||
+    !diagnosticError.message.includes("overflowMenuLabels") ||
+    diagnosticError.diagnostics !== diagnostics
+  ) {
+    throw new Error(`SCM primary-action diagnostic self-test failed: ${diagnosticError.message}`);
   }
 }
 
