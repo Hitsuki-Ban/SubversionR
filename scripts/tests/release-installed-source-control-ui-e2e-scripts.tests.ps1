@@ -7339,6 +7339,18 @@ const report = {
       url: "vscode-file://fixture/workbench.html"
     }
   },
+  windowBounds: {
+    method: "window.resizeTo",
+    initial: { outerWidth: 1456, outerHeight: 908, innerWidth: 1440, innerHeight: 900 },
+    requested: { outerWidth: 1600, outerHeight: 1000 },
+    applied: { resizeWidth: 1584, resizeHeight: 992, frameWidth: 16, frameHeight: 8 },
+    observed: {
+      outerWidth: mode === "window-bounds-lie" ? 1599 : 1600,
+      outerHeight: 1000,
+      innerWidth: 1584,
+      innerHeight: 992
+    }
+  },
   viewport: {
     title: "Visual Studio Code - fake workbench",
     url: "vscode-file://fixture/workbench.html",
@@ -8005,9 +8017,29 @@ try {
   finally {
     Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
   }
+  $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "workbench-window-normalization"
+  try {
+    & node $driverScript
+    Assert-Equal 0 $LASTEXITCODE "Renderer capture workbench-window fake-CDP self-test should preserve exact Electron resize semantics and reject clamped bounds."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
+  }
   $driverText = Get-Content -Raw -LiteralPath $driverScript
   Assert-True ($driverText.Contains("waitForScmPrimaryActions") -and $driverText.Contains("REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS")) "Renderer capture should use the existing bounded state timeout for SCM primary actions."
   Assert-True ($driverText.Contains("SCM title actions were not rendered with expected codicons") -and $driverText.Contains("Observed:")) "Renderer capture should retain strict title-action failure reporting with the observed contract."
+  $normalizeCallIndex = $driverText.IndexOf('windowBounds = await normalizeWorkbenchWindow(cdp);')
+  $viewportCallIndex = $driverText.IndexOf('await setExpectedViewport(cdp, expectedViewport);')
+  Assert-True ($normalizeCallIndex -ge 0 -and $viewportCallIndex -gt $normalizeCallIndex) "Renderer capture should normalize and verify the real workbench window before applying the exact emulated viewport."
+  Assert-True ($driverText -match '(?s)Emulation\.clearDeviceMetricsOverride.*?normalizeWorkbenchWindow\(cdp\).*?Emulation\.setDeviceMetricsOverride') "Renderer capture should clear prior emulation, normalize the real Electron window, and only then apply the exact capture viewport."
+  Assert-True ($driverText -match '(?s)WORKBENCH_OUTER_BOUNDS\s*=\s*Object\.freeze\(\{\s*width:\s*1600,\s*height:\s*1000') "Renderer capture should use the fixed 1600x1000 outer-window contract."
+  Assert-True ($driverText -match '(?s)frameWidth = initial\.outerWidth - initial\.innerWidth.*?window\.resizeTo\(\$\{resizeWidth\}, \$\{resizeHeight\}\).*?observed\.outerWidth === WORKBENCH_OUTER_BOUNDS\.width.*?observed\.outerHeight === WORKBENCH_OUTER_BOUNDS\.height') "Renderer capture should translate the exact outer-window contract through Electron window.resizeTo and verify observed outer bounds."
+  Assert-True ($driverText -match '(?s)const alreadyNormalized =.*?if \(!alreadyNormalized\).*?window\.resizeTo') "Renderer capture should avoid repeated native-window relayout only after the exact 1600x1000 outer bounds are already present."
+  Assert-True ($driverText -match '(?s)windowBounds,.*?viewport:') "Renderer capture report should record requested and observed native window bounds before viewport evidence."
+  Assert-True ($driverText.Contains("restrictedMode") -and $driverText.Contains("scmRepositoryToolbar") -and $driverText.Contains("visiblePrimaryActionCandidates") -and $driverText.Contains("moreActionsCandidates") -and $driverText.Contains("overflowMenuLabels")) "Renderer capture SCM failure diagnostics should distinguish trust state, repository-toolbar layout, visible primary actions, and overflow contents."
+  Assert-True ($driverText -match '(?s)renderedPrimaryElement\.closest\("\.actions-container, \.title-actions"\).*?renderedPrimaryElement\.closest\("\.scm-provider"\).*?scmRepositoryToolbar.*?anchoredMoreActionsCandidates.*?clickAt\(cdp, candidate\.x, candidate\.y, "left"\).*?overflowMenuLabels = await waitForAnyVisibleMenuLabels\(cdp\).*?pressEscape\(cdp\).*?throw scmPrimaryActionFailure') "Renderer capture should diagnose the exact Refresh-anchored SCM repository toolbar and overflow menu, close it, and still fail the exact primary-action contract."
+  Assert-True ($driverText.Contains("error.diagnostics = diagnostics") -and $driverText -match '(?s)error:\s*\{.*?diagnostics: error\.diagnostics') "Renderer capture should preserve SCM failure diagnostics as structured error evidence."
+  Assert-True ($workflowContent -match '(?s)function Assert-RendererCaptureReport.*?windowBounds\.method -ne "window\.resizeTo".*?requested\.outerWidth -ne 1600.*?requested\.outerHeight -ne 1000.*?observed\.outerWidth -ne 1600.*?observed\.outerHeight -ne 1000') "Installed Source Control UI E2E evidence validation should require exact requested and observed native workbench outer bounds."
 
   $rootPackage = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e-scripts".Contains("release-installed-source-control-ui-e2e-scripts.tests.ps1")) "Root package should expose M7j3 installed Source Control UI E2E script tests."
@@ -9144,6 +9176,7 @@ try {
   }
 
   $rendererDetailLieCases = @(
+    [pscustomobject]@{ Mode = "window-bounds-lie"; Port = 32165; Expected = "Renderer capture must prove the exact 1600x1000 native workbench outer bounds."; Description = "native workbench outer bounds" },
     [pscustomobject]@{ Mode = "viewport-lie"; Port = 32155; Expected = "Renderer capture must prove an exact 1440x900 DOM viewport and PNG."; Description = "viewport detail" },
     [pscustomobject]@{ Mode = "scm-primary-lie"; Port = 32156; Expected = "Renderer capture SCM primary action/codicon evidence did not match expectations."; Description = "SCM primary action detail" },
     [pscustomobject]@{ Mode = "scm-submenu-lie"; Port = 32157; Expected = "Renderer capture SCM overflow submenu reachability did not match expectations."; Description = "SCM submenu detail" },
