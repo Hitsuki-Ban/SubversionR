@@ -520,18 +520,25 @@ describe("StatusSnapshotStore", () => {
   it("returns immutable copies of stored snapshots", () => {
     const store = new StatusSnapshotStore();
     store.registerRepository({ repositoryId: "repo-uuid:C:/wc", epoch: 7 });
-    const view = store.applySnapshot(snapshotResponse());
+    const snapshot = snapshotResponse();
+    snapshot.localEntries[0].localStatus = "conflicted";
+    snapshot.localEntries[0].conflict = "text";
+    snapshot.localEntries[0].conflictArtifacts = ["src/main.c.mine"];
+    const view = store.applySnapshot(snapshot);
     const localEntry = store.getLocalEntry("repo-uuid:C:/wc", "src/main.c");
 
     view.localEntries[0].path = "mutated.c";
+    view.localEntries[0].conflictArtifacts.push("src/mutated.mine");
     view.identity.repositoryUuid = "mutated-repo";
     view.summary.localChanges = 99;
     if (!localEntry) {
       throw new Error("Expected local entry");
     }
     localEntry.path = "entry-mutated.c";
+    localEntry.conflictArtifacts.push("src/entry-mutated.mine");
 
     expect(store.getLocalEntry("repo-uuid:C:/wc", "src/main.c")?.path).toBe("src/main.c");
+    expect(store.getLocalEntry("repo-uuid:C:/wc", "src/main.c")?.conflictArtifacts).toEqual(["src/main.c.mine"]);
     expect(store.getSnapshot("repo-uuid:C:/wc")).toMatchObject({
       identity: { repositoryUuid: "repo-uuid" },
       summary: { localChanges: 1 },
@@ -589,6 +596,7 @@ function deltaResponse(options: DeltaOptions = {}): StatusDelta {
       switched: false,
       depth: "infinity",
       conflict: null,
+      conflictArtifacts: [],
       external: false,
       generation,
     })),
@@ -613,6 +621,7 @@ function deltaResponse(options: DeltaOptions = {}): StatusDelta {
       switched: false,
       depth: "infinity",
       conflict: null,
+      conflictArtifacts: [],
       external: false,
       generation,
     })),
@@ -665,6 +674,7 @@ function snapshotResponse(options: SnapshotOptions = {}): StatusSnapshot {
       switched: false,
       depth: "infinity",
       conflict: null,
+      conflictArtifacts: [],
       external: false,
       generation,
     })),
@@ -688,6 +698,7 @@ function snapshotResponse(options: SnapshotOptions = {}): StatusSnapshot {
       switched: false,
       depth: "infinity",
       conflict: null,
+      conflictArtifacts: [],
       external: false,
       generation,
     })),

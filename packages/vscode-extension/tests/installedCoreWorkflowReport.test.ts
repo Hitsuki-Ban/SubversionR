@@ -404,6 +404,7 @@ function statusEntry(overrides: Partial<ScmRepositoryProjection["groups"][number
     switched: false,
     depth: "infinity",
     conflict: null,
+    conflictArtifacts: overrides.conflictArtifacts ?? [],
     external: false,
     generation: 3,
     ...overrides,

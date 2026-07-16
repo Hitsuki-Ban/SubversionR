@@ -3613,7 +3613,7 @@ export class RepositoryCommandController {
       }
       const paths = targets.map((target) => target.path);
       const choice = await this.options.ui.promptResolveChoice(
-        this.options.localize("{0} SVN conflicts", paths.length),
+        this.options.localize(paths.length === 1 ? "{0} SVN conflict" : "{0} SVN conflicts", paths.length),
       );
       if (choice === undefined) {
         return;
@@ -3623,7 +3623,7 @@ export class RepositoryCommandController {
         for (const target of targets) {
           const result = await this.runJournaledOperation(
             "resolve",
-            this.options.localize("Resolving SVN conflicts"),
+            this.options.localize(paths.length === 1 ? "Resolving SVN conflict" : "Resolving SVN conflicts"),
             target.repositoryId,
             1,
             (operationOptions) => {
@@ -3644,10 +3644,12 @@ export class RepositoryCommandController {
       });
       this.showCommandInformation(
         this.options.localize(
-          "SubversionR resolved {0} SVN conflicts with {1}: {2}",
-          paths.length,
-          resolveChoiceLabel(choice, this.options.localize),
-          commitPathSummary(paths),
+          paths.length === 1
+            ? "SubversionR resolved SVN conflict with {0}: {1}"
+            : "SubversionR resolved {0} SVN conflicts with {1}: {2}",
+          ...(paths.length === 1
+            ? [resolveChoiceLabel(choice, this.options.localize), paths[0]]
+            : [paths.length, resolveChoiceLabel(choice, this.options.localize), commitPathSummary(paths)]),
         ),
       );
     } catch (error) {

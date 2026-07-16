@@ -19,6 +19,7 @@
   "command.refreshRepository.title": "SubversionR: Refresh",
   "command.checkRemoteChanges.title": "SubversionR: Check Remote Changes",
   "command.refreshResource.title": "SubversionR: Refresh Resource",
+  "command.openConflictArtifact.title": "SubversionR: Open Conflict Artifact",
   "command.addResource.title": "SubversionR: Add Resource",
   "command.addToIgnoreResource.title": "SubversionR: Add to Ignore",
   "command.removeFromIgnoreResource.title": "SubversionR: Remove from Ignore",

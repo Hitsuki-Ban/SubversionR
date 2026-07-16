@@ -873,6 +873,56 @@ describe("collectInstalledSourceControlSurfaceReport", () => {
     );
   });
 
+  it("reports conflict artifacts and count exclusions from the installed SourceControl surface", async () => {
+    const session = repositorySession();
+    const storedSnapshot = statusSnapshot();
+    const freshness = freshnessState("partial");
+    const projection = conflictArtifactScmProjection(freshness);
+    const sourceControl = conflictArtifactSourceControlSnapshot(freshness);
+
+    const report = await collectInstalledSourceControlUiE2eFreshnessReport(
+      { repositoryId: session.repositoryId, epoch: session.epoch, scenario: "partial" },
+      {
+        generatedAt: () => "2026-06-25T00:00:10Z",
+        sessionService: { listOpenSessions: vi.fn(() => [session]) },
+        statusSnapshotStore: {
+          getSnapshot: vi.fn(() => storedSnapshot),
+          replaceSnapshot: vi.fn(() => storedSnapshot),
+          markStale: vi.fn(),
+        },
+        sourceControlProjection: {
+          getProjection: vi.fn(() => projection),
+          replaceSnapshot: vi.fn(() => projection),
+          markStale: vi.fn(),
+        },
+        statusRefreshCoverage: { getLastCompletedRefresh: vi.fn(() => undefined) },
+        sourceControlSurface: { snapshotRepository: vi.fn(() => sourceControl) },
+      },
+    );
+
+    expect(report.conflictArtifactSurface).toEqual({
+      group: sourceControl.groups.find((group) => group.id === "conflictArtifacts"),
+      counts: {
+        sourceControl: 1,
+        conflicts: 1,
+        conflictArtifacts: 3,
+        unversioned: 0,
+      },
+      collapseControl: {
+        owner: "vscodeUserInterface",
+        extensionDefaultSupported: false,
+      },
+    });
+    expect(report.conflictArtifactSurface.group.resources).toEqual(
+      CONFLICT_ARTIFACT_PATHS.map((artifactPath) => ({
+        path: artifactPath,
+        contextValue: "subversionr.conflictArtifact",
+        kind: "file",
+        generation: 3,
+      })),
+    );
+  });
+
   it("reports an installed stale SourceControl freshness affordance for an open UI E2E session", async () => {
     const session = repositorySession();
     const markStale = vi.fn();
@@ -997,6 +1047,7 @@ function scmProjection(
     freshness,
     groups: [
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       {
         id: "changes",
         labelKey: "scm.group.changes",
@@ -1043,6 +1094,7 @@ function changelistScmProjection(
     count: 1,
     groups: [
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
       { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
       { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
@@ -1091,6 +1143,7 @@ function sourceControlSnapshot(
     statusBarCommands: freshnessCommand(freshness),
     groups: [
       { id: "conflicts", contextValue: "subversionr.conflicts", hideWhenEmpty: true, count: 0, resources: [] },
+      { id: "conflictArtifacts", contextValue: "subversionr.conflictArtifacts", hideWhenEmpty: true, count: 0, resources: [] },
       {
         id: "changes",
         contextValue: "subversionr.changes",
@@ -1127,6 +1180,79 @@ function sourceControlSnapshot(
   };
 }
 
+const CONFLICT_ARTIFACT_PATHS = [
+  "src/tracked.txt.mine",
+  "src/tracked.txt.r1",
+  "src/tracked.txt.r2",
+];
+
+function conflictArtifactScmProjection(
+  freshness: NonNullable<ScmRepositoryProjection["freshness"]>,
+): ScmRepositoryProjection {
+  const artifactResources = CONFLICT_ARTIFACT_PATHS.map((artifactPath) => {
+    const resource = projectedResource({
+      path: artifactPath,
+      kind: "file",
+      groupId: "conflictArtifacts",
+      contextValue: "subversionr.conflictArtifact",
+      localStatus: "unversioned",
+      nodeStatus: "unversioned",
+    });
+    resource.tooltipKey = "scm.resource.conflictArtifact";
+    return resource;
+  });
+  const conflictResource = projectedResource({
+    path: "src/tracked.txt",
+    kind: "file",
+    groupId: "conflicts",
+    contextValue: "subversionr.conflicted",
+    localStatus: "normal",
+    nodeStatus: "normal",
+  });
+  conflictResource.tooltipKey = "scm.resource.conflicted";
+  return {
+    ...scmProjection(freshness),
+    count: 1,
+    groups: [
+      { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [conflictResource] },
+      {
+        id: "conflictArtifacts",
+        labelKey: "scm.group.conflictArtifacts",
+        changelist: null,
+        resources: artifactResources,
+      },
+      { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
+      { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+      { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
+      { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [] },
+      { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
+      { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
+    ],
+  };
+}
+
+function conflictArtifactSourceControlSnapshot(
+  freshness: NonNullable<VscodeSourceControlSnapshot["freshness"]>,
+): VscodeSourceControlSnapshot {
+  const groups = conflictArtifactScmProjection(freshness).groups.map((group) => ({
+    id: group.id,
+    contextValue: `subversionr.${group.id}`,
+    hideWhenEmpty: true,
+    count: group.resources.length,
+    resources: group.resources.map((resource) => ({
+      path: resource.path,
+      contextValue: resource.contextValue,
+      kind: resource.entry.kind,
+      generation: 3,
+    })),
+  }));
+  return {
+    ...sourceControlSnapshot(freshness),
+    count: 1,
+    groups,
+  };
+}
+
 function changelistSourceControlSnapshot(
   freshness: VscodeSourceControlSnapshot["freshness"],
 ): VscodeSourceControlSnapshot {
@@ -1135,6 +1261,7 @@ function changelistSourceControlSnapshot(
     count: 1,
     groups: [
       { id: "conflicts", contextValue: "subversionr.conflicts", hideWhenEmpty: true, count: 0, resources: [] },
+      { id: "conflictArtifacts", contextValue: "subversionr.conflictArtifacts", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "changes", contextValue: "subversionr.changes", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "unversioned", contextValue: "subversionr.unversioned", hideWhenEmpty: true, count: 0, resources: [] },
       { id: "metadata", contextValue: "subversionr.metadata", hideWhenEmpty: true, count: 0, resources: [] },
@@ -1172,6 +1299,7 @@ function sourceControlSnapshotFor(session: RepositorySession, resourcePath: stri
     },
     groups: [
       { id: "conflicts", contextValue: "subversionr.conflicts", hideWhenEmpty: true, count: 0, resources: [] },
+      { id: "conflictArtifacts", contextValue: "subversionr.conflictArtifacts", hideWhenEmpty: true, count: 0, resources: [] },
       {
         id: "changes",
         contextValue: "subversionr.changes",
@@ -1265,6 +1393,7 @@ function statusEntry(overrides: Partial<StatusSnapshot["localEntries"][number]> 
     switched: false,
     depth: "infinity",
     conflict: null,
+    conflictArtifacts: [],
     external: false,
     generation: 3,
     ...overrides,
@@ -1308,6 +1437,7 @@ function projectedResource(options: {
       switched: false,
       depth: "infinity",
       conflict: null,
+      conflictArtifacts: [],
       external: false,
       generation: 3,
     },

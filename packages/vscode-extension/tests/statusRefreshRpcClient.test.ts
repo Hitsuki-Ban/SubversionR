@@ -66,6 +66,80 @@ describe("StatusRefreshRpcClient", () => {
     ["coverage.0.path", (delta: StatusDelta) => (delta.coverage[0].path = "../main.c")],
     ["upsert.0.generation", (delta: StatusDelta) => (delta.upsert[0].generation = 10)],
     ["upsert.0.path", (delta: StatusDelta) => (delta.upsert[0].path = "/src/main.c")],
+    [
+      "upsert.0.conflictArtifacts",
+      (delta: StatusDelta) => (delta.upsert[0].conflictArtifacts = ["src/main.c.mine"]),
+    ],
+    [
+      "upsert.0.conflictArtifacts.0",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = ["../main.c.mine"];
+      },
+    ],
+    [
+      "upsert.0.conflictArtifacts.0",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = ["."];
+      },
+    ],
+    [
+      "upsert.0.conflictArtifacts.1",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = ["src/main.c.mine", "src/main.c.mine"];
+      },
+    ],
+    [
+      "upsert.0.conflictArtifacts.0",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = [".svn/text-base/main.c.svn-base"];
+      },
+    ],
+    [
+      "upsert.0.conflictArtifacts.0",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = ["src/.SvN/text-base/main.c.svn-base"];
+      },
+    ],
+    [
+      "upsert.0.conflictArtifacts.1",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = ["src/main.c.r8", "src/main.c.r7"];
+      },
+    ],
+    [
+      "upsert.0.conflictArtifacts.1",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = ["src/\u{10000}", "src/\uE000"];
+      },
+    ],
+    [
+      "upsert.1.path",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = ["src/main.c.mine"];
+        delta.upsert.push({
+          ...delta.upsert[0],
+          path: "src/main.c.mine",
+          localStatus: "unversioned",
+          conflict: null,
+          conflictArtifacts: [],
+        });
+      },
+    ],
+    [
+      "upsert.0.conflictArtifacts",
+      (delta: StatusDelta) => {
+        delta.upsert[0].localStatus = "conflicted";
+        delta.upsert[0].conflictArtifacts = ["a", "b", "c", "d", "e"];
+      },
+    ],
     ["upsert.0.needsLock", (delta: StatusDelta) => ((delta.upsert[0] as { needsLock: unknown }).needsLock = "yes")],
     [
       "upsert.0.lock.extra",
@@ -86,6 +160,10 @@ describe("StatusRefreshRpcClient", () => {
     ["remove.0", (delta: StatusDelta) => (delta.remove = ["src/main.c"])],
     ["remoteUpsert.0.generation", (delta: StatusDelta) => (delta.remoteUpsert[0].generation = 10)],
     ["remoteUpsert.0.path", (delta: StatusDelta) => (delta.remoteUpsert[0].path = "/src/incoming.c")],
+    [
+      "remoteUpsert.0.conflictArtifacts",
+      (delta: StatusDelta) => (delta.remoteUpsert[0].conflictArtifacts = ["src/incoming.c.mine"]),
+    ],
     ["remoteRemove.0", (delta: StatusDelta) => (delta.remoteRemove = ["D:/outside.c"])],
     ["remoteRemove.1", (delta: StatusDelta) => (delta.remoteRemove = ["src/old-incoming.c", "src/old-incoming.c"])],
     ["remoteUpsert.1.path", (delta: StatusDelta) => delta.remoteUpsert.push({ ...delta.remoteUpsert[0] })],
@@ -113,6 +191,93 @@ describe("StatusRefreshRpcClient", () => {
       messageKey: "error.status.refreshResponseInvalid",
       safeArgs: { field },
     });
+  });
+
+  it.runIf(process.platform === "win32")(
+    "rejects Windows case aliases across delta conflict artifact owners, duplicates, and entries",
+    async () => {
+      const cases: Array<[string, (delta: StatusDelta) => void]> = [
+        [
+          "upsert.0.conflictArtifacts.0",
+          (delta) => {
+            delta.upsert[0].localStatus = "conflicted";
+            delta.upsert[0].conflictArtifacts = ["SRC/MAIN.C"];
+          },
+        ],
+        [
+          "upsert.0.conflictArtifacts.1",
+          (delta) => {
+            delta.upsert[0].localStatus = "conflicted";
+            delta.upsert[0].conflictArtifacts = ["SRC/MAIN.C.MINE", "src/main.c.mine"];
+          },
+        ],
+        [
+          "upsert.1.path",
+          (delta) => {
+            delta.upsert[0].localStatus = "conflicted";
+            delta.upsert[0].conflictArtifacts = ["src/main.c.mine"];
+            delta.upsert.push({
+              ...delta.upsert[0],
+              path: "SRC/MAIN.C.MINE",
+              localStatus: "unversioned",
+              conflict: null,
+              conflictArtifacts: [],
+            });
+          },
+        ],
+      ];
+
+      for (const [field, mutate] of cases) {
+        const response = deltaResponse();
+        mutate(response);
+        const client = new StatusRefreshRpcClient({ sendRequest: vi.fn().mockResolvedValue(response) });
+        await expect(
+          client.refreshStatus({
+            repositoryId: "repo-uuid:C:/wc",
+            epoch: 7,
+            targets: [{ path: "src/main.c", depth: "empty", reason: "fileChanged" }],
+          }),
+        ).rejects.toMatchObject({
+          code: "SUBVERSIONR_STATUS_REFRESH_RESPONSE_INVALID",
+          safeArgs: { field },
+        });
+      }
+    },
+  );
+
+  it("preserves bounded libsvn conflict artifact paths from local delta upserts", async () => {
+    const response = deltaResponse();
+    response.upsert[0].localStatus = "conflicted";
+    response.upsert[0].conflict = "text";
+    response.upsert[0].conflictArtifacts = ["src/main.c.mine", "src/main.c.r7", "src/main.c.r8"];
+    const client = new StatusRefreshRpcClient({ sendRequest: vi.fn().mockResolvedValue(response) });
+
+    const delta = await client.refreshStatus({
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      targets: [{ path: "src/main.c", depth: "empty", reason: "fileChanged" }],
+    });
+
+    expect(delta.upsert[0].conflictArtifacts).toEqual([
+      "src/main.c.mine",
+      "src/main.c.r7",
+      "src/main.c.r8",
+    ]);
+  });
+
+  it("accepts canonical conflict artifact delta order by UTF-8 bytes for non-BMP paths", async () => {
+    const response = deltaResponse();
+    response.upsert[0].localStatus = "conflicted";
+    response.upsert[0].conflictArtifacts = ["src/\uE000", "src/\u{10000}"];
+    const client = new StatusRefreshRpcClient({ sendRequest: vi.fn().mockResolvedValue(response) });
+
+    const delta = await client.refreshStatus({
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      targets: [{ path: "src/main.c", depth: "empty", reason: "fileChanged" }],
+    });
+
+    expect(delta.upsert[0].conflictArtifacts).toEqual(["src/\uE000", "src/\u{10000}"]);
   });
 
   it("rejects extra refresh response fields", async () => {
@@ -286,6 +451,7 @@ function deltaResponse(): StatusDelta {
         switched: false,
         depth: "infinity",
         conflict: null,
+        conflictArtifacts: [],
         external: false,
         generation: 11,
       },
@@ -312,6 +478,7 @@ function deltaResponse(): StatusDelta {
         switched: false,
         depth: "infinity",
         conflict: null,
+        conflictArtifacts: [],
         external: false,
         generation: 11,
       },

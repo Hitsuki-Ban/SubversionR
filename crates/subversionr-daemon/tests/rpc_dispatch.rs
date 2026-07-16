@@ -118,6 +118,7 @@ impl FakeBridge {
             switched: false,
             depth: "infinity".to_string(),
             conflict: None,
+            conflict_artifacts: vec![],
             external: false,
             generation,
         }
@@ -1731,13 +1732,13 @@ fn initialize_request_returns_versions_and_keeps_process_running() {
     assert_eq!(outcome, DispatchOutcome::Continue);
     assert_eq!(outcome.response()["id"], 1);
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 29);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 30);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["schemaId"],
         "subversionr.cache.v1"
     );
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 29);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 30);
     assert_eq!(outcome.response()["result"]["cacheSchema"]["version"], 1);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["rollback"],
@@ -2683,6 +2684,52 @@ fn status_get_snapshot_returns_local_snapshot_for_open_repository() {
         0
     );
     assert_eq!(outcome.response()["result"]["summary"]["localChanges"], 1);
+}
+
+#[test]
+fn status_get_snapshot_groups_conflict_artifacts_without_hiding_similar_unversioned_files() {
+    let mut owner = FakeBridge::status_entry("src/conflicted.txt", "conflicted", 1);
+    owner.conflict = Some("conflicted".to_string());
+    owner.conflict_artifacts = vec!["src/conflicted.txt.mine".to_string()];
+    let artifact = FakeBridge::status_entry("src/conflicted.txt.mine", "unversioned", 1);
+    let ordinary = FakeBridge::status_entry("src/conflicted-copy.txt.mine", "unversioned", 1);
+    let bridge = FakeBridge::open_success().with_snapshot_entries(vec![owner, artifact, ordinary]);
+    let mut state = DaemonState::new();
+    state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":140,"method":"repository/open","params":{"path":"C:\\wc"}}"#,
+            &bridge,
+        )
+        .expect("repository/open should dispatch");
+
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":141,"method":"status/getSnapshot","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
+            &bridge,
+        )
+        .expect("status/getSnapshot should dispatch");
+
+    let entries = outcome.response()["result"]["localEntries"]
+        .as_array()
+        .expect("localEntries should be an array");
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["path"] == "src/conflicted.txt")
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["path"] == "src/conflicted-copy.txt.mine")
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["path"] == "src/conflicted.txt.mine")
+    );
+    assert_eq!(outcome.response()["result"]["summary"]["conflicts"], 1);
+    assert_eq!(outcome.response()["result"]["summary"]["unversioned"], 1);
 }
 
 #[test]
@@ -7722,6 +7769,134 @@ fn status_refresh_returns_delta_and_removes_restored_path_from_cached_snapshot()
         -1
     );
     assert_eq!(outcome.response()["result"]["completeness"], "partial");
+}
+
+#[test]
+fn status_refresh_does_not_reinsert_an_artifact_from_an_artifact_path_event() {
+    let mut owner = FakeBridge::status_entry("src/conflicted.txt", "conflicted", 1);
+    owner.conflict = Some("conflicted".to_string());
+    owner.conflict_artifacts = vec!["src/conflicted.txt.mine".to_string()];
+    let artifact = FakeBridge::status_entry("src/conflicted.txt.mine", "unversioned", 1);
+    let bridge = FakeBridge::open_success()
+        .with_snapshot_entries(vec![owner, artifact.clone()])
+        .with_scan_result(
+            "src/conflicted.txt.mine",
+            "empty",
+            FakeBridge::scan_success("src/conflicted.txt.mine", vec![artifact]),
+        );
+    let mut state = DaemonState::new();
+    state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":142,"method":"repository/open","params":{"path":"C:\\wc"}}"#,
+            &bridge,
+        )
+        .expect("repository/open should dispatch");
+    state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":143,"method":"status/getSnapshot","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
+            &bridge,
+        )
+        .expect("status/getSnapshot should seed the conflict owner");
+
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":144,"method":"status/refresh","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"targets":[{"path":"src/conflicted.txt.mine","depth":"empty","reason":"fileChanged"}]}}"#,
+            &bridge,
+        )
+        .expect("artifact path refresh should dispatch");
+
+    assert!(
+        outcome.response()["result"]["upsert"]
+            .as_array()
+            .expect("upsert should be an array")
+            .is_empty()
+    );
+    assert!(
+        outcome.response()["result"]["remove"]
+            .as_array()
+            .expect("remove should be an array")
+            .is_empty()
+    );
+    assert_eq!(outcome.response()["result"]["summaryDelta"]["conflicts"], 0);
+    assert_eq!(
+        outcome.response()["result"]["summaryDelta"]["unversioned"],
+        0
+    );
+}
+
+#[test]
+fn status_refresh_clears_conflict_artifacts_when_the_owner_is_resolved() {
+    let mut conflicted = FakeBridge::status_entry("src/conflicted.txt", "conflicted", 1);
+    conflicted.conflict = Some("conflicted".to_string());
+    conflicted.conflict_artifacts = vec!["src/conflicted.txt.mine".to_string()];
+    let resolved = FakeBridge::status_entry("src/conflicted.txt", "modified", 1);
+    let bridge = FakeBridge::open_success()
+        .with_snapshot_entries(vec![conflicted])
+        .with_scan_result(
+            "src/conflicted.txt",
+            "empty",
+            FakeBridge::scan_success("src/conflicted.txt", vec![resolved]),
+        )
+        .with_scan_result(
+            "src/conflicted.txt.mine",
+            "empty",
+            FakeBridge::scan_success(
+                "src/conflicted.txt.mine",
+                vec![FakeBridge::status_entry(
+                    "src/conflicted.txt.mine",
+                    "unversioned",
+                    1,
+                )],
+            ),
+        );
+    let mut state = DaemonState::new();
+    state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":145,"method":"repository/open","params":{"path":"C:\\wc"}}"#,
+            &bridge,
+        )
+        .expect("repository/open should dispatch");
+    state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":146,"method":"status/getSnapshot","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
+            &bridge,
+        )
+        .expect("status/getSnapshot should seed the conflict owner");
+
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":147,"method":"status/refresh","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"targets":[{"path":"src/conflicted.txt","depth":"empty","reason":"operation"},{"path":"src/conflicted.txt.mine","depth":"empty","reason":"fileChanged"}]}}"#,
+            &bridge,
+        )
+        .expect("resolved owner refresh should dispatch");
+
+    assert_eq!(
+        outcome.response()["result"]["upsert"][0]["path"],
+        "src/conflicted.txt"
+    );
+    assert_eq!(
+        outcome.response()["result"]["upsert"]
+            .as_array()
+            .expect("upsert should be an array")
+            .len(),
+        1
+    );
+    assert_eq!(
+        outcome.response()["result"]["upsert"][0]["conflictArtifacts"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        outcome.response()["result"]["upsert"][0]["conflict"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        outcome.response()["result"]["summaryDelta"]["conflicts"],
+        -1
+    );
+    assert_eq!(
+        outcome.response()["result"]["summaryDelta"]["unversioned"],
+        0
+    );
 }
 
 #[test]

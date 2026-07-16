@@ -192,6 +192,8 @@ struct RawStatusEntry {
     copy_from_path: *const c_char,
     copy_from_revision: i64,
     moved_from_abspath: *const c_char,
+    conflict_artifact_paths: [*const c_char; 4],
+    conflict_artifact_count: usize,
 }
 
 #[repr(C)]
@@ -1155,6 +1157,7 @@ impl BridgeApi for NativeBridge {
                 raw_entry, identity, generation,
             )?);
         }
+        remove_conflict_artifact_entries(&mut local_entries);
         let summary = status_summary(&local_entries);
 
         Ok(StatusSnapshot {
@@ -5122,6 +5125,7 @@ fn raw_status_entry_to_protocol(
     .map(|path| relative_native_path(&identity.working_copy_root, &path, "status.move"))
     .transpose()?;
     let conflict = (raw_entry.conflicted != 0).then(|| "conflicted".to_string());
+    let conflict_artifacts = raw_conflict_artifacts_to_protocol(raw_entry, identity, &path)?;
 
     Ok(StatusEntry {
         path,
@@ -5143,6 +5147,7 @@ fn raw_status_entry_to_protocol(
         switched: raw_entry.switched != 0,
         depth,
         conflict,
+        conflict_artifacts,
         external: raw_entry.external != 0,
         generation,
     })
@@ -5154,6 +5159,12 @@ fn raw_remote_status_entry_to_protocol(
     generation: u64,
 ) -> Result<StatusEntry, BridgeFailure> {
     let mut entry = raw_status_entry_to_protocol(raw_entry, identity, generation)?;
+    if !entry.conflict_artifacts.is_empty() {
+        return Err(native_invalid_response(
+            &identity.working_copy_root,
+            "remoteStatus.conflictArtifacts",
+        ));
+    }
     let repos_node_status =
         unsafe { c_string_to_owned(raw_entry.repos_node_status, "remoteStatus.nodeStatus") }
             .map_err(|failure| native_field_failure(&identity.working_copy_root, failure))?;
@@ -5190,6 +5201,87 @@ fn raw_remote_status_entry_to_protocol(
     entry.changed_date = repos_changed_date;
     entry.lock = repos_lock;
     Ok(entry)
+}
+
+fn raw_conflict_artifacts_to_protocol(
+    raw_entry: &RawStatusEntry,
+    identity: &RepositoryIdentity,
+    owner_path: &str,
+) -> Result<Vec<String>, BridgeFailure> {
+    const FIELD: &str = "status.conflictArtifacts";
+    if raw_entry.conflict_artifact_count > raw_entry.conflict_artifact_paths.len() {
+        return Err(native_invalid_response(&identity.working_copy_root, FIELD));
+    }
+    if raw_entry.conflict_artifact_count > 0 && raw_entry.conflicted == 0 {
+        return Err(native_invalid_response(&identity.working_copy_root, FIELD));
+    }
+    if raw_entry.conflict_artifact_paths[raw_entry.conflict_artifact_count..]
+        .iter()
+        .any(|path| !path.is_null())
+    {
+        return Err(native_invalid_response(&identity.working_copy_root, FIELD));
+    }
+
+    let mut artifacts = Vec::with_capacity(raw_entry.conflict_artifact_count);
+    let mut seen = BTreeSet::new();
+    for raw_path in &raw_entry.conflict_artifact_paths[..raw_entry.conflict_artifact_count] {
+        let absolute_path = unsafe { c_string_to_owned(*raw_path, FIELD) }
+            .map_err(|failure| native_field_failure(&identity.working_copy_root, failure))?;
+        if !is_native_absolute_path(&absolute_path) {
+            return Err(native_invalid_response(&identity.working_copy_root, FIELD));
+        }
+        let artifact_path =
+            relative_native_path(&identity.working_copy_root, &absolute_path, FIELD)?;
+        if artifact_path == "."
+            || !valid_scan_path(&artifact_path)
+            || artifact_path
+                .split('/')
+                .any(|component| component.eq_ignore_ascii_case(".svn"))
+            || same_native_path(&artifact_path, owner_path)
+        {
+            return Err(native_invalid_response(&identity.working_copy_root, FIELD));
+        }
+        if !seen.insert(native_path_key(&artifact_path)) {
+            return Err(native_invalid_response(&identity.working_copy_root, FIELD));
+        }
+        artifacts.push(artifact_path);
+    }
+    artifacts.sort();
+    Ok(artifacts)
+}
+
+fn remove_conflict_artifact_entries(entries: &mut Vec<StatusEntry>) {
+    let artifact_paths = entries
+        .iter()
+        .flat_map(|entry| entry.conflict_artifacts.iter())
+        .map(|path| native_path_key(path))
+        .collect::<BTreeSet<_>>();
+    entries.retain(|entry| {
+        entry.local_status != "unversioned"
+            || !artifact_paths.contains(&native_path_key(&entry.path))
+    });
+}
+
+fn is_native_absolute_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    normalized.starts_with('/')
+        || (normalized.len() >= 3
+            && normalized.as_bytes()[0].is_ascii_alphabetic()
+            && normalized.as_bytes()[1] == b':'
+            && normalized.as_bytes()[2] == b'/')
+}
+
+fn same_native_path(left: &str, right: &str) -> bool {
+    native_path_key(left) == native_path_key(right)
+}
+
+fn native_path_key(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    if cfg!(windows) {
+        normalized.to_ascii_lowercase()
+    } else {
+        normalized
+    }
 }
 
 fn status_copy_from_protocol(
@@ -5496,10 +5588,17 @@ fn normalize_status_path(path: &str) -> String {
 }
 
 fn status_summary(entries: &[StatusEntry]) -> StatusSummary {
+    let artifact_paths = entries
+        .iter()
+        .flat_map(|entry| entry.conflict_artifacts.iter())
+        .collect::<BTreeSet<_>>();
     let mut local_changes = 0;
     let mut conflicts = 0;
     let mut unversioned = 0;
     for entry in entries {
+        if entry.local_status == "unversioned" && artifact_paths.contains(&entry.path) {
+            continue;
+        }
         if is_local_status_change(entry) {
             local_changes += 1;
         }
@@ -5692,36 +5791,14 @@ mod tests {
         let depth = CString::new("infinity").unwrap();
         let copy_from = CString::new("branches/stable/src/copied.c").unwrap();
         let moved_from = CString::new("C:/workspace/wc/src/old.c").unwrap();
-        let raw_entry = RawStatusEntry {
-            path: path.as_ptr(),
-            kind: kind.as_ptr(),
-            node_status: status.as_ptr(),
-            text_status: status.as_ptr(),
-            property_status: property_status.as_ptr(),
-            repos_node_status: property_status.as_ptr(),
-            repos_text_status: property_status.as_ptr(),
-            repos_property_status: property_status.as_ptr(),
-            repos_kind: kind.as_ptr(),
-            repos_changed_revision: -1,
-            repos_changed_author: ptr::null(),
-            repos_changed_date: ptr::null(),
-            revision: 99,
-            changed_revision: 42,
-            changed_author: ptr::null(),
-            changed_date: ptr::null(),
-            changelist: ptr::null(),
-            lock: ptr::null(),
-            repos_lock: ptr::null(),
-            needs_lock: 0,
-            depth: depth.as_ptr(),
-            conflicted: 0,
-            switched: 0,
-            external: 0,
-            copied: 1,
-            copy_from_path: copy_from.as_ptr(),
-            copy_from_revision: 42,
-            moved_from_abspath: moved_from.as_ptr(),
-        };
+        let mut raw_entry =
+            raw_status_entry_fixture(&path, &kind, &status, &property_status, &depth);
+        raw_entry.revision = 99;
+        raw_entry.changed_revision = 42;
+        raw_entry.copied = 1;
+        raw_entry.copy_from_path = copy_from.as_ptr();
+        raw_entry.copy_from_revision = 42;
+        raw_entry.moved_from_abspath = moved_from.as_ptr();
 
         let entry =
             raw_status_entry_to_protocol(&raw_entry, &identity, 7).expect("status should convert");
@@ -5731,6 +5808,147 @@ mod tests {
             Some("branches/stable/src/copied.c@42")
         );
         assert_eq!(entry.move_.as_deref(), Some("src/old.c"));
+    }
+
+    #[test]
+    fn raw_status_entry_to_protocol_strictly_validates_and_sorts_conflict_artifacts() {
+        let identity = RepositoryIdentity {
+            repository_uuid: "uuid".to_string(),
+            repository_root_url: "file:///repo".to_string(),
+            working_copy_root: "C:/workspace/wc".to_string(),
+            workspace_scope_root: "C:/workspace/wc".to_string(),
+            format: 31,
+        };
+        let path = CString::new("C:/workspace/wc/src/conflicted.txt").unwrap();
+        let kind = CString::new("file").unwrap();
+        let status = CString::new("conflicted").unwrap();
+        let normal = CString::new("normal").unwrap();
+        let depth = CString::new("infinity").unwrap();
+        let incoming = CString::new("C:/workspace/wc/src/conflicted.txt.r8").unwrap();
+        let mine = CString::new("C:/workspace/wc/src/conflicted.txt.mine").unwrap();
+        let bmp = CString::new("C:/workspace/wc/src/\u{e000}.mine").unwrap();
+        let non_bmp = CString::new("C:/workspace/wc/src/\u{10000}.mine").unwrap();
+        let mut raw_entry = raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        raw_entry.conflicted = 1;
+        raw_entry.conflict_artifact_paths =
+            [incoming.as_ptr(), mine.as_ptr(), ptr::null(), ptr::null()];
+        raw_entry.conflict_artifact_count = 2;
+
+        let entry = raw_status_entry_to_protocol(&raw_entry, &identity, 7)
+            .expect("conflict artifacts should convert");
+
+        assert_eq!(
+            entry.conflict_artifacts,
+            vec![
+                "src/conflicted.txt.mine".to_string(),
+                "src/conflicted.txt.r8".to_string()
+            ]
+        );
+
+        let mut unicode = raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        unicode.conflicted = 1;
+        unicode.conflict_artifact_paths =
+            [non_bmp.as_ptr(), bmp.as_ptr(), ptr::null(), ptr::null()];
+        unicode.conflict_artifact_count = 2;
+        let unicode_entry = raw_status_entry_to_protocol(&unicode, &identity, 7)
+            .expect("conflict artifacts must use UTF-8 byte ordering");
+        assert_eq!(
+            unicode_entry.conflict_artifacts,
+            vec![
+                "src/\u{e000}.mine".to_string(),
+                "src/\u{10000}.mine".to_string()
+            ]
+        );
+
+        let invalid_paths = [
+            CString::new("C:/outside.txt").unwrap(),
+            CString::new("C:/workspace/wc/src/conflicted.txt").unwrap(),
+            CString::new("C:/workspace/wc/.svn/conflict.tmp").unwrap(),
+            CString::new("C:/workspace/wc/src/.SvN/conflict.tmp").unwrap(),
+            CString::new("relative/conflict.tmp").unwrap(),
+        ];
+        for invalid_path in &invalid_paths {
+            let mut invalid = raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+            invalid.conflicted = 1;
+            invalid.conflict_artifact_paths[0] = invalid_path.as_ptr();
+            invalid.conflict_artifact_count = 1;
+            let failure = raw_status_entry_to_protocol(&invalid, &identity, 7)
+                .expect_err("invalid conflict artifact path must fail");
+            assert_eq!(failure.code, "SVN_BRIDGE_INVALID_RESPONSE");
+            assert_eq!(failure.args["field"], "status.conflictArtifacts");
+        }
+
+        let mut duplicate = raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        duplicate.conflicted = 1;
+        duplicate.conflict_artifact_paths = [
+            incoming.as_ptr(),
+            incoming.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+        ];
+        duplicate.conflict_artifact_count = 2;
+        assert!(raw_status_entry_to_protocol(&duplicate, &identity, 7).is_err());
+
+        let mut excessive = raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        excessive.conflicted = 1;
+        excessive.conflict_artifact_count = 5;
+        assert!(raw_status_entry_to_protocol(&excessive, &identity, 7).is_err());
+
+        let mut non_conflict = raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        non_conflict.conflict_artifact_paths[0] = incoming.as_ptr();
+        non_conflict.conflict_artifact_count = 1;
+        assert!(raw_status_entry_to_protocol(&non_conflict, &identity, 7).is_err());
+
+        let mut non_null_tail = raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        non_null_tail.conflicted = 1;
+        non_null_tail.conflict_artifact_paths[1] = incoming.as_ptr();
+        assert!(raw_status_entry_to_protocol(&non_null_tail, &identity, 7).is_err());
+
+        let mut null_counted_path =
+            raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        null_counted_path.conflicted = 1;
+        null_counted_path.conflict_artifact_count = 1;
+        assert!(raw_status_entry_to_protocol(&null_counted_path, &identity, 7).is_err());
+
+        let invalid_utf8 = [0xff_u8, 0];
+        let mut invalid_utf8_path =
+            raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        invalid_utf8_path.conflicted = 1;
+        invalid_utf8_path.conflict_artifact_paths[0] = invalid_utf8.as_ptr().cast();
+        invalid_utf8_path.conflict_artifact_count = 1;
+        assert!(raw_status_entry_to_protocol(&invalid_utf8_path, &identity, 7).is_err());
+
+        let mut remote_artifact = raw_status_entry_fixture(&path, &kind, &status, &normal, &depth);
+        remote_artifact.conflicted = 1;
+        remote_artifact.conflict_artifact_paths[0] = incoming.as_ptr();
+        remote_artifact.conflict_artifact_count = 1;
+        let failure = raw_remote_status_entry_to_protocol(&remote_artifact, &identity, 7)
+            .expect_err("remote status must reject conflict artifacts");
+        assert_eq!(failure.code, "SVN_BRIDGE_INVALID_RESPONSE");
+        assert_eq!(failure.args["field"], "remoteStatus.conflictArtifacts");
+    }
+
+    #[test]
+    fn conflict_artifact_entries_are_removed_without_hiding_unrelated_unversioned_files() {
+        let mut owner = status_entry("src/conflicted.txt", "conflicted");
+        owner.conflict = Some("conflicted".to_string());
+        owner.conflict_artifacts = vec!["src/conflicted.txt.mine".to_string()];
+        let artifact = status_entry("src/conflicted.txt.mine", "unversioned");
+        let ordinary = status_entry("src/conflicted-copy.txt.mine", "unversioned");
+        let mut entries = vec![owner, artifact, ordinary];
+
+        remove_conflict_artifact_entries(&mut entries);
+        let summary = status_summary(&entries);
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/conflicted.txt", "src/conflicted-copy.txt.mine"]
+        );
+        assert_eq!(summary.conflicts, 1);
+        assert_eq!(summary.unversioned, 1);
     }
 
     #[test]
@@ -6466,8 +6684,50 @@ mod tests {
             switched: false,
             depth: "infinity".to_string(),
             conflict: None,
+            conflict_artifacts: vec![],
             external: false,
             generation: 1,
+        }
+    }
+
+    fn raw_status_entry_fixture(
+        path: &CString,
+        kind: &CString,
+        status: &CString,
+        property_status: &CString,
+        depth: &CString,
+    ) -> RawStatusEntry {
+        RawStatusEntry {
+            path: path.as_ptr(),
+            kind: kind.as_ptr(),
+            node_status: status.as_ptr(),
+            text_status: status.as_ptr(),
+            property_status: property_status.as_ptr(),
+            repos_node_status: property_status.as_ptr(),
+            repos_text_status: property_status.as_ptr(),
+            repos_property_status: property_status.as_ptr(),
+            repos_kind: kind.as_ptr(),
+            repos_changed_revision: -1,
+            repos_changed_author: ptr::null(),
+            repos_changed_date: ptr::null(),
+            revision: 7,
+            changed_revision: 7,
+            changed_author: ptr::null(),
+            changed_date: ptr::null(),
+            changelist: ptr::null(),
+            lock: ptr::null(),
+            repos_lock: ptr::null(),
+            needs_lock: 0,
+            depth: depth.as_ptr(),
+            conflicted: 0,
+            switched: 0,
+            external: 0,
+            copied: 0,
+            copy_from_path: ptr::null(),
+            copy_from_revision: -1,
+            moved_from_abspath: ptr::null(),
+            conflict_artifact_paths: [ptr::null(); 4],
+            conflict_artifact_count: 0,
         }
     }
 

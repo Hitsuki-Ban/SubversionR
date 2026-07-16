@@ -2561,10 +2561,10 @@ Assert-Terms $protocolContractTests @(
   "RepositoryDiscoverResponse"
 ) "REP-004 protocol file external boundary contract"
 Assert-Terms $backendProcessTests @(
-  "rejects initialize and terminates the sidecar when protocol minor is too old for failure diagnostics",
+  "rejects initialize and terminates the sidecar when protocol minor is too old for required status fields",
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
-  "expectedMinimum: 29"
-) "REP-004 protocol v1.29 startup gate"
+  "expectedMinimum: 30"
+) "REP-004 protocol v1.30 startup gate"
 Assert-Terms $protocolSource @(
   "OperationFailureDiagnostics",
   "OperationFailureCause",

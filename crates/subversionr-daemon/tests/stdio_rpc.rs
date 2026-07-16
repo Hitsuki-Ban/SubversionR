@@ -107,6 +107,7 @@ impl BridgeApi for FakeBridge {
                 switched: false,
                 depth: "infinity".to_string(),
                 conflict: None,
+                conflict_artifacts: vec![],
                 external: false,
                 generation,
             }],

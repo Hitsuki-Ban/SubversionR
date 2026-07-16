@@ -1377,6 +1377,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const refreshResourceCommand = vscode.commands.registerCommand("subversionr.refreshResource", (...resourceStates: unknown[]) =>
     repositoryCommandController.refreshResource(...resourceStates),
   );
+  const openConflictArtifactCommand = vscode.commands.registerCommand(
+    "subversionr.openConflictArtifact",
+    async (...resourceStateArgs: unknown[]) => {
+      const resourceStates =
+        resourceStateArgs.length === 1 && Array.isArray(resourceStateArgs[0])
+          ? resourceStateArgs[0]
+          : resourceStateArgs;
+      const resourceUri =
+        resourceStates.length === 1
+          ? sourceControlPresenter.currentConflictArtifactResourceUri(resourceStates[0])
+          : undefined;
+      if (!(resourceUri instanceof vscode.Uri) || resourceUri.scheme !== "file") {
+        throw new Error(vscode.l10n.t("The SVN conflict artifact is no longer available."));
+      }
+      await vscode.commands.executeCommand("vscode.open", resourceUri, { preview: true });
+    },
+  );
   const addResourceCommand = vscode.commands.registerCommand("subversionr.addResource", (...resourceStates: unknown[]) =>
     repositoryCommandController.addResource(...resourceStates),
   );
@@ -1743,6 +1760,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshRepositoryCommand,
     checkRemoteChangesCommand,
     refreshResourceCommand,
+    openConflictArtifactCommand,
     addResourceCommand,
     addToIgnoreResourceCommand,
     removeFromIgnoreResourceCommand,

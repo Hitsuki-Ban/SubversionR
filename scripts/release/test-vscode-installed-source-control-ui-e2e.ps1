@@ -1655,7 +1655,11 @@ function Write-HarnessPackage(
   [string]$RevertCancellationPromptDonePath,
   [string]$ResolveUpdateWarningReadyPath,
   [string]$ResolveUpdateWarningDonePath,
+  [string]$ResolveConflictArtifactsReadyPath,
+  [string]$ResolveConflictArtifactsDonePath,
   [string]$ResolvePromptReadyPath,
+  [string]$ResolvedConflictArtifactsReadyPath,
+  [string]$ResolvedConflictArtifactsDonePath,
   [string]$ResolveCancellationPromptReadyPath,
   [string]$CleanupPromptReadyPath,
   [string]$ExtensionsRoot,
@@ -3444,6 +3448,51 @@ function updateConflictWarningCaptureExpectations(resourcePath) {
     requiredDomTokens: ["SubversionR updated SVN working copy to revision", conflictSummary],
     requiredAccessibilityTokens: ["Warning", "SubversionR updated SVN working copy to revision", conflictSummary],
     requiredScreenshot: true
+  };
+}
+
+function conflictArtifactSurfaceCaptureExpectations(scmActionSurface, artifactPaths) {
+  const artifactNames = artifactPaths.map((artifactPath) => path.basename(artifactPath));
+  const forbiddenActionTokens = [
+    "SubversionR: Add Resource",
+    "Delete Unversioned Resource…",
+    "Add to Ignore…",
+    "Move Resource…",
+    "Revert Resource…",
+    "Commit Resource",
+    "Lock Resource…",
+    "Set Changelist…"
+  ];
+  return {
+    requiredDomTokens: ["SubversionR", "Conflicts", "Conflict Artifacts", "tracked.txt", ...artifactNames],
+    requiredAccessibilityTokens: ["SubversionR", "Conflicts", "Conflict Artifacts", "tracked.txt", ...artifactNames, "SVN conflict artifact (read-only)"],
+    forbiddenDomTokens: forbiddenActionTokens,
+    forbiddenAccessibilityTokens: forbiddenActionTokens,
+    requiredScreenshot: true,
+    viewport: { width: 1440, height: 900 },
+    scmActionSurface: {
+      primaryActions: scmActionSurface.primaryActions,
+      overflowSubmenus: scmActionSurface.overflowSubmenus,
+      forbiddenNotificationTokens: scmActionSurface.forbiddenNotificationTokens,
+      resource: {
+        pathToken: artifactNames[0],
+        expectedNoContextActions: true,
+        inlineActions: [{ label: "SubversionR: Open Conflict Artifact", codicon: "go-to-file" }]
+      }
+    }
+  };
+}
+
+function resolvedConflictArtifactSurfaceCaptureExpectations(artifactPaths) {
+  const artifactNames = artifactPaths.map((artifactPath) => path.basename(artifactPath));
+  const forbiddenTokens = ["Conflict Artifacts", ...artifactNames, "SVN conflict artifact (read-only)"];
+  return {
+    requiredDomTokens: ["SubversionR", "Changes", "tracked.txt"],
+    requiredAccessibilityTokens: ["SubversionR", "Changes", "tracked.txt"],
+    forbiddenDomTokens: forbiddenTokens,
+    forbiddenAccessibilityTokens: forbiddenTokens,
+    requiredScreenshot: true,
+    viewport: { width: 1440, height: 900 }
   };
 }
 
@@ -6289,7 +6338,16 @@ async function runRemoveCancellationWorkflow(removeCancellationWorkingCopyRoot, 
   }
 }
 
-async function runResolveWorkflow(resolveWorkingCopyRoot, updateWarningReadyPath, updateWarningDonePath, resolvePromptReadyPath) {
+async function runResolveWorkflow(
+  resolveWorkingCopyRoot,
+  updateWarningReadyPath,
+  updateWarningDonePath,
+  conflictArtifactsReadyPath,
+  conflictArtifactsDonePath,
+  resolvePromptReadyPath,
+  resolvedConflictArtifactsReadyPath,
+  resolvedConflictArtifactsDonePath
+) {
   let resolveOpenReport;
   try {
     resolveOpenReport = await withTimeout(
@@ -6332,6 +6390,26 @@ async function runResolveWorkflow(resolveWorkingCopyRoot, updateWarningReadyPath
     if (!resource || resource.kind !== "file" || typeof resource.generation !== "number") {
       throw new Error("Installed Update conflict workflow did not project src/tracked.txt as conflicted before Resolve.");
     }
+    const expectedArtifactPaths = ["src/tracked.txt.mine", "src/tracked.txt.r1", "src/tracked.txt.r2"];
+    const artifactSurface = postUpdateFreshnessReport.conflictArtifactSurface;
+    const artifactPaths = artifactSurface && artifactSurface.group.resources.map((artifact) => artifact.path).sort();
+    if (
+      !artifactSurface ||
+      artifactSurface.group.id !== "conflictArtifacts" ||
+      artifactSurface.group.contextValue !== "subversionr.conflictArtifacts" ||
+      artifactSurface.group.hideWhenEmpty !== true ||
+      artifactSurface.group.count !== 3 ||
+      JSON.stringify(artifactPaths) !== JSON.stringify(expectedArtifactPaths) ||
+      artifactSurface.group.resources.some((artifact) => artifact.contextValue !== "subversionr.conflictArtifact" || artifact.kind !== "file") ||
+      artifactSurface.counts.sourceControl !== 1 ||
+      artifactSurface.counts.conflicts !== 1 ||
+      artifactSurface.counts.conflictArtifacts !== 3 ||
+      artifactSurface.counts.unversioned !== 0 ||
+      artifactSurface.collapseControl.owner !== "vscodeUserInterface" ||
+      artifactSurface.collapseControl.extensionDefaultSupported !== false
+    ) {
+      throw new Error("Installed Update conflict workflow did not expose exactly three dedicated, count-excluded libsvn conflict artifact resources.");
+    }
 
     const updateWarningExpectations = updateConflictWarningCaptureExpectations(resource.path);
     fs.writeFileSync(updateWarningReadyPath, JSON.stringify({
@@ -6347,6 +6425,22 @@ async function runResolveWorkflow(resolveWorkingCopyRoot, updateWarningReadyPath
     const updateWarningDone = JSON.parse(fs.readFileSync(updateWarningDonePath, "utf8"));
     if (!updateWarningDone || updateWarningDone.ok !== true) {
       throw new Error("Installed Update conflict warning renderer capture did not complete successfully.");
+    }
+
+    const conflictArtifactsRendererCaptureExpectations = conflictArtifactSurfaceCaptureExpectations(
+      resolveOpenReport.rendererCaptureExpectations.scmActionSurface,
+      artifactPaths
+    );
+    fs.writeFileSync(conflictArtifactsReadyPath, JSON.stringify({
+      ok: true,
+      phase: "conflictArtifactsReady",
+      artifactSurface,
+      rendererCaptureExpectations: conflictArtifactsRendererCaptureExpectations
+    }, null, 2));
+    await waitForFile(conflictArtifactsDonePath, 120000);
+    const conflictArtifactsDone = JSON.parse(fs.readFileSync(conflictArtifactsDonePath, "utf8"));
+    if (!conflictArtifactsDone || conflictArtifactsDone.ok !== true) {
+      throw new Error("Installed conflict artifact renderer capture did not complete successfully.");
     }
 
     const fsPath = resourceFsPath(resolveWorkingCopyRoot, resource.path);
@@ -6397,10 +6491,40 @@ async function runResolveWorkflow(resolveWorkingCopyRoot, updateWarningReadyPath
     if (!findStatusCommand(postResolveFreshnessReport, "partial", resolveOpenReport.repository.repositoryId)) {
       throw new Error("Installed Resolve workflow did not expose post-resolve partial full reconcile status command.");
     }
+    const resolveCoverage = validateLastCompletedRefreshCoverage(postResolveFreshnessReport, resolveOpenReport, {
+      path: resource.path,
+      depth: "empty",
+      reason: "operationResolve"
+    });
     const conflictProjectedAfter = Boolean(findResource(postResolveFreshnessReport, "conflicts", resource.path, "subversionr.conflicted"));
     const postResolveResource = findResource(postResolveFreshnessReport, "changes", resource.path, "subversionr.changedFile.baseDiffable");
     if (conflictProjectedAfter || !postResolveResource || postResolveResource.kind !== "file") {
       throw new Error("Installed Resolve workflow did not clear the conflict and project src/tracked.txt as a changed file after resolve.");
+    }
+    const resolvedArtifactSurface = postResolveFreshnessReport.conflictArtifactSurface;
+    if (
+      !resolvedArtifactSurface ||
+      resolvedArtifactSurface.group.id !== "conflictArtifacts" ||
+      resolvedArtifactSurface.group.count !== 0 ||
+      resolvedArtifactSurface.group.resources.length !== 0 ||
+      resolvedArtifactSurface.counts.sourceControl !== 1 ||
+      resolvedArtifactSurface.counts.conflicts !== 0 ||
+      resolvedArtifactSurface.counts.conflictArtifacts !== 0 ||
+      resolvedArtifactSurface.counts.unversioned !== 0
+    ) {
+      throw new Error("Installed Resolve workflow did not remove the dedicated conflict artifact resources after targeted reconcile.");
+    }
+    const resolvedConflictArtifactsRendererCaptureExpectations = resolvedConflictArtifactSurfaceCaptureExpectations(artifactPaths);
+    fs.writeFileSync(resolvedConflictArtifactsReadyPath, JSON.stringify({
+      ok: true,
+      phase: "resolvedConflictArtifactsReady",
+      artifactSurface: resolvedArtifactSurface,
+      rendererCaptureExpectations: resolvedConflictArtifactsRendererCaptureExpectations
+    }, null, 2));
+    await waitForFile(resolvedConflictArtifactsDonePath, 120000);
+    const resolvedConflictArtifactsDone = JSON.parse(fs.readFileSync(resolvedConflictArtifactsDonePath, "utf8"));
+    if (!resolvedConflictArtifactsDone || resolvedConflictArtifactsDone.ok !== true) {
+      throw new Error("Installed post-resolve conflict artifact renderer capture did not complete successfully.");
     }
 
     const resolveCloseReport = await closeOpenReport(resolveOpenReport);
@@ -6441,6 +6565,16 @@ async function runResolveWorkflow(resolveWorkingCopyRoot, updateWarningReadyPath
         notificationCleanup: updateNotificationCleanup,
         postUpdateFreshnessReport
       },
+      conflictArtifacts: {
+        beforeResolve: artifactSurface,
+        afterResolve: resolvedArtifactSurface,
+        beforeResolveRendererCaptureExpectations: conflictArtifactsRendererCaptureExpectations,
+        afterResolveRendererCaptureExpectations: resolvedConflictArtifactsRendererCaptureExpectations,
+        collapseControl: artifactSurface.collapseControl
+      },
+      reconcile: {
+        coverage: resolveCoverage
+      },
       postResolveResource: {
         path: postResolveResource.path,
         contextValue: postResolveResource.contextValue,
@@ -6465,6 +6599,16 @@ async function runResolveWorkflow(resolveWorkingCopyRoot, updateWarningReadyPath
         fileExistedBefore,
         conflictProjectedBefore: true,
         conflictProjectedAfter,
+        conflictArtifactGroupProjectedBefore: artifactSurface.group.count === 3,
+        conflictArtifactsExcludedFromCountsBefore: artifactSurface.counts.sourceControl === 1 && artifactSurface.counts.unversioned === 0,
+        conflictArtifactDestructiveActionsAbsentBefore: true,
+        conflictArtifactTooltipAccessibleBefore: true,
+        conflictArtifactGroupRemovedAfter: resolvedArtifactSurface.group.count === 0,
+        conflictArtifactCollapseOwnedByVscodeUi: artifactSurface.collapseControl.owner === "vscodeUserInterface" && artifactSurface.collapseControl.extensionDefaultSupported === false,
+        targetedReconcileAfterResolve: resolveCoverage.targets[0].path === resource.path &&
+          resolveCoverage.targets[0].depth === "empty" &&
+          resolveCoverage.targets[0].reason === "operationResolve" &&
+          resolveCoverage.coverage[0].path === resource.path,
         fileContentBefore,
         fileContentAfter,
         fileContentPreservedAfter: fileContentAfter === fileContentBefore,
@@ -10171,7 +10315,11 @@ async function run() {
   const revertCancellationPromptDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_DONE;
   const resolveUpdateWarningReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_READY;
   const resolveUpdateWarningDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_DONE;
+  const resolveConflictArtifactsReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CONFLICT_ARTIFACTS_READY;
+  const resolveConflictArtifactsDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CONFLICT_ARTIFACTS_DONE;
   const resolvePromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_PROMPT_READY;
+  const resolvedConflictArtifactsReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVED_CONFLICT_ARTIFACTS_READY;
+  const resolvedConflictArtifactsDonePath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVED_CONFLICT_ARTIFACTS_DONE;
   const resolveCancellationPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CANCELLATION_PROMPT_READY;
   const cleanupPromptReadyPath = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CLEANUP_PROMPT_READY;
   const extensionsRoot = process.env.SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_EXTENSIONS_ROOT;
@@ -10372,7 +10520,11 @@ async function run() {
     !revertCancellationPromptDonePath ||
     !resolveUpdateWarningReadyPath ||
     !resolveUpdateWarningDonePath ||
+    !resolveConflictArtifactsReadyPath ||
+    !resolveConflictArtifactsDonePath ||
     !resolvePromptReadyPath ||
+    !resolvedConflictArtifactsReadyPath ||
+    !resolvedConflictArtifactsDonePath ||
     !resolveCancellationPromptReadyPath ||
     !cleanupPromptReadyPath ||
     !extensionsRoot ||
@@ -10937,7 +11089,16 @@ async function run() {
     writeResult(partialResult());
 
     phase = "executingResolveResource";
-    resolveReport = await runResolveWorkflow(resolveWorkingCopyRoot, resolveUpdateWarningReadyPath, resolveUpdateWarningDonePath, resolvePromptReadyPath);
+    resolveReport = await runResolveWorkflow(
+      resolveWorkingCopyRoot,
+      resolveUpdateWarningReadyPath,
+      resolveUpdateWarningDonePath,
+      resolveConflictArtifactsReadyPath,
+      resolveConflictArtifactsDonePath,
+      resolvePromptReadyPath,
+      resolvedConflictArtifactsReadyPath,
+      resolvedConflictArtifactsDonePath
+    );
     writeResult(partialResult());
 
     phase = "executingResolveResourceCancellation";
@@ -11583,7 +11744,11 @@ exports.run = run;
     RevertCancellationPromptDonePath = $RevertCancellationPromptDonePath
     ResolveUpdateWarningReadyPath = $ResolveUpdateWarningReadyPath
     ResolveUpdateWarningDonePath = $ResolveUpdateWarningDonePath
+    ResolveConflictArtifactsReadyPath = $ResolveConflictArtifactsReadyPath
+    ResolveConflictArtifactsDonePath = $ResolveConflictArtifactsDonePath
     ResolvePromptReadyPath = $ResolvePromptReadyPath
+    ResolvedConflictArtifactsReadyPath = $ResolvedConflictArtifactsReadyPath
+    ResolvedConflictArtifactsDonePath = $ResolvedConflictArtifactsDonePath
     ResolveCancellationPromptReadyPath = $ResolveCancellationPromptReadyPath
     CleanupPromptReadyPath = $CleanupPromptReadyPath
     ExtensionsRoot = $ExtensionsRoot
@@ -12481,9 +12646,29 @@ function Assert-HarnessResult(
     $Result.resolveReport.resource.contextValue -ne "subversionr.conflicted" -or
     $Result.resolveReport.request.choice -ne "working" -or
     $Result.resolveReport.request.depth -ne "empty" -or
+    $Result.resolveReport.conflictArtifacts.beforeResolve.group.id -ne "conflictArtifacts" -or
+    $Result.resolveReport.conflictArtifacts.beforeResolve.group.count -ne 3 -or
+    @($Result.resolveReport.conflictArtifacts.beforeResolve.group.resources).Count -ne 3 -or
+    $Result.resolveReport.conflictArtifacts.beforeResolve.counts.sourceControl -ne 1 -or
+    $Result.resolveReport.conflictArtifacts.beforeResolve.counts.unversioned -ne 0 -or
+    $Result.resolveReport.conflictArtifacts.afterResolve.group.count -ne 0 -or
+    @($Result.resolveReport.conflictArtifacts.afterResolve.group.resources).Count -ne 0 -or
+    $Result.resolveReport.conflictArtifacts.collapseControl.owner -ne "vscodeUserInterface" -or
+    $Result.resolveReport.conflictArtifacts.collapseControl.extensionDefaultSupported -ne $false -or
+    $Result.resolveReport.reconcile.coverage.targets[0].path -ne "src/tracked.txt" -or
+    $Result.resolveReport.reconcile.coverage.targets[0].depth -ne "empty" -or
+    $Result.resolveReport.reconcile.coverage.targets[0].reason -ne "operationResolve" -or
+    $Result.resolveReport.reconcile.coverage.coverage[0].path -ne "src/tracked.txt" -or
     $Result.resolveReport.postResolveResource.contextValue -ne "subversionr.changedFile.baseDiffable" -or
     $Result.resolveReport.assertions.conflictProjectedBefore -ne $true -or
     $Result.resolveReport.assertions.conflictProjectedAfter -ne $false -or
+    $Result.resolveReport.assertions.conflictArtifactGroupProjectedBefore -ne $true -or
+    $Result.resolveReport.assertions.conflictArtifactsExcludedFromCountsBefore -ne $true -or
+    $Result.resolveReport.assertions.conflictArtifactDestructiveActionsAbsentBefore -ne $true -or
+    $Result.resolveReport.assertions.conflictArtifactTooltipAccessibleBefore -ne $true -or
+    $Result.resolveReport.assertions.conflictArtifactGroupRemovedAfter -ne $true -or
+    $Result.resolveReport.assertions.conflictArtifactCollapseOwnedByVscodeUi -ne $true -or
+    $Result.resolveReport.assertions.targetedReconcileAfterResolve -ne $true -or
     $Result.resolveReport.assertions.installedUpdateExecuted -ne $true -or
     $Result.resolveReport.assertions.installedUpdateCreatedConflict -ne $true -or
     $Result.resolveReport.assertions.updateWarningConflictCount -ne 1 -or
@@ -12780,6 +12965,9 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
       }
       Assert-TokenListsEqual -Expected @($expectedSubmenus[$index].commands) -Actual @($actualSubmenus[$index].commands) -Name "Renderer capture SCM submenu commands"
     }
+    $expectedNoContextActions =
+      $captureExpectations.scmActionSurface.resource.PSObject.Properties.Name -contains "expectedNoContextActions" -and
+      $captureExpectations.scmActionSurface.resource.expectedNoContextActions -eq $true
     $expectedInline = @($captureExpectations.scmActionSurface.resource.inlineActions)
     $actualInline = @($Capture.interaction.resource.inlineActions)
     if ($actualInline.Count -ne $expectedInline.Count) {
@@ -12794,7 +12982,10 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
         throw "Renderer capture SCM resource inline action/codicon evidence did not match expectations."
       }
     }
-    $expectedContext = @($captureExpectations.scmActionSurface.resource.contextActions)
+    $expectedContext = @()
+    if (-not $expectedNoContextActions) {
+      $expectedContext = @($captureExpectations.scmActionSurface.resource.contextActions)
+    }
     $actualContext = @($Capture.interaction.resource.contextActions)
     if ($actualContext.Count -ne $expectedContext.Count) {
       throw "Renderer capture SCM resource context action count did not match expectations."
@@ -12813,6 +13004,16 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
       $Capture.assertions.activationReadyToastAbsent -ne $true
     ) {
       throw "Renderer capture SCM action and activation-toast assertions must all pass."
+    }
+    if ($expectedNoContextActions) {
+      if (
+        $Capture.interaction.resource.expectedNoContextActions -ne $true -or
+        @($Capture.interaction.resource.observedInlineActions).Count -ne $expectedInline.Count -or
+        @($Capture.interaction.resource.observedContextMenuLabels).Count -ne 0 -or
+        $Capture.assertions.scmResourceContextActionsEmpty -ne $true
+      ) {
+        throw "Renderer capture must prove that the selected SCM resource exposes only the expected read-only inline action and no context actions."
+      }
     }
   }
   if ($captureExpectations.PSObject.Properties.Name -contains "clickButtonText") {
@@ -13253,7 +13454,11 @@ $harnessRevertCancellationPromptReadyPath = Join-Path $fixtureRootResolved "inst
 $harnessRevertCancellationPromptDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-revert-cancellation-prompt-done.json"
 $harnessResolveUpdateWarningReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-update-warning-ready.json"
 $harnessResolveUpdateWarningDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-update-warning-done.json"
+$harnessResolveConflictArtifactsReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-conflict-artifacts-ready.json"
+$harnessResolveConflictArtifactsDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-conflict-artifacts-done.json"
 $harnessResolvePromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-prompt-ready.json"
+$harnessResolvedConflictArtifactsReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolved-conflict-artifacts-ready.json"
+$harnessResolvedConflictArtifactsDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolved-conflict-artifacts-done.json"
 $harnessResolveCancellationPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-cancellation-prompt-ready.json"
 $harnessCleanupPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-cleanup-prompt-ready.json"
 $captureRoot = Join-Path $fixtureRootResolved "renderer-capture"
@@ -13414,6 +13619,10 @@ $resolvePromptCaptureRoot = Join-Path $fixtureRootResolved "resolve-prompt-captu
 $resolvePromptExpectationsPath = Join-Path $fixtureRootResolved "resolve-prompt-capture-expectations.json"
 $resolveUpdateWarningCaptureRoot = Join-Path $fixtureRootResolved "resolve-update-warning-capture"
 $resolveUpdateWarningExpectationsPath = Join-Path $fixtureRootResolved "resolve-update-warning-capture-expectations.json"
+$resolveConflictArtifactsCaptureRoot = Join-Path $fixtureRootResolved "resolve-conflict-artifacts-capture"
+$resolveConflictArtifactsExpectationsPath = Join-Path $fixtureRootResolved "resolve-conflict-artifacts-capture-expectations.json"
+$resolvedConflictArtifactsCaptureRoot = Join-Path $fixtureRootResolved "resolved-conflict-artifacts-capture"
+$resolvedConflictArtifactsExpectationsPath = Join-Path $fixtureRootResolved "resolved-conflict-artifacts-capture-expectations.json"
 $resolveCancellationPromptCaptureRoot = Join-Path $fixtureRootResolved "resolve-cancellation-prompt-capture"
 $resolveCancellationPromptExpectationsPath = Join-Path $fixtureRootResolved "resolve-cancellation-prompt-capture-expectations.json"
 $cleanupPromptCaptureRoot = Join-Path $fixtureRootResolved "cleanup-prompt-capture"
@@ -13421,6 +13630,7 @@ $cleanupPromptExpectationsPath = Join-Path $fixtureRootResolved "cleanup-prompt-
 New-Item -ItemType Directory -Force -Path $userDataRoot, $extensionsRoot, $captureRoot, $noRepositoryWelcomeRendererCaptureRoot, $partialFreshnessRendererCaptureRoot, $staleFreshnessRendererCaptureRoot, $fullReconcileCancellationCaptureRoot, $multiRepositoryRefreshPromptCaptureRoot, $deletePromptCaptureRoot, $deleteLoadPromptCaptureRoot, $removePromptCaptureRoot, $removeCancellationPromptCaptureRoot, $removeKeepLocalPromptCaptureRoot, $movePromptCaptureRoot, $moveCancellationPromptCaptureRoot, $checkoutCancellationPromptCaptureRoot, $checkoutExistingTargetFailureUrlPromptCaptureRoot, $checkoutExistingTargetFailureTargetPromptCaptureRoot, $checkoutExistingTargetFailureRevisionPromptCaptureRoot, $checkoutExistingTargetFailureDepthPromptCaptureRoot, $checkoutExistingTargetFailureExternalsPromptCaptureRoot, $checkoutExistingTargetFailureNotificationCaptureRoot, $checkoutInvalidUrlFailureUrlPromptCaptureRoot, $checkoutInvalidUrlFailureTargetPromptCaptureRoot, $checkoutInvalidUrlFailureRevisionPromptCaptureRoot, $checkoutInvalidUrlFailureDepthPromptCaptureRoot, $checkoutInvalidUrlFailureExternalsPromptCaptureRoot, $checkoutInvalidUrlFailureNotificationCaptureRoot, $checkoutExistingDirectoryUrlPromptCaptureRoot, $checkoutExistingDirectoryTargetPromptCaptureRoot, $checkoutExistingDirectoryRevisionPromptCaptureRoot, $checkoutExistingDirectoryDepthPromptCaptureRoot, $checkoutExistingDirectoryExternalsPromptCaptureRoot, $checkoutExistingDirectoryObstructionUrlPromptCaptureRoot, $checkoutExistingDirectoryObstructionTargetPromptCaptureRoot, $checkoutExistingDirectoryObstructionRevisionPromptCaptureRoot, $checkoutExistingDirectoryObstructionDepthPromptCaptureRoot, $checkoutExistingDirectoryObstructionExternalsPromptCaptureRoot, $checkoutUrlPromptCaptureRoot, $checkoutTargetPromptCaptureRoot, $checkoutRevisionPromptCaptureRoot, $checkoutDepthPromptCaptureRoot, $checkoutExternalsPromptCaptureRoot, $updateRevisionPromptCaptureRoot, $updateCancellationRevisionPromptCaptureRoot, $updateDepthPromptCaptureRoot, $updateStickyDepthPromptCaptureRoot, $updateExternalsPromptCaptureRoot, $branchCreateSourcePromptCaptureRoot, $branchCreateDestinationPromptCaptureRoot, $branchCreateRevisionPromptCaptureRoot, $branchCreateMessagePromptCaptureRoot, $branchCreateParentsPromptCaptureRoot, $branchCreateExternalsPromptCaptureRoot, $branchCreateSwitchPromptCaptureRoot, $switchUrlPromptCaptureRoot, $switchRevisionPromptCaptureRoot, $switchDepthPromptCaptureRoot, $switchStickyDepthPromptCaptureRoot, $switchExternalsPromptCaptureRoot, $switchAncestryPromptCaptureRoot, $lockMessageCancellationPromptCaptureRoot, $lockMessagePromptCaptureRoot, $lockModePromptCaptureRoot, $lockRecoveryMessagePromptCaptureRoot, $lockRecoveryModePromptCaptureRoot, $unlockModeCancellationPromptCaptureRoot, $unlockModePromptCaptureRoot, $changelistSetPromptCaptureRoot, $changelistRevertPromptCaptureRoot, $revertPromptCaptureRoot, $revertCancellationPromptCaptureRoot, $resolveUpdateWarningCaptureRoot, $resolvePromptCaptureRoot, $resolveCancellationPromptCaptureRoot, $cleanupPromptCaptureRoot, (Join-Path $userDataRoot "User") | Out-Null
 New-Item -ItemType Directory -Force -Path @($commitPromptCaptureSpecs | ForEach-Object { $_.root }) | Out-Null
 New-Item -ItemType Directory -Force -Path $repositoryHistoryInitialCaptureRoot, $repositoryHistoryLoadedCaptureRoot, $repositoryHistoryStaleCaptureRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $resolveConflictArtifactsCaptureRoot, $resolvedConflictArtifactsCaptureRoot | Out-Null
 @'
 {
   "workbench.startupEditor": "none",
@@ -13585,7 +13795,11 @@ $harness = Write-HarnessPackage `
   -RevertCancellationPromptDonePath $harnessRevertCancellationPromptDonePath `
   -ResolveUpdateWarningReadyPath $harnessResolveUpdateWarningReadyPath `
   -ResolveUpdateWarningDonePath $harnessResolveUpdateWarningDonePath `
+  -ResolveConflictArtifactsReadyPath $harnessResolveConflictArtifactsReadyPath `
+  -ResolveConflictArtifactsDonePath $harnessResolveConflictArtifactsDonePath `
   -ResolvePromptReadyPath $harnessResolvePromptReadyPath `
+  -ResolvedConflictArtifactsReadyPath $harnessResolvedConflictArtifactsReadyPath `
+  -ResolvedConflictArtifactsDonePath $harnessResolvedConflictArtifactsDonePath `
   -ResolveCancellationPromptReadyPath $harnessResolveCancellationPromptReadyPath `
   -CleanupPromptReadyPath $harnessCleanupPromptReadyPath `
   -ExtensionsRoot $extensionsRoot `
@@ -13787,7 +14001,11 @@ $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_READ
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_DONE = $harness.RevertCancellationPromptDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_READY = $harness.ResolveUpdateWarningReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_DONE = $harness.ResolveUpdateWarningDonePath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CONFLICT_ARTIFACTS_READY = $harness.ResolveConflictArtifactsReadyPath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CONFLICT_ARTIFACTS_DONE = $harness.ResolveConflictArtifactsDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_PROMPT_READY = $harness.ResolvePromptReadyPath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVED_CONFLICT_ARTIFACTS_READY = $harness.ResolvedConflictArtifactsReadyPath
+$env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVED_CONFLICT_ARTIFACTS_DONE = $harness.ResolvedConflictArtifactsDonePath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CANCELLATION_PROMPT_READY = $harness.ResolveCancellationPromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CLEANUP_PROMPT_READY = $harness.CleanupPromptReadyPath
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_EXTENSIONS_ROOT = $harness.ExtensionsRoot
@@ -14571,6 +14789,43 @@ try {
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $harness.ResolveUpdateWarningDonePath -Encoding utf8
   }
 
+  Wait-File -Path $harness.ResolveConflictArtifactsReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E conflict artifact surface ready sentinel"
+  $resolveConflictArtifactsReady = Get-Content -Raw -LiteralPath $harness.ResolveConflictArtifactsReadyPath | ConvertFrom-Json
+  if (
+    $resolveConflictArtifactsReady.ok -ne $true -or
+    $resolveConflictArtifactsReady.phase -ne "conflictArtifactsReady" -or
+    $resolveConflictArtifactsReady.artifactSurface.group.id -ne "conflictArtifacts" -or
+    $resolveConflictArtifactsReady.artifactSurface.group.count -ne 3
+  ) {
+    throw "Installed Source Control UI E2E conflict artifact sentinel did not expose exactly three dedicated resources."
+  }
+  $resolveConflictArtifactsReady.rendererCaptureExpectations | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resolveConflictArtifactsExpectationsPath -Encoding utf8
+  $resolveConflictArtifactsDriverError = $null
+  try {
+    Invoke-RendererCaptureDriver `
+      -DriverPath $rendererCaptureDriverResolved `
+      -Port $RemoteDebuggingPort `
+      -CaptureRoot $resolveConflictArtifactsCaptureRoot `
+      -ExpectationsPath $resolveConflictArtifactsExpectationsPath `
+      -Target $Target
+    $resolveConflictArtifactsCapture = Get-Content -Raw -LiteralPath (Join-Path $resolveConflictArtifactsCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+    Assert-RendererCaptureReport -Capture $resolveConflictArtifactsCapture -CaptureRoot $resolveConflictArtifactsCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+      rendererCaptureExpectations = $resolveConflictArtifactsReady.rendererCaptureExpectations
+    })
+  }
+  catch {
+    $resolveConflictArtifactsDriverError = $_
+  }
+  finally {
+    [pscustomobject]@{
+      ok = $null -eq $resolveConflictArtifactsDriverError
+      completedAt = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $harness.ResolveConflictArtifactsDonePath -Encoding utf8
+  }
+  if ($null -ne $resolveConflictArtifactsDriverError) {
+    throw $resolveConflictArtifactsDriverError
+  }
+
   Wait-File -Path $harness.ResolvePromptReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E Resolve prompt ready sentinel"
   $resolvePromptReady = Get-Content -Raw -LiteralPath $harness.ResolvePromptReadyPath | ConvertFrom-Json
   if ($resolvePromptReady.ok -ne $true -or $resolvePromptReady.command -ne "subversionr.resolveResource") {
@@ -14587,6 +14842,43 @@ try {
   }
   catch {
     $resolvePromptDriverError = $_
+  }
+
+  Wait-File -Path $harness.ResolvedConflictArtifactsReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E resolved conflict artifact surface ready sentinel"
+  $resolvedConflictArtifactsReady = Get-Content -Raw -LiteralPath $harness.ResolvedConflictArtifactsReadyPath | ConvertFrom-Json
+  if (
+    $resolvedConflictArtifactsReady.ok -ne $true -or
+    $resolvedConflictArtifactsReady.phase -ne "resolvedConflictArtifactsReady" -or
+    $resolvedConflictArtifactsReady.artifactSurface.group.id -ne "conflictArtifacts" -or
+    $resolvedConflictArtifactsReady.artifactSurface.group.count -ne 0
+  ) {
+    throw "Installed Source Control UI E2E resolved artifact sentinel did not prove the artifact group emptied."
+  }
+  $resolvedConflictArtifactsReady.rendererCaptureExpectations | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resolvedConflictArtifactsExpectationsPath -Encoding utf8
+  $resolvedConflictArtifactsDriverError = $null
+  try {
+    Invoke-RendererCaptureDriver `
+      -DriverPath $rendererCaptureDriverResolved `
+      -Port $RemoteDebuggingPort `
+      -CaptureRoot $resolvedConflictArtifactsCaptureRoot `
+      -ExpectationsPath $resolvedConflictArtifactsExpectationsPath `
+      -Target $Target
+    $resolvedConflictArtifactsCapture = Get-Content -Raw -LiteralPath (Join-Path $resolvedConflictArtifactsCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+    Assert-RendererCaptureReport -Capture $resolvedConflictArtifactsCapture -CaptureRoot $resolvedConflictArtifactsCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+      rendererCaptureExpectations = $resolvedConflictArtifactsReady.rendererCaptureExpectations
+    })
+  }
+  catch {
+    $resolvedConflictArtifactsDriverError = $_
+  }
+  finally {
+    [pscustomobject]@{
+      ok = $null -eq $resolvedConflictArtifactsDriverError
+      completedAt = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $harness.ResolvedConflictArtifactsDonePath -Encoding utf8
+  }
+  if ($null -ne $resolvedConflictArtifactsDriverError) {
+    throw $resolvedConflictArtifactsDriverError
   }
 
   Wait-File -Path $harness.ResolveCancellationPromptReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E Resolve cancellation prompt ready sentinel"
@@ -15394,7 +15686,11 @@ finally {
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_DONE -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_DONE -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CONFLICT_ARTIFACTS_READY -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CONFLICT_ARTIFACTS_DONE -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_PROMPT_READY -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVED_CONFLICT_ARTIFACTS_READY -ErrorAction SilentlyContinue
+  Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVED_CONFLICT_ARTIFACTS_DONE -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CANCELLATION_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CLEANUP_PROMPT_READY -ErrorAction SilentlyContinue
   Remove-Item Env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_EXTENSIONS_ROOT -ErrorAction SilentlyContinue
@@ -15637,6 +15933,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $revertCancellationPromptCaptureRoot
 }
 if (-not (Test-Path -LiteralPath (Join-Path $resolveUpdateWarningCaptureRoot "renderer-capture.json") -PathType Leaf)) {
   throw "Update conflict warning renderer capture driver did not write the expected capture report."
+}
+if (-not (Test-Path -LiteralPath (Join-Path $resolveConflictArtifactsCaptureRoot "renderer-capture.json") -PathType Leaf)) {
+  throw "Resolve conflict artifact renderer capture driver did not write the expected capture report."
+}
+if (-not (Test-Path -LiteralPath (Join-Path $resolvedConflictArtifactsCaptureRoot "renderer-capture.json") -PathType Leaf)) {
+  throw "Resolved conflict artifact renderer capture driver did not write the expected capture report."
 }
 if (-not (Test-Path -LiteralPath (Join-Path $resolvePromptCaptureRoot "renderer-capture.json") -PathType Leaf)) {
   throw "Resolve prompt renderer capture driver did not write the expected capture report."
@@ -16123,6 +16425,14 @@ $resolveUpdateWarningCapture = Get-Content -Raw -LiteralPath (Join-Path $resolve
 Assert-RendererCaptureReport -Capture $resolveUpdateWarningCapture -CaptureRoot $resolveUpdateWarningCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
   rendererCaptureExpectations = $harnessResult.resolveReport.updateConflict.warning.rendererCaptureExpectations
 })
+$resolveConflictArtifactsCapture = Get-Content -Raw -LiteralPath (Join-Path $resolveConflictArtifactsCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+Assert-RendererCaptureReport -Capture $resolveConflictArtifactsCapture -CaptureRoot $resolveConflictArtifactsCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+  rendererCaptureExpectations = $harnessResult.resolveReport.conflictArtifacts.beforeResolveRendererCaptureExpectations
+})
+$resolvedConflictArtifactsCapture = Get-Content -Raw -LiteralPath (Join-Path $resolvedConflictArtifactsCaptureRoot "renderer-capture.json") | ConvertFrom-Json
+Assert-RendererCaptureReport -Capture $resolvedConflictArtifactsCapture -CaptureRoot $resolvedConflictArtifactsCaptureRoot -Target $Target -OpenReport ([pscustomobject]@{
+  rendererCaptureExpectations = $harnessResult.resolveReport.conflictArtifacts.afterResolveRendererCaptureExpectations
+})
 $resolveUpdateWarningDomText = Get-Content -Raw -LiteralPath (Join-Path $resolveUpdateWarningCaptureRoot "dom-text.txt")
 $plainUpdateSuccessPattern = "(?m)^SubversionR updated SVN working copy to revision [0-9]+: $([regex]::Escape($harnessResult.resolveReport.repository.workingCopyRoot))\s*$"
 if ($resolveUpdateWarningDomText -match $plainUpdateSuccessPattern) {
@@ -16427,6 +16737,8 @@ $report = [pscustomObject]@{
   revertCancellationPromptCapture = $revertCancellationPromptCapture
   resolveUpdateWarningCapture = $resolveUpdateWarningCapture
   resolveUpdateWarningPlainSuccessAbsent = $true
+  resolveConflictArtifactsCapture = $resolveConflictArtifactsCapture
+  resolvedConflictArtifactsCapture = $resolvedConflictArtifactsCapture
   resolvePromptCapture = $resolvePromptCapture
   resolveCancellationPromptCapture = $resolveCancellationPromptCapture
   codeCli = [pscustomobject]@{
@@ -16574,6 +16886,8 @@ $report = [pscustomObject]@{
     revertPromptCapture = Get-RepoRelativePath $revertPromptCaptureRoot
     revertCancellationPromptCapture = Get-RepoRelativePath $revertCancellationPromptCaptureRoot
     resolveUpdateWarningCapture = Get-RepoRelativePath $resolveUpdateWarningCaptureRoot
+    resolveConflictArtifactsCapture = Get-RepoRelativePath $resolveConflictArtifactsCaptureRoot
+    resolvedConflictArtifactsCapture = Get-RepoRelativePath $resolvedConflictArtifactsCaptureRoot
     resolvePromptCapture = Get-RepoRelativePath $resolvePromptCaptureRoot
     resolveCancellationPromptCapture = Get-RepoRelativePath $resolveCancellationPromptCaptureRoot
     cleanupPromptCapture = Get-RepoRelativePath $cleanupPromptCaptureRoot

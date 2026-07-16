@@ -5,7 +5,11 @@ import type {
   StatusRefreshDepth,
   StatusRefreshRequest,
 } from "./types";
-import type { StatusEntry, StatusSnapshotCompleteness } from "./statusSnapshotRpcClient";
+import {
+  MAX_CONFLICT_ARTIFACTS_PER_ENTRY,
+  type StatusEntry,
+  type StatusSnapshotCompleteness,
+} from "./statusSnapshotRpcClient";
 
 export type StatusRefreshErrorCategory = "input" | "protocol";
 
@@ -115,9 +119,9 @@ export function parseStatusDelta(rawResponse: unknown): StatusDelta {
     "source",
   ]);
   const generation = requireNonNegativeInteger(response.generation, "generation");
-  const upsert = parseStatusEntries(response.upsert, "upsert", generation);
+  const upsert = parseStatusEntries(response.upsert, "upsert", generation, "local");
   const remove = parseRemovedPaths(response.remove, "remove");
-  const remoteUpsert = parseStatusEntries(response.remoteUpsert, "remoteUpsert", generation);
+  const remoteUpsert = parseStatusEntries(response.remoteUpsert, "remoteUpsert", generation, "remote");
   const remoteRemove = parseRemovedPaths(response.remoteRemove, "remoteRemove");
   requireUniqueEntryPaths(upsert, "upsert");
   requireUniquePaths(remove, "remove");
@@ -172,14 +176,28 @@ function parseCoverageScope(rawScope: unknown, field: string, deltaGeneration: n
   };
 }
 
-function parseStatusEntries(rawEntries: unknown, field: string, deltaGeneration: number): StatusEntry[] {
+function parseStatusEntries(
+  rawEntries: unknown,
+  field: string,
+  deltaGeneration: number,
+  source: "local" | "remote",
+): StatusEntry[] {
   if (!Array.isArray(rawEntries)) {
     throw invalidRefreshResponse(field);
   }
-  return rawEntries.map((entry, index) => parseStatusEntry(entry, `${field}.${index}`, deltaGeneration));
+  const entries = rawEntries.map((entry, index) => parseStatusEntry(entry, `${field}.${index}`, deltaGeneration, source));
+  if (source === "local") {
+    requireNoConflictArtifactEntries(entries, field);
+  }
+  return entries;
 }
 
-function parseStatusEntry(rawEntry: unknown, field: string, deltaGeneration: number): StatusEntry {
+function parseStatusEntry(
+  rawEntry: unknown,
+  field: string,
+  deltaGeneration: number,
+  source: "local" | "remote",
+): StatusEntry {
   const entry = requireResponseRecord(rawEntry, field);
   requireExactResponseKeys(entry, field, [
     "path",
@@ -201,6 +219,7 @@ function parseStatusEntry(rawEntry: unknown, field: string, deltaGeneration: num
     "switched",
     "depth",
     "conflict",
+    "conflictArtifacts",
     "external",
     "generation",
   ]);
@@ -208,13 +227,26 @@ function parseStatusEntry(rawEntry: unknown, field: string, deltaGeneration: num
   if (generation !== deltaGeneration) {
     throw invalidRefreshResponse(`${field}.generation`);
   }
+  const path = requireResponsePath(entry.path, `${field}.path`);
+  const conflict = requireNullableString(entry.conflict, `${field}.conflict`);
+  const localStatus = requireResponseString(entry.localStatus, `${field}.localStatus`);
+  const nodeStatus = requireResponseString(entry.nodeStatus, `${field}.nodeStatus`);
+  const textStatus = requireResponseString(entry.textStatus, `${field}.textStatus`);
+  const propertyStatus = requireResponseString(entry.propertyStatus, `${field}.propertyStatus`);
+  const conflictArtifacts = parseConflictArtifacts(entry.conflictArtifacts, `${field}.conflictArtifacts`, path);
+  if (
+    conflictArtifacts.length > 0 &&
+    (source !== "local" || !hasConflict(conflict, localStatus, nodeStatus, textStatus, propertyStatus))
+  ) {
+    throw invalidRefreshResponse(`${field}.conflictArtifacts`);
+  }
   return {
-    path: requireResponsePath(entry.path, `${field}.path`),
+    path,
     kind: requireResponseString(entry.kind, `${field}.kind`),
-    nodeStatus: requireResponseString(entry.nodeStatus, `${field}.nodeStatus`),
-    textStatus: requireResponseString(entry.textStatus, `${field}.textStatus`),
-    propertyStatus: requireResponseString(entry.propertyStatus, `${field}.propertyStatus`),
-    localStatus: requireResponseString(entry.localStatus, `${field}.localStatus`),
+    nodeStatus,
+    textStatus,
+    propertyStatus,
+    localStatus,
     remoteStatus: requireResponseString(entry.remoteStatus, `${field}.remoteStatus`),
     revision: requireInteger(entry.revision, `${field}.revision`),
     changedRevision: requireInteger(entry.changedRevision, `${field}.changedRevision`),
@@ -227,10 +259,75 @@ function parseStatusEntry(rawEntry: unknown, field: string, deltaGeneration: num
     move: requireNullableString(entry.move, `${field}.move`),
     switched: requireBoolean(entry.switched, `${field}.switched`),
     depth: requireResponseString(entry.depth, `${field}.depth`),
-    conflict: requireNullableString(entry.conflict, `${field}.conflict`),
+    conflict,
+    conflictArtifacts,
     external: requireBoolean(entry.external, `${field}.external`),
     generation,
   };
+}
+
+function parseConflictArtifacts(rawArtifacts: unknown, field: string, entryPath: string): string[] {
+  if (!Array.isArray(rawArtifacts) || rawArtifacts.length > MAX_CONFLICT_ARTIFACTS_PER_ENTRY) {
+    throw invalidRefreshResponse(field);
+  }
+  const seen = new Set<string>();
+  const entryPathKey = canonicalStatusPathKey(entryPath);
+  let previous: string | undefined;
+  return rawArtifacts.map((artifact, index) => {
+    const path = requireResponsePath(artifact, `${field}.${index}`);
+    const pathKey = canonicalStatusPathKey(path);
+    if (
+      path === "." ||
+      pathKey === entryPathKey ||
+      hasWorkingCopyAdminComponent(path) ||
+      seen.has(pathKey) ||
+      (previous !== undefined && compareUtf8(previous, path) >= 0)
+    ) {
+      throw invalidRefreshResponse(`${field}.${index}`);
+    }
+    seen.add(pathKey);
+    previous = path;
+    return path;
+  });
+}
+
+function hasWorkingCopyAdminComponent(path: string): boolean {
+  return path.split("/").some((component) => component.toLowerCase() === ".svn");
+}
+
+function compareUtf8(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+
+function requireNoConflictArtifactEntries(entries: StatusEntry[], field: string): void {
+  const artifactPaths = new Set(
+    entries.flatMap((entry) => entry.conflictArtifacts).map(canonicalStatusPathKey),
+  );
+  entries.forEach((entry, index) => {
+    if (artifactPaths.has(canonicalStatusPathKey(entry.path))) {
+      throw invalidRefreshResponse(`${field}.${index}.path`);
+    }
+  });
+}
+
+function canonicalStatusPathKey(path: string): string {
+  return process.platform === "win32" ? path.replace(/[A-Z]/g, (character) => character.toLowerCase()) : path;
+}
+
+function hasConflict(
+  conflict: string | null,
+  localStatus: string,
+  nodeStatus: string,
+  textStatus: string,
+  propertyStatus: string,
+): boolean {
+  return (
+    conflict !== null ||
+    localStatus === "conflicted" ||
+    nodeStatus === "conflicted" ||
+    textStatus === "conflicted" ||
+    propertyStatus === "conflicted"
+  );
 }
 
 function parseLockInfo(rawLock: unknown, field: string): StatusEntry["lock"] {

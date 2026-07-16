@@ -90,6 +90,7 @@ function statusEntry(path: string): Record<string, unknown> {
     switched: false,
     depth: "infinity",
     conflict: null,
+    conflictArtifacts: [],
     external: false,
     generation: 8,
   };

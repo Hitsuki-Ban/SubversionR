@@ -11,6 +11,10 @@ const REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS = 10000;
 const REQUIRED_TOKEN_CAPTURE_INTERVAL_MS = 250;
 
 async function main() {
+if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "delayed-context-action") {
+  await runDelayedContextActionSelfTest();
+  return;
+}
 const args = parseArgs(process.argv.slice(2));
 const remoteDebuggingPort = requiredInteger(args, "remote-debugging-port");
 const outputRoot = requiredString(args, "output-root");
@@ -185,6 +189,9 @@ try {
           scmOverflowSubmenusReachable: interaction.overflowSubmenus.every((submenu) => submenu.reachable === true),
           scmResourceInlineActionsReachable: interaction.resource.inlineActions.every((action) => action.rendered === true),
           scmResourceContextActionsReachable: interaction.resource.contextActions.every((action) => action.reachable === true),
+          ...(scmActionSurface.resource.expectedNoContextActions ? {
+            scmResourceContextActionsEmpty: interaction.resource.observedContextMenuLabels.length === 0,
+          } : {}),
           activationReadyToastAbsent: interaction.notifications.presentForbiddenTokens.length === 0,
         } : {}),
         ...(interaction && treeViewState ? {
@@ -450,15 +457,24 @@ function optionalScmActionSurface(value) {
     throw new Error("scmActionSurface.resource must be an object.");
   }
   const resourcePathToken = requiredValueString(value.resource.pathToken, "scmActionSurface.resource.pathToken");
+  const expectedNoContextActions = value.resource.expectedNoContextActions === true;
+  if (
+    value.resource.expectedNoContextActions !== undefined &&
+    typeof value.resource.expectedNoContextActions !== "boolean"
+  ) {
+    throw new Error("scmActionSurface.resource.expectedNoContextActions must be a boolean when provided.");
+  }
   const inlineActions = requiredActionArray(
     value.resource.inlineActions,
     "scmActionSurface.resource.inlineActions",
     true,
   );
-  const contextActions = requiredTokenArray(
-    value.resource.contextActions,
-    "scmActionSurface.resource.contextActions",
-  );
+  const contextActions = expectedNoContextActions
+    ? []
+    : requiredTokenArray(
+      value.resource.contextActions,
+      "scmActionSurface.resource.contextActions",
+    );
   const forbiddenNotificationTokens = requiredTokenArray(
     value.forbiddenNotificationTokens,
     "scmActionSurface.forbiddenNotificationTokens",
@@ -468,6 +484,7 @@ function optionalScmActionSurface(value) {
     overflowSubmenus,
     resource: {
       pathToken: resourcePathToken,
+      expectedNoContextActions,
       inlineActions,
       contextActions,
     },
@@ -881,20 +898,10 @@ async function inspectScmActionSurface(cdp, expectations) {
   await pressEscape(cdp);
 
   const resourceRow = await findResourceRow(cdp, expectations.resource.pathToken);
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: resourceRow.x, y: resourceRow.y });
-  await sleep(500);
-  const inlineActions = await inspectResourceInlineActions(
-    cdp,
-    expectations.resource.pathToken,
-    expectations.resource.inlineActions,
-  );
-  const missingInline = inlineActions.filter((action) => action.rendered !== true);
-  if (missingInline.length > 0) {
-    throw new Error(`SCM resource inline actions were not rendered with expected codicons: ${missingInline.map((action) => action.label).join(", ")}`);
-  }
-
   await clickAt(cdp, resourceRow.x, resourceRow.y, "right");
-  const contextLabels = await waitForVisibleMenuLabels(cdp, expectations.resource.contextActions);
+  const contextLabels = expectations.resource.expectedNoContextActions
+    ? await waitForNoVisibleMenuLabels(cdp)
+    : await waitForVisibleMenuLabels(cdp, expectations.resource.contextActions);
   const contextActions = expectations.resource.contextActions.map((label) => ({
     label,
     reachable: menuLabelsContain(contextLabels, label),
@@ -902,6 +909,26 @@ async function inspectScmActionSurface(cdp, expectations) {
   const missingContext = contextActions.filter((action) => action.reachable !== true);
   if (missingContext.length > 0) {
     throw new Error(`SCM resource context menu did not expose expected actions: ${missingContext.map((action) => action.label).join(", ")}. Observed: ${contextLabels.join(" | ")}`);
+  }
+  if (expectations.resource.expectedNoContextActions && contextLabels.length > 0) {
+    throw new Error(`SCM resource exposed context actions despite expectedNoContextActions: ${contextLabels.join(" | ")}`);
+  }
+  await pressEscape(cdp);
+
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: resourceRow.x, y: resourceRow.y });
+  await sleep(500);
+  const observedInlineActions = await inspectVisibleResourceActions(cdp, expectations.resource.pathToken);
+  const inlineActions = await inspectResourceInlineActions(
+    cdp,
+    expectations.resource.pathToken,
+    expectations.resource.inlineActions,
+  );
+  const missingInline = inlineActions.filter((action) => action.rendered !== true);
+  if (missingInline.length > 0) {
+    throw new Error(`SCM resource inline actions were not rendered with expected codicons: ${missingInline.map((action) => action.label).join(", ")}. Observed: ${JSON.stringify(observedInlineActions)}`);
+  }
+  if (observedInlineActions.length !== expectations.resource.inlineActions.length) {
+    throw new Error(`SCM resource row ${JSON.stringify(resourceRow)} exposed unexpected inline actions: ${JSON.stringify(observedInlineActions)}`);
   }
 
   const notificationText = await evaluate(
@@ -925,8 +952,10 @@ async function inspectScmActionSurface(cdp, expectations) {
     overflowSubmenus,
     resource: {
       pathToken: expectations.resource.pathToken,
+      expectedNoContextActions: expectations.resource.expectedNoContextActions,
       row: resourceRow,
       inlineActions,
+      observedInlineActions,
       contextActions,
       observedContextMenuLabels: contextLabels,
     },
@@ -977,6 +1006,58 @@ async function inspectScmOverflowInteractionState(cdp, candidate) {
   );
 }
 
+async function inspectVisibleResourceActions(cdp, pathToken) {
+  return evaluate(
+    cdp,
+    `(() => {
+      const pathToken = ${JSON.stringify(pathToken)};
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const matchingRows = Array.from(document.querySelectorAll(".monaco-list-row"))
+        .filter(row => visible(row) && normalize(row.innerText).includes(pathToken));
+      const rows = matchingRows.filter(row =>
+        !matchingRows.some(candidate => candidate !== row && row.contains(candidate))
+      );
+      if (rows.length !== 1) {
+        throw new Error("Expected exactly one visible SCM resource row while enumerating inline actions.");
+      }
+      const rowRect = rows[0].getBoundingClientRect();
+      return Array.from(rows[0].querySelectorAll(".monaco-action-bar .action-item"))
+        .filter((element, index, all) => {
+          if (
+            !visible(element) ||
+            all.indexOf(element) !== index ||
+            element.closest(".monaco-list-row") !== rows[0]
+          ) return false;
+          const rect = element.getBoundingClientRect();
+          const centerY = rect.top + rect.height / 2;
+          return centerY >= rowRect.top && centerY <= rowRect.bottom;
+        })
+        .map(element => {
+          const rect = element.getBoundingClientRect();
+          const labelElement = element.querySelector(".action-label");
+          const disabled =
+            element.classList.contains("disabled") ||
+            element.getAttribute("aria-disabled") === "true" ||
+            labelElement?.classList.contains("disabled") === true ||
+            labelElement?.getAttribute("aria-disabled") === "true";
+          return {
+            label: normalize(labelElement?.getAttribute("aria-label") || labelElement?.getAttribute("title") || element.textContent),
+            ariaLabel: normalize(labelElement?.getAttribute("aria-label") || element.getAttribute("aria-label")),
+            title: normalize(labelElement?.getAttribute("title") || element.getAttribute("title")),
+            className: typeof element.className === "string" ? element.className : "",
+            disabled,
+            bounds: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+          };
+        });
+    })()`,
+  );
+}
+
 async function inspectResourceInlineActions(cdp, pathToken, expectedActions) {
   return evaluate(
     cdp,
@@ -989,13 +1070,22 @@ async function inspectResourceInlineActions(cdp, pathToken, expectedActions) {
         return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
           rect.left < window.innerWidth && rect.top < window.innerHeight;
       };
-      const rows = Array.from(document.querySelectorAll(".monaco-list-row"))
+      const matchingRows = Array.from(document.querySelectorAll(".monaco-list-row"))
         .filter(row => visible(row) && normalize(row.innerText).includes(pathToken));
+      const rows = matchingRows.filter(row =>
+        !matchingRows.some(candidate => candidate !== row && row.contains(candidate))
+      );
       if (rows.length !== 1) {
         return expected.map(action => ({ ...action, rendered: false, matchingRowCount: rows.length }));
       }
+      const rowRect = rows[0].getBoundingClientRect();
       const elements = Array.from(rows[0].querySelectorAll("button, a, [role='button'], [aria-label], [title]"))
-        .filter(visible);
+        .filter(element => {
+          if (!visible(element) || element.closest(".monaco-list-row") !== rows[0]) return false;
+          const rect = element.getBoundingClientRect();
+          const centerY = rect.top + rect.height / 2;
+          return centerY >= rowRect.top && centerY <= rowRect.bottom;
+        });
       return expected.map(action => {
         const element = elements.find(candidate => {
           const labels = [candidate.getAttribute("aria-label"), candidate.getAttribute("title"), candidate.textContent]
@@ -1004,9 +1094,17 @@ async function inspectResourceInlineActions(cdp, pathToken, expectedActions) {
         });
         const iconClass = "codicon-" + action.codicon;
         const icon = element && (element.classList.contains(iconClass) ? element : element.querySelector("." + iconClass));
+        const actionItem = element?.closest(".action-item") ?? element;
+        const disabled = Boolean(actionItem && (
+          actionItem.classList.contains("disabled") ||
+          actionItem.getAttribute("aria-disabled") === "true" ||
+          element.classList.contains("disabled") ||
+          element.getAttribute("aria-disabled") === "true"
+        ));
         return {
           ...action,
           rendered: Boolean(element && icon),
+          disabled,
           ariaLabel: element ? normalize(element.getAttribute("aria-label")) : "",
           title: element ? normalize(element.getAttribute("title")) : "",
           className: element && typeof element.className === "string" ? element.className : "",
@@ -1028,14 +1126,18 @@ async function findResourceRow(cdp, pathToken) {
         return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
           rect.left < window.innerWidth && rect.top < window.innerHeight;
       };
-      const rows = Array.from(document.querySelectorAll(".monaco-list-row"))
+      const matchingRows = Array.from(document.querySelectorAll(".monaco-list-row"))
         .filter(element => visible(element) && normalize(element.innerText).includes(token));
+      const rows = matchingRows.filter(row =>
+        !matchingRows.some(candidate => candidate !== row && row.contains(candidate))
+      );
       if (rows.length !== 1) {
-        return { matchingRowCount: rows.length };
+        return { matchingRowCount: rows.length, matchingAncestorRowCount: matchingRows.length - rows.length };
       }
       const rect = rows[0].getBoundingClientRect();
       return {
         matchingRowCount: 1,
+        matchingAncestorRowCount: matchingRows.length - 1,
         text: normalize(rows[0].innerText),
         x: rect.left + Math.max(4, rect.width / 2),
         y: rect.top + rect.height / 2,
@@ -1086,37 +1188,79 @@ async function waitForVisibleMenuLabels(cdp, expectedLabels) {
   const deadline = Date.now() + CDP_REQUEST_TIMEOUT_MS;
   let labels = [];
   do {
-    labels = await evaluate(
-      cdp,
-      `(() => {
-        const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
-        const visible = element => {
-          const rect = element.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
-            rect.left < window.innerWidth && rect.top < window.innerHeight;
-        };
-        const queryAllOpenRoots = (root, selector) => {
-          const matches = Array.from(root.querySelectorAll(selector));
-          for (const element of root.querySelectorAll("*")) {
-            if (element.shadowRoot) matches.push(...queryAllOpenRoots(element.shadowRoot, selector));
-          }
-          return matches;
-        };
-        return queryAllOpenRoots(document, ".context-view .monaco-menu .action-item, .monaco-menu .action-item")
-          .filter(visible)
-          .map(element => {
-            const label = element.querySelector(".action-label");
-            return normalize(label?.textContent || label?.getAttribute("aria-label") || element.getAttribute("aria-label") || element.innerText);
-          })
-          .filter(Boolean);
-      })()`,
-    );
+    labels = await visibleMenuLabels(cdp);
     if (containsAllMenuLabels(labels, expectedLabels)) {
       return labels;
     }
     await sleep(200);
   } while (Date.now() < deadline);
   return labels;
+}
+
+async function waitForNoVisibleMenuLabels(cdp, settleWindowMs = 1200) {
+  const deadline = Date.now() + settleWindowMs;
+  do {
+    const labels = await visibleMenuLabels(cdp);
+    if (labels.length > 0) {
+      throw new Error(`SCM resource exposed context actions despite expectedNoContextActions: ${labels.join(" | ")}`);
+    }
+    await sleep(100);
+  } while (Date.now() < deadline);
+  return [];
+}
+
+async function runDelayedContextActionSelfTest() {
+  let pollCount = 0;
+  const cdp = {
+    async send(method) {
+      if (method !== "Runtime.evaluate") {
+        throw new Error(`Unexpected fake CDP method: ${method}`);
+      }
+      pollCount += 1;
+      return {
+        result: {
+          value: pollCount < 3 ? [] : ["Delete Unversioned Resource…"]
+        }
+      };
+    }
+  };
+  let rejected = false;
+  try {
+    await waitForNoVisibleMenuLabels(cdp, 500);
+  } catch (error) {
+    rejected = String(error && error.message).includes("Delete Unversioned Resource…");
+  }
+  if (!rejected || pollCount < 3) {
+    throw new Error(`Delayed context action self-test failed after ${pollCount} poll(s).`);
+  }
+}
+
+async function visibleMenuLabels(cdp) {
+  return evaluate(
+    cdp,
+    `(() => {
+      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
+      const visible = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+          rect.left < window.innerWidth && rect.top < window.innerHeight;
+      };
+      const queryAllOpenRoots = (root, selector) => {
+        const matches = Array.from(root.querySelectorAll(selector));
+        for (const element of root.querySelectorAll("*")) {
+          if (element.shadowRoot) matches.push(...queryAllOpenRoots(element.shadowRoot, selector));
+        }
+        return matches;
+      };
+      return queryAllOpenRoots(document, ".context-view .monaco-menu .action-item, .monaco-menu .action-item")
+        .filter(visible)
+        .map(element => {
+          const label = element.querySelector(".action-label");
+          return normalize(label?.textContent || label?.getAttribute("aria-label") || element.getAttribute("aria-label") || element.innerText);
+        })
+        .filter(Boolean);
+    })()`,
+  );
 }
 
 function menuLabelsContain(observedLabels, expectedLabel) {

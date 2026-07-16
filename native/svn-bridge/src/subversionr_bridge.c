@@ -645,20 +645,130 @@ static svn_error_t *bridge_status_receiver(
   entry->moved_from_abspath = status->moved_from_abspath != NULL
     ? apr_pstrdup(result_pool, status->moved_from_abspath)
     : NULL;
+  for (size_t i = 0; i < SUBVERSIONR_BRIDGE_CONFLICT_ARTIFACT_LIMIT; ++i) {
+    entry->conflict_artifact_paths[i] = NULL;
+  }
+  entry->conflict_artifact_count = 0;
   return SVN_NO_ERROR;
 }
 
-static svn_error_t *bridge_status_copy_from_info(
-  svn_client_ctx_t *ctx,
-  const subversionr_bridge_status_entry *entry,
-  apr_pool_t *result_pool,
-  apr_pool_t *scratch_pool,
-  const char **copy_from_path,
-  long long *copy_from_revision
+static int bridge_path_contains_wc_admin_segment(const char *path) {
+  const char *segment = path;
+  const size_t admin_length = strlen(SVN_WC_ADM_DIR_NAME);
+  while (segment != NULL && segment[0] != '\0') {
+    const char *separator = strchr(segment, '/');
+    const size_t segment_length = separator != NULL
+      ? (size_t)(separator - segment)
+      : strlen(segment);
+    if (segment_length == admin_length) {
+      int matches = 1;
+      for (size_t i = 0; i < admin_length; ++i) {
+        char left = segment[i];
+        char right = SVN_WC_ADM_DIR_NAME[i];
+        if (left >= 'A' && left <= 'Z') {
+          left = (char)(left - 'A' + 'a');
+        }
+        if (right >= 'A' && right <= 'Z') {
+          right = (char)(right - 'A' + 'a');
+        }
+        if (left != right) {
+          matches = 0;
+          break;
+        }
+      }
+      if (matches) {
+        return 1;
+      }
+    }
+    segment = separator != NULL ? separator + 1 : NULL;
+  }
+  return 0;
+}
+
+static svn_error_t *bridge_status_add_conflict_artifact(
+  subversionr_bridge_status_entry *entry,
+  const char *artifact_abspath,
+  const char *working_copy_root,
+  apr_pool_t *result_pool
 ) {
-  *copy_from_path = NULL;
-  *copy_from_revision = -1;
-  if (entry == NULL || !entry->copied || entry->path == NULL) {
+  if (artifact_abspath == NULL) {
+    return SVN_NO_ERROR;
+  }
+  if (entry->path != NULL && strcmp(artifact_abspath, entry->path) == 0) {
+    return SVN_NO_ERROR;
+  }
+  if (
+    working_copy_root == NULL ||
+    !svn_dirent_is_absolute(working_copy_root) ||
+    !svn_dirent_is_absolute(artifact_abspath)
+  ) {
+    return svn_error_create(SVN_ERR_WC_CORRUPT, NULL, NULL);
+  }
+  const char *artifact_relpath = svn_dirent_skip_ancestor(working_copy_root, artifact_abspath);
+  if (
+    artifact_relpath == NULL ||
+    artifact_relpath[0] == '\0' ||
+    bridge_path_contains_wc_admin_segment(artifact_relpath)
+  ) {
+    return svn_error_create(SVN_ERR_WC_CORRUPT, NULL, NULL);
+  }
+  for (size_t i = 0; i < entry->conflict_artifact_count; ++i) {
+    if (strcmp(entry->conflict_artifact_paths[i], artifact_abspath) == 0) {
+      return SVN_NO_ERROR;
+    }
+  }
+  if (entry->conflict_artifact_count == SUBVERSIONR_BRIDGE_CONFLICT_ARTIFACT_LIMIT) {
+    return svn_error_create(SVN_ERR_WC_CORRUPT, NULL, NULL);
+  }
+  entry->conflict_artifact_paths[entry->conflict_artifact_count++] =
+    apr_pstrdup(result_pool, artifact_abspath);
+  return SVN_NO_ERROR;
+}
+
+static svn_error_t *bridge_status_populate_conflict_artifacts(
+  subversionr_bridge_status_entry *entry,
+  const svn_wc_info_t *wc_info,
+  apr_pool_t *result_pool
+) {
+  if (entry == NULL || !entry->conflicted || wc_info == NULL || wc_info->conflicts == NULL) {
+    return SVN_NO_ERROR;
+  }
+
+  for (int i = 0; i < wc_info->conflicts->nelts; ++i) {
+    const svn_wc_conflict_description2_t *description =
+      APR_ARRAY_IDX(wc_info->conflicts, i, const svn_wc_conflict_description2_t *);
+    if (description == NULL) {
+      continue;
+    }
+    if (description->kind == svn_wc_conflict_kind_text) {
+      SVN_ERR(bridge_status_add_conflict_artifact(
+        entry, description->base_abspath, wc_info->wcroot_abspath, result_pool));
+      SVN_ERR(bridge_status_add_conflict_artifact(
+        entry, description->their_abspath, wc_info->wcroot_abspath, result_pool));
+      SVN_ERR(bridge_status_add_conflict_artifact(
+        entry, description->my_abspath, wc_info->wcroot_abspath, result_pool));
+      SVN_ERR(bridge_status_add_conflict_artifact(
+        entry, description->merged_file, wc_info->wcroot_abspath, result_pool));
+    } else if (description->kind == svn_wc_conflict_kind_property) {
+      SVN_ERR(bridge_status_add_conflict_artifact(
+        entry, description->prop_reject_abspath, wc_info->wcroot_abspath, result_pool));
+    }
+  }
+  return SVN_NO_ERROR;
+}
+
+static svn_error_t *bridge_status_populate_metadata_from_info(
+  svn_client_ctx_t *ctx,
+  subversionr_bridge_status_entry *entry,
+  int include_conflict_artifacts,
+  apr_pool_t *result_pool,
+  apr_pool_t *scratch_pool
+) {
+  if (
+    entry == NULL ||
+    (!entry->copied && !(include_conflict_artifacts && entry->conflicted)) ||
+    entry->path == NULL
+  ) {
     return SVN_NO_ERROR;
   }
 
@@ -686,26 +796,32 @@ static svn_error_t *bridge_status_copy_from_info(
 
   const svn_client_info2_t *svn_info = receiver_baton.info;
   const svn_wc_info_t *wc_info = svn_info != NULL ? svn_info->wc_info : NULL;
-  if (wc_info == NULL || wc_info->copyfrom_url == NULL) {
+  if (wc_info == NULL) {
     return SVN_NO_ERROR;
   }
 
-  const char *source = wc_info->copyfrom_url;
-  if (svn_info->repos_root_URL != NULL) {
-    const char *relative_source =
-      svn_uri_skip_ancestor(svn_info->repos_root_URL, wc_info->copyfrom_url, scratch_pool);
-    if (relative_source != NULL) {
-      source = relative_source[0] != '\0' ? relative_source : "/";
+  if (entry->copied && wc_info->copyfrom_url != NULL) {
+    const char *source = wc_info->copyfrom_url;
+    if (svn_info->repos_root_URL != NULL) {
+      const char *relative_source =
+        svn_uri_skip_ancestor(svn_info->repos_root_URL, wc_info->copyfrom_url, scratch_pool);
+      if (relative_source != NULL) {
+        source = relative_source[0] != '\0' ? relative_source : "/";
+      }
     }
+    entry->copy_from_path = apr_pstrdup(result_pool, source);
+    entry->copy_from_revision = bridge_revision_to_i64(wc_info->copyfrom_rev);
   }
-  *copy_from_path = apr_pstrdup(result_pool, source);
-  *copy_from_revision = bridge_revision_to_i64(wc_info->copyfrom_rev);
-  return SVN_NO_ERROR;
+
+  return include_conflict_artifacts
+    ? bridge_status_populate_conflict_artifacts(entry, wc_info, result_pool)
+    : SVN_NO_ERROR;
 }
 
-static svn_error_t *bridge_status_populate_copy_metadata(
+static svn_error_t *bridge_status_populate_metadata(
   svn_client_ctx_t *ctx,
   apr_array_header_t *entries,
+  int include_conflict_artifacts,
   apr_pool_t *result_pool,
   apr_pool_t *scratch_pool
 ) {
@@ -716,18 +832,13 @@ static svn_error_t *bridge_status_populate_copy_metadata(
   for (int i = 0; i < entries->nelts; ++i) {
     subversionr_bridge_status_entry *entry =
       &APR_ARRAY_IDX(entries, i, subversionr_bridge_status_entry);
-    const char *copy_from_path = NULL;
-    long long copy_from_revision = -1;
-    SVN_ERR(bridge_status_copy_from_info(
+    SVN_ERR(bridge_status_populate_metadata_from_info(
       ctx,
       entry,
+      include_conflict_artifacts,
       result_pool,
-      scratch_pool,
-      &copy_from_path,
-      &copy_from_revision
+      scratch_pool
     ));
-    entry->copy_from_path = copy_from_path;
-    entry->copy_from_revision = copy_from_revision;
   }
 
   return SVN_NO_ERROR;
@@ -1755,9 +1866,10 @@ static int bridge_status_scan_impl(
     runtime->result_pool
   );
   if (err == NULL) {
-    err = bridge_status_populate_copy_metadata(
+    err = bridge_status_populate_metadata(
       runtime->ctx,
       entries,
+      check_working_copy ? 1 : 0,
       runtime->result_pool,
       runtime->result_pool
     );

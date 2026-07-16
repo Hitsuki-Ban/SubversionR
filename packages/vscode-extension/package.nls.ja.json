@@ -19,6 +19,7 @@
   "command.refreshRepository.title": "SubversionR: 状態を再読み込み",
   "command.checkRemoteChanges.title": "SubversionR: リモート変更を確認",
   "command.refreshResource.title": "SubversionR: リソースを再読み込み",
+  "command.openConflictArtifact.title": "SubversionR: 競合生成物を開く",
   "command.addResource.title": "SubversionR: リソースを追加",
   "command.addToIgnoreResource.title": "SubversionR: ignore に追加",
   "command.removeFromIgnoreResource.title": "SubversionR: ignore から削除",

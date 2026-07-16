@@ -57,6 +57,7 @@ describe("VscodeSourceControlPresenter", () => {
     );
     expect(api.createdGroups.map((group) => group.id)).toEqual([
       "conflicts",
+      "conflictArtifacts",
       "changes",
       "unversioned",
       "metadata",
@@ -66,6 +67,7 @@ describe("VscodeSourceControlPresenter", () => {
     ]);
     expect(api.createdGroups.map((group) => group.label)).toEqual([
       "l10n:Conflicts",
+      "l10n:Conflict Artifacts",
       "l10n:Changes",
       "l10n:Unversioned",
       "l10n:Working Copy Metadata",
@@ -130,6 +132,7 @@ describe("VscodeSourceControlPresenter", () => {
         ...projection(),
         groups: [
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+          { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
           {
             id: "changes",
             labelKey: "scm.group.changes",
@@ -177,6 +180,7 @@ describe("VscodeSourceControlPresenter", () => {
         ...projection(),
         groups: [
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+          { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
           { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
           { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
           { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
@@ -221,6 +225,7 @@ describe("VscodeSourceControlPresenter", () => {
         ...projection(),
         groups: [
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+          { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
           { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
           { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
           { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
@@ -283,6 +288,7 @@ describe("VscodeSourceControlPresenter", () => {
     ]);
     expect(presenter.snapshotRepository("repo-uuid:C:/wc")?.groups.map((group) => group.id)).toEqual([
       "conflicts",
+      "conflictArtifacts",
       "changelist:review",
       "changes",
       "unversioned",
@@ -297,6 +303,7 @@ describe("VscodeSourceControlPresenter", () => {
     expect(api.group("changelist:review").dispose).toHaveBeenCalledTimes(1);
     expect(presenter.snapshotRepository("repo-uuid:C:/wc")?.groups.map((group) => group.id)).toEqual([
       "conflicts",
+      "conflictArtifacts",
       "changes",
       "unversioned",
       "metadata",
@@ -355,6 +362,7 @@ describe("VscodeSourceControlPresenter", () => {
       },
       groups: [
         { id: "conflicts", contextValue: "subversionr.conflicts", hideWhenEmpty: true, count: 0, resources: [] },
+        { id: "conflictArtifacts", contextValue: "subversionr.conflictArtifacts", hideWhenEmpty: true, count: 0, resources: [] },
         {
           id: "changes",
           contextValue: "subversionr.changes",
@@ -390,6 +398,7 @@ describe("VscodeSourceControlPresenter", () => {
       count: 1,
       groups: [
         { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+        { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
         {
           id: "changes",
           labelKey: "scm.group.changes",
@@ -539,6 +548,51 @@ describe("VscodeSourceControlPresenter", () => {
     expect(api.group("changes").resourceStates[0]).not.toHaveProperty("command");
   });
 
+  it("presents conflict artifacts with a read-only context, accessible tooltip, and no QuickDiff target", () => {
+    const api = fakeVscodeScmApi();
+    const presenter = new VscodeSourceControlPresenter(api);
+    presenter.registerRepository({ repositoryId: "repo-uuid:C:/wc", epoch: 7, workingCopyRoot: "C:/wc" });
+    const artifactEntry = statusEntry("src/main.c.mine", "conflicted", { conflict: "text" });
+    const artifactProjection = projection();
+    artifactProjection.groups = artifactProjection.groups.map((group) =>
+      group.id === "conflictArtifacts"
+        ? {
+            ...group,
+            resources: [
+              projectedResource("local", "conflictArtifacts", "subversionr.conflictArtifact", artifactEntry, {
+                tooltipKey: "scm.resource.conflictArtifact",
+              }),
+            ],
+          }
+        : group,
+    );
+
+    presenter.updateRepository(artifactProjection);
+
+    expect(api.group("conflictArtifacts").resourceStates).toEqual([
+      {
+        resourceUri: { fsPath: nodePath.join("C:/wc", "src", "main.c.mine") },
+        contextValue: "subversionr.conflictArtifact",
+        subversionrResourceKind: "file",
+        subversionrProjectionGeneration: 11,
+        decorations: { tooltip: "l10n:SVN conflict artifact (read-only)" },
+      },
+    ]);
+    expect(api.group("conflictArtifacts").resourceStates[0]).not.toHaveProperty("command");
+    expect(
+      presenter.currentConflictArtifactResourceUri(api.group("conflictArtifacts").resourceStates[0]),
+    ).toEqual({ fsPath: nodePath.join("C:/wc", "src", "main.c.mine") });
+    expect(presenter.currentConflictArtifactResourceUri(api.group("changes").resourceStates[0])).toBeUndefined();
+    expect(
+      presenter.currentConflictArtifactResourceUri({
+        ...api.group("conflictArtifacts").resourceStates[0],
+      }),
+    ).toBeUndefined();
+    expect(
+      api.sourceControl.quickDiffProvider?.provideOriginalResource({ fsPath: "C:/wc/src/main.c.mine" }),
+    ).toBeUndefined();
+  });
+
   it("adds switched and sparse depth metadata to SourceControl resource tooltips", () => {
     const api = fakeVscodeScmApi();
     const presenter = new VscodeSourceControlPresenter(api);
@@ -588,6 +642,7 @@ describe("VscodeSourceControlPresenter", () => {
         ...projection(),
         groups: [
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+          { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
           {
             id: "changes",
             labelKey: "scm.group.changes",
@@ -668,6 +723,7 @@ describe("VscodeSourceControlPresenter", () => {
         ...projection(),
         groups: [
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+          { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
           {
             id: "changes",
             labelKey: "scm.group.changes",
@@ -777,6 +833,7 @@ describe("VscodeSourceControlPresenter", () => {
         ...projection(),
         groups: [
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+          { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
           {
             id: "changes",
             labelKey: "scm.group.changes",
@@ -838,6 +895,7 @@ describe("VscodeSourceControlPresenter", () => {
         ...projection(),
         groups: [
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+          { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
           {
             id: "changes",
             labelKey: "scm.group.changes",
@@ -897,6 +955,7 @@ describe("VscodeSourceControlPresenter", () => {
         ...projection(),
         groups: [
           { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+          { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
           {
             id: "changes",
             labelKey: "scm.group.changes",
@@ -1150,7 +1209,7 @@ describe("VscodeSourceControlPresenter", () => {
 
     expect(api.group("conflicts").dispose).toHaveBeenCalledTimes(1);
     expect(api.sourceControl.dispose).toHaveBeenCalledTimes(1);
-    expect(api.createdGroups.map((group) => group.id)).toEqual(["conflicts"]);
+    expect(api.createdGroups.map((group) => group.id)).toEqual(["conflicts", "conflictArtifacts"]);
   });
 });
 
@@ -1274,6 +1333,7 @@ function projection(
     count: 1,
     groups: [
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       {
         id: "changes",
         labelKey: "scm.group.changes",
@@ -1307,6 +1367,7 @@ function projection(
               switched: false,
               depth: "infinity",
               conflict: null,
+              conflictArtifacts: [],
               external: false,
               generation: 11,
             },
@@ -1339,6 +1400,7 @@ function projectionWithLockedResources(): ScmRepositoryProjection {
     count: 2,
     groups: [
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       {
         id: "changelist:review",
         labelKey: "scm.group.changelist",
@@ -1368,13 +1430,16 @@ function projectionWithChangelist(): ScmRepositoryProjection {
     count: 2,
     groups: [
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       {
         id: "changelist:review",
         labelKey: "scm.group.changelist",
         changelist: "review",
         resources: [projectedResource("local", "changelist:review", "subversionr.changedFile", reviewEntry)],
       },
-      ...(base.groups.filter((group) => group.id !== "conflicts") as ScmRepositoryProjection["groups"]),
+      ...(base.groups.filter(
+        (group) => group.id !== "conflicts" && group.id !== "conflictArtifacts",
+      ) as ScmRepositoryProjection["groups"]),
     ],
   };
 }
@@ -1391,6 +1456,7 @@ function projectionWithNonBaseResources(): ScmRepositoryProjection {
     count: 0,
     groups: [
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
       {
         id: "unversioned",
@@ -1435,6 +1501,7 @@ function projectionWithUnsupportedChangedFiles(): ScmRepositoryProjection {
     count: entries.length,
     groups: [
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       {
         id: "changes",
         labelKey: "scm.group.changes",
@@ -1465,6 +1532,7 @@ function projectionWithWorkingCopyMetadata(): ScmRepositoryProjection {
     count: 1,
     groups: [
       { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       {
         id: "changes",
         labelKey: "scm.group.changes",
@@ -1508,6 +1576,7 @@ function projectionWithConflictedIgnoredAndExternal(): ScmRepositoryProjection {
           projectedResource("local", "conflicts", "subversionr.conflicted", conflictedIgnored),
         ],
       },
+      { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
       { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [] },
       { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
       { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
@@ -1558,6 +1627,7 @@ function statusEntry(path: string, localStatus: string, overrides: Partial<Statu
     switched: false,
     depth: "infinity",
     conflict: null,
+    conflictArtifacts: [],
     external: false,
     generation: 11,
     ...overrides,

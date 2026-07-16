@@ -49,7 +49,7 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
         response.protocol,
         ProtocolVersion {
             major: 1,
-            minor: 29
+            minor: 30
         }
     );
     assert_eq!(response.cache_schema, default_cache_schema());
@@ -109,7 +109,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     let json = serde_json::to_value(response).expect("initialize response must serialize");
 
     assert_eq!(json["protocol"]["major"], 1);
-    assert_eq!(json["protocol"]["minor"], 29);
+    assert_eq!(json["protocol"]["minor"], 30);
     assert_eq!(json["cacheSchema"]["schemaId"], "subversionr.cache.v1");
     assert_eq!(json["cacheSchema"]["version"], 1);
     assert_eq!(json["cacheSchema"]["rollback"], "delete-and-reconcile");
@@ -1037,7 +1037,8 @@ fn status_delta_serializes_local_and_remote_upsert_remove_fields() {
             move_: None,
             switched: false,
             depth: "infinity".to_string(),
-            conflict: None,
+            conflict: Some("conflicted".to_string()),
+            conflict_artifacts: vec!["src/main.c.mine".to_string(), "src/main.c.r8".to_string()],
             external: false,
             generation: 4,
         }],
@@ -1062,6 +1063,7 @@ fn status_delta_serializes_local_and_remote_upsert_remove_fields() {
             switched: false,
             depth: "infinity".to_string(),
             conflict: None,
+            conflict_artifacts: vec![],
             external: false,
             generation: 4,
         }],
@@ -1094,6 +1096,14 @@ fn status_delta_serializes_local_and_remote_upsert_remove_fields() {
     assert_eq!(delta_json["upsert"][0]["lock"]["owner"], "alice");
     assert_eq!(delta_json["upsert"][0]["lock"]["isRemote"], false);
     assert_eq!(delta_json["upsert"][0]["needsLock"], true);
+    assert_eq!(
+        delta_json["upsert"][0]["conflictArtifacts"][0],
+        "src/main.c.mine"
+    );
+    assert_eq!(
+        delta_json["upsert"][0]["conflictArtifacts"][1],
+        "src/main.c.r8"
+    );
     assert_eq!(delta_json["remove"][0], "src/old.c");
     assert_eq!(delta_json["remoteUpsert"][0]["path"], "src/incoming.c");
     assert_eq!(delta_json["remoteUpsert"][0]["remoteStatus"], "modified");
@@ -1101,6 +1111,13 @@ fn status_delta_serializes_local_and_remote_upsert_remove_fields() {
     assert_eq!(delta_json["summaryDelta"]["localChanges"], -1);
     assert_eq!(delta_json["summaryDelta"]["remoteChanges"], 1);
     assert_eq!(delta_json["completeness"], "partial");
+
+    let mut missing_conflict_artifacts = delta_json["upsert"][0].clone();
+    missing_conflict_artifacts
+        .as_object_mut()
+        .expect("status entry must be an object")
+        .remove("conflictArtifacts");
+    assert!(serde_json::from_value::<StatusEntry>(missing_conflict_artifacts).is_err());
 }
 
 #[test]
@@ -1137,6 +1154,7 @@ fn status_snapshot_serializes_local_and_remote_dimensions_separately() {
             switched: false,
             depth: "infinity".to_string(),
             conflict: None,
+            conflict_artifacts: vec![],
             external: false,
             generation: 3,
         }],
@@ -1158,6 +1176,10 @@ fn status_snapshot_serializes_local_and_remote_dimensions_separately() {
     assert_eq!(json["localEntries"][0]["propertyStatus"], "normal");
     assert_eq!(json["localEntries"][0]["localStatus"], "modified");
     assert_eq!(json["localEntries"][0]["remoteStatus"], "notChecked");
+    assert_eq!(
+        json["localEntries"][0]["conflictArtifacts"],
+        serde_json::json!([])
+    );
     assert_eq!(json["localEntries"][0]["move"], serde_json::Value::Null);
     assert_eq!(
         json["remoteEntries"]

@@ -216,11 +216,26 @@ export interface InstalledSourceControlUiE2eFreshnessReport {
     identity: RepositorySession["identity"];
   };
   sourceControl: VscodeSourceControlSnapshot;
+  conflictArtifactSurface: InstalledConflictArtifactSurfaceEvidence;
   lastCompletedRefresh?: CompletedStatusRefreshCoverage;
   freshnessWorkflow: {
     repositoryOpen: true;
     currentEpochMatched: true;
     sourceControlSurface: true;
+  };
+}
+
+export interface InstalledConflictArtifactSurfaceEvidence {
+  group: VscodeSourceControlGroupSnapshot;
+  counts: {
+    sourceControl: number | undefined;
+    conflicts: number;
+    conflictArtifacts: number;
+    unversioned: number;
+  };
+  collapseControl: {
+    owner: "vscodeUserInterface";
+    extensionDefaultSupported: false;
   };
 }
 
@@ -333,6 +348,44 @@ export function collectInstalledSourceControlUiE2eCurrentSurfaceReport(
       repositoryClosed: false,
     },
   };
+}
+
+function conflictArtifactSurfaceEvidence(
+  sourceControl: VscodeSourceControlSnapshot,
+): InstalledConflictArtifactSurfaceEvidence {
+  const conflicts = requireSourceControlGroup(sourceControl, "conflicts");
+  const conflictArtifacts = requireSourceControlGroup(sourceControl, "conflictArtifacts");
+  const unversioned = requireSourceControlGroup(sourceControl, "unversioned");
+  return {
+    group: {
+      ...conflictArtifacts,
+      resources: conflictArtifacts.resources.map((resource) => ({ ...resource })),
+    },
+    counts: {
+      sourceControl: sourceControl.count,
+      conflicts: conflicts.count,
+      conflictArtifacts: conflictArtifacts.count,
+      unversioned: unversioned.count,
+    },
+    collapseControl: {
+      owner: "vscodeUserInterface",
+      extensionDefaultSupported: false,
+    },
+  };
+}
+
+function requireSourceControlGroup(
+  sourceControl: VscodeSourceControlSnapshot,
+  groupId: string,
+): VscodeSourceControlGroupSnapshot {
+  const group = sourceControl.groups.find((candidate) => candidate.id === groupId);
+  if (!group) {
+    throw surfaceMismatch(sourceControl.repositoryId, sourceControl.epoch, {
+      missingSourceControlGroup: groupId,
+      sourceControlGroups: sourceControlGroupSummaries(sourceControl.groups),
+    });
+  }
+  return group;
 }
 
 export async function collectInstalledSourceControlUiE2eLazyExternalProviderReport(
@@ -603,6 +656,7 @@ export function collectInstalledSourceControlUiE2eFreshnessReport(
       identity: session.identity,
     },
     sourceControl,
+    conflictArtifactSurface: conflictArtifactSurfaceEvidence(sourceControl),
     lastCompletedRefresh: deps.statusRefreshCoverage.getLastCompletedRefresh(request.repositoryId, request.epoch),
     freshnessWorkflow: {
       repositoryOpen: true,

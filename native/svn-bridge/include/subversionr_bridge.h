@@ -134,6 +134,8 @@ typedef struct subversionr_bridge_lock_info {
   int is_remote;
 } subversionr_bridge_lock_info;
 
+#define SUBVERSIONR_BRIDGE_CONFLICT_ARTIFACT_LIMIT 4
+
 typedef struct subversionr_bridge_status_entry {
   const char *path;
   const char *kind;
@@ -163,6 +165,8 @@ typedef struct subversionr_bridge_status_entry {
   const char *copy_from_path;
   long long copy_from_revision;
   const char *moved_from_abspath;
+  const char *conflict_artifact_paths[SUBVERSIONR_BRIDGE_CONFLICT_ARTIFACT_LIMIT];
+  size_t conflict_artifact_count;
 } subversionr_bridge_status_entry;
 
 typedef struct subversionr_bridge_status_scan_info {

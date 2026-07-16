@@ -19,6 +19,7 @@
   "command.refreshRepository.title": "SubversionR: 刷新",
   "command.checkRemoteChanges.title": "SubversionR: 检查远端变更",
   "command.refreshResource.title": "SubversionR: 刷新资源",
+  "command.openConflictArtifact.title": "SubversionR: 打开冲突产物",
   "command.addResource.title": "SubversionR: 添加资源",
   "command.addToIgnoreResource.title": "SubversionR: 添加到忽略",
   "command.removeFromIgnoreResource.title": "SubversionR: 从忽略中移除",

@@ -427,7 +427,11 @@ $revertCancellationPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_U
 $revertCancellationPromptDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_REVERT_CANCELLATION_PROMPT_DONE
 $resolveUpdateWarningReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_READY
 $resolveUpdateWarningDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_UPDATE_WARNING_DONE
+$resolveConflictArtifactsReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CONFLICT_ARTIFACTS_READY
+$resolveConflictArtifactsDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CONFLICT_ARTIFACTS_DONE
 $resolvePromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_PROMPT_READY
+$resolvedConflictArtifactsReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVED_CONFLICT_ARTIFACTS_READY
+$resolvedConflictArtifactsDonePath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVED_CONFLICT_ARTIFACTS_DONE
 $resolveCancellationPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_RESOLVE_CANCELLATION_PROMPT_READY
 $cleanupPromptReadyPath = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_CLEANUP_PROMPT_READY
 $extensionsRoot = $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_EXTENSIONS_ROOT
@@ -4459,6 +4463,47 @@ $resolveUpdateWarningExpectations = [pscustomobject]@{
 } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $resolveUpdateWarningReadyPath -Encoding utf8
 Wait-FakeRendererDone -Path $resolveUpdateWarningDonePath -Description "resolve update warning"
 
+$resolveArtifactPaths = @("src/tracked.txt.mine", "src/tracked.txt.r1", "src/tracked.txt.r2")
+$resolveArtifactResources = @($resolveArtifactPaths | ForEach-Object {
+  [pscustomobject]@{ path = $_; contextValue = "subversionr.conflictArtifact"; kind = "file"; generation = 1 }
+})
+$resolveArtifactSurface = [pscustomobject]@{
+  group = [pscustomobject]@{
+    id = "conflictArtifacts"
+    contextValue = "subversionr.conflictArtifacts"
+    hideWhenEmpty = $true
+    count = 3
+    resources = $resolveArtifactResources
+  }
+  counts = [pscustomobject]@{ sourceControl = 1; conflicts = 1; conflictArtifacts = 3; unversioned = 0 }
+  collapseControl = [pscustomobject]@{ owner = "vscodeUserInterface"; extensionDefaultSupported = $false }
+}
+$resolveArtifactExpectations = [pscustomobject]@{
+  requiredDomTokens = @("SubversionR", "Conflicts", "Conflict Artifacts", "tracked.txt", "tracked.txt.mine", "tracked.txt.r1", "tracked.txt.r2")
+  requiredAccessibilityTokens = @("SubversionR", "Conflicts", "Conflict Artifacts", "tracked.txt", "tracked.txt.mine", "tracked.txt.r1", "tracked.txt.r2", "SVN conflict artifact (read-only)")
+  forbiddenDomTokens = @("SubversionR: Add Resource", "Delete Unversioned Resource…", "Add to Ignore…", "Move Resource…", "Revert Resource…", "Commit Resource", "Lock Resource…", "Set Changelist…")
+  forbiddenAccessibilityTokens = @("SubversionR: Add Resource", "Delete Unversioned Resource…", "Add to Ignore…", "Move Resource…", "Revert Resource…", "Commit Resource", "Lock Resource…", "Set Changelist…")
+  requiredScreenshot = $true
+  viewport = [pscustomobject]@{ width = 1440; height = 900 }
+  scmActionSurface = [pscustomobject]@{
+    primaryActions = $openReport.rendererCaptureExpectations.scmActionSurface.primaryActions
+    overflowSubmenus = $openReport.rendererCaptureExpectations.scmActionSurface.overflowSubmenus
+    forbiddenNotificationTokens = $openReport.rendererCaptureExpectations.scmActionSurface.forbiddenNotificationTokens
+    resource = [pscustomobject]@{
+      pathToken = "tracked.txt.mine"
+      expectedNoContextActions = $true
+      inlineActions = @([pscustomobject]@{ label = "SubversionR: Open Conflict Artifact"; codicon = "go-to-file" })
+    }
+  }
+}
+[pscustomobject]@{
+  ok = $true
+  phase = "conflictArtifactsReady"
+  artifactSurface = $resolveArtifactSurface
+  rendererCaptureExpectations = $resolveArtifactExpectations
+} | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $resolveConflictArtifactsReadyPath -Encoding utf8
+Wait-FakeRendererDone -Path $resolveConflictArtifactsDonePath -Description "resolve conflict artifacts"
+
 $resolvePromptExpectations = [pscustomobject]@{
   requiredDomTokens = @("Resolve SVN conflict", "Working copy", "Use the current working copy file")
   requiredAccessibilityTokens = @("Resolve SVN conflict", "Working copy", "Use the current working copy file")
@@ -4565,12 +4610,42 @@ $postResolveFreshnessReport = [pscustomobject]@{
       }
     )
   }
+  conflictArtifactSurface = [pscustomobject]@{
+    group = [pscustomobject]@{ id = "conflictArtifacts"; contextValue = "subversionr.conflictArtifacts"; hideWhenEmpty = $true; count = 0; resources = @() }
+    counts = [pscustomobject]@{ sourceControl = 1; conflicts = 0; conflictArtifacts = 0; unversioned = 0 }
+    collapseControl = [pscustomobject]@{ owner = "vscodeUserInterface"; extensionDefaultSupported = $false }
+  }
+  lastCompletedRefresh = [pscustomobject]@{
+    repositoryId = $resolveOpenReport.repository.repositoryId
+    epoch = $resolveOpenReport.repository.epoch
+    targets = @([pscustomobject]@{ path = "src/tracked.txt"; depth = "empty"; reason = "operationResolve" })
+    coverage = @([pscustomobject]@{ path = "src/tracked.txt"; depth = "empty"; reason = "operationResolve"; generation = 2 })
+    generation = 2
+    completeness = "partial"
+    timestamp = "2026-06-25T00:00:08Z"
+    source = "libsvn-local"
+  }
   freshnessWorkflow = [pscustomobject]@{
     repositoryOpen = $true
     currentEpochMatched = $true
     sourceControlSurface = $true
   }
 }
+$resolvedArtifactExpectations = [pscustomobject]@{
+  requiredDomTokens = @("SubversionR", "Changes", "tracked.txt")
+  requiredAccessibilityTokens = @("SubversionR", "Changes", "tracked.txt")
+  forbiddenDomTokens = @("Conflict Artifacts", "tracked.txt.mine", "tracked.txt.r1", "tracked.txt.r2", "SVN conflict artifact (read-only)")
+  forbiddenAccessibilityTokens = @("Conflict Artifacts", "tracked.txt.mine", "tracked.txt.r1", "tracked.txt.r2", "SVN conflict artifact (read-only)")
+  requiredScreenshot = $true
+  viewport = [pscustomobject]@{ width = 1440; height = 900 }
+}
+[pscustomobject]@{
+  ok = $true
+  phase = "resolvedConflictArtifactsReady"
+  artifactSurface = $postResolveFreshnessReport.conflictArtifactSurface
+  rendererCaptureExpectations = $resolvedArtifactExpectations
+} | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $resolvedConflictArtifactsReadyPath -Encoding utf8
+Wait-FakeRendererDone -Path $resolvedConflictArtifactsDonePath -Description "resolved conflict artifacts"
 $resolveReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eResolveWorkflow"
   generatedAt = "2026-06-25T00:00:08Z"
@@ -4604,6 +4679,14 @@ $resolveReport = [pscustomobject]@{
     notificationCleanup = [pscustomobject]@{ command = "notifications.clearAll"; label = "updateRepositoryConflict"; cleared = $true }
     postUpdateFreshnessReport = [pscustomobject]@{ kind = "subversionr.installedSourceControlUiE2eFreshnessReport" }
   }
+  conflictArtifacts = [pscustomobject]@{
+    beforeResolve = $resolveArtifactSurface
+    afterResolve = $postResolveFreshnessReport.conflictArtifactSurface
+    beforeResolveRendererCaptureExpectations = $resolveArtifactExpectations
+    afterResolveRendererCaptureExpectations = $resolvedArtifactExpectations
+    collapseControl = $resolveArtifactSurface.collapseControl
+  }
+  reconcile = [pscustomobject]@{ coverage = $postResolveFreshnessReport.lastCompletedRefresh }
   postResolveResource = [pscustomobject]@{
     path = "src/tracked.txt"
     contextValue = "subversionr.changedFile.baseDiffable"
@@ -4632,6 +4715,13 @@ $resolveReport = [pscustomobject]@{
     fileExistedBefore = $resolveFileExistedBefore
     conflictProjectedBefore = $true
     conflictProjectedAfter = $false
+    conflictArtifactGroupProjectedBefore = $true
+    conflictArtifactsExcludedFromCountsBefore = $true
+    conflictArtifactDestructiveActionsAbsentBefore = $true
+    conflictArtifactTooltipAccessibleBefore = $true
+    conflictArtifactGroupRemovedAfter = $true
+    conflictArtifactCollapseOwnedByVscodeUi = $true
+    targetedReconcileAfterResolve = $true
     fileContentBefore = $resolveContentBefore
     fileContentAfter = $resolveContentBefore
     fileContentPreservedAfter = $true
@@ -7296,6 +7386,9 @@ const report = {
       scmOverflowSubmenusReachable: true,
       scmResourceInlineActionsReachable: true,
       scmResourceContextActionsReachable: true,
+      ...(expectations.scmActionSurface.resource.expectedNoContextActions ? {
+        scmResourceContextActionsEmpty: mode !== "scm-empty-context-lie"
+      } : {}),
       activationReadyToastAbsent: true
     } : {}),
     ...(expectations.treeViewState ? {
@@ -7327,10 +7420,20 @@ const report = {
       overflowSubmenus: expectations.scmActionSurface.overflowSubmenus.map(submenu => ({ ...submenu, reachable: mode !== "scm-submenu-lie", observedMenuLabels: submenu.commands })),
       resource: {
         pathToken: expectations.scmActionSurface.resource.pathToken,
+        expectedNoContextActions: expectations.scmActionSurface.resource.expectedNoContextActions === true,
         row: { matchingRowCount: 1, text: expectations.scmActionSurface.resource.pathToken, x: 100, y: 100, className: "monaco-list-row" },
-        inlineActions: expectations.scmActionSurface.resource.inlineActions.map(action => ({ ...action, rendered: mode !== "scm-inline-lie" })),
-        contextActions: expectations.scmActionSurface.resource.contextActions.map(label => ({ label, reachable: mode !== "scm-context-lie" })),
-        observedContextMenuLabels: expectations.scmActionSurface.resource.contextActions
+        inlineActions: (expectations.scmActionSurface.resource.inlineActions || []).map(action => ({
+          ...action,
+          rendered: mode !== "scm-inline-lie"
+        })),
+        observedInlineActions: mode === "scm-empty-inline-lie"
+          ? [
+              ...(expectations.scmActionSurface.resource.inlineActions || []),
+              { label: "Revert Resource…", className: "action-item", disabled: false }
+            ]
+          : (expectations.scmActionSurface.resource.inlineActions || []),
+        contextActions: (expectations.scmActionSurface.resource.contextActions || []).map(label => ({ label, reachable: mode !== "scm-context-lie" })),
+        observedContextMenuLabels: mode === "scm-empty-context-lie" ? ["Revert Resource…"] : (expectations.scmActionSurface.resource.contextActions || [])
       },
       notifications: {
         forbiddenTokens: expectations.scmActionSurface.forbiddenNotificationTokens,
@@ -7879,6 +7982,14 @@ try {
   Invoke-EmptyHistoryProbeOrderSmoke -WorkflowContent $workflowContent -TempRoot $tempRoot
   Assert-True (Test-Path -LiteralPath $workflowScript -PathType Leaf) "test-vscode-installed-source-control-ui-e2e.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $driverScript -PathType Leaf) "capture-vscode-renderer-ui.mjs should exist."
+  $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "delayed-context-action"
+  try {
+    & node $driverScript
+    Assert-Equal 0 $LASTEXITCODE "Renderer capture delayed context-action fake-CDP self-test should reject a destructive action that appears after initially empty polls."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
+  }
 
   $rootPackage = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
   Assert-True ($rootPackage.scripts."release:test-installed-source-control-ui-e2e-scripts".Contains("release-installed-source-control-ui-e2e-scripts.tests.ps1")) "Root package should expose M7j3 installed Source Control UI E2E script tests."

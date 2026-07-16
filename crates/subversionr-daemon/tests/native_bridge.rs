@@ -3742,15 +3742,48 @@ fn native_bridge_resolve_clears_text_conflict_and_reports_touched_path() {
     fixture.commit_path(&svn, &peer_wc.join("conflicted.txt"), "remote edit");
     fixture.write_file("conflicted.txt", "local\n");
     fixture.update_accepting_conflicts(&svn, "conflicted.txt");
+    fixture.write_file("conflicted-copy.txt.mine", "ordinary unversioned file\n");
 
     let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
     let identity = bridge
         .open_working_copy(&fixture.wc_path())
         .expect("native bridge should open the fixture working copy");
     let conflicted = bridge
-        .status_scan(&identity, "conflicted.txt", "empty", 81)
-        .expect("native bridge should scan the conflicted file");
+        .status_scan(&identity, ".", "infinity", 81)
+        .expect("native bridge should scan the conflicted working copy");
     assert_eq!(conflicted.summary.conflicts, 1);
+    let conflict_owner = conflicted
+        .local_entries
+        .iter()
+        .find(|entry| entry.path.replace('\\', "/") == "conflicted.txt")
+        .expect("conflicted owner should be reported");
+    assert_eq!(conflict_owner.conflict_artifacts.len(), 3);
+    let mut sorted_artifacts = conflict_owner.conflict_artifacts.clone();
+    sorted_artifacts.sort();
+    assert_eq!(conflict_owner.conflict_artifacts, sorted_artifacts);
+    assert!(
+        conflict_owner
+            .conflict_artifacts
+            .iter()
+            .all(|artifact| artifact != "conflicted.txt" && !artifact.starts_with(".svn/"))
+    );
+    assert!(conflict_owner.conflict_artifacts.iter().all(|artifact| {
+        conflicted
+            .local_entries
+            .iter()
+            .all(|entry| entry.path.replace('\\', "/") != *artifact)
+    }));
+    assert!(conflicted.local_entries.iter().any(|entry| {
+        entry.path.replace('\\', "/") == "conflicted-copy.txt.mine"
+            && entry.local_status == "unversioned"
+    }));
+    let artifact_paths = conflict_owner.conflict_artifacts.clone();
+    let fixture_root = PathBuf::from(fixture.wc_path());
+    assert!(
+        artifact_paths
+            .iter()
+            .all(|artifact| fixture_root.join(artifact).is_file())
+    );
     let working_copy_contents_before_resolve = fixture.read_file("conflicted.txt");
 
     let result = bridge
@@ -3768,8 +3801,8 @@ fn native_bridge_resolve_clears_text_conflict_and_reports_touched_path() {
     assert!(result.skipped_paths.is_empty());
 
     let resolved = bridge
-        .status_scan(&identity, "conflicted.txt", "empty", 82)
-        .expect("native bridge should scan the resolved file");
+        .status_scan(&identity, ".", "infinity", 82)
+        .expect("native bridge should scan the resolved working copy");
     assert_eq!(
         fixture.read_file("conflicted.txt"),
         working_copy_contents_before_resolve
@@ -3779,8 +3812,17 @@ fn native_bridge_resolve_clears_text_conflict_and_reports_touched_path() {
         resolved
             .local_entries
             .iter()
-            .all(|entry| entry.conflict.is_none())
+            .all(|entry| entry.conflict.is_none() && entry.conflict_artifacts.is_empty())
     );
+    assert!(
+        artifact_paths
+            .iter()
+            .all(|artifact| !fixture_root.join(artifact).exists())
+    );
+    assert!(resolved.local_entries.iter().any(|entry| {
+        entry.path.replace('\\', "/") == "conflicted-copy.txt.mine"
+            && entry.local_status == "unversioned"
+    }));
 }
 
 #[test]
