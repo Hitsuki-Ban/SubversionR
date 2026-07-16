@@ -23,8 +23,8 @@ if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "scm-primary-action-w
   await runScmPrimaryActionWaitSelfTest();
   return;
 }
-if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "workbench-window-normalization") {
-  await runWorkbenchWindowNormalizationSelfTest();
+if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "workbench-window-observation") {
+  await runWorkbenchWindowObservationSelfTest();
   return;
 }
 const args = parseArgs(process.argv.slice(2));
@@ -85,7 +85,7 @@ try {
   const cdp = await CdpConnection.connect(selectedTarget.webSocketDebuggerUrl);
   try {
     await cdp.send("Emulation.clearDeviceMetricsOverride");
-    windowBounds = await normalizeWorkbenchWindow(cdp);
+    windowBounds = await observeNormalizedWorkbenchWindow(cdp);
     await cdp.send("Page.enable").catch(() => undefined);
     await cdp.send("Runtime.enable").catch(() => undefined);
     await cdp.send("Accessibility.enable").catch(() => undefined);
@@ -599,35 +599,11 @@ async function inspectWorkbenchWindowGeometry(cdp) {
   );
 }
 
-async function normalizeWorkbenchWindow(
+async function observeNormalizedWorkbenchWindow(
   cdp,
   timeoutMs = CDP_REQUEST_TIMEOUT_MS,
   intervalMs = 100,
 ) {
-  const initial = await inspectWorkbenchWindowGeometry(cdp);
-  const alreadyNormalized =
-    initial.outerWidth === WORKBENCH_OUTER_BOUNDS.width &&
-    initial.outerHeight === WORKBENCH_OUTER_BOUNDS.height;
-  const frameWidth = initial.outerWidth - initial.innerWidth;
-  const frameHeight = initial.outerHeight - initial.innerHeight;
-  const resizeWidth = WORKBENCH_OUTER_BOUNDS.width - frameWidth;
-  const resizeHeight = WORKBENCH_OUTER_BOUNDS.height - frameHeight;
-  if (
-    !Number.isInteger(frameWidth) ||
-    !Number.isInteger(frameHeight) ||
-    frameWidth < 0 ||
-    frameHeight < 0 ||
-    resizeWidth <= 0 ||
-    resizeHeight <= 0
-  ) {
-    throw new Error(`VS Code workbench window frame geometry is invalid: ${JSON.stringify(initial)}.`);
-  }
-  if (!alreadyNormalized) {
-    await evaluate(cdp, `(() => {
-      window.resizeTo(${resizeWidth}, ${resizeHeight});
-      return true;
-    })()`);
-  }
   const deadline = Date.now() + timeoutMs;
   let observed;
   do {
@@ -637,13 +613,11 @@ async function normalizeWorkbenchWindow(
       observed.outerHeight === WORKBENCH_OUTER_BOUNDS.height
     ) {
       return {
-        method: "window.resizeTo",
-        initial,
-        requested: {
+        method: "renderer.observation",
+        expected: {
           outerWidth: WORKBENCH_OUTER_BOUNDS.width,
           outerHeight: WORKBENCH_OUTER_BOUNDS.height,
         },
-        applied: { resizeWidth, resizeHeight, frameWidth, frameHeight },
         observed,
       };
     }
@@ -1491,53 +1465,35 @@ async function waitForNoVisibleMenuLabels(cdp, settleWindowMs = 1200) {
   return [];
 }
 
-async function runWorkbenchWindowNormalizationSelfTest() {
+async function runWorkbenchWindowObservationSelfTest() {
   const exactCalls = [];
-  const exactValues = [
-    { outerWidth: 1456, outerHeight: 908, innerWidth: 1440, innerHeight: 900, screenX: 10, screenY: 10, devicePixelRatio: 1 },
-    true,
-    { outerWidth: 1600, outerHeight: 1000, innerWidth: 1584, innerHeight: 992, screenX: 10, screenY: 10, devicePixelRatio: 1 },
-  ];
   const exactCdp = {
     async send(method, params) {
       exactCalls.push({ method, params });
       if (method !== "Runtime.evaluate") throw new Error(`Unexpected exact-window CDP method: ${method}`);
-      return { result: { value: exactValues.shift() } };
-    },
-  };
-  const exactResult = await normalizeWorkbenchWindow(exactCdp, 10, 1);
-  if (
-    exactCalls.length !== 3 ||
-    exactCalls.some(call => call.method !== "Runtime.evaluate") ||
-    !exactCalls[1].params.expression.includes("window.resizeTo(1584, 992)") ||
-    exactResult.method !== "window.resizeTo" ||
-    exactResult.requested.outerWidth !== 1600 ||
-    exactResult.requested.outerHeight !== 1000 ||
-    exactResult.observed.outerWidth !== 1600 ||
-    exactResult.observed.outerHeight !== 1000
-  ) {
-    throw new Error(`Workbench window normalization self-test observed invalid calls: ${JSON.stringify(exactCalls)}.`);
-  }
-
-  const normalizedCalls = [];
-  const normalizedCdp = {
-    async send(method, params) {
-      normalizedCalls.push({ method, params });
-      if (method !== "Runtime.evaluate") throw new Error(`Unexpected normalized-window CDP method: ${method}`);
       return { result: { value: {
         outerWidth: 1600,
         outerHeight: 1000,
         innerWidth: 1584,
         innerHeight: 992,
-        screenX: 10,
-        screenY: 10,
+        screenX: 0,
+        screenY: 0,
         devicePixelRatio: 1,
       } } };
     },
   };
-  await normalizeWorkbenchWindow(normalizedCdp, 10, 1);
-  if (normalizedCalls.length !== 2 || normalizedCalls.some(call => call.params.expression.includes("window.resizeTo"))) {
-    throw new Error(`Normalized workbench window should not be resized again: ${JSON.stringify(normalizedCalls)}.`);
+  const exactResult = await observeNormalizedWorkbenchWindow(exactCdp, 10, 1);
+  if (
+    exactCalls.length !== 1 ||
+    exactCalls.some(call => call.method !== "Runtime.evaluate") ||
+    exactCalls.some(call => call.params.expression.includes("resize" + "To")) ||
+    exactResult.method !== "renderer.observation" ||
+    exactResult.expected.outerWidth !== 1600 ||
+    exactResult.expected.outerHeight !== 1000 ||
+    exactResult.observed.outerWidth !== 1600 ||
+    exactResult.observed.outerHeight !== 1000
+  ) {
+    throw new Error(`Workbench window normalization self-test observed invalid calls: ${JSON.stringify(exactCalls)}.`);
   }
 
   let clampedEvaluationCount = 0;
@@ -1545,12 +1501,11 @@ async function runWorkbenchWindowNormalizationSelfTest() {
     async send(method, params) {
       if (method !== "Runtime.evaluate") throw new Error(`Unexpected clamped-window CDP method: ${method}`);
       clampedEvaluationCount += 1;
-      if (params.expression.includes("window.resizeTo")) return { result: { value: true } };
       return { result: { value: {
-        outerWidth: clampedEvaluationCount === 1 ? 1456 : 1599,
-        outerHeight: clampedEvaluationCount === 1 ? 908 : 1000,
-        innerWidth: clampedEvaluationCount === 1 ? 1440 : 1583,
-        innerHeight: clampedEvaluationCount === 1 ? 900 : 992,
+        outerWidth: 1599,
+        outerHeight: 1000,
+        innerWidth: 1583,
+        innerHeight: 992,
         screenX: 10,
         screenY: 10,
         devicePixelRatio: 1,
@@ -1559,12 +1514,12 @@ async function runWorkbenchWindowNormalizationSelfTest() {
   };
   let clampedRejected = false;
   try {
-    await normalizeWorkbenchWindow(clampedCdp, 5, 1);
+    await observeNormalizedWorkbenchWindow(clampedCdp, 5, 1);
   } catch (error) {
     clampedRejected = String(error && error.message).includes("1599");
   }
   if (!clampedRejected) {
-    throw new Error("Workbench window normalization self-test did not fail fast on clamped bounds.");
+    throw new Error("Workbench window observation self-test did not fail on clamped bounds without attempting resize.");
   }
 }
 

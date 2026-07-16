@@ -17,6 +17,9 @@ param(
   [string]$RendererCaptureDriverPath,
 
   [Parameter(Mandatory = $true)]
+  [string]$WindowNormalizerPath,
+
+  [Parameter(Mandatory = $true)]
   [string]$FixtureRoot,
 
   [Parameter(Mandatory = $true)]
@@ -94,6 +97,13 @@ function Assert-CodeCliPath([string]$Path) {
   $resolved
 }
 
+function Get-CodeExecutablePath([string]$CodeCliPath) {
+  if ((Split-Path -Leaf $CodeCliPath) -eq "code.exe") {
+    return [System.IO.Path]::GetFullPath($CodeCliPath)
+  }
+  [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent (Split-Path -Parent $CodeCliPath)) "Code.exe"))
+}
+
 function Assert-SvnToolsRoot([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or $Path.Contains("%") -or $Path.Contains("$")) {
     throw "SvnToolsRoot must be an explicit directory path."
@@ -119,6 +129,22 @@ function Assert-RendererCaptureDriverPath([string]$Path) {
   )
   $resolved = Assert-GeneratedPath -Path $Path -Name "RendererCaptureDriverPath" -AllowedRoots $allowedRoots -Description "scripts/release or target/tests/release-installed-source-control-ui-e2e-scripts"
   Assert-File $resolved "RendererCaptureDriverPath"
+}
+
+function Assert-WindowNormalizerPath([string]$Path) {
+  if ([string]::IsNullOrWhiteSpace($Path) -or $Path.Contains("%") -or $Path.Contains("$")) {
+    throw "WindowNormalizerPath must be an explicit file path."
+  }
+  $allowedRoots = @(
+    [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release")),
+    [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\tests\release-installed-source-control-ui-e2e-scripts"))
+  )
+  $resolved = Assert-GeneratedPath -Path $Path -Name "WindowNormalizerPath" -AllowedRoots $allowedRoots -Description "scripts/release or target/tests/release-installed-source-control-ui-e2e-scripts"
+  $resolved = Assert-File $resolved "WindowNormalizerPath"
+  if ([System.IO.Path]::GetExtension($resolved) -ne ".ps1") {
+    throw "WindowNormalizerPath must point to a PowerShell script: $Path"
+  }
+  $resolved
 }
 
 function Assert-TcpPortAvailable([int]$Port) {
@@ -254,6 +280,75 @@ function Invoke-RendererCaptureDriver([string]$DriverPath, [int]$Port, [string]$
     $text = $output | Out-String
     throw "Renderer capture driver failed with exit code $LASTEXITCODE. $text"
   }
+}
+
+function Assert-WindowNormalizationReport([object]$Report, [string]$UserDataRoot, [string]$CodeExecutablePath, [int]$RemoteDebuggingPort) {
+  if (
+    $Report.schema -ne "subversionr.release.vscode-window-normalization.v1" -or
+    $Report.method -ne "win32.SetWindowPos(SWP_NOSENDCHANGING)" -or
+    -not (Test-IsSamePath -Left ([string]$Report.identity.userDataRoot) -Right $UserDataRoot) -or
+    -not (Test-IsSamePath -Left ([string]$Report.identity.executablePath) -Right $CodeExecutablePath) -or
+    [int]$Report.identity.processId -le 0 -or
+    [string]$Report.identity.hwnd -notmatch '^0x[0-9A-F]+$' -or
+    [int]$Report.identity.remoteDebuggingPort -ne $RemoteDebuggingPort -or
+    [int]$Report.identity.listenerOwnerProcessId -ne [int]$Report.identity.processId -or
+    [int]$Report.requested.width -ne 1600 -or
+    [int]$Report.requested.height -ne 1000 -or
+    [int]$Report.requested.dpi -ne 96 -or
+    [int]$Report.requested.setWindowPosFlags -ne 0x0416 -or
+    [string]$Report.requested.setWindowPosFlagsHex -ne "0x0416" -or
+    [int]$Report.observed.width -ne 1600 -or
+    [int]$Report.observed.height -ne 1000 -or
+    [int]$Report.observed.dpi -ne 96 -or
+    $Report.observed.maximized -ne $false -or
+    $Report.observed.minimized -ne $false -or
+    $Report.assertions.uniqueRootProcessWindow -ne $true -or
+    $Report.assertions.uniqueRemoteDebuggingListenerOwner -ne $true -or
+    $Report.assertions.executablePathMatched -ne $true -or
+    $Report.assertions.processStartedAfterLaunch -ne $true -or
+    $Report.assertions.rootProcessHasNoTypeArgument -ne $true -or
+    $Report.assertions.uniqueUserDataDirArgument -ne $true -or
+    $Report.assertions.userDataRootMatched -ne $true -or
+    $Report.assertions.restoredBeforeResize -ne $true -or
+    $Report.assertions.singleSetWindowPosCall -ne $true -or
+    $Report.assertions.exactOuterBounds -ne $true -or
+    $Report.assertions.dpi96 -ne $true
+  ) {
+    throw "VS Code native window normalization report did not prove the exact unique restored 1600x1000 DPI-96 contract."
+  }
+}
+
+function Invoke-WindowNormalizer(
+  [string]$NormalizerPath,
+  [string]$UserDataRoot,
+  [string]$ReportPath,
+  [string]$CodeExecutablePath,
+  [int]$RemoteDebuggingPort,
+  [DateTimeOffset]$LaunchStartedAtUtc
+) {
+  if (Test-Path -LiteralPath $ReportPath) {
+    Remove-Item -LiteralPath $ReportPath -Force
+  }
+  $output = @(& pwsh -NoProfile -ExecutionPolicy Bypass -File $NormalizerPath `
+      -UserDataRoot $UserDataRoot `
+      -EvidencePath $ReportPath `
+      -CodeExecutablePath $CodeExecutablePath `
+      -RemoteDebuggingPort $RemoteDebuggingPort `
+      -LaunchStartedAtUtc $LaunchStartedAtUtc.ToString("o") 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    $text = $output | Out-String
+    throw "VS Code window normalizer failed with exit code $LASTEXITCODE. $text"
+  }
+  if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) {
+    throw "VS Code window normalizer did not write its evidence report: $ReportPath"
+  }
+  $report = Get-Content -Raw -LiteralPath $ReportPath | ConvertFrom-Json
+  Assert-WindowNormalizationReport `
+    -Report $report `
+    -UserDataRoot $UserDataRoot `
+    -CodeExecutablePath $CodeExecutablePath `
+    -RemoteDebuggingPort $RemoteDebuggingPort
+  $report
 }
 
 function Get-CodeCliVersion([string]$Path) {
@@ -12882,9 +12977,9 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
   }
   if (
     -not ($Capture.PSObject.Properties.Name -contains "windowBounds") -or
-    $Capture.windowBounds.method -ne "window.resizeTo" -or
-    [int]$Capture.windowBounds.requested.outerWidth -ne 1600 -or
-    [int]$Capture.windowBounds.requested.outerHeight -ne 1000 -or
+    $Capture.windowBounds.method -ne "renderer.observation" -or
+    [int]$Capture.windowBounds.expected.outerWidth -ne 1600 -or
+    [int]$Capture.windowBounds.expected.outerHeight -ne 1000 -or
     [int]$Capture.windowBounds.observed.outerWidth -ne 1600 -or
     [int]$Capture.windowBounds.observed.outerHeight -ne 1000
   ) {
@@ -13163,6 +13258,8 @@ $vsixResolved = Assert-File $vsixResolved "VsixPath"
 $codeCliResolved = Assert-CodeCliPath $CodeCliPath
 $svnToolsRootResolved = Assert-SvnToolsRoot $SvnToolsRoot
 $rendererCaptureDriverResolved = Assert-RendererCaptureDriverPath $RendererCaptureDriverPath
+$windowNormalizerResolved = Assert-WindowNormalizerPath $WindowNormalizerPath
+$codeExecutablePath = Get-CodeExecutablePath $codeCliResolved
 $svnExeResolved = Assert-File (Join-Path $svnToolsRootResolved "svn.exe") "svn.exe"
 $svnAdminExeResolved = Assert-File (Join-Path $svnToolsRootResolved "svnadmin.exe") "svnadmin.exe"
 Assert-TcpPortAvailable $RemoteDebuggingPort
@@ -13480,6 +13577,7 @@ $harnessResolvedConflictArtifactsReadyPath = Join-Path $fixtureRootResolved "ins
 $harnessResolvedConflictArtifactsDonePath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolved-conflict-artifacts-done.json"
 $harnessResolveCancellationPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-resolve-cancellation-prompt-ready.json"
 $harnessCleanupPromptReadyPath = Join-Path $fixtureRootResolved "installed-source-control-ui-e2e-cleanup-prompt-ready.json"
+$windowNormalizationReportPath = Join-Path $fixtureRootResolved "vscode-window-normalization.json"
 $captureRoot = Join-Path $fixtureRootResolved "renderer-capture"
 $expectationsPath = Join-Path $fixtureRootResolved "renderer-capture-expectations.json"
 $repositoryHistoryInitialCaptureRoot = Join-Path $fixtureRootResolved "repository-history-initial-capture"
@@ -14126,7 +14224,9 @@ $repositoryHistoryInitialDriverError = $null
 $repositoryHistoryLoadedDriverError = $null
 $repositoryHistoryStaleDriverError = $null
 $activeEditorPaletteCaptures = @()
+$windowNormalizationReport = $null
 try {
+  $mainLaunchStartedAtUtc = [DateTimeOffset]::UtcNow
   $codeProcess = Start-CodeCliProcess -Path $codeCliResolved -Arguments @(
     "--user-data-dir",
     $userDataRoot,
@@ -14167,6 +14267,13 @@ try {
   ) {
     throw "Installed Source Control UI E2E ready sentinel did not include the bounded organic-session readiness contract."
   }
+  $windowNormalizationReport = Invoke-WindowNormalizer `
+    -NormalizerPath $windowNormalizerResolved `
+    -UserDataRoot $userDataRoot `
+    -ReportPath $windowNormalizationReportPath `
+    -CodeExecutablePath $codeExecutablePath `
+    -RemoteDebuggingPort $RemoteDebuggingPort `
+    -LaunchStartedAtUtc $mainLaunchStartedAtUtc
   $ready.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $expectationsPath -Encoding utf8
 
   try {
@@ -15988,6 +16095,7 @@ $restrictedPaletteUserDataRoot = Join-Path $restrictedPaletteRoot "user-data"
 $restrictedPaletteResultPath = Join-Path $restrictedPaletteRoot "result.json"
 $restrictedPaletteReadyPath = Join-Path $restrictedPaletteRoot "ready.json"
 $restrictedPaletteDonePath = Join-Path $restrictedPaletteRoot "done.json"
+$restrictedWindowNormalizationReportPath = Join-Path $restrictedPaletteRoot "vscode-window-normalization.json"
 New-Item -ItemType Directory -Force -Path (Join-Path $restrictedPaletteUserDataRoot "User") | Out-Null
 @'
 {
@@ -16008,6 +16116,7 @@ $restrictedPaletteCaptureSpecs = @(
   [pscustomobject]@{ id = "subversionr.showBlame"; title = "SubversionR: Blame"; slug = "blame"; visible = $false }
 )
 $restrictedPaletteCaptures = @()
+$restrictedWindowNormalizationReport = $null
 $restrictedPaletteProcess = $null
 $restrictedPaletteOriginalAppData = $env:APPDATA
 $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_MODE = "restricted-active-editor-palette"
@@ -16018,6 +16127,7 @@ $env:SUBVERSIONR_INSTALLED_SOURCE_CONTROL_UI_E2E_WORKING_COPY = $multiRepository
 $env:APPDATA = $multiRepositoryRefreshFixture.svnRuntimeAppDataRoot
 try {
   Assert-TcpPortAvailable $RemoteDebuggingPort
+  $restrictedLaunchStartedAtUtc = [DateTimeOffset]::UtcNow
   $restrictedPaletteProcess = Start-CodeCliProcess -Path $codeCliResolved -Arguments @(
     "--user-data-dir",
     $restrictedPaletteUserDataRoot,
@@ -16053,6 +16163,15 @@ try {
       $restrictedReady.command.title -ne $restrictedSpec.title
     ) {
       throw "Installed Restricted Mode palette sentinel did not identify $($restrictedSpec.id)."
+    }
+    if ($null -eq $restrictedWindowNormalizationReport) {
+      $restrictedWindowNormalizationReport = Invoke-WindowNormalizer `
+        -NormalizerPath $windowNormalizerResolved `
+        -UserDataRoot $restrictedPaletteUserDataRoot `
+        -ReportPath $restrictedWindowNormalizationReportPath `
+        -CodeExecutablePath $codeExecutablePath `
+        -RemoteDebuggingPort $RemoteDebuggingPort `
+        -LaunchStartedAtUtc $restrictedLaunchStartedAtUtc
     }
     $restrictedReady.rendererCaptureExpectations | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $restrictedExpectationsPath -Encoding utf8
     $restrictedDriverError = $null
@@ -16607,6 +16726,10 @@ $report = [pscustomObject]@{
     hasCleanupRepositoryCommand = [bool]$harnessResult.hasCleanupRepositoryCommand
   }
   trustedProfile = $ready.workspaceTrust
+  windowNormalization = [pscustomobject]@{
+    trusted = $windowNormalizationReport
+    restricted = $restrictedWindowNormalizationReport
+  }
   sourceControlUiOpenReport = $harnessResult.openReport
   sourceControlUiPartialFreshnessReport = $harnessResult.partialFreshnessReport
   sourceControlUiStaleFreshnessReport = $harnessResult.staleFreshnessReport
@@ -16777,6 +16900,10 @@ $report = [pscustomObject]@{
   rendererCaptureDriver = [pscustomobject]@{
     path = Get-RepoRelativePath $rendererCaptureDriverResolved
     sha256 = (Get-FileHash -LiteralPath $rendererCaptureDriverResolved -Algorithm SHA256).Hash.ToLowerInvariant()
+  }
+  windowNormalizer = [pscustomobject]@{
+    path = Get-RepoRelativePath $windowNormalizerResolved
+    sha256 = (Get-FileHash -LiteralPath $windowNormalizerResolved -Algorithm SHA256).Hash.ToLowerInvariant()
   }
   fixtureTools = [pscustomobject]@{
     root = Get-RepoRelativePath $svnToolsRootResolved
