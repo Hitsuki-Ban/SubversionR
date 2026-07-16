@@ -10813,6 +10813,11 @@ async function run() {
     if (!openReport || openReport.kind !== "subversionr.installedSourceControlUiE2eOpenReport") {
       throw new Error(`Unexpected installed Source Control UI E2E open report kind: ${openReport && openReport.kind}`);
     }
+    if (vscode.workspace.isTrusted !== true || openReport.workspace.trusted !== true) {
+      throw new Error(
+        `Installed Source Control UI E2E trusted profile was not established before renderer capture: extensionHost=${vscode.workspace.isTrusted}, openReport=${openReport.workspace.trusted}.`
+      );
+    }
     if (openReport.extension.version !== extension.packageJSON.version) {
       throw new Error("Installed Source Control UI E2E open report extension version did not match installed package version.");
     }
@@ -10886,6 +10891,10 @@ async function run() {
       ok: true,
       phase,
       openReport,
+      workspaceTrust: {
+        extensionHostTrusted: vscode.workspace.isTrusted,
+        openReportTrusted: openReport.workspace.trusted
+      },
       organicSurfaceReadiness: organicSurfaceReadiness.readiness,
       rendererCaptureExpectations: openReport.rendererCaptureExpectations
     }, null, 2));
@@ -13639,6 +13648,7 @@ New-Item -ItemType Directory -Force -Path $resolveConflictArtifactsCaptureRoot, 
   "telemetry.telemetryLevel": "off",
   "extensions.autoCheckUpdates": false,
   "extensions.autoUpdate": false,
+  "security.workspace.trust.enabled": false,
   "workbench.scm.alwaysShowRepositories": true
 }
 '@ | Set-Content -LiteralPath (Join-Path $userDataRoot "User\settings.json") -NoNewline -Encoding utf8
@@ -14112,7 +14122,6 @@ try {
     $userDataRoot,
     "--extensions-dir",
     $extensionsRoot,
-    "--disable-workspace-trust",
     "--disable-updates",
     "--disable-telemetry",
     "--skip-welcome",
@@ -14133,6 +14142,13 @@ try {
   $ready = Get-Content -Raw -LiteralPath $harness.ReadyPath | ConvertFrom-Json
   if ($ready.ok -ne $true -or $ready.openReport.kind -ne "subversionr.installedSourceControlUiE2eOpenReport") {
     throw "Installed Source Control UI E2E ready sentinel did not include an open report."
+  }
+  if (
+    $ready.workspaceTrust.extensionHostTrusted -ne $true -or
+    $ready.workspaceTrust.openReportTrusted -ne $true -or
+    $ready.openReport.workspace.trusted -ne $true
+  ) {
+    throw "Installed Source Control UI E2E ready sentinel did not prove a trusted profile before renderer capture."
   }
   if (
     [int]$ready.organicSurfaceReadiness.attempts -lt 1 -or
@@ -16580,6 +16596,7 @@ $report = [pscustomObject]@{
     hasResolveResourceCommand = [bool]$harnessResult.hasResolveResourceCommand
     hasCleanupRepositoryCommand = [bool]$harnessResult.hasCleanupRepositoryCommand
   }
+  trustedProfile = $ready.workspaceTrust
   sourceControlUiOpenReport = $harnessResult.openReport
   sourceControlUiPartialFreshnessReport = $harnessResult.partialFreshnessReport
   sourceControlUiStaleFreshnessReport = $harnessResult.staleFreshnessReport

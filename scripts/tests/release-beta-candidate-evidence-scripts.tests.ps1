@@ -298,6 +298,10 @@ function Write-InstalledSourceControlUiE2eEvidence([string]$EvidenceRoot, [objec
       hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand = $true
       hasShowRepositoryLogCommand = $true
     }
+    trustedProfile = [pscustomobject]@{
+      extensionHostTrusted = $true
+      openReportTrusted = $true
+    }
     installedExtensions = @("hitsuki-ban.subversionr@0.2.4")
     vsix = [pscustomobject]@{
       path = $Vsix.path
@@ -1101,6 +1105,38 @@ try {
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $missingInstalledWorkflowFixture
   } "installedSourceControlUiE2e must define sourceControlUiCheckoutWorkflow" "Beta candidate consistency should reject installed UI E2E evidence missing the Checkout workflow."
+
+  $missingTrustedProfileFixture = New-BetaCandidateFixture (Join-Path $tempRoot "missing-trusted-profile")
+  $missingTrustedProfilePath = New-EvidencePath $missingTrustedProfileFixture.evidenceRoot "installed-source-control-ui-e2e"
+  $missingTrustedProfile = Get-Content -Raw -LiteralPath $missingTrustedProfilePath | ConvertFrom-Json
+  $missingTrustedProfile.PSObject.Properties.Remove("trustedProfile")
+  Write-Json $missingTrustedProfilePath $missingTrustedProfile
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $missingTrustedProfileFixture
+  } "installedSourceControlUiE2e must define trustedProfile" "Beta candidate consistency should reject installed UI E2E evidence missing the trusted profile proof."
+
+  foreach ($case in @(
+    @{ Name = "extension-host-untrusted"; Property = "extensionHostTrusted" },
+    @{ Name = "open-report-untrusted"; Property = "openReportTrusted" }
+  )) {
+    $untrustedProfileFixture = New-BetaCandidateFixture (Join-Path $tempRoot $case.Name)
+    $untrustedProfilePath = New-EvidencePath $untrustedProfileFixture.evidenceRoot "installed-source-control-ui-e2e"
+    $untrustedProfile = Get-Content -Raw -LiteralPath $untrustedProfilePath | ConvertFrom-Json
+    $untrustedProfile.trustedProfile.($case.Property) = $false
+    Write-Json $untrustedProfilePath $untrustedProfile
+    Assert-NativeCommandFailsContaining {
+      Invoke-BetaCandidateVerifier $untrustedProfileFixture
+    } "$($case.Property) must be true" "Beta candidate consistency should reject installed UI E2E evidence where $($case.Property) is false."
+  }
+
+  $stringTrustedProfileFixture = New-BetaCandidateFixture (Join-Path $tempRoot "string-trusted-profile")
+  $stringTrustedProfilePath = New-EvidencePath $stringTrustedProfileFixture.evidenceRoot "installed-source-control-ui-e2e"
+  $stringTrustedProfile = Get-Content -Raw -LiteralPath $stringTrustedProfilePath | ConvertFrom-Json
+  $stringTrustedProfile.trustedProfile.extensionHostTrusted = "True"
+  Write-Json $stringTrustedProfilePath $stringTrustedProfile
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $stringTrustedProfileFixture
+  } "extensionHostTrusted must be a JSON boolean" "Beta candidate consistency should reject stringified trusted profile proof."
 
   $staleInstalledOracleFixture = New-BetaCandidateFixture (Join-Path $tempRoot "stale-installed-oracle")
   $staleInstalledOraclePath = New-EvidencePath $staleInstalledOracleFixture.evidenceRoot "installed-source-control-ui-e2e"

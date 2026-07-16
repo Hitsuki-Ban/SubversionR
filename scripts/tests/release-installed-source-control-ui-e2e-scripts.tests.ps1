@@ -506,6 +506,9 @@ $installedPackage = Get-ChildItem -LiteralPath $extensionsRoot -Directory |
 if ($null -eq $installedPackage) {
   throw "installed SubversionR package was not found by fake code CLI."
 }
+$trustedProfileMode = $env:SUBVERSIONR_FAKE_TRUSTED_PROFILE_MODE
+$extensionHostTrusted = $trustedProfileMode -ne "extension-host-untrusted"
+$openReportTrusted = $trustedProfileMode -ne "open-report-untrusted"
 $openReport = [pscustomobject]@{
   kind = "subversionr.installedSourceControlUiE2eOpenReport"
   generatedAt = "2026-06-25T00:00:00Z"
@@ -514,7 +517,7 @@ $openReport = [pscustomobject]@{
     version = "0.2.0"
   }
   workspace = [pscustomobject]@{
-    trusted = $true
+    trusted = $openReportTrusted
     pathCase = "case-insensitive"
   }
   repository = [pscustomobject]@{
@@ -611,6 +614,10 @@ $ready = [pscustomobject]@{
   ok = $true
   phase = "focusingSourceControlView"
   openReport = $openReport
+  workspaceTrust = [pscustomobject]@{
+    extensionHostTrusted = $extensionHostTrusted
+    openReportTrusted = $openReportTrusted
+  }
   organicSurfaceReadiness = [pscustomobject]@{
     attempts = 2
     waitedMs = 250
@@ -8049,6 +8056,9 @@ try {
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.showResourceProperties" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the resource Properties command invocation."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.diagnostics.installedSourceControlUiE2eShowOutput" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the command that exposes the SubversionR output channel."
   Assert-Equal "True" ([string]$report.extension.afterActive) "Installed Source Control UI E2E evidence should prove SubversionR was active before UI validation."
+  Assert-Equal "True" ([string]$report.trustedProfile.extensionHostTrusted) "Installed Source Control UI E2E evidence should record the trusted Extension Host profile used for renderer capture."
+  Assert-Equal "True" ([string]$report.trustedProfile.openReportTrusted) "Installed Source Control UI E2E evidence should record the trusted open-report profile used for renderer capture."
+  Assert-Equal "True" ([string]$report.sourceControlUiOpenReport.workspace.trusted) "Installed Source Control UI E2E open-report evidence should remain trusted."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eOpenReportCommand) "Installed Source Control UI E2E evidence should prove hidden open command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eFreshnessReportCommand) "Installed Source Control UI E2E evidence should prove hidden freshness command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledSourceControlUiE2eRepositoryHistoryReportCommand) "Installed Source Control UI E2E evidence should prove hidden Repository Log report command registration."
@@ -9107,6 +9117,32 @@ try {
     Remove-Item Env:SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE -ErrorAction SilentlyContinue
   }
 
+  $trustedProfileFailureCases = @(
+    [pscustomobject]@{ Mode = "extension-host-untrusted"; Port = 32161; Description = "Extension Host trust" },
+    [pscustomobject]@{ Mode = "open-report-untrusted"; Port = 32162; Description = "open-report trust" }
+  )
+  foreach ($trustCase in $trustedProfileFailureCases) {
+    $env:SUBVERSIONR_FAKE_TRUSTED_PROFILE_MODE = $trustCase.Mode
+    try {
+      Assert-NativeCommandFailsContaining {
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File $workflowScript `
+          -Target win32-x64 `
+          -VsixPath $vsixPath `
+          -CodeCliPath $fakeCodeCliPath `
+          -SvnToolsRoot $fakeSvnRoot `
+          -RendererCaptureDriverPath $fakeDriverPath `
+          -FixtureRoot (Join-Path $tempRoot "$($trustCase.Mode)\win32-x64") `
+          -EvidencePath (Join-Path $tempRoot "evidence\$($trustCase.Mode).json") `
+          -RemoteDebuggingPort $trustCase.Port `
+          -ExtensionHostTimeoutSeconds 30 `
+          -UiReadyTimeoutSeconds 10
+      } "ready sentinel did not prove a trusted profile before renderer capture" "Installed Source Control UI E2E gate should reject false $($trustCase.Description) evidence before renderer capture."
+    }
+    finally {
+      Remove-Item Env:SUBVERSIONR_FAKE_TRUSTED_PROFILE_MODE -ErrorAction SilentlyContinue
+    }
+  }
+
   $rendererDetailLieCases = @(
     [pscustomobject]@{ Mode = "viewport-lie"; Port = 32155; Expected = "Renderer capture must prove an exact 1440x900 DOM viewport and PNG."; Description = "viewport detail" },
     [pscustomobject]@{ Mode = "scm-primary-lie"; Port = 32156; Expected = "Renderer capture SCM primary action/codicon evidence did not match expectations."; Description = "SCM primary action detail" },
@@ -9187,6 +9223,11 @@ try {
   Assert-True ($workflowContent -match '(?s)function resolvePromptCaptureExpectations.*?quickPickItemText: "Working copy".*?async function runResolveWorkflow.*?executeCommand\("subversionr\.resolveResource"') "Resolve should expose and select the Working copy QuickPick choice."
   Assert-True ($workflowContent -match '(?s)async function runResolveWorkflow.*?executeCommand\("subversionr\.updateRepository".*?updateConflictWarningReady.*?executeCommand\("subversionr\.resolveResource"') "Resolve evidence should create the conflict through installed Update, capture its warning, then execute Resolve."
   Assert-True ($workflowContent -match '(?s)beforeActive !== true.*?did not activate organically before any installed Source Control UI E2E command executed') "Installed Source Control UI E2E should fail before its first SubversionR command when organic activation did not occur."
+  Assert-True ($workflowContent -match '"security\.workspace\.trust\.enabled": false') "Installed Source Control UI E2E trusted profile should disable Workspace Trust through the isolated user-data setting."
+  Assert-True ($workflowContent -match '"security\.workspace\.trust\.enabled": true') "Installed Restricted Mode profile should explicitly enable Workspace Trust."
+  Assert-True (-not $workflowContent.Contains('"--disable-workspace-trust"')) "Installed Source Control UI E2E should use one settings-backed trusted-profile path instead of a CLI trust fallback."
+  Assert-True ($workflowContent -match '(?s)vscode\.workspace\.isTrusted !== true \|\| openReport\.workspace\.trusted !== true.*?trusted profile was not established before renderer capture') "Installed Source Control UI E2E harness should fail fast unless Extension Host and open-report trust are both true."
+  Assert-True ($workflowContent -match '(?s)workspaceTrust\.extensionHostTrusted -ne \$true.*?workspaceTrust\.openReportTrusted -ne \$true.*?ready sentinel did not prove a trusted profile before renderer capture') "Installed Source Control UI E2E PowerShell consumer should independently reject an untrusted ready sentinel."
   Assert-True ($workflowContent -match '(?s)executeCommand\("subversionr\.diagnostics\.installedSourceControlUiE2eShowOutput"\).*?invokedCommands:\s*\[.*?"subversionr\.diagnostics\.installedSourceControlUiE2eShowOutput"') "Installed Source Control UI E2E evidence should record the command that exposes the real SubversionR output channel."
   Assert-True ($workflowContent -match '(?s)waitForFile\(donePath, 120000\).*?executeCommand\("workbench\.action\.closePanel"\).*?executingInstalledSourceControlUiE2ePartialFreshnessReport') "Installed Source Control UI E2E should close the Output panel after the SCM screenshot so later notification-safety captures remain surface-local."
   Assert-True (($workflowContent -match 'function Normalize-RendererTokenText') -and ($workflowContent -match '-replace ''\\s\+'', '' ''') -and ($workflowContent -match '(?s)function Assert-TextContainsTokens.*?Normalize-RendererTokenText') -and ($workflowContent -match '(?s)function Assert-TextExcludesTokens.*?Normalize-RendererTokenText')) "Installed Source Control UI E2E gate should normalize renderer whitespace before independently checking required and forbidden artifact tokens."
