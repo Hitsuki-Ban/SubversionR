@@ -19,12 +19,19 @@ describe("baseDiffResource", () => {
     },
   );
 
-  it("rejects property-only changes until property diff rendering is supported", () => {
+  it("allows the libsvn property-only file shape for BASE text content", () => {
     expect(
       isBaseDiffableProjectedResource(
-        projectedResource(statusEntry({ localStatus: "normal", propertyStatus: "modified" })),
+        projectedResource(
+          statusEntry({
+            localStatus: "modified",
+            nodeStatus: "modified",
+            textStatus: "normal",
+            propertyStatus: "modified",
+          }),
+        ),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("rejects non-local files, directories, externals, and non-changed contexts", () => {

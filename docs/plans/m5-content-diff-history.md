@@ -37,7 +37,7 @@ The second M5 slice wires the BASE content RPC into VS Code QuickDiff:
 
 - Each registered Source Control instance receives a `quickDiffProvider`.
 - The provider returns `svn-r-base` virtual document URIs only for projected local versioned file changes and conflicts.
-- Unversioned, ignored, external, incoming remote, repository-root, repository-external, added, deleted, missing, obstructed, incomplete, and property-only resources do not receive QuickDiff originals.
+- Unversioned, ignored, external, incoming remote, repository-root, repository-external, added, deleted, missing, obstructed, and incomplete resources do not receive QuickDiff originals. A real libsvn property-only file shape (`localStatus = nodeStatus = modified`, `textStatus = normal`, `propertyStatus = modified`) remains BASE-text-diffable; the content comparison can be identical because property deltas are not rendered.
 - QuickDiff URI identity stores `repositoryId`, `epoch`, `generation`, repository-relative `path`, and `revision = "base"` in the query string.
 - The URI does not expose the local working-copy root or encode repository identity in authority/path segments.
 - `generation` is carried only to force original-resource URI invalidation as status projection changes. The backend request remains `repositoryId`, `epoch`, `path`, and `revision`.
@@ -54,7 +54,7 @@ This slice intentionally does not implement manual “open BASE” commands, tex
 - `BackendContentClient` tests cover backend initialization and active JSON-RPC sender usage.
 - Base content URI tests cover stable URI components and malformed URI rejection.
 - Base content document provider tests cover text content and localized binary placeholder behavior.
-- Source Control presenter tests cover QuickDiff original URI generation for supported local versioned text changes and rejection for unversioned, ignored, external, incoming, root, outside, added, deleted, missing, obstructed, incomplete, and property-only paths.
+- Source Control presenter tests cover QuickDiff original URI generation for supported local versioned text changes and rejection for unversioned, ignored, external, incoming, root, outside, added, deleted, missing, obstructed, and incomplete paths. BASE classifier tests separately prove the real libsvn property-only shape remains eligible.
 - TypeScript checks and extension tests pass.
 
 ## M5c Implemented Slice
@@ -66,7 +66,7 @@ The third M5 slice adds an explicit user-facing BASE diff command on top of the 
 - The command is hidden from the Command Palette because it requires a concrete SCM resource state argument.
 - The controller accepts the SCM context as the menu-level file signal, then validates the current Source Control projection before opening a diff.
 - Projection validation requires an open repository, matching `repositoryId`, matching `epoch`, local `changes` group source, projection context `subversionr.changedFile`, `kind = "file"`, a non-external resource, and a supported text status.
-- Added, deleted, missing, obstructed, incomplete, and property-only file states do not receive the BASE diff menu context and fail fast with stable command error codes if invoked through a spoofed command argument.
+- Added, deleted, missing, obstructed, and incomplete file states do not receive the BASE diff menu context and fail fast with stable command error codes if invoked through a spoofed command argument. A real libsvn property-only file shape receives the BASE text-content comparison context; this does not claim property-delta rendering.
 - The generated BASE URI carries `repositoryId`, `epoch`, current projection `generation`, canonical repository-relative `path` from the projection, and `revision = "base"`.
 - The working-copy side of the diff is derived from the projection working-copy root and canonical repository-relative path, not from untrusted command argument casing.
 - Runtime diff titles are localized through the VS Code extension l10n bundle.
@@ -75,7 +75,7 @@ This slice intentionally does not implement open-BASE-only commands, editor cont
 
 ## M5c Gates
 
-- Repository command controller tests cover successful BASE diff URI generation with projection-canonical paths, unavailable projection state, added-file rejection, unsafe-state rejection, property-only rejection, and non-file resource rejection.
+- Repository command controller tests cover successful BASE diff URI generation with projection-canonical paths, the real libsvn property-only file shape, unavailable projection state, added-file rejection, unsafe-state rejection, and non-file resource rejection.
 - Source Control presenter tests cover derived base-diffable menu context assignment only for supported changed files.
 - Extension manifest tests cover activation, command contribution, SCM menu placement, Command Palette hiding, and contributed command localization keys.
 - Runtime localization tests require the diff editor title in English, Japanese, and Chinese bundles.
@@ -373,14 +373,14 @@ The sixteenth M5 slice extends the File Header CodeLens surface with BASE and HE
 - Base-diffable editor-visible files receive additional `Compare BASE` and `Compare HEAD` CodeLens entries between the summary lens and the existing File History/Blame/Log lenses.
 - The compare lenses invoke existing canonical commands `subversionr.diffWithBase` and `subversionr.diffWithHead`; no new native ABI, Rust RPC, content URI scheme, or backend request type is introduced.
 - The compare command arguments deliberately use the `subversionr.changedFile.baseDiffable` SCM context required by the existing repository command controller. History and blame lenses continue to use the projection's original context.
-- Non-base-diffable projected files, including property-only changes and conflicted files, keep only the existing summary/history/blame/log lenses and do not expose unsupported compare actions.
+- Real libsvn property-only projected files remain base-diffable and receive BASE/HEAD text-content compare lenses; conflicted and other non-base-diffable projected files keep only the existing summary/history/blame/log lenses. Property deltas themselves are not rendered by those compare actions.
 - The slice advances `HIS-006`, `PRD-009`, `PER-011`, `DIF-001`, `DIF-002`, and command-catalog rows `svnNative.file.compareBase` and `svnNative.file.compareHead` for File Header CodeLens without adding compatibility aliases, CLI dependency, remote polling, unmodified-file discovery, or Compare PREV semantics.
 
 This slice intentionally does not implement Compare PREV from active editors, editor context menu BASE/HEAD/diff entries, CodeLens for normal unmodified versioned files absent from the current projection, synthetic added/deleted/missing content, property diffs, binary external viewers, arbitrary revision/URL diff commands, current-line blame, line history, hover, or symbol lenses.
 
 ## M5p Gates
 
-- File Header CodeLens provider tests cover unresolved lens count for base-diffable files, resolve-time BASE/HEAD compare command binding, base-diffable SCM context arguments for diff commands, and absence of compare lenses for property-only/conflicted files.
+- File Header CodeLens provider tests cover unresolved lens count for base-diffable files, resolve-time BASE/HEAD compare command binding, base-diffable SCM context arguments for diff commands, positive coverage for the real libsvn property-only shape, and absence of compare lenses for conflicted files.
 - Extension manifest localization parity covers the new runtime CodeLens titles in English, Japanese, and Chinese bundles.
 - Targeted extension tests pass for `fileHeaderCodeLensProvider` and `extensionManifest`.
 
@@ -589,6 +589,27 @@ This slice intentionally does not implement a backend `history/line` RPC, BASE-t
 - Extension manifest and localization tests cover command activation, editor context menu placement, Command Palette hiding, view-item action visibility, and English/Japanese/Chinese localization keys.
 - Revision Details document tests cover line-history target rendering.
 - TypeScript checks and targeted extension tests pass for the affected surfaces.
+
+## M5aa Implemented Slice
+
+The twenty-seventh M5 slice exposes the six existing active-file inspection commands through the Command Palette without adding alias commands or a second execution path:
+
+- Exactly `subversionr.diffWithBase`, `subversionr.diffWithHead`, `subversionr.diffWithPrevious`, `subversionr.showFileHistory`, `subversionr.showLineHistory`, and `subversionr.showBlame` receive bounded Command Palette visibility. Every other resource-scoped command remains hidden there.
+- A zero-argument canonical command resolves only the current `file` editor through `ActiveEditorContextService`; existing explicit SCM-resource arguments retain their current behavior. No active editor, a non-file editor, an outside path, an unprojected file, or an ineligible projected resource fails closed instead of selecting an arbitrary Source Control resource.
+- Nested working copies use the most-specific open working-copy root and never fall back to a parent projection. Command targets bind the current repository identity, epoch, projection generation, working-copy root, repository-relative path, and non-stale projection before execution.
+- BASE comparison keeps its existing Restricted Mode local-read contract. HEAD, PREV, file history, line history, and blame require Workspace Trust in both their Command Palette clauses and runtime command enforcement.
+- A property-only modified projected file remains text-stable and is eligible for all six commands when its libsvn node, text, and property statuses prove that boundary. BASE/HEAD/PREV compare text revisions and may display identical content; they do not render the property delta. Dirty editors, oversized line-history files, unsafe SVN node states, stale projections, and files absent from the current projection remain excluded.
+- Palette visibility reads the current projection only. It does not request status refresh, full reconciliation, or remote-status polling.
+
+This slice intentionally does not discover normal unmodified files that are absent from the Source Control projection, broaden remote/authentication/certificate coverage, add background remote polling, add compatibility aliases, or expose other resource commands through the Command Palette.
+
+## M5aa Gates
+
+- Manifest tests prove the exact six canonical command IDs and their exact bounded Command Palette clauses while keeping every other resource command hidden.
+- Active-editor and controller tests cover zero-argument targeting, explicit-argument preservation, no editor, non-file and outside paths, stale epoch/generation/projection state, most-specific nested working-copy selection without parent fallback, property-only text stability, dirty and oversized line-history exclusion, and serialized context refresh ordering.
+- The installed `win32-x64` local-file UI E2E opens a distinct second working copy, searches and executes all six commands from the real Command Palette against its property-only active file, captures renderer evidence for each selection, verifies the expected BASE/HEAD/PREV/history/line-history/blame result, and proves status refresh, reconciliation, and remote-status activity remain unchanged.
+- A separate installed Restricted Mode window proves BASE remains visible and executable, the five trusted-only commands return no Command Palette match, direct invocation returns exactly `SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION`, and the same activity counters remain unchanged.
+- TypeScript checks, extension tests, release-script tests, readiness smoke, and the installed Source Control UI E2E pass for the affected surfaces.
 
 ## Deferred M5 Work
 

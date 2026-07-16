@@ -36,6 +36,7 @@ const submitKey = optionalString(expectations.submitKey, "submitKey");
 const cancelKey = optionalString(expectations.cancelKey, "cancelKey");
 const cancelAction = optionalString(expectations.cancelAction, "cancelAction");
 const quickPickItemText = optionalString(expectations.quickPickItemText, "quickPickItemText");
+const quickPickAbsentItemText = optionalString(expectations.quickPickAbsentItemText, "quickPickAbsentItemText");
 const quickInputSubmitKey = optionalString(expectations.quickInputSubmitKey, "quickInputSubmitKey");
 const expectedViewport = optionalViewport(expectations.viewport);
 const scmActionSurface = optionalScmActionSurface(expectations.scmActionSurface);
@@ -49,7 +50,7 @@ if (submitKey !== undefined && quickInputSubmitKey !== undefined) {
 if (cancelAction !== undefined && cancelAction !== "closeNotification") {
   throw new Error(`Unsupported cancelAction: ${cancelAction}.`);
 }
-const interactionCount = [clickButtonText, inputText, cancelKey, cancelAction, quickPickItemText, quickInputSubmitKey, scmActionSurface, treeViewState].filter((value) => value !== undefined).length;
+const interactionCount = [clickButtonText, inputText, cancelKey, cancelAction, quickPickItemText, quickPickAbsentItemText, quickInputSubmitKey, scmActionSurface, treeViewState].filter((value) => value !== undefined).length;
 if (interactionCount > 1) {
   throw new Error("Renderer expectations must use exactly one interaction kind when an interaction is requested.");
 }
@@ -72,7 +73,7 @@ try {
     if (expectedViewport) {
       await setExpectedViewport(cdp, expectedViewport);
     }
-    const captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined && treeViewState === undefined;
+    const captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined && treeViewState === undefined && quickPickAbsentItemText === undefined;
     const beforeInteractionState = await captureRequiredTokenState(cdp, domTokens, accessibilityTokens);
     const beforeInteractionScreenshot = captureBeforeInteraction
       ? await captureScreenshotWithRetry(cdp)
@@ -89,6 +90,8 @@ try {
             ? await submitCurrentQuickInput(cdp, quickInputSubmitKey, domTokens)
             : quickPickItemText !== undefined
               ? await selectQuickPickItem(cdp, quickPickItemText)
+              : quickPickAbsentItemText !== undefined
+                ? await inspectAbsentQuickPickItem(cdp, quickPickAbsentItemText)
               : cancelKey !== undefined
                 ? await cancelInteraction(cdp, cancelKey, domTokens)
                 : cancelAction !== undefined
@@ -198,6 +201,7 @@ try {
         ...(interaction && inputText !== undefined ? { inputTextSubmitted: interaction.submitted === true } : {}),
         ...(interaction && quickInputSubmitKey !== undefined ? { quickInputSubmitted: interaction.submitted === true } : {}),
         ...(interaction && quickPickItemText !== undefined ? { quickPickItemSelected: interaction.selected === true } : {}),
+        ...(interaction && quickPickAbsentItemText !== undefined ? { quickPickItemAbsent: interaction.absent === true } : {}),
         ...(interaction && (cancelKey !== undefined || cancelAction !== undefined) ? {
           interactionCancelled: interaction.cancelled === true,
           ...(interaction.surface === "quickInput" ? { quickInputCancelled: interaction.cancelled === true } : {}),
@@ -241,6 +245,10 @@ try {
       if (missingSelectedTokens.length > 0) {
         failures.push(`tree view ${treeViewState.viewLabel} selected rows missing tokens: ${missingSelectedTokens.join(", ")}`);
       }
+    }
+    if (interaction && quickPickAbsentItemText !== undefined && interaction.absent !== true) {
+      const matches = Array.isArray(interaction.matchedTexts) ? interaction.matchedTexts.join(" | ") : "";
+      failures.push(`VS Code QuickPick unexpectedly exposed exact item ${quickPickAbsentItemText}${matches ? `: ${matches}` : ""}`);
     }
     if (
       expectedViewport &&
@@ -1709,6 +1717,91 @@ async function selectQuickPickItem(cdp, itemText) {
   }
   const available = lastAvailableTexts.length > 0 ? ` Available items: ${lastAvailableTexts.join(" | ")}` : "";
   throw new Error(`Timed out waiting for VS Code QuickPick item: ${itemText}.${available}`);
+}
+
+async function inspectAbsentQuickPickItem(cdp, itemText) {
+  const expected = JSON.stringify(itemText);
+  const started = Date.now();
+  let lastSignature;
+  let stableSamples = 0;
+  await sleep(1000);
+  while (Date.now() - started < CDP_REQUEST_TIMEOUT_MS) {
+    const state = await evaluate(
+      cdp,
+      `(() => {
+        const expected = ${expected};
+        const normalize = (value) => String(value ?? "").replace(/\\s+/g, " ").trim();
+        const visible = (element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+        const quickInput = Array.from(document.querySelectorAll(".quick-input-widget")).find((element) => visible(element));
+        if (!quickInput) {
+          return { ready: false, quickInputVisible: false, inputValue: "", availableTexts: [], matchedTexts: [] };
+        }
+        const inputValue = normalize(quickInput.querySelector("input")?.value);
+        const rows = Array.from(new Set([
+          ...quickInput.querySelectorAll(".quick-input-list .monaco-list-row"),
+          ...quickInput.querySelectorAll(".monaco-list-row"),
+          ...quickInput.querySelectorAll("[role='option']")
+        ]));
+        const candidates = rows
+          .filter((row) => visible(row))
+          .map((row) => ({
+            text: normalize(row.textContent),
+            label: normalize(row.querySelector(".quick-input-list-entry-label")?.textContent),
+            ariaLabel: normalize(row.getAttribute("aria-label"))
+          }));
+        const matches = candidates.filter((candidate) =>
+          candidate.label === expected ||
+          candidate.text === expected ||
+          candidate.ariaLabel === expected
+        );
+        return {
+          ready: inputValue.includes(expected),
+          quickInputVisible: true,
+          inputValue,
+          availableTexts: candidates.map((candidate) => candidate.text).filter((text) => text.length > 0).slice(0, 20),
+          matchedTexts: matches.map((candidate) => candidate.text || candidate.label || candidate.ariaLabel).slice(0, 20)
+        };
+      })()`,
+    );
+    if (!state || state.ready !== true) {
+      stableSamples = 0;
+      lastSignature = undefined;
+      await sleep(250);
+      continue;
+    }
+    if (Array.isArray(state.matchedTexts) && state.matchedTexts.length > 0) {
+      return {
+        absent: false,
+        surface: "quickPick",
+        requestedText: itemText,
+        inputValue: state.inputValue,
+        availableTexts: state.availableTexts,
+        matchedTexts: state.matchedTexts,
+      };
+    }
+    const signature = JSON.stringify([state.inputValue, state.availableTexts]);
+    if (signature === lastSignature) {
+      stableSamples += 1;
+    } else {
+      lastSignature = signature;
+      stableSamples = 1;
+    }
+    if (stableSamples >= 3) {
+      return {
+        absent: true,
+        surface: "quickPick",
+        requestedText: itemText,
+        inputValue: state.inputValue,
+        availableTexts: state.availableTexts,
+        matchedTexts: [],
+      };
+    }
+    await sleep(250);
+  }
+  throw new Error(`Timed out waiting for VS Code QuickPick absence evidence: ${itemText}.`);
 }
 
 async function cancelInteraction(cdp, cancelKey, domTokens) {

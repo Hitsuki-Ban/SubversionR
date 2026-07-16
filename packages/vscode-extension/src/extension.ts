@@ -798,6 +798,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     monotonicNowMs: () => performance.now(),
     ui: {
       workspaceRoots: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+      activeEditorResource: () => activeEditorContextService.commandTarget(),
       pathCasePolicy: () => pathCasePolicy(process.platform),
       pickRepositoryCandidate,
       pickOpenRepository,

@@ -1020,7 +1020,7 @@ describe("extension manifest", () => {
         },
         {
           command: "subversionr.diffWithBase",
-          when: "false",
+          when: "resourceScheme == file && subversionr.activeEditorBaseDiffable",
         },
         {
           command: "subversionr.openBase",
@@ -1028,7 +1028,7 @@ describe("extension manifest", () => {
         },
         {
           command: "subversionr.diffWithHead",
-          when: "false",
+          when: "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorBaseDiffable",
         },
         {
           command: "subversionr.openHead",
@@ -1036,19 +1036,19 @@ describe("extension manifest", () => {
         },
         {
           command: "subversionr.diffWithPrevious",
-          when: "false",
+          when: "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorPreviousDiffable",
         },
         {
           command: "subversionr.showFileHistory",
-          when: "false",
+          when: "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
         },
         {
           command: "subversionr.showLineHistory",
-          when: "false",
+          when: "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorLineHistoryFile",
         },
         {
           command: "subversionr.showBlame",
-          when: "false",
+          when: "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile",
         },
         {
           command: "subversionr.mergeRangeRepository",
@@ -1309,6 +1309,41 @@ describe("extension manifest", () => {
       "subversionr.moveResource",
     ]) {
       expect(ordinaryContextCommands.has(command), command).toBe(true);
+    }
+  });
+
+  it("exposes exactly the six active-editor inspection commands through bounded Command Palette contexts", () => {
+    const manifest = readJson("package.json");
+    const menus = manifest.contributes.menus as Record<
+      string,
+      Array<{ command?: string; submenu?: string; when?: string }>
+    >;
+    const expected = new Map([
+      ["subversionr.diffWithBase", "resourceScheme == file && subversionr.activeEditorBaseDiffable"],
+      ["subversionr.diffWithHead", "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorBaseDiffable"],
+      ["subversionr.diffWithPrevious", "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorPreviousDiffable"],
+      ["subversionr.showFileHistory", "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile"],
+      ["subversionr.showLineHistory", "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorLineHistoryFile"],
+      ["subversionr.showBlame", "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile"],
+    ]);
+    const resourceCommands = new Set(
+      ["scm/resourceState/context", "subversionr.editorContext", "explorer/context"]
+        .flatMap((menu) => menus[menu] ?? [])
+        .flatMap((entry) => entry.command === undefined ? [] : [entry.command]),
+    );
+    const paletteEntries = menus.commandPalette.filter(
+      (entry) => entry.command !== undefined && resourceCommands.has(entry.command),
+    );
+
+    expect(
+      paletteEntries
+        .filter((entry) => entry.when !== "false")
+        .map((entry) => [entry.command, entry.when]),
+    ).toEqual([...expected.entries()]);
+    for (const command of resourceCommands) {
+      const entries = paletteEntries.filter((entry) => entry.command === command);
+      expect(entries, command).toHaveLength(1);
+      expect(entries[0]?.when, command).toBe(expected.get(command) ?? "false");
     }
   });
 

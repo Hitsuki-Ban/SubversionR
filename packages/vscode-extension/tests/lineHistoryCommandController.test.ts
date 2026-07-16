@@ -194,6 +194,32 @@ describe("LineHistoryCommandController", () => {
     expect(ui.showErrorMessage).not.toHaveBeenCalled();
   });
 
+  it("opens line history for a text-stable property-only active file", async () => {
+    const historyClient = fakeHistoryClient(blameResponse({ lineStart: 1, lineLimit: 1 }), logResponse(4));
+    const controller = lineHistoryController({
+      historyClient,
+      projections: new Map([
+        [
+          "repo-uuid:C:/workspace",
+          scmProjection({
+            resources: [
+              scmProjectedResource({
+                localStatus: "modified",
+                nodeStatus: "modified",
+                textStatus: "normal",
+                propertyStatus: "modified",
+              }),
+            ],
+          }),
+        ],
+      ]),
+    });
+
+    await controller.showLineHistory();
+
+    expect(historyClient.getBlame).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the current line for an empty selection and normalizes reversed selections", async () => {
     const historyClient = fakeHistoryClient(
       blameResponse({
@@ -319,6 +345,70 @@ describe("LineHistoryCommandController", () => {
     expectLineHistoryFailure(ui);
   });
 
+  it("does not query line history from a stale projection", async () => {
+    const projection = scmProjection();
+    projection.freshness = {
+      repositoryCompleteness: "stale",
+      lastRefreshCompleteness: "stale",
+      lastRefreshKind: "stale",
+    };
+    const historyClient = fakeHistoryClient(blameResponse({ lineStart: 1, lineLimit: 1 }), logResponse(4));
+    const ui = fakeUi();
+    const controller = lineHistoryController({
+      historyClient,
+      ui,
+      projections: new Map([[projection.repositoryId, projection]]),
+    });
+
+    await controller.showLineHistory();
+
+    expect(historyClient.getBlame).not.toHaveBeenCalled();
+    expect(historyClient.getLog).not.toHaveBeenCalled();
+    expect(ui.showLineHistory).not.toHaveBeenCalled();
+    expectLineHistoryFailure(ui);
+  });
+
+  it("does not fall back to a parent repository when a nested working copy projection is missing", async () => {
+    const parent = repositorySession();
+    const child = repositorySession({
+      repositoryId: "repo-child:C:/workspace/vendor",
+      workingCopyRoot: "C:\\workspace\\vendor",
+    });
+    const parentProjection = scmProjection({
+      resources: [scmProjectedResource({ path: "vendor/src/main.c" })],
+    });
+    const getProjectedResource = vi.fn((repositoryId: string) => {
+      if (repositoryId !== parent.repositoryId) {
+        return undefined;
+      }
+      const resource = parentProjection.groups.flatMap((group) => group.resources)[0]!;
+      return lookup(parentProjection, resource);
+    });
+    const historyClient = fakeHistoryClient(blameResponse({ lineStart: 1, lineLimit: 1 }), logResponse(4));
+    const ui = fakeUi({ editor: activeEditor("C:\\workspace\\vendor\\src\\main.c") });
+    const controller = lineHistoryController({
+      historyClient,
+      ui,
+      sessions: [parent, child],
+      sourceControlProjection: {
+        getProjection: vi.fn(() => undefined),
+        getProjectedResource,
+      },
+    });
+
+    await controller.showLineHistory();
+
+    expect(getProjectedResource).toHaveBeenCalledTimes(1);
+    expect(getProjectedResource).toHaveBeenCalledWith(
+      child.repositoryId,
+      "src/main.c",
+      "case-insensitive",
+    );
+    expect(historyClient.getBlame).not.toHaveBeenCalled();
+    expect(ui.showLineHistory).not.toHaveBeenCalled();
+    expectLineHistoryFailure(ui);
+  });
+
   it.each([
     ["negative line", activeEditor("C:\\workspace\\src\\main.c", { selection: selection(-1, 0) })],
     ["past end line", activeEditor("C:\\workspace\\src\\main.c", { lineCount: 20, selection: selection(0, 20) })],
@@ -417,7 +507,7 @@ function lineHistoryController(options: {
   ui?: FakeUi;
   sessions?: RepositorySession[];
   projections?: Map<string, ScmRepositoryProjection | undefined>;
-  sourceControlProjection?: Pick<SourceControlProjectionService, "getProjectedResource">;
+  sourceControlProjection?: Pick<SourceControlProjectionService, "getProjectedResource" | "getProjection">;
   includeMergedRevisions?: boolean;
   workspaceTrusted?: boolean;
   diagnostics?: FakeDiagnostics;
@@ -486,8 +576,9 @@ function fakeSessionService(sessions: RepositorySession[]): Pick<RepositorySessi
 
 function fakeSourceControlProjection(
   projections: Map<string, ScmRepositoryProjection | undefined>,
-): Pick<SourceControlProjectionService, "getProjectedResource"> {
+): Pick<SourceControlProjectionService, "getProjectedResource" | "getProjection"> {
   return {
+    getProjection: (repositoryId) => projections.get(repositoryId),
     getProjectedResource: (repositoryId, path, pathCase) => {
       const projection = projections.get(repositoryId);
       if (!projection) {

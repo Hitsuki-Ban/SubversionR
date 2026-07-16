@@ -6,7 +6,11 @@ import {
 } from "../scm/baseDiffResource";
 import { isChangelistResourceGroupId } from "../scm/resourceStateClassifier";
 import type { SourceControlProjectionService } from "../scm/sourceControlProjectionService";
-import type { ScmProjectedResource, ScmProjectedResourceLookup } from "../scm/sourceControlResourceStore";
+import type {
+  ScmProjectedResource,
+  ScmProjectedResourceLookup,
+  ScmRepositoryProjection,
+} from "../scm/sourceControlResourceStore";
 import type { PathCasePolicy } from "../status/types";
 
 export const ACTIVE_EDITOR_HISTORY_FILE_CONTEXT = "subversionr.activeEditorHistoryFile";
@@ -17,7 +21,7 @@ export const ACTIVE_EDITOR_LINE_HISTORY_FILE_CONTEXT = "subversionr.activeEditor
 export interface ActiveEditorContextServiceOptions {
   settings(): LensSettings;
   sessionService: Pick<RepositorySessionService, "listOpenSessions">;
-  sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource">;
+  sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource" | "getProjection">;
   api: ActiveEditorContextApi;
 }
 
@@ -37,6 +41,11 @@ export interface ActiveEditorUri {
   fsPath: string;
 }
 
+export interface ActiveEditorCommandTarget extends ActiveEditorUri {
+  scheme: "file";
+  subversionrProjectionGeneration: number;
+}
+
 interface ActiveEditorContextState {
   historyFile: boolean;
   baseDiffable: boolean;
@@ -47,7 +56,13 @@ interface ActiveEditorContextState {
 interface ResourceMatch {
   session: RepositorySession;
   lookup: ScmProjectedResourceLookup;
+  relativePath: string;
   rootLength: number;
+}
+
+interface ActiveEditorResolution {
+  state: ActiveEditorContextState;
+  commandTarget: ActiveEditorCommandTarget | undefined;
 }
 
 const FALSE_STATE: ActiveEditorContextState = {
@@ -58,10 +73,18 @@ const FALSE_STATE: ActiveEditorContextState = {
 };
 
 export class ActiveEditorContextService {
+  private refreshTail: Promise<void> = Promise.resolve();
+
   public constructor(private readonly options: ActiveEditorContextServiceOptions) {}
 
-  public async refresh(): Promise<void> {
-    const state = this.contextState();
+  public refresh(): Promise<void> {
+    const refresh = this.refreshTail.then(() => this.applyCurrentContext());
+    this.refreshTail = refresh.catch(() => undefined);
+    return refresh;
+  }
+
+  private async applyCurrentContext(): Promise<void> {
+    const { state } = this.resolveActiveEditor();
     await Promise.all([
       this.options.api.setContext(ACTIVE_EDITOR_HISTORY_FILE_CONTEXT, state.historyFile),
       this.options.api.setContext(ACTIVE_EDITOR_BASE_DIFFABLE_CONTEXT, state.baseDiffable),
@@ -70,46 +93,90 @@ export class ActiveEditorContextService {
     ]);
   }
 
-  private contextState(): ActiveEditorContextState {
+  public commandTarget(): ActiveEditorCommandTarget | undefined {
+    return this.resolveActiveEditor().commandTarget;
+  }
+
+  private resolveActiveEditor(): ActiveEditorResolution {
     const document = this.options.api.activeTextDocument();
     if (!document || !isFileDocument(document)) {
-      return FALSE_STATE;
+      return falseResolution();
     }
     const match = this.matchDocument(document.uri.fsPath);
-    if (!match || match.lookup.epoch !== match.session.epoch || match.lookup.repositoryId !== match.session.repositoryId) {
-      return FALSE_STATE;
+    const projection = match
+      ? this.options.sourceControlProjection.getProjection(match.session.repositoryId)
+      : undefined;
+    if (!match || !projection || !isCurrentResourceMatch(match, projection)) {
+      return falseResolution();
     }
     const resource = match.lookup.resource;
     const historyFile = isHistoryFileProjectedResource(resource);
     const lineHistoryFile = isLineHistoryFileProjectedResource(resource, document, this.options.settings());
     return {
-      historyFile,
-      baseDiffable: historyFile && isBaseDiffableProjectedResource(resource),
-      previousDiffable: historyFile && isPreviousDiffableRevision(resource.entry.changedRevision),
-      lineHistoryFile,
+      state: {
+        historyFile,
+        baseDiffable: historyFile && isBaseDiffableProjectedResource(resource),
+        previousDiffable: historyFile && isPreviousDiffableRevision(resource.entry.changedRevision),
+        lineHistoryFile,
+      },
+      commandTarget: historyFile
+        ? {
+            scheme: "file",
+            fsPath: document.uri.fsPath,
+            subversionrProjectionGeneration: match.lookup.generation,
+          }
+        : undefined,
     };
   }
 
   private matchDocument(fsPath: string): ResourceMatch | undefined {
-    return this.options.sessionService
+    const match = this.options.sessionService
       .listOpenSessions()
       .flatMap((session) => {
         const relativePath = repositoryRelativePath(session, fsPath);
-        const lookup = relativePath
-          ? this.options.sourceControlProjection.getProjectedResource(
-              session.repositoryId,
-              relativePath,
-              session.watchScope.pathCase,
-            )
-          : undefined;
-        return lookup ? [{ session, lookup, rootLength: rootKey(session).length }] : [];
+        return relativePath ? [{ session, relativePath, rootLength: rootKey(session).length }] : [];
       })
       .sort(
         (left, right) =>
           right.rootLength - left.rootLength ||
           left.session.repositoryId.localeCompare(right.session.repositoryId),
       )[0];
+    if (!match) {
+      return undefined;
+    }
+    const lookup = this.options.sourceControlProjection.getProjectedResource(
+      match.session.repositoryId,
+      match.relativePath,
+      match.session.watchScope.pathCase,
+    );
+    return lookup ? { ...match, lookup } : undefined;
   }
+}
+
+function falseResolution(): ActiveEditorResolution {
+  return { state: FALSE_STATE, commandTarget: undefined };
+}
+
+function isCurrentResourceMatch(match: ResourceMatch, projection: ScmRepositoryProjection): boolean {
+  const { lookup, relativePath, session } = match;
+  const pathCase = session.watchScope.pathCase;
+  return (
+    projection.repositoryId === session.repositoryId &&
+    projection.epoch === session.epoch &&
+    projection.generation === lookup.generation &&
+    projection.freshness.repositoryCompleteness !== "stale" &&
+    lookup.epoch === session.epoch &&
+    lookup.repositoryId === session.repositoryId &&
+    lookup.resource.repositoryId === session.repositoryId &&
+    lookup.resource.entry.generation === lookup.generation &&
+    absolutePathKey(pathCase, projection.workingCopyRoot) === absolutePathKey(pathCase, session.identity.workingCopyRoot) &&
+    absolutePathKey(pathCase, lookup.workingCopyRoot) === absolutePathKey(pathCase, session.identity.workingCopyRoot) &&
+    comparisonKey(pathCase, lookup.resource.path) === comparisonKey(pathCase, relativePath)
+  );
+}
+
+function absolutePathKey(pathCase: PathCasePolicy, path: string): string {
+  return comparisonKey(pathCase, normalizeAbsolutePath(path));
 }
 
 function isFileDocument(document: ActiveEditorTextDocument): boolean {
@@ -161,8 +228,15 @@ function isLineHistoryFileProjectedResource(
     resource.entry.localStatus !== "ignored" &&
     !hasDeletedStatus(resource) &&
     !hasUnsafeLocalStatus(resource) &&
-    resource.entry.nodeStatus === "normal" &&
+    hasTextStableNodeStatus(resource) &&
     resource.entry.textStatus === "normal"
+  );
+}
+
+function hasTextStableNodeStatus(resource: ScmProjectedResource): boolean {
+  return (
+    resource.entry.nodeStatus === "normal" ||
+    (resource.entry.nodeStatus === "modified" && resource.entry.propertyStatus === "modified")
   );
 }
 

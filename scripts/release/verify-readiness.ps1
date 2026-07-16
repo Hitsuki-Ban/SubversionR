@@ -3510,7 +3510,10 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "DIF-001" @(
   "packages/vscode-extension/l10n/bundle.l10n.json",
   "packages/vscode-extension/l10n/bundle.l10n.ja.json",
   "packages/vscode-extension/l10n/bundle.l10n.zh-cn.json",
-  "packages/vscode-extension/tests/extensionManifest.test.ts"
+  "packages/vscode-extension/tests/extensionManifest.test.ts",
+  "scripts/release/test-vscode-installed-source-control-ui-e2e.ps1",
+  "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1",
+  "scripts/release/capture-vscode-renderer-ui.mjs"
 )
 Assert-Terms $m5Plan @(
   "The first M5 slice adds the native and protocol foundation for BASE content retrieval",
@@ -3596,7 +3599,7 @@ Assert-Terms $baseDiffResourceSource @(
 ) "DIF-001 BASE-diffable SCM classifier"
 Assert-Terms $baseDiffResourceTests @(
   "allows %s file changes with BASE content",
-  "rejects property-only changes until property diff rendering is supported",
+  "allows the libsvn property-only file shape for BASE text content",
   "rejects non-local files, directories, externals, and non-changed contexts"
 ) "DIF-001 BASE-diffable SCM classifier tests"
 Assert-Terms $vscodeSourceControlPresenterSource @(
@@ -3613,9 +3616,9 @@ Assert-Terms $vscodeSourceControlPresenterTests @(
 Assert-Terms $repositoryCommandControllerTests @(
   "opens a BASE diff for a selected changed SVN file using the projection canonical path",
   "opens BASE content for a selected changed SVN file using the projection canonical path",
+  "opens a BASE diff for the libsvn property-only file shape",
   "rejects added SVN files for BASE diff until added-file rendering is supported",
-  "rejects %s SVN files for BASE diff until safe rendering is supported",
-  "property-only"
+  "rejects %s SVN files for BASE diff until safe rendering is supported"
 ) "DIF-001 explicit BASE diff/open command tests"
 Assert-Terms $extensionEntrypoint @(
   "registerTextDocumentContentProvider",
@@ -3687,7 +3690,10 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "DIF-002" @(
   "packages/vscode-extension/l10n/bundle.l10n.json",
   "packages/vscode-extension/l10n/bundle.l10n.ja.json",
   "packages/vscode-extension/l10n/bundle.l10n.zh-cn.json",
-  "packages/vscode-extension/tests/extensionManifest.test.ts"
+  "packages/vscode-extension/tests/extensionManifest.test.ts",
+  "scripts/release/test-vscode-installed-source-control-ui-e2e.ps1",
+  "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1",
+  "scripts/release/capture-vscode-renderer-ui.mjs"
 )
 Assert-Terms $m5Plan @(
   "The fourteenth M5 slice exposes user-triggered HEAD content and Working Copy versus HEAD comparison",
@@ -4369,7 +4375,10 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-002" @(
   "packages/vscode-extension/l10n/bundle.l10n.json",
   "packages/vscode-extension/l10n/bundle.l10n.ja.json",
   "packages/vscode-extension/l10n/bundle.l10n.zh-cn.json",
-  "packages/vscode-extension/tests/extensionManifest.test.ts"
+  "packages/vscode-extension/tests/extensionManifest.test.ts",
+  "scripts/release/test-vscode-installed-source-control-ui-e2e.ps1",
+  "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1",
+  "scripts/release/capture-vscode-renderer-ui.mjs"
 )
 Assert-Terms $m5Plan @(
   'The seventh M5 slice turns the backend-only `history/log` foundation into a native VS Code history surface',
@@ -4712,6 +4721,114 @@ Assert-Terms $extensionManifestTests @(
   "Show Log",
   "SVN {0} failed. Open the SubversionR log for details."
 ) "HIS-003 extension manifest tests"
+Assert-Terms $m5Plan @(
+  "The twenty-seventh M5 slice exposes the six existing active-file inspection commands through the Command Palette",
+  'Exactly `subversionr.diffWithBase`, `subversionr.diffWithHead`, `subversionr.diffWithPrevious`, `subversionr.showFileHistory`, `subversionr.showLineHistory`, and `subversionr.showBlame`',
+  "Nested working copies use the most-specific open working-copy root and never fall back to a parent projection",
+  "A property-only modified projected file remains text-stable and is eligible for all six commands",
+  "they do not render the property delta",
+  "A separate installed Restricted Mode window proves BASE remains visible and executable",
+  "It does not request status refresh, full reconciliation, or remote-status polling"
+) "HIS-003/HIS-004 M5 active-editor Command Palette scope"
+Assert-Terms $roadmap @(
+  "exact active-editor Command Palette access to the six canonical BASE/HEAD/PREV/File History/Line History/Blame commands",
+  "active-editor Command Palette trusted/Restricted Mode behavior for the six canonical inspection commands"
+) "HIS-003/HIS-004 roadmap active-editor Command Palette scope"
+Assert-Terms $releaseGates @(
+  "sourceControlUiActiveEditorPaletteWorkflow",
+  "distinct second local-file working copy whose active projected file is property-only modified",
+  "captures renderer DOM/accessibility/screenshot evidence for every selection",
+  "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION"
+) "HIS-003/HIS-004 installed active-editor Command Palette release gate"
+Assert-Terms $publicClaimMatrix @(
+  "Active-editor diff, history, and blame Command Palette",
+  'Claimed only for eligible files already present in the current local Windows `win32-x64` Source Control projection',
+  "property-delta rendering is not claimed",
+  "Normal unmodified files absent from the projection",
+  "the other five operations require Workspace Trust"
+) "HIS-003/HIS-004 public active-editor Command Palette claim boundary"
+Assert-Terms $extensionPackageJson @(
+  '"command": "subversionr.diffWithBase"',
+  '"when": "resourceScheme == file && subversionr.activeEditorBaseDiffable"',
+  '"when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorBaseDiffable"',
+  '"when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorPreviousDiffable"',
+  '"when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorHistoryFile"',
+  '"when": "resourceScheme == file && isWorkspaceTrusted && subversionr.activeEditorLineHistoryFile"'
+) "HIS-003/HIS-004 exact active-editor Command Palette clauses"
+Assert-Terms $extensionManifestTests @(
+  "exposes exactly the six active-editor inspection commands through bounded Command Palette contexts",
+  "paletteEntries",
+  'expected.get(command) ?? "false"'
+) "HIS-003/HIS-004 exact active-editor Command Palette manifest tests"
+Assert-Terms $activeEditorContextServiceSource @(
+  "export interface ActiveEditorCommandTarget",
+  "public commandTarget()",
+  "subversionrProjectionGeneration",
+  'projection.freshness.repositoryCompleteness !== "stale"',
+  "hasTextStableNodeStatus"
+) "HIS-003/HIS-004 active-editor validated command target"
+Assert-Terms $activeEditorContextServiceTests @(
+  "does not expose an active-editor command target for %s",
+  "rejects a projected resource from a stale generation",
+  "clears active-editor command contexts for a stale projection",
+  "targets the most specific projected working copy when repositories are nested",
+  "does not fall back to a parent projection when the most specific working copy has no resource",
+  "serializes overlapping refreshes so the newest active editor state wins",
+  "sets all inspection contexts for a text-stable property-only active file"
+) "HIS-003/HIS-004 active-editor command target tests"
+Assert-Terms $repositoryCommandControllerSource @(
+  "activeEditorResource(): unknown | undefined;",
+  "this.activeEditorResourceArgs(resourceStates)",
+  "return resourceStates.length === 0 ? [this.options.ui.activeEditorResource()] : resourceStates;",
+  "requireOptionalProjectionGeneration(uri, invalid)",
+  "activeEditorInvocation",
+  "validateEditorProjectionGeneration",
+  "isCurrentActiveEditorProjection"
+) "HIS-003/HIS-004 canonical zero-argument active-editor routing"
+Assert-Terms $repositoryCommandControllerTests @(
+  "runs the five resource-backed palette commands against the current active file without arguments",
+  "rejects stale active-editor generations for all five resource-backed palette commands",
+  "preserves explicit editor URI behavior without applying active-editor freshness metadata"
+) "HIS-003/HIS-004 canonical active-editor controller tests"
+Assert-Terms $lineHistoryCommandControllerTests @(
+  "opens line history for a text-stable property-only active file",
+  "does not query line history from a stale projection",
+  "does not fall back to a parent repository when a nested working copy projection is missing"
+) "HIS-003 active-editor line-history validation tests"
+Assert-Terms $installedSourceControlUiE2eScript @(
+  "PropertyOnlyTracked",
+  "paletteTrackedChangedRevision",
+  "runActiveEditorPaletteWorkflow",
+  "sourceControlUiActiveEditorPaletteWorkflow",
+  "activeEditorPaletteCaptures",
+  "runRestrictedActiveEditorPaletteEvidence",
+  "restrictedActiveEditorPaletteEvidence",
+  "restrictedActiveEditorPaletteCaptures",
+  "quickPickAbsentItemText",
+  "quickPickItemAbsent",
+  "failures.length !== 1",
+  "Restricted direct-call cardinality invalid",
+  '"DIF-001"',
+  '"DIF-002"',
+  '"DIF-003"',
+  '"HIS-002"',
+  '"HIS-003"',
+  '"HIS-004"',
+  "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
+  "statusRefreshRequestCountUnchanged",
+  "remoteStatusRequestCountUnchanged"
+) "HIS-003/HIS-004 installed active-editor Command Palette evidence"
+Assert-Terms $installedSourceControlUiE2eScriptTests @(
+  "sourceControlUiActiveEditorPaletteWorkflow",
+  "activeEditorPaletteCaptures",
+  "restrictedActiveEditorPaletteEvidence",
+  "restrictedActiveEditorPaletteCaptures",
+  "Trusted active-editor palette evidence should preserve the exact canonical command set and order",
+  "Restricted zero-argument direct calls should all record the stable workspace trust code",
+  "Installed Source Control UI E2E evidence should trace DIF-001.",
+  "Installed Source Control UI E2E evidence should trace HIS-004.",
+  "SUBVERSIONR_FAKE_RESTRICTED_EXTRA_FAILURE"
+) "HIS-003/HIS-004 installed active-editor Command Palette script tests"
 Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-004" @(
   "docs/plans/m5-content-diff-history.md",
   "crates/subversionr-protocol/src/lib.rs",
@@ -4736,7 +4853,10 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "HIS-004" @(
   "packages/vscode-extension/l10n/bundle.l10n.json",
   "packages/vscode-extension/l10n/bundle.l10n.ja.json",
   "packages/vscode-extension/l10n/bundle.l10n.zh-cn.json",
-  "packages/vscode-extension/tests/extensionManifest.test.ts"
+  "packages/vscode-extension/tests/extensionManifest.test.ts",
+  "scripts/release/test-vscode-installed-source-control-ui-e2e.ps1",
+  "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1",
+  "scripts/release/capture-vscode-renderer-ui.mjs"
 )
 Assert-Terms $m5Plan @(
   'The eleventh M5 slice exposes file blame through a readonly VS Code document backed by the existing `history/blame` RPC',
@@ -5364,6 +5484,7 @@ Assert-Terms $fileHeaderCodeLensProviderTests @(
   "resolves file-header lenses to summary, PREV/BASE/HEAD compare, file history, blame, and repository log commands",
   "only exposes BASE comparison from file-header lenses in untrusted workspaces",
   "uses the most specific open repository and projection for nested working copies",
+  "exposes BASE and HEAD compare lenses for the libsvn property-only file shape",
   "does not expose BASE/HEAD compare lenses for %s",
   "does not expose Compare PREV when the projected file has no previous revision candidate",
   "checks the file path against open sessions before requesting a projected resource",
@@ -5536,7 +5657,10 @@ Assert-RequirementEvidenceRefs $requirementsEvidence "DIF-003" @(
   "packages/vscode-extension/l10n/bundle.l10n.json",
   "packages/vscode-extension/l10n/bundle.l10n.ja.json",
   "packages/vscode-extension/l10n/bundle.l10n.zh-cn.json",
-  "packages/vscode-extension/tests/extensionManifest.test.ts"
+  "packages/vscode-extension/tests/extensionManifest.test.ts",
+  "scripts/release/test-vscode-installed-source-control-ui-e2e.ps1",
+  "scripts/tests/release-installed-source-control-ui-e2e-scripts.tests.ps1",
+  "scripts/release/capture-vscode-renderer-ui.mjs"
 )
 Assert-Terms $m5Plan @(
   "The ninth M5 slice adds a foreground file-history action that compares a selected file revision against the previous already loaded file-history revision",
