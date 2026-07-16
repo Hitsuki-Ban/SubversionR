@@ -15,6 +15,10 @@ if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "delayed-context-acti
   await runDelayedContextActionSelfTest();
   return;
 }
+if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "scm-primary-action-wait") {
+  await runScmPrimaryActionWaitSelfTest();
+  return;
+}
 const args = parseArgs(process.argv.slice(2));
 const remoteDebuggingPort = requiredInteger(args, "remote-debugging-port");
 const outputRoot = requiredString(args, "output-root");
@@ -778,11 +782,11 @@ async function inspectTreeViewState(cdp, expectations) {
   }
 }
 
-async function inspectScmActionSurface(cdp, expectations) {
-  const primaryActions = await evaluate(
+async function inspectScmPrimaryActions(cdp, expectedActions) {
+  return evaluate(
     cdp,
     `(() => {
-      const expected = ${JSON.stringify(expectations.primaryActions)};
+      const expected = ${JSON.stringify(expectedActions)};
       const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
       const visible = element => {
         const rect = element.getBoundingClientRect();
@@ -814,9 +818,34 @@ async function inspectScmActionSurface(cdp, expectations) {
       });
     })()`,
   );
+}
+
+async function waitForScmPrimaryActions(
+  cdp,
+  expectedActions,
+  timeoutMs = REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS,
+  intervalMs = REQUIRED_TOKEN_CAPTURE_INTERVAL_MS,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let primaryActions = [];
+  do {
+    primaryActions = await inspectScmPrimaryActions(cdp, expectedActions);
+    if (primaryActions.every((action) => action.rendered === true)) {
+      return primaryActions;
+    }
+    if (Date.now() >= deadline) {
+      return primaryActions;
+    }
+    await sleep(intervalMs);
+  } while (Date.now() < deadline);
+  return primaryActions;
+}
+
+async function inspectScmActionSurface(cdp, expectations) {
+  const primaryActions = await waitForScmPrimaryActions(cdp, expectations.primaryActions);
   const missingPrimary = primaryActions.filter((action) => action.rendered !== true);
   if (missingPrimary.length > 0) {
-    throw new Error(`SCM title actions were not rendered with expected codicons: ${missingPrimary.map((action) => `${action.label}/$(${action.codicon})`).join(", ")}`);
+    throw new Error(`SCM title actions were not rendered with expected codicons: ${missingPrimary.map((action) => `${action.label}/$(${action.codicon})`).join(", ")}. Observed: ${JSON.stringify(primaryActions)}`);
   }
 
   const moreCandidates = await evaluate(
@@ -1232,6 +1261,56 @@ async function runDelayedContextActionSelfTest() {
   }
   if (!rejected || pollCount < 3) {
     throw new Error(`Delayed context action self-test failed after ${pollCount} poll(s).`);
+  }
+}
+
+async function runScmPrimaryActionWaitSelfTest() {
+  const expectedActions = [
+    { label: "SubversionR: Refresh Repository", codicon: "refresh" },
+    { label: "SubversionR: Commit Changes", codicon: "check" },
+  ];
+  let delayedPollCount = 0;
+  const delayedCdp = {
+    async send(method) {
+      if (method !== "Runtime.evaluate") {
+        throw new Error(`Unexpected fake CDP method: ${method}`);
+      }
+      delayedPollCount += 1;
+      return {
+        result: {
+          value: expectedActions.map((action, index) => ({
+            ...action,
+            rendered: index === 0 || delayedPollCount >= 3,
+          })),
+        },
+      };
+    },
+  };
+  const delayedResult = await waitForScmPrimaryActions(delayedCdp, expectedActions, 500, 1);
+  if (delayedPollCount !== 3 || delayedResult.some((action) => action.rendered !== true)) {
+    throw new Error(`Delayed SCM primary-action self-test failed after ${delayedPollCount} poll(s).`);
+  }
+
+  let missingPollCount = 0;
+  const missingCdp = {
+    async send(method) {
+      if (method !== "Runtime.evaluate") {
+        throw new Error(`Unexpected fake CDP method: ${method}`);
+      }
+      missingPollCount += 1;
+      return {
+        result: {
+          value: expectedActions.map((action, index) => ({
+            ...action,
+            rendered: index === 0,
+          })),
+        },
+      };
+    },
+  };
+  const missingResult = await waitForScmPrimaryActions(missingCdp, expectedActions, 500, 1);
+  if (missingPollCount < 2 || missingResult.every((action) => action.rendered === true)) {
+    throw new Error(`Missing SCM primary-action self-test did not preserve the failure contract after ${missingPollCount} poll(s).`);
   }
 }
 
