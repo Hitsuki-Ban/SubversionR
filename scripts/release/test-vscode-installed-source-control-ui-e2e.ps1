@@ -2347,7 +2347,7 @@ async function captureFreshnessRendererScenario(report, scenario, readyPath, don
     30000
   );
   await new Promise(resolve => setTimeout(resolve, 1500));
-  fs.writeFileSync(readyPath, JSON.stringify({
+  writeJsonCoordinationFileAtomically(readyPath, {
     ok: true,
     phase: `${scenario}FreshnessRendererReady`,
     scenario,
@@ -2357,7 +2357,7 @@ async function captureFreshnessRendererScenario(report, scenario, readyPath, don
       workingCopyRoot: report.repository.identity.workingCopyRoot
     },
     rendererCaptureExpectations
-  }, null, 2));
+  });
   await waitForFile(donePath, 120000);
   return rendererCaptureExpectations;
 }
@@ -2407,7 +2407,7 @@ async function runFullReconcileCancellationWorkflow(openReport, readyPath, doneP
   );
   const notificationList = await showWorkbenchNotificationsForPrompt("fullReconcileCancellation");
   await new Promise(resolve => setTimeout(resolve, 1500));
-  fs.writeFileSync(readyPath, JSON.stringify({
+  writeJsonCoordinationFileAtomically(readyPath, {
     ok: true,
     phase: "fullReconcileCancellationProgressReady",
     command: "subversionr.fullReconcile",
@@ -2415,7 +2415,7 @@ async function runFullReconcileCancellationWorkflow(openReport, readyPath, doneP
     notificationCleanup,
     notificationList,
     rendererCaptureExpectations
-  }, null, 2));
+  });
   await waitForFile(donePath, 120000);
   await commandPromise;
   const cancellationReport = await withTimeout(
@@ -3735,14 +3735,26 @@ function reviewCommitSelectionCaptureExpectations(requiredPaths) {
   };
 }
 
+function writeJsonCoordinationFileAtomically(destinationPath, payload) {
+  const temporaryPath = path.join(
+    path.dirname(destinationPath),
+    `.${path.basename(destinationPath)}.${crypto.randomUUID()}.tmp`
+  );
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(payload, null, 2), { encoding: "utf8", flag: "wx" });
+    fs.renameSync(temporaryPath, destinationPath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
+}
+
 async function publishCommitPromptReadyAndWait(readyPath, donePath, phase, payload) {
   if (typeof readyPath !== "string" || readyPath.length === 0 || typeof donePath !== "string" || donePath.length === 0) {
     throw new Error(`Installed commit prompt coordination paths are required for phase ${phase}.`);
   }
   fs.rmSync(donePath, { force: true });
-  fs.writeFileSync(readyPath, JSON.stringify({ ok: true, phase, ...payload }, null, 2));
+  writeJsonCoordinationFileAtomically(readyPath, { ok: true, phase, ...payload });
   await waitForFile(donePath, 120000);
-  fs.rmSync(readyPath, { force: true });
 }
 
 async function collectCommitDiagnostics(diagnosticsToken, label) {
@@ -4461,6 +4473,11 @@ async function runReviewCommitPromptWorkflow(commitSelectedMultiSelectionWorking
     await publishCommitPromptReadyAndWait(commitPromptReadyPath, commitPromptDonePath, "reviewCommitSuccessSelection", {
       command: "subversionr.reviewCommit",
       rendererCaptureExpectations: successSelectionExpectations
+    });
+    writeJsonCoordinationFileAtomically(commitPromptReadyPath, {
+      ok: true,
+      phase: "commitPromptSequenceComplete",
+      command: "commitPromptSequence"
     });
     await successfulReviewCommand;
 
@@ -7440,7 +7457,7 @@ function checkoutQuickPickPromptCaptureExpectations(title, selectedText, require
 }
 
 async function publishCheckoutPromptReadyAndWait(readyPath, donePath, payload) {
-  fs.writeFileSync(readyPath, JSON.stringify(payload, null, 2));
+  writeJsonCoordinationFileAtomically(readyPath, payload);
   await waitForFile(donePath, 120000);
 }
 
@@ -10998,7 +11015,7 @@ async function run() {
       30000
     );
     await new Promise(resolve => setTimeout(resolve, 1500));
-    fs.writeFileSync(readyPath, JSON.stringify({
+    writeJsonCoordinationFileAtomically(readyPath, {
       ok: true,
       phase,
       openReport,
@@ -11008,7 +11025,7 @@ async function run() {
       },
       organicSurfaceReadiness: organicSurfaceReadiness.readiness,
       rendererCaptureExpectations: openReport.rendererCaptureExpectations
-    }, null, 2));
+    });
 
     phase = "waitingForRendererCapture";
     await waitForFile(donePath, 120000);
@@ -11935,23 +11952,53 @@ function Wait-File([string]$Path, [int]$TimeoutSeconds, [string]$Description) {
   throw "$Description timed out after $TimeoutSeconds seconds."
 }
 
-function Wait-FilePhaseAdvanced([string]$Path, [string]$CompletedPhase, [int]$TimeoutSeconds, [string]$Description) {
+function Read-SharedPhaseSentinel([string]$Path, [string]$Description) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    throw "$Description disappeared before the expected next phase was published."
+  }
+  $stream = [System.IO.FileStream]::new(
+    $Path,
+    [System.IO.FileMode]::Open,
+    [System.IO.FileAccess]::Read,
+    [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+  )
+  try {
+    $reader = [System.IO.StreamReader]::new($stream)
+    try {
+      $text = $reader.ReadToEnd()
+    }
+    finally {
+      $reader.Dispose()
+    }
+  }
+  finally {
+    $stream.Dispose()
+  }
+  try {
+    $sentinel = $text | ConvertFrom-Json
+  }
+  catch {
+    throw "$Description contains malformed JSON."
+  }
+  $phase = [string]$sentinel.phase
+  if ([string]::IsNullOrWhiteSpace($phase)) {
+    throw "$Description does not contain a non-empty phase."
+  }
+  $phase
+}
+
+function Wait-FileExpectedPhase([string]$Path, [string]$CompletedPhase, [string]$ExpectedNextPhase, [int]$TimeoutSeconds, [string]$Description) {
   $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
   while ($true) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    $readyPhase = Read-SharedPhaseSentinel -Path $Path -Description $Description
+    if ($readyPhase -eq $ExpectedNextPhase) {
       return
     }
-    try {
-      $readyPhase = [string]((Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json).phase)
-      if (-not [string]::IsNullOrWhiteSpace($readyPhase) -and $readyPhase -ne $CompletedPhase) {
-        return
-      }
-    }
-    catch {
-      # The writer may be replacing the phase sentinel; retry until a complete document is visible.
+    if ($readyPhase -ne $CompletedPhase) {
+      throw "$Description skipped from phase $CompletedPhase to unexpected phase $readyPhase; expected $ExpectedNextPhase."
     }
     if ([DateTimeOffset]::UtcNow -gt $deadline) {
-      throw "$Description did not advance after phase $CompletedPhase."
+      throw "$Description repeated phase $CompletedPhase instead of advancing to $ExpectedNextPhase."
     }
     Start-Sleep -Milliseconds 100
   }
@@ -14689,7 +14736,15 @@ try {
     "reviewCommitFailureObserved",
     "reviewCommitSuccessSelection"
   )
-  foreach ($commitPromptPhase in $commitPromptPhases) {
+  $commitPromptTerminalPhase = "commitPromptSequenceComplete"
+  for ($commitPromptPhaseIndex = 0; $commitPromptPhaseIndex -lt $commitPromptPhases.Count; $commitPromptPhaseIndex++) {
+    $commitPromptPhase = $commitPromptPhases[$commitPromptPhaseIndex]
+    $expectedNextCommitPromptPhase = if ($commitPromptPhaseIndex + 1 -lt $commitPromptPhases.Count) {
+      $commitPromptPhases[$commitPromptPhaseIndex + 1]
+    }
+    else {
+      $commitPromptTerminalPhase
+    }
     Wait-File -Path $harness.CommitPromptReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E $commitPromptPhase sentinel"
     $commitPromptReady = Get-Content -Raw -LiteralPath $harness.CommitPromptReadyPath | ConvertFrom-Json
     if ($commitPromptReady.ok -ne $true -or $commitPromptReady.command -notin @("subversionr.reviewCommit", "subversionr.commitAll") -or $commitPromptReady.phase -ne $commitPromptPhase) {
@@ -14729,7 +14784,7 @@ try {
     if ($null -ne $commitPromptDriverError) {
       throw $commitPromptDriverError
     }
-    Wait-FilePhaseAdvanced -Path $harness.CommitPromptReadyPath -CompletedPhase $commitPromptPhase -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E commit prompt sentinel"
+    Wait-FileExpectedPhase -Path $harness.CommitPromptReadyPath -CompletedPhase $commitPromptPhase -ExpectedNextPhase $expectedNextCommitPromptPhase -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E commit prompt sentinel"
   }
 
   Invoke-HarnessPromptCapture `

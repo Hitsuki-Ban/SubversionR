@@ -8,6 +8,7 @@ $normalizerScript = Join-Path $repoRoot "scripts\release\normalize-vscode-window
 $packageJsonPath = Join-Path $repoRoot "package.json"
 $ciWorkflowPath = Join-Path $repoRoot ".github\workflows\ci.yml"
 $workflowContent = Get-Content -Raw -LiteralPath $workflowScript
+$testScriptContent = Get-Content -Raw -LiteralPath $PSCommandPath
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -29,6 +30,18 @@ function Assert-NativeCommandFailsContaining([scriptblock]$Action, [string]$Expe
   Assert-True ($exitCode -ne 0) "$Message Expected native command to fail."
   $text = $output | Out-String
   Assert-True ($text.Contains($ExpectedText)) "$Message Expected output to contain '$ExpectedText', got '$text'."
+}
+
+function Assert-ScriptBlockFailsContaining([scriptblock]$Action, [string]$ExpectedText, [string]$Message) {
+  $failure = $null
+  try {
+    & $Action
+  }
+  catch {
+    $failure = $_
+  }
+  Assert-True ($null -ne $failure) "$Message Expected script block to fail."
+  Assert-True ($failure.Exception.Message.Contains($ExpectedText)) "$Message Expected failure to contain '$ExpectedText', got '$($failure.Exception.Message)'."
 }
 
 function Invoke-EmptyHistoryProbeOrderSmoke([string]$WorkflowContent, [string]$TempRoot) {
@@ -84,6 +97,118 @@ async function clearWorkbenchNotificationsBeforePrompt() {
   Assert-Equal 0 $LASTEXITCODE "Generated empty-history probe order smoke should parse as JavaScript."
   & node $smokePath
   Assert-Equal 0 $LASTEXITCODE "Generated empty-history probe should settle only after notifications.clearAll resolves the warning."
+}
+
+function Invoke-CommitPromptPhaseProtocolSmoke([string]$WorkflowContent, [string]$TempRoot) {
+  $helperMatch = [regex]::Match(
+    $WorkflowContent,
+    '(?s)(function Read-SharedPhaseSentinel\(.*?\r?\n\})\r?\n\r?\n(function Wait-FileExpectedPhase\(.*?\r?\n\})'
+  )
+  Assert-True $helperMatch.Success "Installed commit prompt phase protocol helpers should be extractable for the lightweight state-machine smoke test."
+  Invoke-Expression $helperMatch.Value
+
+  $sequence = @(
+    "commitAllMessagePrompt",
+    "reviewCommitInitialSelection",
+    "reviewCommitMessageCancellation",
+    "reviewCommitFailureSelection",
+    "reviewCommitFailureMessage",
+    "reviewCommitFailureObserved",
+    "reviewCommitSuccessSelection",
+    "commitPromptSequenceComplete"
+  )
+  $sentinelPath = Join-Path $TempRoot "commit-prompt-phase-protocol.json"
+  for ($index = 0; $index -lt $sequence.Count - 1; $index++) {
+    [pscustomobject]@{ phase = $sequence[$index + 1] } |
+      ConvertTo-Json -Compress |
+      Set-Content -LiteralPath $sentinelPath -NoNewline -Encoding utf8
+    Wait-FileExpectedPhase `
+      -Path $sentinelPath `
+      -CompletedPhase $sequence[$index] `
+      -ExpectedNextPhase $sequence[$index + 1] `
+      -TimeoutSeconds 1 `
+      -Description "commit prompt phase smoke"
+  }
+
+  Remove-Item -LiteralPath $sentinelPath -Force
+  Assert-ScriptBlockFailsContaining {
+    Wait-FileExpectedPhase -Path $sentinelPath -CompletedPhase $sequence[0] -ExpectedNextPhase $sequence[1] -TimeoutSeconds 0 -Description "missing commit prompt phase"
+  } "disappeared before the expected next phase" "Commit prompt phase protocol should reject a missing ready sentinel."
+
+  [pscustomobject]@{ phase = $sequence[3] } | ConvertTo-Json -Compress | Set-Content -LiteralPath $sentinelPath -NoNewline -Encoding utf8
+  Assert-ScriptBlockFailsContaining {
+    Wait-FileExpectedPhase -Path $sentinelPath -CompletedPhase $sequence[0] -ExpectedNextPhase $sequence[1] -TimeoutSeconds 0 -Description "skipped commit prompt phase"
+  } "skipped from phase" "Commit prompt phase protocol should reject a skipped phase."
+
+  [pscustomobject]@{ phase = $sequence[0] } | ConvertTo-Json -Compress | Set-Content -LiteralPath $sentinelPath -NoNewline -Encoding utf8
+  Assert-ScriptBlockFailsContaining {
+    Wait-FileExpectedPhase -Path $sentinelPath -CompletedPhase $sequence[0] -ExpectedNextPhase $sequence[1] -TimeoutSeconds 0 -Description "repeated commit prompt phase"
+  } "repeated phase" "Commit prompt phase protocol should reject a phase that never advances."
+
+  Set-Content -LiteralPath $sentinelPath -Value '{' -NoNewline -Encoding utf8
+  Assert-ScriptBlockFailsContaining {
+    Wait-FileExpectedPhase -Path $sentinelPath -CompletedPhase $sequence[0] -ExpectedNextPhase $sequence[1] -TimeoutSeconds 0 -Description "malformed commit prompt phase"
+  } "contains malformed JSON" "Commit prompt phase protocol should reject malformed JSON without retrying it."
+}
+
+function Invoke-CommitPromptProducerProtocolSmoke([string]$WorkflowContent, [string]$TempRoot) {
+  $atomicHelperMatch = [regex]::Match(
+    $WorkflowContent,
+    '(?s)(function writeJsonCoordinationFileAtomically\(destinationPath, payload\) \{.*?\r?\n\})'
+  )
+  $publisherMatch = [regex]::Match(
+    $WorkflowContent,
+    '(?s)(async function publishCommitPromptReadyAndWait\(readyPath, donePath, phase, payload\) \{.*?\r?\n\})'
+  )
+  Assert-True $atomicHelperMatch.Success "Generated run-tests.js should expose the atomic JSON coordination writer for the producer smoke test."
+  Assert-True $publisherMatch.Success "Generated run-tests.js should expose the commit prompt producer for the producer smoke test."
+
+  $smokePath = Join-Path $TempRoot "commit-prompt-producer-protocol-smoke.js"
+  $smokeRootJson = $TempRoot | ConvertTo-Json -Compress
+  $smokeSource = @"
+const fs = require("node:fs");
+const crypto = require("node:crypto");
+const path = require("node:path");
+$($atomicHelperMatch.Groups[1].Value)
+async function waitForFile(donePath) {
+  fs.writeFileSync(donePath, "done", "utf8");
+}
+$($publisherMatch.Groups[1].Value)
+const smokeRoot = $smokeRootJson;
+const readyPath = path.join(smokeRoot, "producer-ready.json");
+const donePath = path.join(smokeRoot, "producer-done.json");
+function assertPublishedPhase(expectedPhase) {
+  const published = JSON.parse(fs.readFileSync(readyPath, "utf8"));
+  if (published.phase !== expectedPhase) {
+    throw new Error("Expected phase " + expectedPhase + " but observed " + published.phase + ".");
+  }
+  const temporaryPrefix = '.' + path.basename(readyPath) + '.';
+  const leftovers = fs.readdirSync(smokeRoot).filter(name => name.startsWith(temporaryPrefix) && name.endsWith(".tmp"));
+  if (leftovers.length !== 0) {
+    throw new Error("Atomic producer left temporary files: " + leftovers.join(", ") + ".");
+  }
+}
+(async () => {
+  await publishCommitPromptReadyAndWait(readyPath, donePath, "commitAllMessagePrompt", { command: "subversionr.commitAll" });
+  assertPublishedPhase("commitAllMessagePrompt");
+  await publishCommitPromptReadyAndWait(readyPath, donePath, "reviewCommitInitialSelection", { command: "subversionr.reviewCommit" });
+  assertPublishedPhase("reviewCommitInitialSelection");
+  writeJsonCoordinationFileAtomically(readyPath, {
+    ok: true,
+    phase: "commitPromptSequenceComplete",
+    command: "commitPromptSequence"
+  });
+  assertPublishedPhase("commitPromptSequenceComplete");
+})().catch(error => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exitCode = 1;
+});
+"@
+  Set-Content -LiteralPath $smokePath -Value $smokeSource -Encoding utf8
+  & node --check $smokePath
+  Assert-Equal 0 $LASTEXITCODE "Generated commit prompt producer protocol smoke should parse as JavaScript."
+  & node $smokePath
+  Assert-Equal 0 $LASTEXITCODE "Generated commit prompt producer should atomically replace phases and publish terminal without temporary files."
 }
 
 function New-TestVsix([string]$Path, [string]$Version, [string]$TargetPlatform = "win32-x64") {
@@ -2098,8 +2223,13 @@ foreach ($commitPromptFakePhase in $commitPromptFakePhases) {
     rendererCaptureExpectations = $rendererCaptureExpectations
   } | ConvertTo-Json -Depth 12 | Write-FakeJsonCoordinationFile -Path $commitPromptReadyPath
   Wait-FakeRendererDone -Path $commitPromptDonePath -Description $commitPromptFakePhase.phase
-  Remove-Item -LiteralPath $commitPromptReadyPath -Force
 }
+[pscustomobject]@{
+  ok = $true
+  phase = "commitPromptSequenceComplete"
+  command = "commitPromptSequence"
+  rendererCaptureExpectations = $null
+} | ConvertTo-Json -Depth 4 | Write-FakeJsonCoordinationFile -Path $commitPromptReadyPath
 $loadPaths = @($loadResources | ForEach-Object { Join-Path $loadWorkingCopyRoot $_.path })
 $allFilesExistedBefore = (@($loadPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -eq $loadItemCount)
 foreach ($loadPath in $loadPaths) {
@@ -8149,6 +8279,8 @@ New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
   Invoke-EmptyHistoryProbeOrderSmoke -WorkflowContent $workflowContent -TempRoot $tempRoot
+  Invoke-CommitPromptPhaseProtocolSmoke -WorkflowContent $workflowContent -TempRoot $tempRoot
+  Invoke-CommitPromptProducerProtocolSmoke -WorkflowContent $workflowContent -TempRoot $tempRoot
   Assert-True (Test-Path -LiteralPath $workflowScript -PathType Leaf) "test-vscode-installed-source-control-ui-e2e.ps1 should exist."
   Assert-True (Test-Path -LiteralPath $driverScript -PathType Leaf) "capture-vscode-renderer-ui.mjs should exist."
   Assert-True (Test-Path -LiteralPath $normalizerScript -PathType Leaf) "normalize-vscode-window.ps1 should exist."
@@ -9609,6 +9741,36 @@ try {
   foreach ($commitPromptHelperPhase in @("commitAllMessagePrompt", "reviewCommitInitialSelection", "reviewCommitMessageCancellation", "reviewCommitFailureSelection", "reviewCommitFailureMessage", "reviewCommitFailureObserved", "reviewCommitSuccessSelection")) {
     Assert-True ($workflowContent -match ('publishCommitPromptReadyAndWait\(commitPromptReadyPath, commitPromptDonePath, "' + [regex]::Escape($commitPromptHelperPhase) + '"')) "Installed commit prompt phase $commitPromptHelperPhase should pass both coordination paths explicitly."
   }
+  $realCommitPromptAtomicWriter = [regex]::Match(
+    $workflowContent,
+    '(?s)function writeJsonCoordinationFileAtomically\(destinationPath, payload\) \{.*?\r?\n\}'
+  )
+  Assert-True $realCommitPromptAtomicWriter.Success "Installed commit prompt producer should expose one atomic JSON writer."
+  Assert-True ($realCommitPromptAtomicWriter.Value -match '(?s)path\.dirname\(destinationPath\).*?path\.basename\(destinationPath\).*?crypto\.randomUUID\(\).*?fs\.writeFileSync\(temporaryPath, JSON\.stringify\(payload, null, 2\), \{ encoding: "utf8", flag: "wx" \}\).*?fs\.renameSync\(temporaryPath, destinationPath\).*?finally\s*\{\s*fs\.rmSync\(temporaryPath, \{ force: true \}\)') "Installed commit prompt atomic writer should publish a complete same-directory temporary file by one replacement and clean only that temporary path."
+  $realCommitPromptPublisher = [regex]::Match(
+    $workflowContent,
+    '(?s)async function publishCommitPromptReadyAndWait\(readyPath, donePath, phase, payload\) \{.*?\r?\n\}'
+  )
+  Assert-True $realCommitPromptPublisher.Success "Installed commit prompt producer should expose the phase publisher."
+  Assert-True ($realCommitPromptPublisher.Value -match 'writeJsonCoordinationFileAtomically\(readyPath, \{ ok: true, phase, \.\.\.payload \}\)') "Installed commit prompt producer should publish every ready phase through the atomic writer."
+  Assert-True (-not $realCommitPromptPublisher.Value.Contains('fs.writeFileSync(readyPath')) "Installed commit prompt producer should not directly write the shared ready sentinel."
+  Assert-True (-not $realCommitPromptPublisher.Value.Contains('fs.rmSync(readyPath')) "Installed commit prompt producer should not delete the shared ready sentinel between phases."
+  Assert-True ($workflowContent -match '(?s)publishCommitPromptReadyAndWait\(commitPromptReadyPath, commitPromptDonePath, "reviewCommitSuccessSelection".*?writeJsonCoordinationFileAtomically\(commitPromptReadyPath, \{\s+ok: true,\s+phase: "commitPromptSequenceComplete",\s+command: "commitPromptSequence"\s+\}\);\s+await successfulReviewCommand') "Installed Review & Commit producer should atomically publish the terminal phase immediately after the seventh handshake."
+  $sharedPhaseReaderMatch = [regex]::Match(
+    $workflowContent,
+    '(?s)function Read-SharedPhaseSentinel\(.*?\r?\n\}'
+  )
+  Assert-True $sharedPhaseReaderMatch.Success "Installed commit prompt phase protocol should expose a dedicated shared sentinel reader."
+  Assert-True ($sharedPhaseReaderMatch.Value -match '\[System\.IO\.FileStream\]::new\([\s\S]*?\[System\.IO\.FileMode\]::Open[\s\S]*?\[System\.IO\.FileAccess\]::Read[\s\S]*?\[System\.IO\.FileShare\]::ReadWrite -bor \[System\.IO\.FileShare\]::Delete') "Installed commit prompt phase reader should permit atomic replacement while its read handle is open."
+  Assert-True (-not $sharedPhaseReaderMatch.Value.Contains('Get-Content')) "Installed commit prompt phase reader should use the explicitly shared FileStream instead of Get-Content."
+  Assert-True (-not $sharedPhaseReaderMatch.Value.Contains('Start-Sleep')) "Installed commit prompt phase reader should reject missing or malformed sentinels without retrying them."
+  Assert-True ($workflowContent -match 'function Wait-FileExpectedPhase\(\[string\]\$Path, \[string\]\$CompletedPhase, \[string\]\$ExpectedNextPhase, \[int\]\$TimeoutSeconds, \[string\]\$Description\)') "Installed commit prompt phase wait should require the explicit expected next phase."
+  Assert-True ($workflowContent -match 'Wait-FileExpectedPhase -Path \$harness\.CommitPromptReadyPath -CompletedPhase \$commitPromptPhase -ExpectedNextPhase \$expectedNextCommitPromptPhase') "Installed commit prompt consumer should advance through the fixed expected phase sequence."
+  Assert-True ($workflowContent -match '(?s)\$commitPromptPhases = @\(\s+"commitAllMessagePrompt",\s+"reviewCommitInitialSelection",\s+"reviewCommitMessageCancellation",\s+"reviewCommitFailureSelection",\s+"reviewCommitFailureMessage",\s+"reviewCommitFailureObserved",\s+"reviewCommitSuccessSelection"\s+\)\s+\$commitPromptTerminalPhase = "commitPromptSequenceComplete"') "Installed commit prompt consumer should preserve the fixed seven-phase order followed by the terminal phase."
+  Assert-True ($workflowContent -match '\$commitPromptTerminalPhase = "commitPromptSequenceComplete"') "Installed commit prompt consumer should require the explicit terminal phase after the seventh prompt phase."
+  $producerReadyDeletion = 'Remove-Item -LiteralPath $commitPrompt' + 'ReadyPath'
+  Assert-True (-not $testScriptContent.Contains($producerReadyDeletion)) "Fake commit prompt producer should retain the ready sentinel while atomically publishing each next phase."
+  Assert-True ($testScriptContent -match '(?s)foreach \(\$commitPromptFakePhase in \$commitPromptFakePhases\).*?Wait-FakeRendererDone -Path \$commitPromptDonePath -Description \$commitPromptFakePhase\.phase\s+\}\s+\[pscustomobject\]@\{\s+ok = \$true\s+phase = "commitPromptSequenceComplete"\s+command = "commitPromptSequence"\s+rendererCaptureExpectations = \$null\s+\} \| ConvertTo-Json -Depth 4 \| Write-FakeJsonCoordinationFile -Path \$commitPromptReadyPath') "Fake commit prompt producer should atomically publish the explicit terminal phase after the full sequence."
   Assert-True ($workflowContent -match '(?s)cancellationHistoryBefore\s*=\s*await probeEmptyCommitMessageHistory.*?cancellationHistoryAfter\s*=\s*await probeEmptyCommitMessageHistory.*?cancellationHistoryUnchanged\s*=\s*cancellationHistoryBefore\.completedWithoutQuickPickInteraction\s*===\s*true\s*&&\s*cancellationHistoryBefore\.returnedUndefined\s*===\s*true\s*&&\s*cancellationHistoryAfter\.completedWithoutQuickPickInteraction\s*===\s*true\s*&&\s*cancellationHistoryAfter\.returnedUndefined\s*===\s*true') "Review & Commit cancellation history evidence should be derived from before/after command probes rather than a constant."
   Assert-True ($workflowContent -match 'reviewedSelectionRetainedAfterCancellation:\s*forcedFailureJournaled\s*&&\s*Boolean\(retainedProbeResourceAfter\)') "Review & Commit cancellation retention evidence should be derived from the subsequent exact reviewed-path failure and retained probe."
   Assert-True ($workflowContent -match 'reviewedSelectionRetainedAfterFailure:\s*selectedPathsCleared\s*&&\s*Boolean\(retainedProbeResourceAfter\)') "Review & Commit failure retention evidence should be derived from the subsequent exact reviewed-path success and retained probe."
