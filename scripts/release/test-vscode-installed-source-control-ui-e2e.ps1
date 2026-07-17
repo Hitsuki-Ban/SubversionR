@@ -3546,7 +3546,7 @@ function updateConflictWarningCaptureExpectations(resourcePath) {
   };
 }
 
-function conflictArtifactSurfaceCaptureExpectations(scmActionSurface, artifactPaths) {
+function conflictArtifactSurfaceCaptureExpectations(forbiddenNotificationTokens, artifactPaths) {
   const artifactNames = artifactPaths.map((artifactPath) => path.basename(artifactPath));
   const forbiddenActionTokens = [
     "SubversionR: Add Resource",
@@ -3565,11 +3565,8 @@ function conflictArtifactSurfaceCaptureExpectations(scmActionSurface, artifactPa
     forbiddenAccessibilityTokens: forbiddenActionTokens,
     requiredScreenshot: true,
     viewport: { width: 1440, height: 900 },
-    scmActionSurface: {
-      layout: scmActionSurface.layout,
-      primaryActions: scmActionSurface.primaryActions,
-      overflowSubmenus: scmActionSurface.overflowSubmenus,
-      forbiddenNotificationTokens: scmActionSurface.forbiddenNotificationTokens,
+    scmResourceSurface: {
+      forbiddenNotificationTokens,
       resource: {
         pathToken: artifactNames[0],
         expectedNoContextActions: true,
@@ -6541,7 +6538,7 @@ async function runResolveWorkflow(
     }
 
     const conflictArtifactsRendererCaptureExpectations = conflictArtifactSurfaceCaptureExpectations(
-      resolveOpenReport.rendererCaptureExpectations.scmActionSurface,
+      resolveOpenReport.rendererCaptureExpectations.scmActionSurface.forbiddenNotificationTokens,
       artifactPaths
     );
     fs.writeFileSync(conflictArtifactsReadyPath, JSON.stringify({
@@ -10977,10 +10974,10 @@ async function run() {
       !scmActionLayout ||
       scmActionLayout.prepareCommand !== "workbench.action.increaseViewSize" ||
       scmActionLayout.incrementCount !== 1 ||
-      scmActionLayout.minimumProviderWidth !== 280 ||
-      scmActionLayout.minimumActionsContainerWidth !== 120
+      scmActionLayout.minimumViewPaneHeaderWidth !== 280 ||
+      scmActionLayout.minimumActionsContainerWidth !== 96
     ) {
-      throw new Error("Installed Source Control UI E2E SCM action layout contract must require one workbench.action.increaseViewSize command and exact 280/120 pixel minimum widths.");
+      throw new Error("Installed Source Control UI E2E SCM action layout contract must require one workbench.action.increaseViewSize command and exact 280/96 pixel minimum widths.");
     }
 
     phase = "focusingSourceControlView";
@@ -12105,8 +12102,8 @@ function Assert-HarnessResult(
   if (
     $scmActionLayout.prepareCommand -ne "workbench.action.increaseViewSize" -or
     [int]$scmActionLayout.incrementCount -ne 1 -or
-    [int]$scmActionLayout.minimumProviderWidth -ne 280 -or
-    [int]$scmActionLayout.minimumActionsContainerWidth -ne 120 -or
+    [int]$scmActionLayout.minimumViewPaneHeaderWidth -ne 280 -or
+    [int]$scmActionLayout.minimumActionsContainerWidth -ne 96 -or
     @($Result.invokedCommands | Where-Object { $_ -eq "workbench.action.increaseViewSize" }).Count -ne 1
   ) {
     throw "Installed Source Control UI E2E result must preserve the exact SCM action layout contract and execute its prepare command exactly once."
@@ -13065,6 +13062,13 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
     throw "Renderer capture must prove the exact 1600x1000 native workbench outer bounds."
   }
   $captureExpectations = $OpenReport.rendererCaptureExpectations
+  $scmInteractionContractCount = @(
+    "scmActionSurface",
+    "scmResourceSurface"
+  | Where-Object { $captureExpectations.PSObject.Properties.Name -contains $_ }).Count
+  if ($scmInteractionContractCount -gt 1) {
+    throw "Renderer capture expectations must not combine scmActionSurface and scmResourceSurface."
+  }
   $expectedDomTokens = Assert-TokenArray -Tokens $captureExpectations.requiredDomTokens -Name "Open report DOM expectations"
   $expectedAccessibilityTokens = Assert-TokenArray -Tokens $captureExpectations.requiredAccessibilityTokens -Name "Open report accessibility expectations"
   $expectedForbiddenDomTokens = @()
@@ -13138,33 +13142,42 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
     if (
       $expectedLayout.prepareCommand -ne "workbench.action.increaseViewSize" -or
       [int]$expectedLayout.incrementCount -ne 1 -or
-      [int]$expectedLayout.minimumProviderWidth -ne 280 -or
-      [int]$expectedLayout.minimumActionsContainerWidth -ne 120
+      [int]$expectedLayout.minimumViewPaneHeaderWidth -ne 280 -or
+      [int]$expectedLayout.minimumActionsContainerWidth -ne 96
     ) {
-      throw "Renderer capture SCM action layout expectations must preserve the exact prepare command and 280/120 pixel minimum widths."
+      throw "Renderer capture SCM action layout expectations must preserve the exact prepare command and 280/96 pixel minimum widths."
     }
     if (
       $actualLayout.expected.prepareCommand -ne $expectedLayout.prepareCommand -or
       [int]$actualLayout.expected.incrementCount -ne [int]$expectedLayout.incrementCount -or
-      [int]$actualLayout.expected.minimumProviderWidth -ne [int]$expectedLayout.minimumProviderWidth -or
+      [int]$actualLayout.expected.minimumViewPaneHeaderWidth -ne [int]$expectedLayout.minimumViewPaneHeaderWidth -or
       [int]$actualLayout.expected.minimumActionsContainerWidth -ne [int]$expectedLayout.minimumActionsContainerWidth -or
       [int]$actualLayout.observed.matchingTargetPaneCount -ne 1 -or
       [int]$actualLayout.observed.matchingResourceRowCount -ne 1 -or
       $null -eq $actualLayout.observed.targetRoot -or
       $actualLayout.observed.targetRoot.scmEditorVisible -ne $true -or
-      [int]$actualLayout.observed.matchingProviderAndActionsContainerCount -ne 1 -or
-      [double]$actualLayout.observed.provider.width -lt [double]$expectedLayout.minimumProviderWidth -or
+      [int]$actualLayout.observed.renderMode.directHeaderCount -ne 1 -or
+      [int]$actualLayout.observed.renderMode.visibleDirectHeaderCount -ne 1 -or
+      [int]$actualLayout.observed.renderMode.directBodyCount -ne 1 -or
+      [int]$actualLayout.observed.renderMode.visibleDirectBodyCount -ne 1 -or
+      [int]$actualLayout.observed.renderMode.scmProviderCount -ne 0 -or
+      [int]$actualLayout.observed.renderMode.directToolbarChainCount -ne 1 -or
+      [int]$actualLayout.observed.renderMode.visibleDirectToolbarChainCount -ne 1 -or
+      $actualLayout.observed.renderMode.expectedActionsUniqueAndDistinct -ne $true -or
+      [int]$actualLayout.observed.matchingViewPaneHeaderAndActionsContainerCount -ne 1 -or
+      [double]$actualLayout.observed.viewPaneHeader.width -lt [double]$expectedLayout.minimumViewPaneHeaderWidth -or
       [double]$actualLayout.observed.actionsContainer.width -lt [double]$expectedLayout.minimumActionsContainerWidth -or
       $actualLayout.assertions.uniqueTargetResourceRow -ne $true -or
-      $actualLayout.assertions.uniqueProviderAndActionsContainer -ne $true -or
-      $actualLayout.assertions.providerMinimumWidthReached -ne $true -or
+      $actualLayout.assertions.uniqueViewPaneHeaderAndActionsContainer -ne $true -or
+      $actualLayout.assertions.singleVisibleRepositoryViewPaneTitleMode -ne $true -or
+      $actualLayout.assertions.viewPaneHeaderMinimumWidthReached -ne $true -or
       $actualLayout.assertions.actionsContainerMinimumWidthReached -ne $true -or
       $Capture.assertions.scmTargetResourceRowUnique -ne $true -or
-      $Capture.assertions.scmProviderAndActionsContainerUnique -ne $true -or
-      $Capture.assertions.scmProviderMinimumWidthReached -ne $true -or
+      $Capture.assertions.scmViewPaneHeaderAndActionsContainerUnique -ne $true -or
+      $Capture.assertions.scmViewPaneHeaderMinimumWidthReached -ne $true -or
       $Capture.assertions.scmActionsContainerMinimumWidthReached -ne $true
     ) {
-      throw "Renderer capture SCM action layout must prove one provider toolbar at or above the exact 280/120 pixel minimum widths."
+      throw "Renderer capture SCM action layout must prove one direct SCM ViewPane header toolbar at or above the exact 280/96 pixel minimum widths."
     }
     $expectedPrimary = @($captureExpectations.scmActionSurface.primaryActions)
     $actualPrimary = @($Capture.interaction.primaryActions)
@@ -13221,6 +13234,7 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
         throw "Renderer capture SCM resource context action reachability did not match expectations."
       }
     }
+    Assert-TokenListsEqual -Expected @($captureExpectations.scmActionSurface.forbiddenNotificationTokens) -Actual @($Capture.interaction.notifications.forbiddenTokens) -Name "Renderer capture SCM forbidden notification tokens"
     if (
       @($Capture.interaction.notifications.presentForbiddenTokens).Count -ne 0 -or
       $Capture.assertions.scmPrimaryActionsRendered -ne $true -or
@@ -13240,6 +13254,79 @@ function Assert-RendererCaptureReport([object]$Capture, [string]$CaptureRoot, [s
       ) {
         throw "Renderer capture must prove that the selected SCM resource exposes only the expected read-only inline action and no context actions."
       }
+    }
+  }
+  if ($captureExpectations.PSObject.Properties.Name -contains "scmResourceSurface") {
+    if ($Capture.interaction.kind -ne "scmResourceSurface") {
+      throw "Renderer capture must include the SCM resource-only surface interaction."
+    }
+    $resourceExpectations = $captureExpectations.scmResourceSurface
+    if (
+      $resourceExpectations.PSObject.Properties.Name -contains "layout" -or
+      $resourceExpectations.PSObject.Properties.Name -contains "primaryActions" -or
+      $resourceExpectations.PSObject.Properties.Name -contains "overflowSubmenus"
+    ) {
+      throw "Renderer capture SCM resource-only expectations must not replay the full SCM action surface contract."
+    }
+    if (
+      -not ($resourceExpectations.PSObject.Properties.Name -contains "resource") -or
+      -not ($resourceExpectations.PSObject.Properties.Name -contains "forbiddenNotificationTokens") -or
+      [string]::IsNullOrWhiteSpace([string]$resourceExpectations.resource.pathToken) -or
+      @($resourceExpectations.resource.inlineActions).Count -eq 0
+    ) {
+      throw "Renderer capture SCM resource-only expectations are missing required resource or notification fields."
+    }
+    $expectedNoContextActions =
+      $resourceExpectations.resource.PSObject.Properties.Name -contains "expectedNoContextActions" -and
+      $resourceExpectations.resource.expectedNoContextActions -eq $true
+    $expectedInline = @($resourceExpectations.resource.inlineActions)
+    $actualInline = @($Capture.interaction.resource.inlineActions)
+    if (
+      $Capture.interaction.resource.pathToken -ne $resourceExpectations.resource.pathToken -or
+      [int]$Capture.interaction.resource.row.matchingRowCount -ne 1 -or
+      $Capture.assertions.scmTargetResourceRowUnique -ne $true -or
+      $actualInline.Count -ne $expectedInline.Count
+    ) {
+      throw "Renderer capture SCM resource-only row or inline action count did not match expectations."
+    }
+    for ($index = 0; $index -lt $expectedInline.Count; $index++) {
+      if (
+        $actualInline[$index].label -ne $expectedInline[$index].label -or
+        $actualInline[$index].codicon -ne $expectedInline[$index].codicon -or
+        $actualInline[$index].rendered -ne $true
+      ) {
+        throw "Renderer capture SCM resource-only inline action/codicon evidence did not match expectations."
+      }
+    }
+    $expectedContext = @()
+    if (-not $expectedNoContextActions) {
+      $expectedContext = @($resourceExpectations.resource.contextActions)
+    }
+    $actualContext = @($Capture.interaction.resource.contextActions)
+    if ($actualContext.Count -ne $expectedContext.Count) {
+      throw "Renderer capture SCM resource-only context action count did not match expectations."
+    }
+    for ($index = 0; $index -lt $expectedContext.Count; $index++) {
+      if ($actualContext[$index].label -ne $expectedContext[$index] -or $actualContext[$index].reachable -ne $true) {
+        throw "Renderer capture SCM resource-only context action reachability did not match expectations."
+      }
+    }
+    Assert-TokenListsEqual -Expected @($resourceExpectations.forbiddenNotificationTokens) -Actual @($Capture.interaction.notifications.forbiddenTokens) -Name "Renderer capture SCM resource-only forbidden notification tokens"
+    if (
+      @($Capture.interaction.notifications.presentForbiddenTokens).Count -ne 0 -or
+      $Capture.assertions.scmResourceInlineActionsReachable -ne $true -or
+      $Capture.assertions.scmResourceContextActionsReachable -ne $true -or
+      $Capture.assertions.activationReadyToastAbsent -ne $true
+    ) {
+      throw "Renderer capture SCM resource-only and notification assertions must all pass."
+    }
+    if ($expectedNoContextActions -and (
+      $Capture.interaction.resource.expectedNoContextActions -ne $true -or
+      @($Capture.interaction.resource.observedInlineActions).Count -ne $expectedInline.Count -or
+      @($Capture.interaction.resource.observedContextMenuLabels).Count -ne 0 -or
+      $Capture.assertions.scmResourceContextActionsEmpty -ne $true
+    )) {
+      throw "Renderer capture must prove the selected SCM resource exposes only the expected read-only inline action and no context actions."
     }
   }
   if ($captureExpectations.PSObject.Properties.Name -contains "clickButtonText") {
@@ -13869,7 +13956,7 @@ New-Item -ItemType Directory -Force -Path $resolveConflictArtifactsCaptureRoot, 
   "extensions.autoCheckUpdates": false,
   "extensions.autoUpdate": false,
   "security.workspace.trust.enabled": false,
-  "workbench.scm.alwaysShowRepositories": true
+  "scm.alwaysShowRepositories": false
 }
 '@ | Set-Content -LiteralPath (Join-Path $userDataRoot "User\settings.json") -NoNewline -Encoding utf8
 

@@ -502,8 +502,8 @@ describe("collectInstalledSourceControlSurfaceReport", () => {
         layout: {
           prepareCommand: "workbench.action.increaseViewSize",
           incrementCount: 1,
-          minimumProviderWidth: 280,
-          minimumActionsContainerWidth: 120,
+          minimumViewPaneHeaderWidth: 280,
+          minimumActionsContainerWidth: 96,
         },
         primaryActions: [
           { label: "SubversionR: Refresh", codicon: "refresh" },

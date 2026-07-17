@@ -770,8 +770,8 @@ $openReport = [pscustomobject]@{
       layout = [pscustomobject]@{
         prepareCommand = "workbench.action.increaseViewSize"
         incrementCount = 1
-        minimumProviderWidth = 280
-        minimumActionsContainerWidth = 120
+        minimumViewPaneHeaderWidth = 280
+        minimumActionsContainerWidth = 96
       }
       primaryActions = @(
         [pscustomobject]@{ label = "SubversionR: Refresh"; codicon = "refresh" },
@@ -4690,10 +4690,7 @@ $resolveArtifactExpectations = [pscustomobject]@{
   forbiddenAccessibilityTokens = @("SubversionR: Add Resource", "Delete Unversioned Resource…", "Add to Ignore…", "Move Resource…", "Revert Resource…", "Commit Resource", "Lock Resource…", "Set Changelist…")
   requiredScreenshot = $true
   viewport = [pscustomobject]@{ width = 1440; height = 900 }
-  scmActionSurface = [pscustomobject]@{
-    layout = $openReport.rendererCaptureExpectations.scmActionSurface.layout
-    primaryActions = $openReport.rendererCaptureExpectations.scmActionSurface.primaryActions
-    overflowSubmenus = $openReport.rendererCaptureExpectations.scmActionSurface.overflowSubmenus
+  scmResourceSurface = [pscustomobject]@{
     forbiddenNotificationTokens = $openReport.rendererCaptureExpectations.scmActionSurface.forbiddenNotificationTokens
     resource = [pscustomobject]@{
       pathToken = "tracked.txt.mine"
@@ -7564,6 +7561,11 @@ if (!outputRoot || !expectationsPath || !target) {
 }
 mkdirSync(outputRoot, { recursive: true });
 const expectations = JSON.parse(readFileSync(expectationsPath, "utf8"));
+if (expectations.scmActionSurface && expectations.scmResourceSurface) {
+  throw new Error("fake renderer expectations must not combine scmActionSurface and scmResourceSurface");
+}
+const scmResourceContract = expectations.scmActionSurface || expectations.scmResourceSurface;
+const resourceOnlySurface = Boolean(expectations.scmResourceSurface);
 const forbiddenDomTokens = expectations.forbiddenDomTokens || [];
 const forbiddenAccessibilityTokens = expectations.forbiddenAccessibilityTokens || [];
 const mode = process.env.SUBVERSIONR_FAKE_RENDERER_CAPTURE_MODE || "valid";
@@ -7588,11 +7590,11 @@ const reportedForbiddenDomTokens = mode === "forbidden-dom-token-lie" ? [] : pre
 const reportedForbiddenAccessibilityTokens = mode === "forbidden-accessibility-token-lie" ? [] : presentForbiddenAccessibilityTokens;
 const reportedScreenshotNonBlank = mode === "blank-screenshot" ? false : true;
 const cancelSurface = expectations.cancelSurface || "quickInput";
-const scmLayoutProviderWidth = expectations.scmActionSurface
-  ? expectations.scmActionSurface.layout.minimumProviderWidth - (mode === "scm-layout-width-lie" ? 1 : 0)
+const scmLayoutViewPaneHeaderWidth = expectations.scmActionSurface
+  ? expectations.scmActionSurface.layout.minimumViewPaneHeaderWidth - (mode === "scm-view-pane-header-width-lie" ? 1 : 0)
   : undefined;
 const scmLayoutActionsContainerWidth = expectations.scmActionSurface
-  ? expectations.scmActionSurface.layout.minimumActionsContainerWidth - (mode === "scm-layout-width-lie" ? 1 : 0)
+  ? expectations.scmActionSurface.layout.minimumActionsContainerWidth - (mode === "scm-actions-container-width-lie" ? 1 : 0)
   : undefined;
 const report = {
   schemaVersion: 1,
@@ -7669,17 +7671,20 @@ const report = {
     ...(expectations.viewport ? { viewportMatched: true } : {}),
     ...(expectations.scmActionSurface ? {
       scmTargetResourceRowUnique: true,
-      scmProviderAndActionsContainerUnique: true,
-      scmProviderMinimumWidthReached: true,
+      scmViewPaneHeaderAndActionsContainerUnique: true,
+      scmViewPaneHeaderMinimumWidthReached: true,
       scmActionsContainerMinimumWidthReached: true,
       scmPrimaryActionsRendered: true,
       scmOverflowSubmenusReachable: true,
-      scmResourceInlineActionsReachable: true,
-      scmResourceContextActionsReachable: true,
-      ...(expectations.scmActionSurface.resource.expectedNoContextActions ? {
-        scmResourceContextActionsEmpty: mode !== "scm-empty-context-lie"
+    } : {}),
+    ...(scmResourceContract ? {
+      scmTargetResourceRowUnique: true,
+      scmResourceInlineActionsReachable: !(resourceOnlySurface && mode === "scm-resource-inline-missing-lie"),
+      scmResourceContextActionsReachable: !(resourceOnlySurface && mode === "scm-resource-context-lie"),
+      ...(scmResourceContract.resource.expectedNoContextActions ? {
+        scmResourceContextActionsEmpty: mode !== "scm-empty-context-lie" && !(resourceOnlySurface && mode === "scm-resource-context-lie")
       } : {}),
-      activationReadyToastAbsent: true
+      activationReadyToastAbsent: !(resourceOnlySurface && mode === "scm-resource-notification-lie")
     } : {}),
     ...(expectations.treeViewState ? {
       treeViewVisible: true,
@@ -7711,15 +7716,28 @@ const report = {
           matchingResourceRowCount: 1,
           globalMatchingResourceRowCount: 2,
           targetRoot: { tagName: "DIV", role: "", className: "pane scm-view", scmEditorVisible: true, left: 0, top: 0, width: 300, height: 400, clientWidth: 300, clientHeight: 400 },
-          matchingProviderAndActionsContainerCount: 1,
-          provider: { left: 0, top: 0, width: scmLayoutProviderWidth, height: 200, clientWidth: scmLayoutProviderWidth, clientHeight: 200 },
+          renderMode: {
+            directHeaderCount: 1,
+            visibleDirectHeaderCount: 1,
+            directBodyCount: 1,
+            visibleDirectBodyCount: 1,
+            scmProviderCount: 0,
+            bodyActionsContainerCount: 0,
+            directToolbarChainCount: 1,
+            visibleDirectToolbarChainCount: 1,
+            expectedActionsUniqueAndDistinct: true,
+            conflictingPrefixResourceRowCount: 0
+          },
+          matchingViewPaneHeaderAndActionsContainerCount: 1,
+          viewPaneHeader: { left: 0, top: 0, width: scmLayoutViewPaneHeaderWidth, height: 22, clientWidth: scmLayoutViewPaneHeaderWidth, clientHeight: 22 },
           actionsContainer: { left: 160, top: 0, width: scmLayoutActionsContainerWidth, height: 22, clientWidth: scmLayoutActionsContainerWidth, clientHeight: 22 },
           matchedActionLabels: expectations.scmActionSurface.primaryActions.map(action => action.label)
         },
         assertions: {
           uniqueTargetResourceRow: true,
-          uniqueProviderAndActionsContainer: true,
-          providerMinimumWidthReached: true,
+          uniqueViewPaneHeaderAndActionsContainer: true,
+          singleVisibleRepositoryViewPaneTitleMode: true,
+          viewPaneHeaderMinimumWidthReached: true,
           actionsContainerMinimumWidthReached: true
         }
       },
@@ -7728,25 +7746,50 @@ const report = {
       overflowParentLabels: expectations.scmActionSurface.overflowSubmenus.map(submenu => submenu.label),
       overflowSubmenus: expectations.scmActionSurface.overflowSubmenus.map(submenu => ({ ...submenu, reachable: mode !== "scm-submenu-lie", observedMenuLabels: submenu.commands })),
       resource: {
-        pathToken: expectations.scmActionSurface.resource.pathToken,
-        expectedNoContextActions: expectations.scmActionSurface.resource.expectedNoContextActions === true,
-        row: { matchingRowCount: 1, text: expectations.scmActionSurface.resource.pathToken, x: 100, y: 100, className: "monaco-list-row" },
-        inlineActions: (expectations.scmActionSurface.resource.inlineActions || []).map(action => ({
+        pathToken: scmResourceContract.resource.pathToken,
+        expectedNoContextActions: scmResourceContract.resource.expectedNoContextActions === true,
+        row: { matchingRowCount: 1, text: scmResourceContract.resource.pathToken, x: 100, y: 100, className: "monaco-list-row" },
+        inlineActions: (scmResourceContract.resource.inlineActions || []).map(action => ({
           ...action,
           rendered: mode !== "scm-inline-lie"
         })),
         observedInlineActions: mode === "scm-empty-inline-lie"
           ? [
-              ...(expectations.scmActionSurface.resource.inlineActions || []),
+              ...(scmResourceContract.resource.inlineActions || []),
               { label: "Revert Resource…", className: "action-item", disabled: false }
             ]
-          : (expectations.scmActionSurface.resource.inlineActions || []),
-        contextActions: (expectations.scmActionSurface.resource.contextActions || []).map(label => ({ label, reachable: mode !== "scm-context-lie" })),
-        observedContextMenuLabels: mode === "scm-empty-context-lie" ? ["Revert Resource…"] : (expectations.scmActionSurface.resource.contextActions || [])
+          : (scmResourceContract.resource.inlineActions || []),
+        contextActions: (scmResourceContract.resource.contextActions || []).map(label => ({ label, reachable: mode !== "scm-context-lie" })),
+        observedContextMenuLabels: mode === "scm-empty-context-lie"
+          ? ["Revert Resource…"]
+          : [...(scmResourceContract.resource.contextActions || []), "SubversionR: Blame"]
       },
       notifications: {
-        forbiddenTokens: expectations.scmActionSurface.forbiddenNotificationTokens,
-        presentForbiddenTokens: mode === "activation-toast-lie" ? expectations.scmActionSurface.forbiddenNotificationTokens : []
+        forbiddenTokens: scmResourceContract.forbiddenNotificationTokens,
+        presentForbiddenTokens: mode === "activation-toast-lie" ? scmResourceContract.forbiddenNotificationTokens : []
+      }
+    }
+  } : expectations.scmResourceSurface ? {
+    interaction: {
+      kind: mode === "scm-resource-wrong-kind-lie" ? "scmActionSurface" : "scmResourceSurface",
+      resource: {
+        pathToken: scmResourceContract.resource.pathToken,
+        expectedNoContextActions: scmResourceContract.resource.expectedNoContextActions === true,
+        row: { matchingRowCount: 1, text: scmResourceContract.resource.pathToken, x: 100, y: 100, className: "monaco-list-row" },
+        inlineActions: (mode === "scm-resource-inline-missing-lie" ? [] : (scmResourceContract.resource.inlineActions || [])).map(action => ({
+          ...action,
+          ...(mode === "scm-resource-codicon-lie" ? { codicon: "wrong" } : {}),
+          rendered: mode !== "scm-inline-lie"
+        })),
+        observedInlineActions: mode === "scm-empty-inline-lie" || mode === "scm-resource-inline-extra-lie"
+          ? [...(scmResourceContract.resource.inlineActions || []), { label: "Revert Resource…", className: "action-item", disabled: false }]
+          : (scmResourceContract.resource.inlineActions || []),
+        contextActions: (scmResourceContract.resource.contextActions || []).map(label => ({ label, reachable: mode !== "scm-context-lie" })),
+        observedContextMenuLabels: mode === "scm-empty-context-lie" || mode === "scm-resource-context-lie" ? ["Revert Resource…"] : (scmResourceContract.resource.contextActions || [])
+      },
+      notifications: {
+        forbiddenTokens: mode === "scm-resource-forbidden-list-lie" ? [] : scmResourceContract.forbiddenNotificationTokens,
+        presentForbiddenTokens: mode === "activation-toast-lie" || mode === "scm-resource-notification-lie" ? scmResourceContract.forbiddenNotificationTokens : []
       }
     }
   } : expectations.treeViewState ? {
@@ -8313,7 +8356,15 @@ try {
   $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "scm-action-layout"
   try {
     & node $driverScript
-    Assert-Equal 0 $LASTEXITCODE "Renderer capture SCM layout fake-CDP self-test should select the target resource pane despite a non-target provider, accept exact minimum widths, and reject insufficient widths."
+    Assert-Equal 0 $LASTEXITCODE "Renderer capture SCM layout fake-CDP self-test should accept the exact single-repository ViewPane-title surface and reject ambiguous, repository-row, misplaced-action, and insufficient-width states."
+  }
+  finally {
+    Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
+  }
+  $env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST = "scm-surface-contracts"
+  try {
+    & node $driverScript
+    Assert-Equal 0 $LASTEXITCODE "Renderer capture SCM surface-contract self-test should accept only the resource-only schema and reject full/resource overlap or missing/forbidden fields."
   }
   finally {
     Remove-Item Env:SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST -ErrorAction SilentlyContinue
@@ -8328,11 +8379,15 @@ try {
   }
   $driverText = Get-Content -Raw -LiteralPath $driverScript
   Assert-True ($driverText.Contains("waitForScmPrimaryActions") -and $driverText.Contains("REQUIRED_TOKEN_CAPTURE_TIMEOUT_MS")) "Renderer capture should use the existing bounded state timeout for SCM primary actions."
-  Assert-True ($driverText -match '(?s)inspectScmActionSurface.*?inspectScmActionLayout\(.*?expectations\.resource\.pathToken.*?waitForScmPrimaryActions\(.*?expectations\.resource\.pathToken') "Renderer capture should validate the target resource pane's unique SCM provider/toolbar layout before checking primary actions in the same scope."
-  Assert-True ($driverText -match '\.scm-provider \.actions-container') "Renderer capture should scope successful SCM primary-action matching to one provider actions container."
-  Assert-True ($driverText -match '(?s)querySelectorAll\("\.pane"\).*?\.scm-editor-container, \.scm-input.*?resourceRows\.length === 1.*?pane\.pairs\.length > 0') "Renderer capture should identify the main SCM pane through its visible editor, unique target resource row, and expected provider actions instead of page order."
-  Assert-True ($driverText -match '(?s)function inspectScmActionLayout.*?querySelector\("\.label-name"\).*?=== resourcePathToken.*?function inspectScmPrimaryActions.*?querySelector\("\.label-name"\).*?=== resourcePathToken') "Renderer capture layout and primary-action scopes should match the visible SCM resource label exactly instead of accepting conflict-artifact prefixes."
+  Assert-True ($driverText -match '(?s)inspectScmActionSurface.*?inspectScmActionLayout\(.*?expectations\.resource\.pathToken.*?waitForScmPrimaryActions\(.*?expectations\.resource\.pathToken') "Renderer capture should validate the target resource pane's unique direct ViewPane-header layout before checking primary actions in the same scope."
+  Assert-True ($driverText -match ':scope > \.actions > \.monaco-toolbar > \.monaco-action-bar > \.actions-container') "Renderer capture should use the one exact direct ViewPane-header toolbar chain."
+  Assert-True ($driverText -match 'actionsContainer\.querySelectorAll\(\":scope > \.action-item\"\)') "Renderer capture should resolve actions only from direct action items in the target header container."
+  Assert-True ($driverText -match '(?s)querySelectorAll\("\.pane"\).*?:scope > \.pane-header.*?:scope > \.pane-body.*?body\.querySelectorAll\("\.scm-editor-container, \.scm-input"\).*?resourceRows\.length === 1') "Renderer capture should identify the main SCM pane through one visible direct header/body pair, its body-local editor, and one exact body-local resource row."
+  Assert-True ($driverText -match '(?s)resourceLabelsFor.*?value === resourcePathToken.*?inspectScmViewPaneHeaderSurface\(cdp, expectedActions, resourcePathToken\).*?inspectScmViewPaneHeaderSurface\(cdp, expectedActions, resourcePathToken\)') "Renderer capture layout and primary-action scopes should reuse exact resource-label matching instead of accepting conflict-artifact prefixes."
+  Assert-True ($driverText -match 'scmProviderCount === 0') "Renderer capture should fail closed when VS Code renders a repository row instead of the explicit single-visible-repository ViewPane-title mode."
   Assert-True ($driverText.Contains("SCM title actions were not rendered with expected codicons") -and $driverText.Contains("Observed:")) "Renderer capture should retain strict title-action failure reporting with the observed contract."
+  Assert-True ($driverText.Contains("waitForVisibleMenuLabels(cdp, expectations.resource.contextActions)") -and $driverText.Contains("SCM resource context menu did not expose expected actions") -and -not $driverText.Contains("SCM resource context menu did not exactly match expected actions")) "Renderer capture should require the declared full-surface context-action subset without rejecting other legitimate SCM menu contributions."
+  Assert-True ($driverText.Contains("waitForNoVisibleMenuLabels(cdp)") -and $driverText.Contains("SCM resource exposed context actions despite expectedNoContextActions")) "Renderer capture should retain the strict empty-menu contract for resource-only conflict evidence."
   $normalizeCallIndex = $driverText.IndexOf('windowBounds = await observeNormalizedWorkbenchWindow(cdp);')
   $viewportCallIndex = $driverText.IndexOf('await setExpectedViewport(cdp, expectedViewport);')
   Assert-True ($normalizeCallIndex -ge 0 -and $viewportCallIndex -gt $normalizeCallIndex) "Renderer capture should observe the normalized real workbench window before applying the exact emulated viewport."
@@ -8341,8 +8396,16 @@ try {
   Assert-True (-not $driverText.Contains("window.resizeTo")) "Renderer capture must not mutate the native workbench window through the clamped Chromium resize API."
   Assert-True ($driverText -match '(?s)async function observeNormalizedWorkbenchWindow.*?method: "renderer\.observation".*?expected:.*?outerWidth: WORKBENCH_OUTER_BOUNDS\.width.*?observed') "Renderer capture should only observe and report the exact 1600x1000 native workbench bounds."
   Assert-True ($driverText -match '(?s)windowBounds,.*?viewport:') "Renderer capture report should record independently observed native window bounds before viewport evidence."
-  Assert-True ($driverText.Contains("restrictedMode") -and $driverText.Contains("scmRepositoryToolbar") -and $driverText.Contains("visiblePrimaryActionCandidates") -and $driverText.Contains("moreActionsCandidates") -and $driverText.Contains("overflowMenuLabels")) "Renderer capture SCM failure diagnostics should distinguish trust state, repository-toolbar layout, visible primary actions, and overflow contents."
-  Assert-True ($driverText -match '(?s)renderedPrimaryElement\.closest\("\.actions-container, \.title-actions"\).*?renderedPrimaryElement\.closest\("\.scm-provider"\).*?scmRepositoryToolbar.*?anchoredMoreActionsCandidates.*?clickAt\(cdp, candidate\.x, candidate\.y, "left"\).*?overflowMenuLabels = await waitForAnyVisibleMenuLabels\(cdp\).*?pressEscape\(cdp\).*?throw scmPrimaryActionFailure') "Renderer capture should diagnose the exact Refresh-anchored SCM repository toolbar and overflow menu, close it, and still fail the exact primary-action contract."
+  Assert-True ($driverText.Contains("restrictedMode") -and $driverText.Contains("scmViewPaneToolbar") -and $driverText.Contains("visiblePrimaryActionCandidates") -and $driverText.Contains("moreActionsCandidates") -and $driverText.Contains("overflowMenuLabels")) "Renderer capture SCM failure diagnostics should distinguish trust state, ViewPane-toolbar layout, visible primary actions, and overflow contents."
+  Assert-True (
+    $driverText.Contains("inspectScmViewPaneHeaderSurface(cdp, expectedActions, resourcePathToken)") -and
+    $driverText.Contains("scmViewPaneToolbar:") -and
+    $driverText.Contains("anchoredMoreActionsCandidates") -and
+    $driverText.Contains('clickAt(cdp, candidate.x, candidate.y, "left")') -and
+    $driverText.Contains("overflowMenuLabels = await waitForAnyVisibleMenuLabels(cdp)") -and
+    $driverText.Contains("await pressEscape(cdp)") -and
+    $driverText.Contains("throw scmPrimaryActionFailure")
+  ) "Renderer capture should diagnose the exact target-header SCM surface and its anchored overflow menu, close it, and still fail the exact primary-action contract."
   Assert-True ($driverText.Contains("error.diagnostics = diagnostics") -and $driverText -match '(?s)error:\s*\{.*?diagnostics: error\.diagnostics') "Renderer capture should preserve SCM failure diagnostics as structured error evidence."
   Assert-True ($workflowContent -match '(?s)function Assert-RendererCaptureReport.*?windowBounds\.method -ne "renderer\.observation".*?expected\.outerWidth -ne 1600.*?expected\.outerHeight -ne 1000.*?observed\.outerWidth -ne 1600.*?observed\.outerHeight -ne 1000') "Installed Source Control UI E2E evidence validation should require exact independently observed native workbench outer bounds."
   $normalizerText = Get-Content -Raw -LiteralPath $normalizerScript
@@ -8412,6 +8475,16 @@ try {
   Assert-Equal 0 @(Get-ChildItem -LiteralPath $fakeJsonHelperSmokeRoot -Filter ".ready.json.*.tmp" -Force).Count "Atomic JSON helper should not leave a temporary file after first or replacement publication."
   $fakeDriverPath = Join-Path $tempRoot "fake-driver\fake-renderer-capture.mjs"
   New-FakeRendererCaptureDriver -Path $fakeDriverPath
+  $fakeBothScmContractsPath = Join-Path $tempRoot "fake-driver\both-scm-contracts.json"
+  $fakeBothScmContractsOutput = Join-Path $tempRoot "fake-driver\both-scm-contracts-output"
+  [pscustomobject]@{
+    requiredDomTokens = @()
+    requiredAccessibilityTokens = @()
+    scmActionSurface = [pscustomobject]@{}
+    scmResourceSurface = [pscustomobject]@{}
+  } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fakeBothScmContractsPath -NoNewline -Encoding utf8
+  $fakeBothScmContractsFailure = @(& node $fakeDriverPath --output-root $fakeBothScmContractsOutput --expectations-path $fakeBothScmContractsPath --target win32-x64 2>&1)
+  Assert-True ($LASTEXITCODE -ne 0 -and ($fakeBothScmContractsFailure -join "`n").Contains("must not combine scmActionSurface and scmResourceSurface")) "Fake renderer should fail before evidence publication when both SCM interaction contracts are present."
   $fakeWindowNormalizerPath = Join-Path $tempRoot "fake-window-normalizer\fake-window-normalizer.ps1"
   New-FakeWindowNormalizer -Path $fakeWindowNormalizerPath
   $fakeSvnRoot = Join-Path $tempRoot "fake-svn"
@@ -8444,10 +8517,10 @@ try {
   Assert-Equal "renderer.observation" $report.rendererCapture.windowBounds.method "Renderer capture should independently observe the already-normalized native window."
   Assert-Equal "workbench.action.increaseViewSize" $report.sourceControlUiOpenReport.rendererCaptureExpectations.scmActionSurface.layout.prepareCommand "Installed Source Control UI E2E evidence should retain the SCM layout prepare command."
   Assert-Equal 1 @($report.extension.invokedCommands | Where-Object { $_ -eq "workbench.action.increaseViewSize" }).Count "Installed Source Control UI E2E evidence should record exactly one SCM layout prepare command invocation."
-  Assert-Equal "280" ([string]$report.rendererCapture.interaction.layout.observed.provider.width) "Renderer capture should prove the SCM provider reached its minimum width."
-  Assert-Equal "120" ([string]$report.rendererCapture.interaction.layout.observed.actionsContainer.width) "Renderer capture should prove the SCM actions container reached its minimum width."
-  Assert-Equal "True" ([string]$report.rendererCapture.assertions.scmProviderAndActionsContainerUnique) "Renderer capture should prove one unique SCM provider toolbar."
-  Assert-Equal "True" ([string]$report.rendererCapture.assertions.scmTargetResourceRowUnique) "Renderer capture should anchor the SCM provider toolbar to one unique target resource row."
+  Assert-Equal "280" ([string]$report.rendererCapture.interaction.layout.observed.viewPaneHeader.width) "Renderer capture should prove the SCM ViewPane header reached its minimum width."
+  Assert-Equal "96" ([string]$report.rendererCapture.interaction.layout.observed.actionsContainer.width) "Renderer capture should prove the SCM actions container reached its minimum width."
+  Assert-Equal "True" ([string]$report.rendererCapture.assertions.scmViewPaneHeaderAndActionsContainerUnique) "Renderer capture should prove one unique direct SCM ViewPane header toolbar."
+  Assert-Equal "True" ([string]$report.rendererCapture.assertions.scmTargetResourceRowUnique) "Renderer capture should anchor the direct SCM ViewPane header toolbar to one unique target resource row."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Installed Source Control UI E2E evidence should record the extension id."
   Assert-Equal "complete" $report.extension.harnessPhase "Installed Source Control UI E2E evidence should record a completed harness phase."
   Assert-True (@($report.extension.invokedCommands | Where-Object { $_ -eq "subversionr.refreshResource" }).Count -eq 1) "Installed Source Control UI E2E evidence should record the restored-path Refresh Resource command invocation."
@@ -9615,7 +9688,15 @@ try {
   $rendererDetailLieCases = @(
     [pscustomobject]@{ Mode = "window-bounds-lie"; Port = 32165; Expected = "Renderer capture must prove the exact 1600x1000 native workbench outer bounds."; Description = "native workbench outer bounds" },
     [pscustomobject]@{ Mode = "viewport-lie"; Port = 32155; Expected = "Renderer capture must prove an exact 1440x900 DOM viewport and PNG."; Description = "viewport detail" },
-    [pscustomobject]@{ Mode = "scm-layout-width-lie"; Port = 32164; Expected = "Renderer capture SCM action layout must prove one provider toolbar"; Description = "SCM provider and toolbar widths" },
+    [pscustomobject]@{ Mode = "scm-view-pane-header-width-lie"; Port = 32164; Expected = "Renderer capture SCM action layout must prove one direct SCM ViewPane header toolbar"; Description = "SCM ViewPane header width" },
+    [pscustomobject]@{ Mode = "scm-actions-container-width-lie"; Port = 32166; Expected = "Renderer capture SCM action layout must prove one direct SCM ViewPane header toolbar"; Description = "SCM actions container width" },
+    [pscustomobject]@{ Mode = "scm-resource-wrong-kind-lie"; Port = 32167; Expected = "Renderer capture must include the SCM resource-only surface interaction."; Description = "SCM resource-only interaction kind" },
+    [pscustomobject]@{ Mode = "scm-resource-inline-missing-lie"; Port = 32168; Expected = "Renderer capture SCM resource-only row or inline action count did not match expectations."; Description = "SCM resource-only missing inline action" },
+    [pscustomobject]@{ Mode = "scm-resource-inline-extra-lie"; Port = 32169; Expected = "selected SCM resource exposes only the expected read-only inline action"; Description = "SCM resource-only extra inline action" },
+    [pscustomobject]@{ Mode = "scm-resource-codicon-lie"; Port = 32170; Expected = "Renderer capture SCM resource-only inline action/codicon evidence did not match expectations."; Description = "SCM resource-only inline codicon" },
+    [pscustomobject]@{ Mode = "scm-resource-context-lie"; Port = 32171; Expected = "Renderer capture SCM resource-only and notification assertions must all pass."; Description = "SCM resource-only context actions" },
+    [pscustomobject]@{ Mode = "scm-resource-notification-lie"; Port = 32172; Expected = "Renderer capture SCM resource-only and notification assertions must all pass."; Description = "SCM resource-only forbidden notification presence" },
+    [pscustomobject]@{ Mode = "scm-resource-forbidden-list-lie"; Port = 32173; Expected = "Renderer capture SCM resource-only forbidden notification tokens"; Description = "SCM resource-only forbidden notification list" },
     [pscustomobject]@{ Mode = "scm-primary-lie"; Port = 32156; Expected = "Renderer capture SCM primary action/codicon evidence did not match expectations."; Description = "SCM primary action detail" },
     [pscustomobject]@{ Mode = "scm-submenu-lie"; Port = 32157; Expected = "Renderer capture SCM overflow submenu reachability did not match expectations."; Description = "SCM submenu detail" },
     [pscustomobject]@{ Mode = "scm-inline-lie"; Port = 32158; Expected = "Renderer capture SCM resource inline action/codicon evidence did not match expectations."; Description = "SCM inline action detail" },
@@ -9649,8 +9730,8 @@ try {
   $driverContent = Get-Content -Raw -LiteralPath $driverScript
   Assert-True ($driverContent -match '(?s)queryAllOpenRoots.*?element\.shadowRoot.*?monaco-menu') "Renderer capture driver should inspect VS Code menus rendered inside open Shadow DOM roots."
   Assert-True ($driverContent -match '(?s)function matchTokens.*?normalizeTokenText\(text\).*?function normalizeTokenText.*?replace\(/\\s\+/gu') "Renderer capture driver should normalize renderer whitespace such as Output-panel non-breaking spaces before matching required and forbidden tokens."
-  Assert-True ($driverContent -match '(?s)captureScreenshotWithRetry\(cdp\).*?if \(scmActionSurface\).*?pressEscape\(cdp\)') "Renderer capture driver should preserve the SCM context menu in the screenshot and then close it before the next installed UI scenario."
-  Assert-True ($driverContent -match '(?s)captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined.*?beforeInteractionState.*?beforeInteractionScreenshot.*?const interaction.*?capturedState = captureBeforeInteraction') "Renderer capture driver should capture prompt, notification, and dialog surfaces before sending the real interaction that closes them."
+  Assert-True ($driverContent -match '(?s)captureScreenshotWithRetry\(cdp\).*?if \(scmActionSurface \|\| scmResourceSurface\).*?pressEscape\(cdp\)') "Renderer capture driver should preserve either SCM contract's context menu in the screenshot and then close it before the next installed UI scenario."
+  Assert-True ($driverContent -match '(?s)captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined && scmResourceSurface === undefined.*?beforeInteractionState.*?beforeInteractionScreenshot.*?const interaction.*?capturedState = captureBeforeInteraction') "Renderer capture driver should capture prompt, notification, and dialog surfaces before sending the real interaction that closes them."
   Assert-True ($driverContent -match '(?s)captureRequiredTokenState.*?collectOpenShadowText.*?element\.shadowRoot') "Renderer capture driver should include visible open Shadow DOM text in DOM artifacts."
   Assert-True ($driverContent -match '(?s)async function cancelInteraction.*?queryAllOpenRoots.*?quickInputSelectors.*?queryAllOpenRoots') "Renderer cancellation should locate QuickInput, notification, and dialog surfaces across open Shadow DOM roots."
   Assert-True ($driverContent -match "captureRequiredTokenState") "Renderer capture driver should retry DOM/accessibility token capture before writing artifacts."
@@ -9696,14 +9777,16 @@ try {
   Assert-True ($workflowContent -match '(?s)async function runResolveWorkflow.*?executeCommand\("subversionr\.updateRepository".*?updateConflictWarningReady.*?executeCommand\("subversionr\.resolveResource"') "Resolve evidence should create the conflict through installed Update, capture its warning, then execute Resolve."
   Assert-True ($workflowContent -match '(?s)beforeActive !== true.*?did not activate organically before any installed Source Control UI E2E command executed') "Installed Source Control UI E2E should fail before its first SubversionR command when organic activation did not occur."
   Assert-True ($workflowContent -match '"security\.workspace\.trust\.enabled": false') "Installed Source Control UI E2E trusted profile should disable Workspace Trust through the isolated user-data setting."
+  Assert-True ($workflowContent -match '"scm\.alwaysShowRepositories": false') "Installed Source Control UI E2E trusted profile should explicitly establish the single-visible-repository ViewPane-title action mode."
+  Assert-True (-not ($workflowContent -match '"workbench\.scm\.alwaysShowRepositories"')) "Installed Source Control UI E2E must use the canonical scm.alwaysShowRepositories setting key."
   Assert-True ($workflowContent -match '"security\.workspace\.trust\.enabled": true') "Installed Restricted Mode profile should explicitly enable Workspace Trust."
   Assert-True (-not $workflowContent.Contains('"--disable-workspace-trust"')) "Installed Source Control UI E2E should use one settings-backed trusted-profile path instead of a CLI trust fallback."
   Assert-True ($workflowContent -match '(?s)vscode\.workspace\.isTrusted !== true \|\| openReport\.workspace\.trusted !== true.*?trusted profile was not established before renderer capture') "Installed Source Control UI E2E harness should fail fast unless Extension Host and open-report trust are both true."
   Assert-True ($workflowContent -match '(?s)workspaceTrust\.extensionHostTrusted -ne \$true.*?workspaceTrust\.openReportTrusted -ne \$true.*?ready sentinel did not prove a trusted profile before renderer capture') "Installed Source Control UI E2E PowerShell consumer should independently reject an untrusted ready sentinel."
   Assert-True ($workflowContent -match '(?s)executeCommand\("subversionr\.diagnostics\.installedSourceControlUiE2eShowOutput"\).*?invokedCommands:\s*\[.*?"subversionr\.diagnostics\.installedSourceControlUiE2eShowOutput"') "Installed Source Control UI E2E evidence should record the command that exposes the real SubversionR output channel."
   Assert-True ($workflowContent -match '(?s)executeCommand\(openReport\.rendererCaptureExpectations\.viewCommand\).*?executeCommand\(scmActionLayout\.prepareCommand\)') "Installed Source Control UI E2E harness should execute the exact SCM layout prepare command only after focusing the SCM view."
-  Assert-True ($workflowContent -match '(?s)scmActionLayout\.incrementCount !== 1.*?scmActionLayout\.minimumProviderWidth !== 280.*?scmActionLayout\.minimumActionsContainerWidth !== 120') "Installed Source Control UI E2E harness should fail fast unless the SCM layout contract has the exact fixed count and widths."
-  Assert-True ($workflowContent -match '(?s)matchingProviderAndActionsContainerCount -ne 1.*?observed\.provider\.width.*?minimumProviderWidth.*?observed\.actionsContainer\.width.*?minimumActionsContainerWidth') "Installed Source Control UI E2E gate should independently verify the unique SCM provider and toolbar widths from renderer evidence."
+  Assert-True ($workflowContent -match '(?s)scmActionLayout\.incrementCount !== 1.*?scmActionLayout\.minimumViewPaneHeaderWidth !== 280.*?scmActionLayout\.minimumActionsContainerWidth !== 96') "Installed Source Control UI E2E harness should fail fast unless the SCM layout contract has the exact fixed count and widths."
+  Assert-True ($workflowContent -match '(?s)matchingViewPaneHeaderAndActionsContainerCount -ne 1.*?observed\.viewPaneHeader\.width.*?minimumViewPaneHeaderWidth.*?observed\.actionsContainer\.width.*?minimumActionsContainerWidth') "Installed Source Control UI E2E gate should independently verify the unique direct SCM ViewPane header and toolbar widths from renderer evidence."
   Assert-True ($workflowContent -match '(?s)waitForFile\(donePath, 120000\).*?executeCommand\("workbench\.action\.closePanel"\).*?executingInstalledSourceControlUiE2ePartialFreshnessReport') "Installed Source Control UI E2E should close the Output panel after the SCM screenshot so later notification-safety captures remain surface-local."
   Assert-True (($workflowContent -match 'function Normalize-RendererTokenText') -and ($workflowContent -match '-replace ''\\s\+'', '' ''') -and ($workflowContent -match '(?s)function Assert-TextContainsTokens.*?Normalize-RendererTokenText') -and ($workflowContent -match '(?s)function Assert-TextExcludesTokens.*?Normalize-RendererTokenText')) "Installed Source Control UI E2E gate should normalize renderer whitespace before independently checking required and forbidden artifact tokens."
   Assert-True ($workflowContent -match 'Get-UpdateConflictWorkingCopyOracle') "Installed Update conflict evidence should use the SVN status XML working-copy oracle."
