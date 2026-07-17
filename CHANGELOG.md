@@ -10,6 +10,7 @@
 - Opens property and hidden mergeinfo reports as reusable read-only documents and presents libsvn conflict artifacts in a dedicated read-only Source Control group.
 - Aligns extension, daemon, protocol, and native bridge version stamps and fails closed on build-time version drift.
 - Retains the `hitsuki-ban.subversionr` / `SVN-R` Windows `win32-x64` pre-release identity and existing public-readiness non-claim.
+- Publishes the exact Windows package through the Visual Studio Marketplace pre-release channel and as the `v0.2.5-beta.1` GitHub pre-release, with live digest attestation and Gallery byte-continuity evidence.
 
 ## 0.2.4
 

@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-SubversionR currently publishes the Windows `win32-x64` `0.2.4` Beta through the Marketplace pre-release channel and GitHub Releases. No stable release is currently supported.
+SubversionR currently publishes the Windows `win32-x64` `0.2.5` Beta through the Marketplace pre-release channel and GitHub Releases. No stable release is currently supported.
 
 Security fixes target the active public pre-release candidate. After the first stable release, fixes are expected to target the current stable release line and any active public pre-release candidate unless a release note states otherwise.
 
