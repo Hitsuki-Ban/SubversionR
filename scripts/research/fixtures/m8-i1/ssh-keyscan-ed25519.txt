@@ -1,0 +1,2 @@
+# Static, non-secret Ed25519 public-key record for parser verification.
+[fixture.invalid]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f
