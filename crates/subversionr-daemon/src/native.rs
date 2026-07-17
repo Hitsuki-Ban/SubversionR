@@ -26,10 +26,11 @@ use crate::{
     HistoryBlameResult, HistoryLogRequest, HistoryLogResult, LockOperationRequest,
     MergeOperationRequest, MoveOperationRequest, NeverCancelled, OperationResult,
     PropertiesListResult, PropertyDeleteOperationRequest, PropertyEntry,
-    PropertySetOperationRequest, RelocateOperationRequest, RemoveOperationRequest,
-    RepositoryCheckoutRequest, RepositoryCheckoutResult, ResolveOperationRequest,
-    RevertOperationRequest, SwitchOperationRequest, SwitchOperationResult, UnlockOperationRequest,
-    UpdateOperationRequest, UpdateOperationResult, UpgradeOperationRequest, current_timestamp,
+    PropertySetOperationRequest, RelocateOperationRequest, RemoteConfigPlan, RemoteConfigScheme,
+    RemoteConfigServerAuth, RemoveOperationRequest, RepositoryCheckoutRequest,
+    RepositoryCheckoutResult, ResolveOperationRequest, RevertOperationRequest,
+    SwitchOperationRequest, SwitchOperationResult, UnlockOperationRequest, UpdateOperationRequest,
+    UpdateOperationResult, UpgradeOperationRequest, current_timestamp,
 };
 
 const BRIDGE_RUNTIME_VERSION: &str = concat!("subversionr-svn-bridge/", env!("CARGO_PKG_VERSION"));
@@ -50,6 +51,9 @@ const RAW_OPERATION_LOCAL_COMMIT_AUTHOR_UNAVAILABLE: c_int = 13;
 const RAW_OPERATION_PARTIAL_FAILURE: c_int = 14;
 const RAW_OPERATION_PARTIAL_CANCEL_CALLBACK_FAILED: c_int = 15;
 const RAW_OPERATION_PARTIAL_CANCELLED: c_int = 16;
+const RAW_REMOTE_CONFIG_ABI_VERSION: u32 = 1;
+const RAW_REMOTE_CATEGORY_MASK: u32 = 0b11;
+const RAW_REMOTE_OPTION_MASK: u32 = 0b11_1111;
 const NATIVE_AUTH_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const RAW_CERT_FAILURE_NOT_YET_VALID: u32 = 0x0000_0001;
 const RAW_CERT_FAILURE_EXPIRED: u32 = 0x0000_0002;
@@ -285,8 +289,32 @@ struct RawOperationResult {
     skipped_path_count: usize,
 }
 
+#[repr(C)]
+struct RawRemoteConfigV1 {
+    abi_version: u32,
+    scheme: u32,
+    server_auth: u32,
+    timeout_ms: u64,
+    trust_windows_roots: c_int,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct RawRemoteConfigInspection {
+    abi_version: u32,
+    category_mask: u32,
+    option_mask: u32,
+    provider_mask: u32,
+    forbidden_input_mask: u32,
+}
+
 type RuntimeCreate = unsafe extern "C" fn(*mut *mut c_void) -> c_int;
 type RuntimeDestroy = unsafe extern "C" fn(*mut c_void);
+type RemoteContextCreate =
+    unsafe extern "C" fn(*const RawRemoteConfigV1, *mut *mut c_void) -> c_int;
+type RemoteContextInspect =
+    unsafe extern "C" fn(*const c_void, *mut RawRemoteConfigInspection) -> c_int;
+type RemoteContextDestroy = unsafe extern "C" fn(*mut c_void);
 type Version = unsafe extern "C" fn() -> RawVersionInfo;
 type OpenWorkingCopy =
     unsafe extern "C" fn(*mut c_void, *const c_char, *mut RawWorkingCopyInfo) -> c_int;
@@ -573,6 +601,9 @@ type LastErrorDiagnosticsFn = unsafe extern "C" fn(*mut c_void, *mut RawErrorDia
 struct NativeSymbols {
     runtime_create: RuntimeCreate,
     runtime_destroy: RuntimeDestroy,
+    remote_context_create: RemoteContextCreate,
+    remote_context_inspect: RemoteContextInspect,
+    remote_context_destroy: RemoteContextDestroy,
     version: Version,
     last_error_diagnostics: LastErrorDiagnosticsFn,
     open_working_copy: OpenWorkingCopy,
@@ -611,6 +642,15 @@ impl NativeSymbols {
         Ok(Self {
             runtime_create: *unsafe { library.get(b"subversionr_bridge_runtime_create\0") }?,
             runtime_destroy: *unsafe { library.get(b"subversionr_bridge_runtime_destroy\0") }?,
+            remote_context_create: *unsafe {
+                library.get(b"subversionr_bridge_remote_context_create\0")
+            }?,
+            remote_context_inspect: *unsafe {
+                library.get(b"subversionr_bridge_remote_context_inspect\0")
+            }?,
+            remote_context_destroy: *unsafe {
+                library.get(b"subversionr_bridge_remote_context_destroy\0")
+            }?,
             version: *unsafe { library.get(b"subversionr_bridge_version\0") }?,
             last_error_diagnostics: *unsafe {
                 library.get(b"subversionr_bridge_last_error_diagnostics\0")
@@ -941,6 +981,70 @@ fn native_failure_cause(entries: &[SvnErrorDiagnosticEntry]) -> OperationFailure
 impl BridgeApi for NativeBridge {
     fn info(&self) -> BridgeInfo {
         self.info.clone()
+    }
+
+    fn create_remote_context_foundation(
+        &self,
+        plan: RemoteConfigPlan,
+    ) -> Result<(), BridgeFailure> {
+        let config = RawRemoteConfigV1 {
+            abi_version: RAW_REMOTE_CONFIG_ABI_VERSION,
+            scheme: match plan.scheme {
+                RemoteConfigScheme::Http => 1,
+                RemoteConfigScheme::Https => 2,
+                RemoteConfigScheme::Svn => 3,
+            },
+            server_auth: match plan.server_auth {
+                RemoteConfigServerAuth::Anonymous => 1,
+                RemoteConfigServerAuth::Basic => 2,
+                RemoteConfigServerAuth::CramMd5 => 3,
+            },
+            timeout_ms: plan.timeout_ms,
+            trust_windows_roots: i32::from(plan.trust_windows_roots),
+        };
+        let mut context = ptr::null_mut();
+        let status = unsafe { (self.symbols.remote_context_create)(&config, &mut context) };
+        if status != 0 {
+            return Err(remote_context_failure(
+                "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED",
+                "error.remote.configCreateFailed",
+                status,
+            ));
+        }
+        let Some(context) = NonNull::new(context) else {
+            return Err(remote_context_failure(
+                "SUBVERSIONR_REMOTE_CONFIG_CREATE_NULL",
+                "error.remote.configCreateNull",
+                0,
+            ));
+        };
+
+        let mut inspection = RawRemoteConfigInspection::default();
+        let inspect_status =
+            unsafe { (self.symbols.remote_context_inspect)(context.as_ptr(), &mut inspection) };
+        unsafe { (self.symbols.remote_context_destroy)(context.as_ptr()) };
+        if inspect_status != 0 {
+            return Err(remote_context_failure(
+                "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_FAILED",
+                "error.remote.configInspectionFailed",
+                inspect_status,
+            ));
+        }
+        if inspection.abi_version != RAW_REMOTE_CONFIG_ABI_VERSION
+            || inspection.category_mask != RAW_REMOTE_CATEGORY_MASK
+            || inspection.option_mask != RAW_REMOTE_OPTION_MASK
+            || inspection.provider_mask != 0
+            || inspection.forbidden_input_mask != 0
+        {
+            return Err(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_INVALID",
+                "native",
+                "error.remote.configInspectionInvalid",
+                json!({}),
+                false,
+            ));
+        }
+        Ok(())
     }
 
     fn open_working_copy(&self, path: &str) -> Result<RepositoryIdentity, BridgeFailure> {
@@ -3836,6 +3940,16 @@ unsafe fn drop_c_string(ptr: *const c_char, zeroize: bool) {
         return;
     }
     drop(string);
+}
+
+fn remote_context_failure(code: &str, message_key: &str, status: c_int) -> BridgeFailure {
+    BridgeFailure::new(
+        code,
+        "native",
+        message_key,
+        json!({ "status": status }),
+        false,
+    )
 }
 
 fn open_working_copy_failure(status: c_int, path: &str) -> BridgeFailure {

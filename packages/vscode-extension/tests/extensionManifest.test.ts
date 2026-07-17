@@ -178,8 +178,6 @@ describe("extension manifest", () => {
       restrictedConfigurations: [
         "subversionr.tortoise.executablePath",
         "subversionr.tortoise.configDirectory",
-        "subversionr.svn.configDirectory",
-        "subversionr.svn.tunnelCommand",
       ],
     });
   });
@@ -1521,7 +1519,7 @@ describe("extension manifest", () => {
     }
   });
 
-  it("contributes external tool and SVN runtime config settings behind Workspace Trust without defaults", () => {
+  it("contributes only Tortoise external tool settings behind Workspace Trust without defaults", () => {
     const manifest = readJson("package.json");
     const properties = manifest.contributes.configuration.properties;
 
@@ -1535,19 +1533,101 @@ describe("extension manifest", () => {
       scope: "machine-overridable",
       markdownDescription: "%configuration.tortoise.configDirectory.description%",
     });
-    expect(properties["subversionr.svn.configDirectory"]).toEqual({
-      type: "string",
-      scope: "machine-overridable",
-      markdownDescription: "%configuration.svn.configDirectory.description%",
-    });
-    expect(properties["subversionr.svn.tunnelCommand"]).toEqual({
-      type: "string",
-      scope: "machine-overridable",
-      markdownDescription: "%configuration.svn.tunnelCommand.description%",
-    });
+    expect(properties).not.toHaveProperty("subversionr.svn.configDirectory");
+    expect(properties).not.toHaveProperty("subversionr.svn.tunnelCommand");
     expect(properties).not.toHaveProperty("svnNative.tortoise.path");
     expect(properties).not.toHaveProperty("svnNative.advanced.configDir");
     expect(properties).not.toHaveProperty("svnNative.security.allowWorkspaceTunnelConfig");
+  });
+
+  it("contributes a strict machine-scoped remote profile schema without a default", () => {
+    const manifest = readJson("package.json");
+    const setting = manifest.contributes.configuration.properties["subversionr.remote.profiles"];
+
+    expect(setting.type).toBe("array");
+    expect(setting.scope).toBe("machine");
+    expect(setting).not.toHaveProperty("default");
+    expect(setting.markdownDescription).toBe("%configuration.remote.profiles.description%");
+
+    const profile = setting.items;
+    expect(profile.additionalProperties).toBe(false);
+    expect(profile.required).toEqual([
+      "schema",
+      "profileId",
+      "authority",
+      "serverAuth",
+      "serverAccount",
+      "serverCredentialPersistence",
+      "proxy",
+      "ssh",
+      "redirectPolicy",
+    ]);
+    expect(profile.properties.schema.enum).toEqual(["subversionr.remote-profile.v1"]);
+    expect(profile.properties.authority).toEqual(
+      expect.objectContaining({
+        additionalProperties: false,
+        required: ["scheme", "canonicalHost", "effectivePort"],
+      }),
+    );
+    expect(profile.properties.authority.properties.scheme.enum).toEqual(["http", "https", "svn", "svn+ssh"]);
+    expect(profile.properties.authority.properties.effectivePort).toEqual({
+      type: "integer",
+      minimum: 1,
+      maximum: 65535,
+    });
+
+    const serverAccount = profile.properties.serverAccount.oneOf;
+    expect(serverAccount[0].enum).toEqual(["none"]);
+    expect(serverAccount[1]).toEqual(
+      expect.objectContaining({ additionalProperties: false, required: ["mode", "username"] }),
+    );
+    expect(serverAccount[1].properties.mode.enum).toEqual(["fixed"]);
+    expect(serverAccount[2]).toEqual(
+      expect.objectContaining({ additionalProperties: false, required: ["mode"] }),
+    );
+    expect(serverAccount[2].properties.mode.enum).toEqual(["chooseForeground"]);
+
+    expect(profile.properties.tls).toEqual(
+      expect.objectContaining({ additionalProperties: false, required: ["trust"] }),
+    );
+    expect(profile.properties.tls.properties.trust.enum).toEqual([
+      "windowsRootsThenBroker",
+      "explicitCaThenBroker",
+    ]);
+
+    const proxy = profile.properties.proxy.oneOf;
+    expect(proxy[0].enum).toEqual(["none"]);
+    expect(proxy[1]).toEqual(
+      expect.objectContaining({ additionalProperties: false, required: ["authority", "auth", "account"] }),
+    );
+    expect(proxy[1].properties.authority).toEqual(
+      expect.objectContaining({
+        additionalProperties: false,
+        required: ["scheme", "canonicalHost", "effectivePort"],
+      }),
+    );
+    expect(proxy[1].properties.account.oneOf[1]).toEqual(
+      expect.objectContaining({ additionalProperties: false, required: ["mode", "username"] }),
+    );
+
+    const ssh = profile.properties.ssh.oneOf;
+    expect(ssh[0].enum).toEqual(["none"]);
+    expect(ssh[1]).toEqual(
+      expect.objectContaining({
+        additionalProperties: false,
+        required: ["adapter", "sshUsername", "auth", "hostKey"],
+      }),
+    );
+    expect(ssh[1].properties.auth.oneOf[1]).toEqual(
+      expect.objectContaining({ additionalProperties: false, required: ["identityFilePath"] }),
+    );
+    expect(ssh[1].properties.hostKey).toEqual(
+      expect.objectContaining({
+        additionalProperties: false,
+        required: ["algorithm", "publicKeyBlob", "fingerprint"],
+      }),
+    );
+    expect(profile.properties.redirectPolicy.enum).toEqual(["rejectAll", "sameAuthorityInitialOptions301"]);
   });
 
   it("contributes explicit status, history, and lens settings without legacy setting aliases", () => {
@@ -1726,8 +1806,9 @@ describe("extension manifest", () => {
       expect(bundle).not.toHaveProperty("configuration.backend.bridgeDllPath.description");
       expect(bundle).toHaveProperty("configuration.tortoise.executablePath.description");
       expect(bundle).toHaveProperty("configuration.tortoise.configDirectory.description");
-      expect(bundle).toHaveProperty("configuration.svn.configDirectory.description");
-      expect(bundle).toHaveProperty("configuration.svn.tunnelCommand.description");
+      expect(bundle).toHaveProperty("configuration.remote.profiles.description");
+      expect(bundle).not.toHaveProperty("configuration.svn.configDirectory.description");
+      expect(bundle).not.toHaveProperty("configuration.svn.tunnelCommand.description");
       expect(bundle).toHaveProperty("configuration.status.countUnversioned.description");
       expect(bundle).toHaveProperty("configuration.status.ignoreChangelistsInCount.description");
       expect(bundle).toHaveProperty("configuration.history.pageSize.description");
@@ -1828,6 +1909,7 @@ describe("extension manifest", () => {
       expect(bundle).toHaveProperty("SubversionR reopened moved SVN working copy: {0} -> {1}");
       expect(bundle).toHaveProperty("SubversionR could not recover moved SVN working copy {0}: {1}");
       expect(bundle).toHaveProperty("SubversionR could not mark SVN status stale after backend restart: {0}");
+      expect(bundle).toHaveProperty("SubversionR could not acknowledge the Workspace Trust update: {0}");
       expect(bundle).toHaveProperty("SubversionR could not reopen SVN working copy after backend restart {0}: {1}");
       expect(bundle).toHaveProperty("SubversionR extension cache cleared. SVN working copies were not modified.");
       expect(bundle).toHaveProperty("SubversionR cache clear failed: {0}");
@@ -2623,6 +2705,7 @@ function runtimeLocalizationKeys(): string[] {
     "SubversionR reopened moved SVN working copy: {0} -> {1}",
     "SubversionR could not recover moved SVN working copy {0}: {1}",
     "SubversionR could not mark SVN status stale after backend restart: {0}",
+    "SubversionR could not acknowledge the Workspace Trust update: {0}",
     "SubversionR could not reopen SVN working copy after backend restart {0}: {1}",
     "SubversionR refreshed SVN working copy: {0}",
     "SubversionR completed full reconcile: {0}",

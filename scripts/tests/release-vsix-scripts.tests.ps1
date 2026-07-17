@@ -506,7 +506,7 @@ try {
   Assert-Equal "subversionr-svn-bridge/$productVersion" $report.nativeCompatibility.bridgeVersion "VSIX package evidence should bind the bridge version to the product."
   Assert-True (-not [string]::IsNullOrWhiteSpace([string]$report.nativeCompatibility.libsvnVersion)) "VSIX package evidence should preserve the independent libsvn version."
   Assert-Equal "1" ([string]$report.nativeCompatibility.protocol.major) "VSIX package evidence should record the probed protocol major."
-  Assert-True ([int]$report.nativeCompatibility.protocol.minor -ge 30) "VSIX package evidence should record a supported protocol minor."
+  Assert-True ([int]$report.nativeCompatibility.protocol.minor -ge 31) "VSIX package evidence should record a supported protocol minor."
 
   $stalePackageRoot = Join-Path $tempRoot "stale-protocol-package"
   Copy-Item -LiteralPath $packageRoot -Destination $stalePackageRoot -Recurse

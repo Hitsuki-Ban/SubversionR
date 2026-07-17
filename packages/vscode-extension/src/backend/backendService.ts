@@ -188,6 +188,15 @@ export class BackendService {
     return this.startup;
   }
 
+  public async updateWorkspaceTrust(trusted: boolean): Promise<number> {
+    const connection = await this.initialize();
+    return await connection.updateWorkspaceTrust(trusted);
+  }
+
+  public isRemoteSubmissionEnabled(): boolean {
+    return this.connection?.isRemoteSubmissionEnabled() === true;
+  }
+
   public async shutdown(): Promise<void> {
     if (this.shutdownPromise) {
       return this.shutdownPromise;

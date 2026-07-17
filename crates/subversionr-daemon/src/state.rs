@@ -8,15 +8,19 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use subversionr_protocol::{
     ContentGetResponse, DiagnosticsBackendStderr, DiagnosticsGetResponse,
-    DiagnosticsRepositorySummary, HistoryBlameResponse, HistoryLogResponse, OperationReconcileHint,
-    OperationRunResponse, OperationSummary, OperationWarning, PropertiesListResponse,
-    PropertyEntry as ProtocolPropertyEntry, ProtocolVersion, RepositoryCheckoutResponse,
-    RepositoryCloseResponse, RepositoryDiscoverResponse, RepositoryDiscoveryCandidate,
-    RepositoryIdentity, RepositoryOpenResponse, StatusCoverageScope, StatusDelta, StatusEntry,
-    StatusRefreshTarget, StatusSnapshot, StatusSummary, StatusSummaryDelta, current_platform,
+    DiagnosticsRepositorySummary, HistoryBlameResponse, HistoryLogResponse, InitializeParams,
+    InitializeResponse, OperationReconcileHint, OperationRunResponse, OperationSummary,
+    OperationWarning, PropertiesListResponse, PropertyEntry as ProtocolPropertyEntry,
+    ProtocolVersion, RepositoryCheckoutResponse, RepositoryCloseResponse,
+    RepositoryDiscoverResponse, RepositoryDiscoveryCandidate, RepositoryIdentity,
+    RepositoryOpenResponse, StatusCoverageScope, StatusDelta, StatusEntry, StatusRefreshTarget,
+    StatusSnapshot, StatusSummary, StatusSummaryDelta, WorkspaceTrustState,
+    WorkspaceTrustUpdateParams, WorkspaceTrustUpdateResponse, current_platform,
     default_cache_schema,
 };
 
+use crate::remote::RemoteTrustState;
+use crate::remote::{envelope_value, preflight_repository_urls};
 use crate::{
     AddOperationRequest, AuthRequestBroker, BranchCreateOperationRequest, BridgeApi,
     BridgeCancellationToken, BridgeFailure, ChangelistClearOperationRequest,
@@ -40,6 +44,7 @@ pub struct DaemonState {
     next_epoch: u64,
     next_operation_id: u64,
     pending_notifications: Vec<Value>,
+    remote_trust: Option<RemoteTrustState>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +91,7 @@ impl DaemonState {
             next_epoch: 1,
             next_operation_id: 1,
             pending_notifications: Vec::new(),
+            remote_trust: None,
         }
     }
 
@@ -117,6 +123,8 @@ impl DaemonState {
         cancellation: &dyn BridgeCancellationToken,
     ) -> DispatchResult {
         let (outcome, response) = match request.method.as_str() {
+            "initialize" => self.dispatch_initialize(&request, bridge),
+            "workspaceTrust/update" => self.dispatch_workspace_trust_update(&request),
             "repository/discover" => self.dispatch_repository_discover(&request, bridge),
             "repository/open" => self.dispatch_repository_open(&request, bridge, auth),
             "repository/checkout" => {
@@ -147,6 +155,144 @@ impl DaemonState {
         }
     }
 
+    fn dispatch_initialize(
+        &mut self,
+        request: &JsonRpcRequest,
+        bridge: &dyn BridgeApi,
+    ) -> (DispatchOutcome, Value) {
+        if self.remote_trust.is_some() {
+            return (
+                DispatchOutcome::Continue,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": request.id,
+                    "error": rpc_error(
+                        "SUBVERSIONR_INITIALIZE_ALREADY_COMPLETED",
+                        "state",
+                        "error.backend.initializeAlreadyCompleted",
+                        json!({}),
+                        false,
+                    ),
+                }),
+            );
+        }
+        let Some(params_value) = request.params.clone() else {
+            return invalid_param(request, "params");
+        };
+        let Some(params_object) = params_value.as_object() else {
+            return invalid_param(request, "params");
+        };
+        let initialize_fields = [
+            "clientName",
+            "clientVersion",
+            "locale",
+            "workspaceTrust",
+            "trustEpoch",
+            "cacheRoot",
+        ];
+        if let Some(field) = params_object
+            .keys()
+            .find(|field| !initialize_fields.contains(&field.as_str()))
+        {
+            return invalid_param(request, field);
+        }
+        for field in ["clientName", "clientVersion", "locale"] {
+            if !params_object
+                .get(field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                return invalid_param(request, field);
+            }
+        }
+        if !params_object
+            .get("cacheRoot")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty() && Path::new(value).is_absolute())
+        {
+            return invalid_param(request, "cacheRoot");
+        }
+        if params_object.get("trustEpoch").and_then(Value::as_u64) != Some(1) {
+            return invalid_param(request, "trustEpoch");
+        }
+        if !matches!(
+            params_object.get("workspaceTrust").and_then(Value::as_str),
+            Some("trusted" | "untrusted")
+        ) {
+            return invalid_param(request, "workspaceTrust");
+        }
+        let Ok(params) = serde_json::from_value::<InitializeParams>(params_value) else {
+            return invalid_param(request, "params");
+        };
+        let trust = match RemoteTrustState::new(
+            params.workspace_trust == WorkspaceTrustState::Trusted,
+            params.trust_epoch,
+        ) {
+            Ok(trust) => trust,
+            Err(failure) => return bridge_failure_response(request, failure),
+        };
+        let acknowledged_trust_epoch = trust.acknowledged_epoch();
+        self.remote_trust = Some(trust);
+        let bridge_info = bridge.info();
+        let result = InitializeResponse::new(
+            env!("CARGO_PKG_VERSION").to_string(),
+            bridge_info.bridge_version.clone(),
+            bridge_info.libsvn_version.clone(),
+            current_platform(),
+            bridge_info.capabilities(),
+            acknowledged_trust_epoch,
+        );
+        (
+            DispatchOutcome::Continue,
+            json!({
+                "jsonrpc": "2.0",
+                "id": request.id,
+                "result": result,
+            }),
+        )
+    }
+
+    fn dispatch_workspace_trust_update(
+        &mut self,
+        request: &JsonRpcRequest,
+    ) -> (DispatchOutcome, Value) {
+        let Some(params_value) = request.params.clone() else {
+            return invalid_param(request, "params");
+        };
+        let Ok(params) = serde_json::from_value::<WorkspaceTrustUpdateParams>(params_value) else {
+            return invalid_param(request, "params");
+        };
+        let Some(trust) = self.remote_trust.as_mut() else {
+            return (
+                DispatchOutcome::Continue,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": request.id,
+                    "error": rpc_error(
+                        "SUBVERSIONR_REMOTE_TRUST_NOT_INITIALIZED",
+                        "state",
+                        "error.remote.trustNotInitialized",
+                        json!({}),
+                        false,
+                    ),
+                }),
+            );
+        };
+        let acknowledged_trust_epoch = match trust.apply_update(params.trusted, params.trust_epoch)
+        {
+            Ok(epoch) => epoch,
+            Err(failure) => return bridge_failure_response(request, failure),
+        };
+        (
+            DispatchOutcome::Continue,
+            json!({
+                "jsonrpc": "2.0",
+                "id": request.id,
+                "result": WorkspaceTrustUpdateResponse { acknowledged_trust_epoch },
+            }),
+        )
+    }
+
     fn dispatch_diagnostics_get(
         &self,
         request: &JsonRpcRequest,
@@ -163,7 +309,7 @@ impl DaemonState {
             libsvn_version: bridge_info.libsvn_version,
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 30,
+                minor: 31,
             },
             platform: current_platform(),
             cache_schema: default_cache_schema(),
@@ -429,6 +575,14 @@ impl DaemonState {
             Ok(checkout_request) => checkout_request,
             Err(field) => return invalid_param(request, &field),
         };
+        if let Err(failure) = preflight_repository_urls(
+            request,
+            &[&checkout_request.url],
+            self.remote_trust.as_ref(),
+            bridge,
+        ) {
+            return bridge_failure_response(request, failure);
+        }
 
         match bridge.repository_checkout_with_cancellation(&checkout_request, auth, cancellation) {
             Ok(result) => (
@@ -727,7 +881,7 @@ impl DaemonState {
         auth: &mut dyn AuthRequestBroker,
         cancellation: &dyn BridgeCancellationToken,
     ) -> (DispatchOutcome, Value) {
-        if let Some(field) = unexpected_param(request, &["repositoryId", "epoch"]) {
+        if let Some(field) = unexpected_param(request, &["repositoryId", "epoch", "remote"]) {
             return invalid_param(request, &field);
         }
         let Some(repository_id) = repository_id_param(request) else {
@@ -741,6 +895,14 @@ impl DaemonState {
         };
         if epoch != session.epoch {
             return repository_not_open(request, repository_id);
+        }
+        if let Err(failure) = preflight_repository_urls(
+            request,
+            &[&session.identity.repository_root_url],
+            self.remote_trust.as_ref(),
+            bridge,
+        ) {
+            return bridge_failure_response(request, failure);
         }
 
         let generation = session.next_generation;
@@ -828,9 +990,10 @@ impl DaemonState {
         bridge: &dyn BridgeApi,
         auth: &mut dyn AuthRequestBroker,
     ) -> (DispatchOutcome, Value) {
-        if let Some(field) =
-            unexpected_param(request, &["repositoryId", "epoch", "path", "revision"])
-        {
+        if let Some(field) = unexpected_param(
+            request,
+            &["repositoryId", "epoch", "path", "revision", "remote"],
+        ) {
             return invalid_param(request, &field);
         }
         let Some(repository_id) = repository_id_param(request) else {
@@ -850,6 +1013,18 @@ impl DaemonState {
         };
         if epoch != session.epoch {
             return repository_not_open(request, repository_id);
+        }
+        if revision != "base" {
+            if let Err(failure) = preflight_repository_urls(
+                request,
+                &[&session.identity.repository_root_url],
+                self.remote_trust.as_ref(),
+                bridge,
+            ) {
+                return bridge_failure_response(request, failure);
+            }
+        } else if envelope_value(request).is_some() {
+            return invalid_param(request, "remote");
         }
 
         match bridge.content_get(&session.identity, path, revision, auth) {
@@ -964,6 +1139,7 @@ impl DaemonState {
                 "discoverChangedPaths",
                 "strictNodeHistory",
                 "includeMergedRevisions",
+                "remote",
             ],
         ) {
             return invalid_param(request, &field);
@@ -983,6 +1159,14 @@ impl DaemonState {
         };
         if epoch != session.epoch {
             return repository_not_open(request, repository_id);
+        }
+        if let Err(failure) = preflight_repository_urls(
+            request,
+            &[&session.identity.repository_root_url],
+            self.remote_trust.as_ref(),
+            bridge,
+        ) {
+            return bridge_failure_response(request, failure);
         }
 
         match bridge.history_log(&session.identity, &log_request, auth) {
@@ -1038,6 +1222,7 @@ impl DaemonState {
                 "ignoreEolStyle",
                 "ignoreMimeType",
                 "includeMergedRevisions",
+                "remote",
             ],
         ) {
             return invalid_param(request, &field);
@@ -1057,6 +1242,14 @@ impl DaemonState {
         };
         if epoch != session.epoch {
             return repository_not_open(request, repository_id);
+        }
+        if let Err(failure) = preflight_repository_urls(
+            request,
+            &[&session.identity.repository_root_url],
+            self.remote_trust.as_ref(),
+            bridge,
+        ) {
+            return bridge_failure_response(request, failure);
         }
 
         match bridge.history_blame(&session.identity, &blame_request, auth) {
@@ -1107,9 +1300,10 @@ impl DaemonState {
         auth: &mut dyn AuthRequestBroker,
         cancellation: &dyn BridgeCancellationToken,
     ) -> (DispatchOutcome, Value) {
-        if let Some(field) =
-            unexpected_param(request, &["repositoryId", "epoch", "kind", "options"])
-        {
+        if let Some(field) = unexpected_param(
+            request,
+            &["repositoryId", "epoch", "kind", "options", "remote"],
+        ) {
             return invalid_param(request, &field);
         }
         let Some(repository_id) = repository_id_param(request) else {
@@ -1230,6 +1424,43 @@ impl DaemonState {
         let session_repository_id = session.repository_id.clone();
         let session_epoch = session.epoch;
         let session_identity = session.identity.clone();
+
+        let remote_preflight = match &operation {
+            ParsedOperation::Update(_)
+            | ParsedOperation::Lock(_)
+            | ParsedOperation::Unlock(_)
+            | ParsedOperation::Commit(_) => {
+                Some(vec![session_identity.repository_root_url.as_str()])
+            }
+            ParsedOperation::BranchCreate(operation) => Some(vec![
+                session_identity.repository_root_url.as_str(),
+                operation.source_url.as_str(),
+                operation.destination_url.as_str(),
+            ]),
+            ParsedOperation::Switch(operation) => Some(vec![
+                session_identity.repository_root_url.as_str(),
+                operation.url.as_str(),
+            ]),
+            ParsedOperation::Relocate(operation) => Some(vec![
+                session_identity.repository_root_url.as_str(),
+                operation.from_url.as_str(),
+                operation.to_url.as_str(),
+            ]),
+            ParsedOperation::Merge(operation) => Some(vec![
+                session_identity.repository_root_url.as_str(),
+                operation.source_url.as_str(),
+            ]),
+            _ => None,
+        };
+        if let Some(urls) = remote_preflight {
+            if let Err(failure) =
+                preflight_repository_urls(request, &urls, self.remote_trust.as_ref(), bridge)
+            {
+                return bridge_failure_response(request, failure);
+            }
+        } else if envelope_value(request).is_some() {
+            return invalid_param(request, "remote");
+        }
 
         match operation {
             ParsedOperation::Revert(revert_request) => {
@@ -2066,7 +2297,14 @@ fn repository_checkout_request(
 ) -> Result<RepositoryCheckoutRequest, String> {
     if let Some(field) = unexpected_param(
         request,
-        &["url", "targetPath", "revision", "depth", "ignoreExternals"],
+        &[
+            "url",
+            "targetPath",
+            "revision",
+            "depth",
+            "ignoreExternals",
+            "remote",
+        ],
     ) {
         return Err(field);
     }
@@ -2457,6 +2695,20 @@ fn discovery_path_key(path: &str) -> String {
 }
 
 fn discovery_bridge_failure(
+    request: &JsonRpcRequest,
+    failure: BridgeFailure,
+) -> (DispatchOutcome, Value) {
+    (
+        DispatchOutcome::Continue,
+        json!({
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "error": bridge_error(failure),
+        }),
+    )
+}
+
+fn bridge_failure_response(
     request: &JsonRpcRequest,
     failure: BridgeFailure,
 ) -> (DispatchOutcome, Value) {

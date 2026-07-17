@@ -1,11 +1,10 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::path::Path;
-use subversionr_protocol::{InitializeResponse, current_platform};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 mod bridge;
 mod native;
+mod remote;
 mod state;
 mod stdio;
 
@@ -17,11 +16,11 @@ pub use bridge::{
     HistoryBlameResult, HistoryLogRequest, HistoryLogResult, LockOperationRequest,
     MergeOperationRequest, MoveOperationRequest, NeverCancelled, OperationResult,
     PropertiesListResult, PropertyDeleteOperationRequest, PropertyEntry,
-    PropertySetOperationRequest, RelocateOperationRequest, RemoveOperationRequest,
-    RepositoryCheckoutRequest, RepositoryCheckoutResult, ResolveOperationRequest,
-    RevertOperationRequest, SwitchOperationRequest, SwitchOperationResult,
-    UnavailableAuthRequestBroker, UnavailableBridge, UnlockOperationRequest,
-    UpdateOperationRequest, UpdateOperationResult, UpgradeOperationRequest,
+    PropertySetOperationRequest, RelocateOperationRequest, RemoteConfigPlan, RemoteConfigScheme,
+    RemoteConfigServerAuth, RemoveOperationRequest, RepositoryCheckoutRequest,
+    RepositoryCheckoutResult, ResolveOperationRequest, RevertOperationRequest,
+    SwitchOperationRequest, SwitchOperationResult, UnavailableAuthRequestBroker, UnavailableBridge,
+    UnlockOperationRequest, UpdateOperationRequest, UpdateOperationResult, UpgradeOperationRequest,
 };
 pub use native::{NativeBridge, NativeBridgeLoadError};
 pub use state::DaemonState;
@@ -82,43 +81,9 @@ pub fn dispatch_json_rpc_with_bridge(
 
 pub(crate) fn dispatch_known_request(
     request: &JsonRpcRequest,
-    bridge: &dyn BridgeApi,
+    _bridge: &dyn BridgeApi,
 ) -> (DispatchOutcome, Value) {
     let (outcome, response) = match request.method.as_str() {
-        "initialize" => {
-            if !has_valid_initialize_cache_root(request) {
-                return (
-                    DispatchOutcome::Continue,
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": request.id,
-                        "error": rpc_error(
-                            "RPC_INVALID_PARAMS",
-                            "protocol",
-                            "error.rpc.invalidParams",
-                            json!({ "field": "cacheRoot" }),
-                            false,
-                        ),
-                    }),
-                );
-            }
-            let bridge_info = bridge.info();
-            let result = InitializeResponse::new(
-                env!("CARGO_PKG_VERSION").to_string(),
-                bridge_info.bridge_version.clone(),
-                bridge_info.libsvn_version.clone(),
-                current_platform(),
-                bridge_info.capabilities(),
-            );
-            (
-                DispatchOutcome::Continue,
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": request.id,
-                    "result": result,
-                }),
-            )
-        }
         "shutdown" => (
             DispatchOutcome::Shutdown,
             json!({
@@ -146,16 +111,6 @@ pub(crate) fn dispatch_known_request(
     };
 
     (outcome, response)
-}
-
-fn has_valid_initialize_cache_root(request: &JsonRpcRequest) -> bool {
-    request
-        .params
-        .as_ref()
-        .and_then(|params| params.get("cacheRoot"))
-        .and_then(Value::as_str)
-        .filter(|cache_root| !cache_root.trim().is_empty())
-        .is_some_and(|cache_root| Path::new(cache_root).is_absolute())
 }
 
 pub(crate) fn rpc_error(

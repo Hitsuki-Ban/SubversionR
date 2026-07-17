@@ -1,6 +1,7 @@
 import type { Readable, Writable } from "node:stream";
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 import { ContentLengthFrameDecoder, encodeContentLengthFrame } from "./framing";
+import { OrderedWriteQueue } from "./orderedWriteQueue";
 
 export interface JsonRpcStreamClientOptions {
   readable: Readable;
@@ -74,16 +75,16 @@ export class JsonRpcRequestCancelledError extends Error {
 export class JsonRpcStreamClient implements JsonRpcSender {
   private readonly decoder = new ContentLengthFrameDecoder();
   private readonly pending = new Map<number, PendingRequest>();
+  private readonly writer: OrderedWriteQueue;
   private nextId = 1;
   private disposed = false;
 
   public constructor(private readonly options: JsonRpcStreamClientOptions) {
+    this.writer = new OrderedWriteQueue(this.options.writable, this.handleStreamError);
     this.options.readable.on("data", this.handleData);
     this.options.readable.on("error", this.handleStreamError);
     this.options.readable.on("close", this.handleClose);
     this.options.readable.on("end", this.handleClose);
-    this.options.writable.on("error", this.handleStreamError);
-    this.options.writable.on("close", this.handleClose);
   }
 
   public sendRequest<T>(method: string, params: unknown, options: JsonRpcRequestOptions = {}): Promise<T> {
@@ -124,13 +125,7 @@ export class JsonRpcStreamClient implements JsonRpcSender {
         reject,
       });
       options.signal?.addEventListener("abort", abortListener, { once: true });
-      try {
-        this.options.writable.write(encodeContentLengthFrame(payload), "utf8");
-      } catch (error) {
-        this.pending.delete(id);
-        cleanup();
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
+      this.enqueuePayload(payload);
     });
   }
 
@@ -143,8 +138,7 @@ export class JsonRpcStreamClient implements JsonRpcSender {
     this.options.readable.off("error", this.handleStreamError);
     this.options.readable.off("close", this.handleClose);
     this.options.readable.off("end", this.handleClose);
-    this.options.writable.off("error", this.handleStreamError);
-    this.options.writable.off("close", this.handleClose);
+    this.writer.dispose(reason);
     this.rejectPending(reason);
   }
 
@@ -256,7 +250,13 @@ export class JsonRpcStreamClient implements JsonRpcSender {
     if (this.disposed) {
       return;
     }
-    this.options.writable.write(encodeContentLengthFrame(JSON.stringify(message)), "utf8");
+    this.enqueuePayload(JSON.stringify(message));
+  }
+
+  private enqueuePayload(payload: string): void {
+    void this.writer.write(encodeContentLengthFrame(payload)).catch((error: unknown) => {
+      this.dispose(error instanceof Error ? error : new Error(String(error)));
+    });
   }
 
   private writeCancelNotification(id: number): void {

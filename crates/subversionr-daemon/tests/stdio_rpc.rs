@@ -1990,7 +1990,7 @@ impl BridgeApi for CertificateShortTimeoutBridge {
 #[test]
 fn stdio_loop_dispatches_content_length_framed_requests_until_shutdown() {
     let input = [
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2655,7 +2655,7 @@ fn stdio_loop_ignores_nonmatching_cancel_notification_while_waiting_for_auth() {
 fn stdio_loop_rejects_unrelated_request_while_waiting_for_auth_and_continues() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":99,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":99,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"session"}}"#),
     ]
     .concat();
@@ -2693,7 +2693,7 @@ fn stdio_loop_rejects_auth_request_flood_while_waiting_for_response() {
     ));
     for id in 2..=66 {
         input.extend(frame(&format!(
-            r#"{{"jsonrpc":"2.0","id":{id},"method":"initialize","params":{{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}}}"#
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"initialize","params":{{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}}}"#
         )));
     }
     let mut output = Vec::new();

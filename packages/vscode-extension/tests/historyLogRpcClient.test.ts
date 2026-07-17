@@ -248,6 +248,8 @@ function fakeBackendConnection(result: unknown): BackendConnection & {
   return {
     ...sender,
     initializeResult: {} as BackendConnection["initializeResult"],
+    isRemoteSubmissionEnabled: vi.fn(() => true),
+    updateWorkspaceTrust: vi.fn(async () => 2),
     onDidTerminate: vi.fn(() => ({ dispose: vi.fn() })),
     shutdown: vi.fn(async () => {}),
     dispose: vi.fn(),

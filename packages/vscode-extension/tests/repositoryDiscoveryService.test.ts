@@ -259,6 +259,8 @@ function fakeConnection(response: unknown): BackendConnection {
       }
       return Promise.resolve(response);
     }) as unknown as BackendConnection["sendRequest"],
+    isRemoteSubmissionEnabled: vi.fn(() => true),
+    updateWorkspaceTrust: vi.fn(async () => 2),
     onDidTerminate: vi.fn(() => ({ dispose: vi.fn() })),
     shutdown: vi.fn().mockResolvedValue(undefined),
     dispose: vi.fn(),
@@ -295,7 +297,7 @@ function fakeSession(): RepositorySession {
 
 function initializeResult(): InitializeResult {
   return {
-    protocol: { major: 1, minor: 28 },
+    protocol: { major: 1, minor: 31 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -346,7 +348,10 @@ function initializeResult(): InitializeResult {
       diagnosticsGet: true,
       credentialRequest: true,
       certificateRequest: true,
+      remoteOperationEnvelope: true,
+      trustedConfigSnapshot: true,
     },
+    acknowledgedTrustEpoch: 1,
   };
 }
 

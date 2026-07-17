@@ -124,21 +124,21 @@ This slice intentionally does not wire native libsvn SSL server certificate call
 
 The fifth M6 slice establishes the future external-tool trust boundary required by `SEC-007`, `SEC-008`, `SEC-011`, `PRD-004`, and the TortoiseSVN reference requirements without implementing the M7 Tortoise adapter:
 
-- The extension manifest lists future external executable/config/tunnel settings in `capabilities.untrustedWorkspaces.restrictedConfigurations`: `subversionr.tortoise.executablePath`, `subversionr.tortoise.configDirectory`, `subversionr.svn.configDirectory`, and `subversionr.svn.tunnelCommand`.
+- The extension manifest lists the TortoiseSVN executable/config settings in `capabilities.untrustedWorkspaces.restrictedConfigurations`: `subversionr.tortoise.executablePath` and `subversionr.tortoise.configDirectory`.
 - These settings use current SubversionR IDs only. Historical `svnNative.*` catalog rows remain trace references and are not contributed as live aliases.
-- The settings are `machine-overridable` and have no defaults, so trusted users can make explicit per-workspace choices later while Restricted Mode suppresses workspace-provided values.
+- The TortoiseSVN settings are `machine-overridable` and have no defaults, so trusted users can make explicit per-workspace choices while Restricted Mode suppresses workspace-provided values.
 - A TypeScript security policy module reads optional settings, checks VS Code configuration provenance through `inspect`, and rejects workspace/folder/language-scoped values in untrusted workspaces with stable code `SUBVERSIONR_EXTERNAL_TOOL_WORKSPACE_SETTING_UNTRUSTED`.
 - External tool execution has an explicit runtime gate, `SUBVERSIONR_EXTERNAL_TOOL_UNTRUSTED_WORKSPACE`, so direct command invocation cannot bypass manifest/menu gating when future adapters call the policy.
-- Tortoise executable/config and SVN config-directory values must be absolute paths when used. Missing optional Tortoise settings remain unconfigured and do not break native core workflows.
-- Structured errors return stable code, category, message key, and safe args containing only setting IDs or feature names; raw executable paths, config directories, and tunnel commands are not included in safe args.
+- Tortoise executable/config values must be absolute paths when used. Missing optional Tortoise settings remain unconfigured and do not break native core workflows.
+- Structured errors return stable code, category, message key, and safe args containing only setting IDs or feature names; raw external-tool paths are not included in safe args.
 - Package configuration descriptions and the Workspace Trust description are localized in English, Japanese, and Chinese.
 
-This slice intentionally does not launch TortoiseSVN, detect Tortoise installations, probe PATH or registry locations, pass SVN config/tunnel settings to libsvn, parse shell command strings, add `svnNative.*` aliases, add diagnostics exposure for raw external-tool settings, or implement external mutation reconcile flows.
+This slice intentionally does not launch TortoiseSVN, detect Tortoise installations, probe PATH or registry locations, pass external-tool settings to libsvn, parse shell command strings, add `svnNative.*` aliases, add diagnostics exposure for raw external-tool settings, or implement external mutation reconcile flows.
 
 ## M6e Gates
 
-- External tool configuration tests cover the exact restricted setting list, optional missing Tortoise settings, untrusted external-tool execution blocking, untrusted workspace/folder/language setting provenance blocking, trusted workspace setting allowance, absolute path normalization, and non-absolute path rejection without raw value leakage.
-- Manifest tests cover the restricted configuration list, the four no-default `machine-overridable` settings, English/Japanese/Chinese package localization, and absence of historical `svnNative.*` setting aliases.
+- External tool configuration tests cover the exact Tortoise-only restricted setting list, optional missing Tortoise settings, untrusted external-tool execution blocking, untrusted workspace/folder/language setting provenance blocking, trusted workspace setting allowance, absolute path normalization, and non-absolute path rejection without raw value leakage.
+- Manifest tests cover the restricted configuration list, the two no-default TortoiseSVN `machine-overridable` settings, English/Japanese/Chinese package localization, and absence of historical `svnNative.*` setting aliases.
 
 ## M6f Implemented Slice
 

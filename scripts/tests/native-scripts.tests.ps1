@@ -911,6 +911,14 @@ try {
   Assert-True ($packageJsonText.Contains('"native:smoke-malicious-dav-xml:staged"')) "M7l5 package scripts should expose the staged malicious DAV/XML fixture smoke gate."
   Assert-True ($packageJsonText.Contains('"native:smoke-malicious-svn-server-response:staged"')) "M7l6 package scripts should expose the staged malicious SVN server-response fixture smoke gate."
 
+  $smokeBridgeText = Get-Content -Raw -LiteralPath $smokeBridgeScript
+  Assert-True ($smokeBridgeText.Contains("subversionr_bridge_remote_context_create") -and $smokeBridgeText.Contains("subversionr_bridge_remote_context_inspect") -and $smokeBridgeText.Contains("subversionr_bridge_remote_context_destroy")) "M8 I2 bridge smoke should exercise the real remote-context ABI lifecycle."
+  Assert-True ($smokeBridgeText.Contains("inspection.provider_mask != 0") -and $smokeBridgeText.Contains("inspection.forbidden_input_mask != 0")) "M8 I2 bridge smoke should reject provider or forbidden-input use."
+  Assert-True ($smokeBridgeText.Contains("APPDATA = `$poisonAppData") -and $smokeBridgeText.Contains("SVN_SSH =") -and $smokeBridgeText.Contains("http_proxy =") -and $smokeBridgeText.Contains("USERNAME =")) "M8 I2 bridge smoke should poison ambient Subversion, tunnel, proxy, and username inputs."
+  Assert-True ($smokeBridgeText.Contains('Software\Tigris.org\Subversion\Servers\global') -and $smokeBridgeText.Contains('RegistryValueKind]::String') -and $smokeBridgeText.Contains('registryPreviousValues')) "M8 I2 bridge smoke should poison and restore the per-user Subversion registry configuration source."
+  Assert-True ($smokeBridgeText.Contains("[IO.FileShare]::None") -and $smokeBridgeText.Contains('auth\svn.simple\poison') -and $smokeBridgeText.Contains('.ssh\config')) "M8 I2 bridge smoke should deny reads of poisoned Subversion config/auth and OpenSSH config files while the context is constructed."
+  Assert-True ($smokeBridgeText.Contains("ambient-input-was-executed.txt") -and $smokeBridgeText.Contains("Test-Path -LiteralPath `$sentinelPath")) "M8 I2 bridge smoke should fail if poisoned ambient configuration executes its sentinel."
+
   Assert-True (Test-Path -LiteralPath $buildDavModulesScript -PathType Leaf) "M6y should provide a dedicated Subversion DAV module build entrypoint."
   $buildDavModulesText = Get-Content -Raw -LiteralPath $buildDavModulesScript
   Assert-True ($buildDavModulesText.Contains('Assert-RequiredFile $VsDevCmd') -and $buildDavModulesText.Contains("Visual Studio developer command")) "M6y DAV module script should validate VsDevCmd before clearing generated directories."

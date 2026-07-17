@@ -599,5 +599,6 @@
   "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.": "所选 SVN 加锁目标已不是当前资源。请在源代码管理中选择当前资源，然后重试“加锁”。",
   "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.": "所选 SVN 加锁目标位于已打开仓库之外。请选择已打开 SVN 工作副本中的资源，然后重试“加锁”。",
   "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.": "所选 SVN 解锁目标已不是当前资源。请在源代码管理中选择当前资源，然后重试“解锁”。",
-  "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.": "所选 SVN 解锁目标位于已打开仓库之外。请选择已打开 SVN 工作副本中的资源，然后重试“解锁”。"
+  "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.": "所选 SVN 解锁目标位于已打开仓库之外。请选择已打开 SVN 工作副本中的资源，然后重试“解锁”。",
+  "SubversionR could not acknowledge the Workspace Trust update: {0}": "SubversionR 无法确认工作区信任更新：{0}"
 }

@@ -564,6 +564,12 @@ $extensionEntrypoint = Read-RequiredDocument "packages/vscode-extension/src/exte
 $extensionManifestTests = Read-RequiredDocument "packages/vscode-extension/tests/extensionManifest.test.ts"
 $externalToolConfigurationSource = Read-RequiredDocument "packages/vscode-extension/src/security/externalToolConfiguration.ts"
 $externalToolConfigurationTests = Read-RequiredDocument "packages/vscode-extension/tests/externalToolConfiguration.test.ts"
+$remoteAccessProfileSource = Read-RequiredDocument "packages/vscode-extension/src/security/remoteAccessProfile.ts"
+$remoteAccessProfileTests = Read-RequiredDocument "packages/vscode-extension/tests/remoteAccessProfile.test.ts"
+$orderedWriteQueueSource = Read-RequiredDocument "packages/vscode-extension/src/transport/orderedWriteQueue.ts"
+$orderedWriteQueueTests = Read-RequiredDocument "packages/vscode-extension/tests/orderedWriteQueue.test.ts"
+$jsonRpcStreamClientSource = Read-RequiredDocument "packages/vscode-extension/src/transport/jsonRpcStreamClient.ts"
+$jsonRpcStreamClientTests = Read-RequiredDocument "packages/vscode-extension/tests/jsonRpcStreamClient.test.ts"
 $tortoiseDetectorSource = Read-RequiredDocument "packages/vscode-extension/src/tortoise/tortoiseDetector.ts"
 $tortoiseDetectorTests = Read-RequiredDocument "packages/vscode-extension/tests/tortoiseDetector.test.ts"
 $tortoiseLauncherSource = Read-RequiredDocument "packages/vscode-extension/src/tortoise/tortoiseLauncher.ts"
@@ -580,6 +586,7 @@ $nativeBridgeSource = Read-RequiredDocument "native/svn-bridge/src/subversionr_b
 $nativeBridgeRustSource = Read-RequiredDocument "crates/subversionr-daemon/src/native.rs"
 $bridgeSource = Read-RequiredDocument "crates/subversionr-daemon/src/bridge.rs"
 $daemonStateSource = Read-RequiredDocument "crates/subversionr-daemon/src/state.rs"
+$daemonRemoteSource = Read-RequiredDocument "crates/subversionr-daemon/src/remote.rs"
 $protocolSource = Read-RequiredDocument "crates/subversionr-protocol/src/lib.rs"
 $nativeBridgeHeader = Read-RequiredDocument "native/svn-bridge/include/subversionr_bridge.h"
 $statusSnapshotRpcClientSource = Read-RequiredDocument "packages/vscode-extension/src/status/statusSnapshotRpcClient.ts"
@@ -1285,11 +1292,17 @@ Assert-Terms $externalToolConfigurationSource @(
   "requireExternalToolExecutionTrusted",
   "assertExternalToolSettingsTrusted"
 ) "TortoiseSVN external tool trust source coverage"
+Assert-NoTerms $externalToolConfigurationSource @(
+  "subversionr.svn.configDirectory",
+  "subversionr.svn.tunnelCommand",
+  "svnConfigDirectory",
+  "svnTunnelCommand"
+) "removed SVN config and tunnel setting source absence"
 Assert-Terms $externalToolConfigurationTests @(
   "keeps optional Tortoise settings unconfigured without failing native core workflows",
   "blocks all external tool execution in an untrusted workspace before settings are used",
   "blocks workspace-provided external tool settings in an untrusted workspace without leaking values",
-  "accepts absolute executable and config paths without expanding them"
+  "accepts absolute Tortoise executable and config paths without expanding them"
 ) "TortoiseSVN external tool trust test coverage"
 Assert-Terms $tortoiseDetectorSource @(
   'const TORTOISE_PROC_EXE = "TortoiseProc.exe";',
@@ -1363,9 +1376,83 @@ Assert-Terms $extensionPackageJson @(
   '"subversionr.tortoise.executablePath"',
   '"subversionr.tortoise.configDirectory"'
 ) "TortoiseSVN manifest contribution coverage"
+Assert-Terms $extensionPackageJson @(
+  '"subversionr.remote.profiles"',
+  '"scope": "machine"',
+  '"subversionr.remote-profile.v1"',
+  '"additionalProperties": false'
+) "strict machine-scoped remote profile manifest coverage"
+Assert-NoTerms $extensionPackageJson @(
+  '"subversionr.svn.configDirectory"',
+  '"subversionr.svn.tunnelCommand"'
+) "removed SVN config and tunnel manifest contribution absence"
+Assert-Terms $remoteAccessProfileSource @(
+  'REMOTE_PROFILE_SCHEMA = "subversionr.remote-profile.v1"',
+  "requireExactKeys",
+  "selectRemoteAccessProfile",
+  "buildRemoteOperationEnvelope",
+  "SUBVERSIONR_REMOTE_TRUST_NOT_ACKNOWLEDGED",
+  "SUBVERSIONR_REMOTE_PROXY_UNSUPPORTED"
+) "M8 I2 strict trusted remote profile and envelope adapter contract"
+Assert-Terms $remoteAccessProfileTests @(
+  "rejects unknown fields, profile versions, proxy fields and duplicate identifiers",
+  "requires canonical authority and exactly one matching profile",
+  "builds the v1 envelope only after trust acknowledgement and with bounded interaction",
+  "expectedProxy"
+) "M8 I2 remote profile and envelope adapter tests"
+Assert-Terms $orderedWriteQueueSource @(
+  'this.writable.on("drain"',
+  "waitingForDrain",
+  "this.queued.shift()",
+  "item.reject(error)"
+) "M8 I2 ordered JSON-RPC write queue implementation"
+Assert-Terms $orderedWriteQueueTests @(
+  "waits for drain after write returns false and preserves frame order",
+  "rejects queued and future frames with the first writable error",
+  "rejects queued and future frames deterministically when the writable closes"
+) "M8 I2 ordered JSON-RPC write queue tests"
+Assert-Terms $jsonRpcStreamClientSource @(
+  "new OrderedWriteQueue",
+  "enqueuePayload",
+  "writeCancelNotification"
+) "M8 I2 single JSON-RPC writer integration"
+Assert-Terms $jsonRpcStreamClientTests @(
+  "preserves request and cancellation frame order while backpressured",
+  "queues daemon initiated responses behind earlier backpressured frames"
+) "M8 I2 JSON-RPC writer integration tests"
+Assert-Terms $protocolSource @(
+  "RemoteOperationEnvelope",
+  "RemoteAccessProfileSnapshot",
+  "WorkspaceTrustUpdateParams",
+  "remote_operation_envelope",
+  "trusted_config_snapshot"
+) "M8 I2 protocol foundation contract"
+Assert-Terms $daemonRemoteSource @(
+  "preflight_repository_urls",
+  "SUBVERSIONR_REMOTE_ENVELOPE_REQUIRED",
+  "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",
+  "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH",
+  "SUBVERSIONR_REMOTE_PROXY_UNSUPPORTED"
+) "M8 I2 daemon fail-closed remote preflight"
+Assert-Terms $rpcDispatchTests @(
+  "remote_checkout_requires_initialized_current_trust_and_never_calls_legacy_checkout",
+  "remote_checkout_rejects_contract_and_policy_variants_before_context_creation",
+  "remote_working_copy_status_check_is_gated_before_the_legacy_remote_bridge_path"
+) "M8 I2 daemon remote preflight tests"
+Assert-Terms $nativeBridgeSource @(
+  "subversionr_bridge_remote_context_create",
+  "svn_config_create2",
+  "svn_auth_open",
+  "inspection.forbidden_input_mask = 0"
+) "M8 I2 native in-memory configuration foundation"
+Assert-Terms $nativeBridgeTests @(
+  "native_remote_context_source_uses_only_explicit_in_memory_configuration",
+  "native_bridge_remote_context_foundation_accepts_the_exact_allowlist"
+) "M8 I2 native configuration boundary tests"
 Assert-Terms $extensionManifestTests @(
   "declares limited Workspace Trust support for trust-sensitive SVN operations and external tool config paths",
-  "contributes external tool and SVN runtime config settings behind Workspace Trust without defaults",
+  "contributes only Tortoise external tool settings behind Workspace Trust without defaults",
+  "contributes a strict machine-scoped remote profile schema without a default",
   'not.toHaveProperty("No TortoiseSVN executable is configured or detected.")',
   "SubversionR TortoiseSVN command failed: {0}",
   "subversionr.tortoiseAvailable"
@@ -2562,10 +2649,10 @@ Assert-Terms $protocolContractTests @(
   "RepositoryDiscoverResponse"
 ) "REP-004 protocol file external boundary contract"
 Assert-Terms $backendProcessTests @(
-  "rejects initialize and terminates the sidecar when protocol minor is too old for required status fields",
+  "rejects initialize and terminates the sidecar when protocol minor is too old",
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
-  "expectedMinimum: 30"
-) "REP-004 protocol v1.30 startup gate"
+  "expectedMinimum: 31"
+) "REP-004 protocol v1.31 startup gate"
 Assert-Terms $protocolSource @(
   "OperationFailureDiagnostics",
   "OperationFailureCause",

@@ -3,6 +3,21 @@ import { BackendService, type BackendStarter } from "../src/backend/backendServi
 import type { BackendConnection, BackendLaunchConfig, InitializeResult } from "../src/backend/backendProcess";
 
 describe("BackendService", () => {
+  it("delegates trust updates to the active connection and exposes remote submission state", async () => {
+    const connection = fakeConnection();
+    const service = new BackendService({
+      readConfig: () => launchConfig(),
+      start: vi.fn<BackendStarter>().mockResolvedValue(connection),
+      ...backendLifecycleDefaults(),
+    });
+
+    expect(service.isRemoteSubmissionEnabled()).toBe(false);
+    await expect(service.updateWorkspaceTrust(true)).resolves.toBe(2);
+    expect(connection.updateWorkspaceTrust).toHaveBeenCalledWith(true);
+    expect(service.isRemoteSubmissionEnabled()).toBe(true);
+    expect(connection.isRemoteSubmissionEnabled).toHaveBeenCalledTimes(1);
+  });
+
   it("coalesces concurrent initialize calls into one sidecar startup", async () => {
     const connection = fakeConnection();
     let resolveStart: (connection: BackendConnection) => void = () => {};
@@ -650,6 +665,8 @@ function fakeConnection(): BackendConnection {
   return {
     initializeResult: initializeResult(),
     sendRequest: vi.fn().mockResolvedValue({}),
+    isRemoteSubmissionEnabled: vi.fn(() => true),
+    updateWorkspaceTrust: vi.fn(async () => 2),
     onDidTerminate: vi.fn(() => ({ dispose: vi.fn() })),
     shutdown: vi.fn().mockResolvedValue(undefined),
     dispose: vi.fn(),
@@ -785,7 +802,7 @@ class CodedError extends Error {
 
 function initializeResult(): InitializeResult {
   return {
-    protocol: { major: 1, minor: 28 },
+    protocol: { major: 1, minor: 31 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -836,6 +853,9 @@ function initializeResult(): InitializeResult {
       diagnosticsGet: true,
       credentialRequest: true,
       certificateRequest: true,
+      remoteOperationEnvelope: true,
+      trustedConfigSnapshot: true,
     },
+    acknowledgedTrustEpoch: 1,
   };
 }
