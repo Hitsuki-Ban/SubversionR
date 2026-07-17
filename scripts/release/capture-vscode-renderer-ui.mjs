@@ -27,6 +27,10 @@ if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "scm-action-layout") 
   await runScmActionLayoutSelfTest();
   return;
 }
+if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "scm-surface-contracts") {
+  runScmSurfaceContractSelfTest();
+  return;
+}
 if (process.env.SUBVERSIONR_RENDERER_CAPTURE_SELF_TEST === "workbench-window-observation") {
   await runWorkbenchWindowObservationSelfTest();
   return;
@@ -59,7 +63,7 @@ const quickPickItemText = optionalString(expectations.quickPickItemText, "quickP
 const quickPickAbsentItemText = optionalString(expectations.quickPickAbsentItemText, "quickPickAbsentItemText");
 const quickInputSubmitKey = optionalString(expectations.quickInputSubmitKey, "quickInputSubmitKey");
 const expectedViewport = optionalViewport(expectations.viewport);
-const scmActionSurface = optionalScmActionSurface(expectations.scmActionSurface);
+const { scmActionSurface, scmResourceSurface } = requiredExclusiveScmSurfaceContracts(expectations);
 const treeViewState = optionalTreeViewState(expectations.treeViewState);
 if ((inputText === undefined) !== (submitKey === undefined)) {
   throw new Error("inputText and submitKey must be provided together.");
@@ -70,7 +74,7 @@ if (submitKey !== undefined && quickInputSubmitKey !== undefined) {
 if (cancelAction !== undefined && cancelAction !== "closeNotification") {
   throw new Error(`Unsupported cancelAction: ${cancelAction}.`);
 }
-const interactionCount = [clickButtonText, inputText, cancelKey, cancelAction, quickPickItemText, quickPickAbsentItemText, quickInputSubmitKey, scmActionSurface, treeViewState].filter((value) => value !== undefined).length;
+const interactionCount = [clickButtonText, inputText, cancelKey, cancelAction, quickPickItemText, quickPickAbsentItemText, quickInputSubmitKey, scmActionSurface, scmResourceSurface, treeViewState].filter((value) => value !== undefined).length;
 if (interactionCount > 1) {
   throw new Error("Renderer expectations must use exactly one interaction kind when an interaction is requested.");
 }
@@ -97,7 +101,7 @@ try {
     if (expectedViewport) {
       await setExpectedViewport(cdp, expectedViewport);
     }
-    const captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined && treeViewState === undefined && quickPickAbsentItemText === undefined;
+    const captureBeforeInteraction = interactionCount > 0 && scmActionSurface === undefined && scmResourceSurface === undefined && treeViewState === undefined && quickPickAbsentItemText === undefined;
     const beforeInteractionState = await captureRequiredTokenState(cdp, domTokens, accessibilityTokens);
     const beforeInteractionScreenshot = captureBeforeInteraction
       ? await captureScreenshotWithRetry(cdp)
@@ -106,6 +110,8 @@ try {
       ? await inspectTreeViewState(cdp, treeViewState)
       : scmActionSurface
       ? await inspectScmActionSurface(cdp, scmActionSurface, selectedTarget)
+      : scmResourceSurface
+        ? await inspectScmResourceSurface(cdp, scmResourceSurface)
       : clickButtonText !== undefined
         ? await clickButtonByText(cdp, clickButtonText, domTokens)
         : inputText !== undefined
@@ -136,7 +142,7 @@ try {
     const screenshotBytes = Buffer.from(String(screenshot.data), "base64");
     await writeFile(screenshotPath, screenshotBytes);
     const screenshotInfo = inspectPng(screenshotBytes);
-    if (scmActionSurface) {
+    if (scmActionSurface || scmResourceSurface) {
       await pressEscape(cdp);
     }
 
@@ -207,14 +213,23 @@ try {
         } : {}),
         ...(interaction && scmActionSurface ? {
           scmTargetResourceRowUnique: interaction.layout.assertions.uniqueTargetResourceRow,
-          scmProviderAndActionsContainerUnique: interaction.layout.assertions.uniqueProviderAndActionsContainer,
-          scmProviderMinimumWidthReached: interaction.layout.assertions.providerMinimumWidthReached,
+          scmViewPaneHeaderAndActionsContainerUnique: interaction.layout.assertions.uniqueViewPaneHeaderAndActionsContainer,
+          scmViewPaneHeaderMinimumWidthReached: interaction.layout.assertions.viewPaneHeaderMinimumWidthReached,
           scmActionsContainerMinimumWidthReached: interaction.layout.assertions.actionsContainerMinimumWidthReached,
           scmPrimaryActionsRendered: interaction.primaryActions.every((action) => action.rendered === true),
           scmOverflowSubmenusReachable: interaction.overflowSubmenus.every((submenu) => submenu.reachable === true),
           scmResourceInlineActionsReachable: interaction.resource.inlineActions.every((action) => action.rendered === true),
           scmResourceContextActionsReachable: interaction.resource.contextActions.every((action) => action.reachable === true),
           ...(scmActionSurface.resource.expectedNoContextActions ? {
+            scmResourceContextActionsEmpty: interaction.resource.observedContextMenuLabels.length === 0,
+          } : {}),
+          activationReadyToastAbsent: interaction.notifications.presentForbiddenTokens.length === 0,
+        } : {}),
+        ...(interaction && scmResourceSurface ? {
+          scmTargetResourceRowUnique: interaction.resource.row.matchingRowCount === 1,
+          scmResourceInlineActionsReachable: interaction.resource.inlineActions.every((action) => action.rendered === true),
+          scmResourceContextActionsReachable: interaction.resource.contextActions.every((action) => action.reachable === true),
+          ...(scmResourceSurface.resource.expectedNoContextActions ? {
             scmResourceContextActionsEmpty: interaction.resource.observedContextMenuLabels.length === 0,
           } : {}),
           activationReadyToastAbsent: interaction.notifications.presentForbiddenTokens.length === 0,
@@ -491,36 +506,67 @@ function optionalScmActionSurface(value) {
   const layout = requiredScmActionLayout(value.layout);
   const primaryActions = requiredActionArray(value.primaryActions, "scmActionSurface.primaryActions", true);
   const overflowSubmenus = requiredSubmenuArray(value.overflowSubmenus);
-  if (!value.resource || typeof value.resource !== "object") {
-    throw new Error("scmActionSurface.resource must be an object.");
+  const resourceSurface = requiredScmResourceSurface(value, "scmActionSurface");
+  return {
+    layout,
+    primaryActions,
+    overflowSubmenus,
+    ...resourceSurface,
+  };
+}
+
+function requiredExclusiveScmSurfaceContracts(expectations) {
+  const scmActionSurface = optionalScmActionSurface(expectations.scmActionSurface);
+  const scmResourceSurface = optionalScmResourceSurface(expectations.scmResourceSurface);
+  if (scmActionSurface !== undefined && scmResourceSurface !== undefined) {
+    throw new Error("Renderer expectations must not combine scmActionSurface and scmResourceSurface.");
   }
-  const resourcePathToken = requiredValueString(value.resource.pathToken, "scmActionSurface.resource.pathToken");
+  return { scmActionSurface, scmResourceSurface };
+}
+
+function optionalScmResourceSurface(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object") {
+    throw new Error("scmResourceSurface must be an object when provided.");
+  }
+  for (const forbiddenField of ["layout", "primaryActions", "overflowSubmenus"]) {
+    if (Object.prototype.hasOwnProperty.call(value, forbiddenField)) {
+      throw new Error(`scmResourceSurface.${forbiddenField} is not allowed; resource-only capture must not replay the full SCM action surface contract.`);
+    }
+  }
+  return requiredScmResourceSurface(value, "scmResourceSurface");
+}
+
+function requiredScmResourceSurface(value, name) {
+  if (!value.resource || typeof value.resource !== "object") {
+    throw new Error(`${name}.resource must be an object.`);
+  }
+  const resourcePathToken = requiredValueString(value.resource.pathToken, `${name}.resource.pathToken`);
   const expectedNoContextActions = value.resource.expectedNoContextActions === true;
   if (
     value.resource.expectedNoContextActions !== undefined &&
     typeof value.resource.expectedNoContextActions !== "boolean"
   ) {
-    throw new Error("scmActionSurface.resource.expectedNoContextActions must be a boolean when provided.");
+    throw new Error(`${name}.resource.expectedNoContextActions must be a boolean when provided.`);
   }
   const inlineActions = requiredActionArray(
     value.resource.inlineActions,
-    "scmActionSurface.resource.inlineActions",
+    `${name}.resource.inlineActions`,
     true,
   );
   const contextActions = expectedNoContextActions
     ? []
     : requiredTokenArray(
       value.resource.contextActions,
-      "scmActionSurface.resource.contextActions",
+      `${name}.resource.contextActions`,
     );
   const forbiddenNotificationTokens = requiredTokenArray(
     value.forbiddenNotificationTokens,
-    "scmActionSurface.forbiddenNotificationTokens",
+    `${name}.forbiddenNotificationTokens`,
   );
   return {
-    layout,
-    primaryActions,
-    overflowSubmenus,
     resource: {
       pathToken: resourcePathToken,
       expectedNoContextActions,
@@ -538,15 +584,15 @@ function requiredScmActionLayout(value) {
   if (
     value.prepareCommand !== "workbench.action.increaseViewSize" ||
     value.incrementCount !== 1 ||
-    value.minimumProviderWidth !== 280 ||
-    value.minimumActionsContainerWidth !== 120
+    value.minimumViewPaneHeaderWidth !== 280 ||
+    value.minimumActionsContainerWidth !== 96
   ) {
-    throw new Error("scmActionSurface.layout must require one workbench.action.increaseViewSize command and exact 280/120 pixel minimum widths.");
+    throw new Error("scmActionSurface.layout must require one workbench.action.increaseViewSize command and exact 280/96 pixel minimum widths.");
   }
   return {
     prepareCommand: value.prepareCommand,
     incrementCount: value.incrementCount,
-    minimumProviderWidth: value.minimumProviderWidth,
+    minimumViewPaneHeaderWidth: value.minimumViewPaneHeaderWidth,
     minimumActionsContainerWidth: value.minimumActionsContainerWidth,
   };
 }
@@ -881,10 +927,8 @@ async function inspectTreeViewState(cdp, expectations) {
   }
 }
 
-async function inspectScmActionLayout(cdp, expectedLayout, expectedActions, resourcePathToken) {
-  const observation = await evaluate(
-    cdp,
-    `(() => {
+function scmViewPaneHeaderInspectionSource(expectedActions, resourcePathToken) {
+  return `(() => {
       const expectedActions = ${JSON.stringify(expectedActions)};
       const resourcePathToken = ${JSON.stringify(resourcePathToken)};
       const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
@@ -907,65 +951,121 @@ async function inspectScmActionLayout(cdp, expectedLayout, expectedActions, reso
           clientHeight: element.clientHeight
         };
       };
-      const expectedLabel = candidateLabel => expectedActions.find(action =>
-        candidateLabel === action.label || candidateLabel.startsWith(action.label + " (")
-      )?.label;
-      const exactResourceRow = element => {
-        const resourceLabel = element.querySelector(".label-name");
-        return resourceLabel && visible(resourceLabel) && normalize(resourceLabel.innerText ?? resourceLabel.textContent) === resourcePathToken;
-      };
+      const labelsFor = element => [
+        element,
+        ...element.querySelectorAll("[aria-label], [title], button, a, [role='button']")
+      ].flatMap(candidate => [
+        normalize(candidate.getAttribute("aria-label")),
+        normalize(candidate.getAttribute("title")),
+        normalize(candidate.textContent)
+      ]).filter(Boolean);
+      const codiconsFor = element => Array.from(new Set(
+        [element, ...element.querySelectorAll("[class*='codicon-']")]
+          .flatMap(candidate => Array.from(candidate.classList))
+          .filter(className => className.startsWith("codicon-"))
+      ));
+      const resourceLabelsFor = row => Array.from(row.querySelectorAll(".label-name"))
+        .filter(element => visible(element) && !element.querySelector(".label-name"))
+        .map(element => normalize(element.innerText ?? element.textContent));
       const panes = Array.from(document.querySelectorAll(".pane")).filter(visible).map(pane => {
-        const scmEditorVisible = Array.from(pane.querySelectorAll(".scm-editor-container, .scm-input")).some(visible);
-        const matchingRows = Array.from(pane.querySelectorAll(".monaco-list-row"))
-          .filter(element => visible(element) && exactResourceRow(element));
-        const resourceRows = matchingRows.filter(row =>
-          !matchingRows.some(candidate => candidate !== row && row.contains(candidate))
+        const directHeaders = Array.from(pane.querySelectorAll(":scope > .pane-header"));
+        const directBodies = Array.from(pane.querySelectorAll(":scope > .pane-body"));
+        const viewPaneHeader = directHeaders.length === 1 && visible(directHeaders[0]) ? directHeaders[0] : null;
+        const body = directBodies.length === 1 && visible(directBodies[0]) ? directBodies[0] : null;
+        const scmEditorVisible = body
+          ? Array.from(body.querySelectorAll(".scm-editor-container, .scm-input")).some(visible)
+          : false;
+        const visibleRows = body
+          ? Array.from(body.querySelectorAll(".monaco-list-row")).filter(visible)
+          : [];
+        const resourceRows = visibleRows.filter(row =>
+          resourceLabelsFor(row).filter(value => value === resourcePathToken).length === 1
         );
-        const actionElements = Array.from(pane.querySelectorAll(
-          ".scm-provider .actions-container button, .scm-provider .actions-container a, .scm-provider .actions-container [role='button'], .scm-provider .actions-container [aria-label], .scm-provider .actions-container [title]"
-        )).filter(visible);
-        const pairs = [];
-        for (const element of actionElements) {
-          const matchedLabel = expectedLabel(label(element));
-          if (!matchedLabel) continue;
-          const actionsContainer = element.closest(".actions-container");
-          const provider = element.closest(".scm-provider");
-          if (!actionsContainer || !provider || !pane.contains(provider) || !provider.contains(actionsContainer)) continue;
-          let pair = pairs.find(candidate =>
-            candidate.providerElement === provider && candidate.actionsContainerElement === actionsContainer
+        const conflictingPrefixRows = visibleRows.filter(row =>
+          resourceLabelsFor(row).some(value => value !== resourcePathToken && value.startsWith(resourcePathToken))
+        );
+        const scmProviderCount = pane.querySelectorAll(".scm-provider").length;
+        const bodyActionsContainerCount = body ? body.querySelectorAll(".actions-container").length : 0;
+        const toolbarChains = viewPaneHeader
+          ? Array.from(viewPaneHeader.querySelectorAll(
+              ":scope > .actions > .monaco-toolbar > .monaco-action-bar > .actions-container"
+            ))
+          : [];
+        const actionsContainer = toolbarChains.length === 1 && visible(toolbarChains[0])
+          ? toolbarChains[0]
+          : null;
+        const actionItems = actionsContainer
+          ? Array.from(actionsContainer.querySelectorAll(":scope > .action-item"))
+          : [];
+        const actionItemEvidence = actionItems.map((item, index) => ({
+          index,
+          visible: visible(item),
+          labels: labelsFor(item),
+          codicons: codiconsFor(item),
+          className: typeof item.className === "string" ? item.className : "",
+          bounds: bounds(item)
+        }));
+        const expectedActionMatches = expectedActions.map(action => {
+          const iconClass = "codicon-" + action.codicon;
+          const matches = actionItemEvidence.filter(item => item.visible &&
+            item.labels.some(value => value === action.label || value.startsWith(action.label + " (")) &&
+            item.codicons.includes(iconClass)
           );
-          if (!pair) {
-            pair = { providerElement: provider, actionsContainerElement: actionsContainer, matchedActionLabels: [] };
-            pairs.push(pair);
-          }
-          if (!pair.matchedActionLabels.includes(matchedLabel)) pair.matchedActionLabels.push(matchedLabel);
-        }
-        return { paneElement: pane, scmEditorVisible, resourceRows, pairs };
+          return {
+            label: action.label,
+            codicon: action.codicon,
+            matchingItemCount: matches.length,
+            matchingItemIndexes: matches.map(item => item.index),
+            item: matches.length === 1 ? matches[0] : null
+          };
+        });
+        const matchedIndexes = expectedActionMatches.flatMap(action => action.matchingItemIndexes);
+        const expectedActionsUniqueAndDistinct =
+          expectedActionMatches.every(action => action.matchingItemCount === 1) &&
+          new Set(matchedIndexes).size === expectedActions.length;
+        return {
+          paneElement: pane,
+          directHeaderCount: directHeaders.length,
+          visibleDirectHeaderCount: directHeaders.filter(visible).length,
+          directBodyCount: directBodies.length,
+          visibleDirectBodyCount: directBodies.filter(visible).length,
+          viewPaneHeader,
+          body,
+          scmEditorVisible,
+          resourceRows,
+          conflictingPrefixRows,
+          scmProviderCount,
+          bodyActionsContainerCount,
+          toolbarChainCount: toolbarChains.length,
+          visibleToolbarChainCount: toolbarChains.filter(visible).length,
+          actionsContainer,
+          actionItemEvidence,
+          expectedActionMatches,
+          expectedActionsUniqueAndDistinct
+        };
       });
       const matchingPanes = panes.filter(pane =>
-        pane.scmEditorVisible && pane.resourceRows.length === 1 && pane.pairs.length > 0
+        pane.viewPaneHeader && pane.body && pane.scmEditorVisible && pane.resourceRows.length === 1
       );
       const targetPane = matchingPanes.length === 1 ? matchingPanes[0] : null;
-      const pairs = targetPane ? targetPane.pairs : [];
-      const matchingPairs = pairs.map(pair => ({
-        provider: bounds(pair.providerElement),
-        actionsContainer: bounds(pair.actionsContainerElement),
-        matchedActionLabels: pair.matchedActionLabels,
-        visibleActionCandidates: Array.from(pair.actionsContainerElement.querySelectorAll(
-          "button, a, [role='button'], [aria-label], [title]"
-        )).filter(visible).map(element => ({
-          label: label(element),
-          className: typeof element.className === "string" ? element.className : ""
-        })).filter(candidate => candidate.label).slice(0, 40)
-      }));
+      const directHeaderSurfaceValid = Boolean(targetPane &&
+        targetPane.scmProviderCount === 0 &&
+        targetPane.toolbarChainCount === 1 &&
+        targetPane.visibleToolbarChainCount === 1 &&
+        targetPane.actionsContainer &&
+        targetPane.expectedActionsUniqueAndDistinct
+      );
       const globalActionCandidates = Array.from(document.querySelectorAll(
         "button, a, [role='button'], [aria-label], [title]"
       )).filter(visible).map(element => ({
         label: label(element),
+        codicons: codiconsFor(element),
         className: typeof element.className === "string" ? element.className : ""
-      })).filter(candidate => expectedLabel(candidate.label)).slice(0, 40);
+      })).filter(candidate => expectedActions.some(action =>
+        candidate.label === action.label || candidate.label.startsWith(action.label + " (")
+      )).slice(0, 40);
       const globalMatchingResourceRows = Array.from(document.querySelectorAll(".monaco-list-row"))
-        .filter(element => visible(element) && exactResourceRow(element));
+        .filter(element => visible(element) && resourceLabelsFor(element).includes(resourcePathToken));
       return {
         matchingTargetPaneCount: matchingPanes.length,
         matchingResourceRowCount: targetPane ? targetPane.resourceRows.length : 0,
@@ -977,20 +1077,50 @@ async function inspectScmActionLayout(cdp, expectedLayout, expectedActions, reso
           scmEditorVisible: targetPane.scmEditorVisible,
           ...bounds(targetPane.paneElement)
         } : null,
-        matchingPairCount: matchingPairs.length,
-        matchingPairs,
+        renderMode: targetPane ? {
+          directHeaderCount: targetPane.directHeaderCount,
+          visibleDirectHeaderCount: targetPane.visibleDirectHeaderCount,
+          directBodyCount: targetPane.directBodyCount,
+          visibleDirectBodyCount: targetPane.visibleDirectBodyCount,
+          scmProviderCount: targetPane.scmProviderCount,
+          bodyActionsContainerCount: targetPane.bodyActionsContainerCount,
+          directToolbarChainCount: targetPane.toolbarChainCount,
+          visibleDirectToolbarChainCount: targetPane.visibleToolbarChainCount,
+          expectedActionsUniqueAndDistinct: targetPane.expectedActionsUniqueAndDistinct,
+          conflictingPrefixResourceRowCount: targetPane.conflictingPrefixRows.length
+        } : null,
+        matchingViewPaneHeaderAndActionsContainerCount: directHeaderSurfaceValid ? 1 : 0,
+        viewPaneHeader: directHeaderSurfaceValid ? bounds(targetPane.viewPaneHeader) : null,
+        actionsContainer: directHeaderSurfaceValid ? bounds(targetPane.actionsContainer) : null,
+        expectedActionMatches: targetPane ? targetPane.expectedActionMatches : [],
+        visibleActionCandidates: targetPane ? targetPane.actionItemEvidence : [],
         paneCandidates: panes.map(pane => ({
+          directHeaderCount: pane.directHeaderCount,
+          visibleDirectHeaderCount: pane.visibleDirectHeaderCount,
+          directBodyCount: pane.directBodyCount,
+          visibleDirectBodyCount: pane.visibleDirectBodyCount,
           scmEditorVisible: pane.scmEditorVisible,
           matchingResourceRowCount: pane.resourceRows.length,
-          matchingProviderAndActionsContainerCount: pane.pairs.length,
+          conflictingPrefixResourceRowCount: pane.conflictingPrefixRows.length,
+          scmProviderCount: pane.scmProviderCount,
+          bodyActionsContainerCount: pane.bodyActionsContainerCount,
+          directToolbarChainCount: pane.toolbarChainCount,
+          visibleDirectToolbarChainCount: pane.visibleToolbarChainCount,
+          expectedActionsUniqueAndDistinct: pane.expectedActionsUniqueAndDistinct,
           className: typeof pane.paneElement.className === "string" ? pane.paneElement.className : "",
           ...bounds(pane.paneElement)
         })),
         globalActionCandidates
       };
-    })()`,
-  );
-  const matchingPair = observation.matchingPairCount === 1 ? observation.matchingPairs[0] : undefined;
+    })()`;
+}
+
+async function inspectScmViewPaneHeaderSurface(cdp, expectedActions, resourcePathToken) {
+  return evaluate(cdp, scmViewPaneHeaderInspectionSource(expectedActions, resourcePathToken));
+}
+
+async function inspectScmActionLayout(cdp, expectedLayout, expectedActions, resourcePathToken) {
+  const observation = await inspectScmViewPaneHeaderSurface(cdp, expectedActions, resourcePathToken);
   const result = {
     expected: expectedLayout,
     observed: {
@@ -998,107 +1128,66 @@ async function inspectScmActionLayout(cdp, expectedLayout, expectedActions, reso
       matchingResourceRowCount: observation.matchingResourceRowCount,
       globalMatchingResourceRowCount: observation.globalMatchingResourceRowCount,
       targetRoot: observation.targetRoot,
-      matchingProviderAndActionsContainerCount: observation.matchingPairCount,
-      provider: matchingPair?.provider,
-      actionsContainer: matchingPair?.actionsContainer,
-      matchedActionLabels: matchingPair?.matchedActionLabels ?? [],
+      renderMode: observation.renderMode,
+      matchingViewPaneHeaderAndActionsContainerCount: observation.matchingViewPaneHeaderAndActionsContainerCount,
+      viewPaneHeader: observation.viewPaneHeader,
+      actionsContainer: observation.actionsContainer,
+      expectedActionMatches: observation.expectedActionMatches,
     },
     assertions: {
-      uniqueProviderAndActionsContainer: observation.matchingPairCount === 1,
+      uniqueViewPaneHeaderAndActionsContainer:
+        observation.matchingViewPaneHeaderAndActionsContainerCount === 1,
       uniqueTargetResourceRow:
         observation.matchingTargetPaneCount === 1 &&
         observation.matchingResourceRowCount === 1 &&
         observation.targetRoot?.scmEditorVisible === true,
-      providerMinimumWidthReached:
-        observation.matchingPairCount === 1 &&
-        matchingPair.provider.width >= expectedLayout.minimumProviderWidth,
+      singleVisibleRepositoryViewPaneTitleMode:
+        observation.renderMode?.directHeaderCount === 1 &&
+        observation.renderMode?.visibleDirectHeaderCount === 1 &&
+        observation.renderMode?.directBodyCount === 1 &&
+        observation.renderMode?.visibleDirectBodyCount === 1 &&
+        observation.renderMode?.scmProviderCount === 0 &&
+        observation.renderMode?.directToolbarChainCount === 1 &&
+        observation.renderMode?.visibleDirectToolbarChainCount === 1 &&
+        observation.renderMode?.expectedActionsUniqueAndDistinct === true,
+      viewPaneHeaderMinimumWidthReached:
+        observation.matchingViewPaneHeaderAndActionsContainerCount === 1 &&
+        observation.viewPaneHeader.width >= expectedLayout.minimumViewPaneHeaderWidth,
       actionsContainerMinimumWidthReached:
-        observation.matchingPairCount === 1 &&
-        matchingPair.actionsContainer.width >= expectedLayout.minimumActionsContainerWidth,
+        observation.matchingViewPaneHeaderAndActionsContainerCount === 1 &&
+        observation.actionsContainer.width >= expectedLayout.minimumActionsContainerWidth,
     },
   };
   if (
     result.assertions.uniqueTargetResourceRow !== true ||
-    result.assertions.uniqueProviderAndActionsContainer !== true ||
-    result.assertions.providerMinimumWidthReached !== true ||
+    result.assertions.uniqueViewPaneHeaderAndActionsContainer !== true ||
+    result.assertions.singleVisibleRepositoryViewPaneTitleMode !== true ||
+    result.assertions.viewPaneHeaderMinimumWidthReached !== true ||
     result.assertions.actionsContainerMinimumWidthReached !== true
   ) {
-    throw new Error(`SCM action layout did not identify one provider toolbar in the unique visible resource pane for ${resourcePathToken} with minimum ${expectedLayout.minimumProviderWidth}/${expectedLayout.minimumActionsContainerWidth} pixel widths. Layout: ${JSON.stringify(result)}. Diagnostics: ${JSON.stringify(observation)}`);
+    throw new Error(`SCM action layout did not identify one direct SCM ViewPane header toolbar in the unique visible resource pane for ${resourcePathToken} with minimum ${expectedLayout.minimumViewPaneHeaderWidth}/${expectedLayout.minimumActionsContainerWidth} pixel widths. Layout: ${JSON.stringify(result)}. Diagnostics: ${JSON.stringify(observation)}`);
   }
   return result;
 }
 
 async function inspectScmPrimaryActions(cdp, expectedActions, resourcePathToken) {
-  return evaluate(
-    cdp,
-    `(() => {
-      const expected = ${JSON.stringify(expectedActions)};
-      const resourcePathToken = ${JSON.stringify(resourcePathToken)};
-      const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
-      const visible = element => {
-        const rect = element.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
-          rect.left < window.innerWidth && rect.top < window.innerHeight;
-      };
-      const expectedLabel = candidateLabel => expected.find(action =>
-        candidateLabel === action.label || candidateLabel.startsWith(action.label + " (")
-      )?.label;
-      const exactResourceRow = element => {
-        const resourceLabel = element.querySelector(".label-name");
-        return resourceLabel && visible(resourceLabel) && normalize(resourceLabel.innerText ?? resourceLabel.textContent) === resourcePathToken;
-      };
-      const matchingPanes = Array.from(document.querySelectorAll(".pane")).filter(visible).map(pane => {
-        const scmEditorVisible = Array.from(pane.querySelectorAll(".scm-editor-container, .scm-input")).some(visible);
-        const matchingRows = Array.from(pane.querySelectorAll(".monaco-list-row"))
-          .filter(element => visible(element) && exactResourceRow(element));
-        const resourceRows = matchingRows.filter(row =>
-          !matchingRows.some(candidate => candidate !== row && row.contains(candidate))
-        );
-        const scopedElements = Array.from(pane.querySelectorAll(
-          ".scm-provider .actions-container button, .scm-provider .actions-container a, .scm-provider .actions-container [role='button'], .scm-provider .actions-container [aria-label], .scm-provider .actions-container [title]"
-        )).filter(visible);
-        const pairs = [];
-        for (const element of scopedElements) {
-          const labels = [element.getAttribute("aria-label"), element.getAttribute("title"), element.textContent]
-            .map(normalize);
-          if (!labels.some(expectedLabel)) continue;
-          const actionsContainer = element.closest(".actions-container");
-          const provider = element.closest(".scm-provider");
-          if (!actionsContainer || !provider || !pane.contains(provider) || !provider.contains(actionsContainer)) continue;
-          if (!pairs.some(pair => pair.provider === provider && pair.actionsContainer === actionsContainer)) {
-            pairs.push({ provider, actionsContainer });
-          }
-        }
-        return { scmEditorVisible, resourceRows, pairs };
-      }).filter(pane => pane.scmEditorVisible && pane.resourceRows.length === 1 && pane.pairs.length > 0);
-      const pairs = matchingPanes.length === 1 ? matchingPanes[0].pairs : [];
-      const elements = pairs.length === 1
-        ? Array.from(pairs[0].actionsContainer.querySelectorAll("button, a, [role='button'], [aria-label], [title]"))
-          .filter(visible)
-        : [];
-      return expected.map(action => {
-        const element = elements.find(candidate => {
-          const labels = [candidate.getAttribute("aria-label"), candidate.getAttribute("title"), candidate.textContent]
-            .map(normalize);
-          return labels.some(label => label === action.label || label.startsWith(action.label + " ("));
-        });
-        const iconClass = "codicon-" + action.codicon;
-        const icon = element && (
-          element.classList.contains(iconClass) ? element : element.querySelector("." + iconClass)
-        );
-        return {
-          label: action.label,
-          codicon: action.codicon,
-          rendered: Boolean(element && icon),
-          ariaLabel: element ? normalize(element.getAttribute("aria-label")) : "",
-          title: element ? normalize(element.getAttribute("title")) : "",
-          tagName: element ? element.tagName : "",
-          className: element && typeof element.className === "string" ? element.className : "",
-          iconClassName: icon && typeof icon.className === "string" ? icon.className : ""
-        };
-      });
-    })()`,
-  );
+  const observation = await inspectScmViewPaneHeaderSurface(cdp, expectedActions, resourcePathToken);
+  const surfaceValid = observation.matchingTargetPaneCount === 1 &&
+    observation.matchingViewPaneHeaderAndActionsContainerCount === 1;
+  return expectedActions.map(action => {
+    const match = observation.expectedActionMatches.find(candidate =>
+      candidate.label === action.label && candidate.codicon === action.codicon
+    );
+    return {
+      label: action.label,
+      codicon: action.codicon,
+      rendered: Boolean(surfaceValid && match?.matchingItemCount === 1 && match.item),
+      actionItemIndex: match?.matchingItemCount === 1 ? match.matchingItemIndexes[0] : undefined,
+      labels: match?.item?.labels ?? [],
+      className: match?.item?.className ?? "",
+      codicons: match?.item?.codicons ?? [],
+    };
+  });
 }
 
 async function waitForScmPrimaryActions(
@@ -1123,96 +1212,26 @@ async function waitForScmPrimaryActions(
   return primaryActions;
 }
 
-async function inspectScmPrimaryActionFailureDiagnostics(cdp, selectedTarget, primaryActions) {
+async function inspectScmPrimaryActionFailureDiagnostics(
+  cdp,
+  selectedTarget,
+  primaryActions,
+  expectedActions,
+  resourcePathToken,
+) {
+  const surface = await inspectScmViewPaneHeaderSurface(cdp, expectedActions, resourcePathToken);
   const documentDiagnostics = await evaluate(
     cdp,
     `(() => {
-      const renderedPrimaryLabels = ${JSON.stringify(primaryActions.filter(action => action.rendered === true).map(action => action.label))};
       const normalize = value => String(value ?? "").replace(/\\s+/g, " ").trim();
       const visible = element => {
         const rect = element.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
           rect.left < window.innerWidth && rect.top < window.innerHeight;
       };
-      const bounds = element => {
-        const rect = element.getBoundingClientRect();
-        return {
-          left: rect.left,
-          top: rect.top,
-          width: rect.width,
-          height: rect.height,
-          clientWidth: element.clientWidth,
-          clientHeight: element.clientHeight
-        };
-      };
       const label = element => normalize(
         element.getAttribute("aria-label") || element.getAttribute("title") || element.textContent
       );
-      const sidebarRoots = Array.from(document.querySelectorAll(".pane-composite-part, .sidebar"))
-        .filter(visible);
-      const actionRoots = sidebarRoots.length > 0 ? sidebarRoots : [document.body];
-      const actionElements = actionRoots.flatMap(root =>
-        Array.from(root.querySelectorAll("button, a, [role='button'], .action-label"))
-      );
-      const visiblePrimaryActionCandidates = actionElements
-        .filter((element, index, all) => all.indexOf(element) === index && visible(element))
-        .map(element => {
-          const codicons = [element, ...element.querySelectorAll("[class*='codicon-']")]
-            .flatMap(candidate => Array.from(candidate.classList))
-            .filter(className => className.startsWith("codicon-"));
-          return {
-            label: label(element),
-            codicons: Array.from(new Set(codicons)),
-            className: typeof element.className === "string" ? element.className : ""
-          };
-        })
-        .filter(candidate => candidate.label || candidate.codicons.length > 0)
-        .slice(0, 80);
-      const renderedPrimaryElement = actionElements.find(element => {
-        if (!visible(element)) return false;
-        const candidateLabel = label(element);
-        return renderedPrimaryLabels.some(renderedLabel =>
-          candidateLabel === renderedLabel || candidateLabel.startsWith(renderedLabel + " (")
-        );
-      });
-      const renderedPrimaryActionsContainer = renderedPrimaryElement &&
-        renderedPrimaryElement.closest(".actions-container, .title-actions");
-      const scmProvider = renderedPrimaryElement && renderedPrimaryElement.closest(".scm-provider");
-      const scmRepositoryToolbar = renderedPrimaryActionsContainer
-        ? {
-            actionsContainer: bounds(renderedPrimaryActionsContainer),
-            provider: scmProvider ? bounds(scmProvider) : null
-          }
-        : null;
-      const anchoredMoreActionsCandidates = renderedPrimaryActionsContainer
-        ? Array.from(renderedPrimaryActionsContainer.querySelectorAll(
-            ".codicon-more, [aria-label*='More Actions'], [title*='More Actions']"
-          ))
-            .map(element => element.closest("button, a, [role='button'], .action-label") || element)
-            .filter((element, index, all) => all.indexOf(element) === index && visible(element))
-            .map(element => {
-              const rect = element.getBoundingClientRect();
-              return {
-                x: rect.left + rect.width / 2,
-                y: rect.top + rect.height / 2,
-                label: label(element),
-                className: typeof element.className === "string" ? element.className : "",
-                ...bounds(element)
-              };
-            })
-        : [];
-      const moreActionsCandidates = actionRoots.flatMap(root =>
-        Array.from(root.querySelectorAll(
-          ".codicon-more, [aria-label*='More Actions'], [title*='More Actions']"
-        ))
-      )
-        .map(element => element.closest("button, a, [role='button'], .action-label") || element)
-        .filter((element, index, all) => all.indexOf(element) === index && visible(element))
-        .map(element => ({
-          label: label(element),
-          className: typeof element.className === "string" ? element.className : "",
-          ...bounds(element)
-        }));
       const restrictedModeElements = Array.from(document.querySelectorAll(
         "[aria-label*='Restricted Mode'], [title*='Restricted Mode'], .statusbar-item"
       ))
@@ -1230,16 +1249,26 @@ async function inspectScmPrimaryActionFailureDiagnostics(cdp, selectedTarget, pr
           bodyTextPresent: normalize(document.body.innerText).includes("Restricted Mode"),
           visibleLabels: Array.from(new Set(restrictedModeElements))
         },
-        scmRepositoryToolbar,
-        visiblePrimaryActionCandidates,
-        anchoredMoreActionsCandidates,
-        moreActionsCandidates
       };
     })()`,
   );
+  const anchoredMoreActionsCandidates = surface.matchingViewPaneHeaderAndActionsContainerCount === 1
+    ? surface.visibleActionCandidates
+      .filter(candidate =>
+        candidate.codicons.includes("codicon-more") ||
+        candidate.labels.some(value => value.includes("More Actions"))
+      )
+      .map(candidate => ({
+        x: candidate.bounds.left + candidate.bounds.width / 2,
+        y: candidate.bounds.top + candidate.bounds.height / 2,
+        label: candidate.labels[0] ?? "",
+        className: candidate.className,
+        ...candidate.bounds,
+      }))
+    : [];
   let overflowMenuLabels = [];
-  if (documentDiagnostics.anchoredMoreActionsCandidates.length > 0) {
-    const candidate = documentDiagnostics.anchoredMoreActionsCandidates[0];
+  if (anchoredMoreActionsCandidates.length > 0) {
+    const candidate = anchoredMoreActionsCandidates[0];
     await clickAt(cdp, candidate.x, candidate.y, "left");
     try {
       overflowMenuLabels = await waitForAnyVisibleMenuLabels(cdp);
@@ -1255,6 +1284,16 @@ async function inspectScmPrimaryActionFailureDiagnostics(cdp, selectedTarget, pr
       url: selectedTarget.url,
     },
     ...documentDiagnostics,
+    scmViewPaneToolbar: surface.matchingViewPaneHeaderAndActionsContainerCount === 1
+      ? {
+          viewPaneHeader: surface.viewPaneHeader,
+          actionsContainer: surface.actionsContainer,
+        }
+      : null,
+    surface,
+    visiblePrimaryActionCandidates: surface.visibleActionCandidates,
+    anchoredMoreActionsCandidates,
+    moreActionsCandidates: anchoredMoreActionsCandidates,
     overflowMenuLabels,
   };
 }
@@ -1281,7 +1320,13 @@ async function inspectScmActionSurface(cdp, expectations, selectedTarget) {
   );
   const missingPrimary = primaryActions.filter((action) => action.rendered !== true);
   if (missingPrimary.length > 0) {
-    const diagnostics = await inspectScmPrimaryActionFailureDiagnostics(cdp, selectedTarget, primaryActions);
+    const diagnostics = await inspectScmPrimaryActionFailureDiagnostics(
+      cdp,
+      selectedTarget,
+      primaryActions,
+      expectations.primaryActions,
+      expectations.resource.pathToken,
+    );
     throw scmPrimaryActionFailure(missingPrimary, primaryActions, diagnostics);
   }
 
@@ -1363,6 +1408,27 @@ async function inspectScmActionSurface(cdp, expectations, selectedTarget) {
   await pressEscape(cdp);
   await pressEscape(cdp);
 
+  const resourceSurface = await inspectScmResourceEvidence(cdp, expectations);
+
+  return {
+    kind: "scmActionSurface",
+    layout,
+    primaryActions,
+    overflowButton,
+    overflowParentLabels,
+    overflowSubmenus,
+    ...resourceSurface,
+  };
+}
+
+async function inspectScmResourceSurface(cdp, expectations) {
+  return {
+    kind: "scmResourceSurface",
+    ...await inspectScmResourceEvidence(cdp, expectations),
+  };
+}
+
+async function inspectScmResourceEvidence(cdp, expectations) {
   const resourceRow = await findResourceRow(cdp, expectations.resource.pathToken);
   await clickAt(cdp, resourceRow.x, resourceRow.y, "right");
   const contextLabels = expectations.resource.expectedNoContextActions
@@ -1411,12 +1477,6 @@ async function inspectScmActionSurface(cdp, expectations, selectedTarget) {
   }
 
   return {
-    kind: "scmActionSurface",
-    layout,
-    primaryActions,
-    overflowButton,
-    overflowParentLabels,
-    overflowSubmenus,
     resource: {
       pathToken: expectations.resource.pathToken,
       expectedNoContextActions: expectations.resource.expectedNoContextActions,
@@ -1593,8 +1653,11 @@ async function findResourceRow(cdp, pathToken) {
         return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
           rect.left < window.innerWidth && rect.top < window.innerHeight;
       };
+      const exactLeafLabel = row => Array.from(row.querySelectorAll(".label-name"))
+        .filter(element => visible(element) && !element.querySelector(".label-name"))
+        .some(element => normalize(element.innerText ?? element.textContent) === token);
       const matchingRows = Array.from(document.querySelectorAll(".monaco-list-row"))
-        .filter(element => visible(element) && normalize(element.innerText).includes(token));
+        .filter(element => visible(element) && exactLeafLabel(element));
       const rows = matchingRows.filter(row =>
         !matchingRows.some(candidate => candidate !== row && row.contains(candidate))
       );
@@ -1778,6 +1841,21 @@ async function runScmPrimaryActionWaitSelfTest() {
     { label: "SubversionR: Refresh Repository", codicon: "refresh" },
     { label: "SubversionR: Commit Changes", codicon: "check" },
   ];
+  const primaryObservation = renderedCount => ({
+    matchingTargetPaneCount: 1,
+    matchingViewPaneHeaderAndActionsContainerCount: 1,
+    expectedActionMatches: expectedActions.map((action, index) => ({
+      ...action,
+      matchingItemCount: index < renderedCount ? 1 : 0,
+      matchingItemIndexes: index < renderedCount ? [index] : [],
+      item: index < renderedCount ? {
+        index,
+        labels: [action.label],
+        codicons: [`codicon-${action.codicon}`],
+        className: "action-item",
+      } : null,
+    })),
+  });
   let delayedPollCount = 0;
   const delayedCdp = {
     async send(method) {
@@ -1787,10 +1865,7 @@ async function runScmPrimaryActionWaitSelfTest() {
       delayedPollCount += 1;
       return {
         result: {
-          value: expectedActions.map((action, index) => ({
-            ...action,
-            rendered: index === 0 || delayedPollCount >= 3,
-          })),
+          value: primaryObservation(delayedPollCount >= 3 ? expectedActions.length : 1),
         },
       };
     },
@@ -1809,10 +1884,7 @@ async function runScmPrimaryActionWaitSelfTest() {
       missingPollCount += 1;
       return {
         result: {
-          value: expectedActions.map((action, index) => ({
-            ...action,
-            rendered: index === 0,
-          })),
+          value: primaryObservation(1),
         },
       };
     },
@@ -1831,17 +1903,22 @@ async function runScmPrimaryActionWaitSelfTest() {
           result: {
             value: diagnosticEvaluationCount === 1
               ? {
-                  document: { title: "fixture", url: "vscode-file://fixture", clientWidth: 1440, clientHeight: 900 },
-                  restrictedMode: { bodyTextPresent: false, visibleLabels: [] },
-                  scmRepositoryToolbar: {
-                    actionsContainer: { clientWidth: 320 },
-                    provider: { clientWidth: 340 },
-                  },
-                  visiblePrimaryActionCandidates: [{ label: expectedActions[0].label, codicons: ["codicon-refresh"] }],
-                  anchoredMoreActionsCandidates: [{ x: 120, y: 40, label: "More Actions..." }],
-                  moreActionsCandidates: [{ x: 120, y: 40, label: "More Actions..." }],
+                  ...primaryObservation(1),
+                  viewPaneHeader: { clientWidth: 340 },
+                  actionsContainer: { clientWidth: 320 },
+                  visibleActionCandidates: [{
+                    labels: ["More Actions..."],
+                    codicons: ["codicon-more"],
+                    className: "action-item",
+                    bounds: { left: 110, top: 30, width: 20, height: 20, clientWidth: 20, clientHeight: 20 },
+                  }],
                 }
-              : ["SubversionR: Commit Changes", "SubversionR: Review & Commit"],
+              : diagnosticEvaluationCount === 2
+                ? {
+                    document: { title: "fixture", url: "vscode-file://fixture", clientWidth: 1440, clientHeight: 900 },
+                    restrictedMode: { bodyTextPresent: false, visibleLabels: [] },
+                  }
+                : ["SubversionR: Commit Changes", "SubversionR: Review & Commit"],
           },
         };
       }
@@ -1857,6 +1934,8 @@ async function runScmPrimaryActionWaitSelfTest() {
     diagnosticCdp,
     { id: "target", type: "page", title: "workbench", url: "vscode-file://workbench" },
     diagnosticPrimaryActions,
+    expectedActions,
+    "tracked.txt",
   );
   const diagnosticError = scmPrimaryActionFailure(
     diagnosticPrimaryActions.filter(action => action.rendered !== true),
@@ -1866,7 +1945,8 @@ async function runScmPrimaryActionWaitSelfTest() {
   if (
     diagnostics.overflowMenuLabels.length !== 2 ||
     diagnostics.restrictedMode.bodyTextPresent !== false ||
-    diagnostics.scmRepositoryToolbar.actionsContainer.clientWidth !== 320 ||
+    diagnostics.scmViewPaneToolbar.actionsContainer.clientWidth !== 320 ||
+    diagnostics.scmViewPaneToolbar.viewPaneHeader.clientWidth !== 340 ||
     !diagnosticError.message.includes("Diagnostics:") ||
     !diagnosticError.message.includes("overflowMenuLabels") ||
     diagnosticError.diagnostics !== diagnostics
@@ -1879,30 +1959,40 @@ async function runScmActionLayoutSelfTest() {
   const expectedLayout = {
     prepareCommand: "workbench.action.increaseViewSize",
     incrementCount: 1,
-    minimumProviderWidth: 280,
-    minimumActionsContainerWidth: 120,
+    minimumViewPaneHeaderWidth: 280,
+    minimumActionsContainerWidth: 96,
   };
   const expectedActions = [{ label: "SubversionR: Refresh", codicon: "refresh" }];
-  const observation = (providerWidth, actionsContainerWidth) => ({
+  const observation = (viewPaneHeaderWidth, actionsContainerWidth, overrides = {}) => ({
     matchingTargetPaneCount: 1,
     matchingResourceRowCount: 1,
     globalMatchingResourceRowCount: 2,
     targetRoot: { tagName: "DIV", role: "", className: "pane scm-view", scmEditorVisible: true, left: 0, top: 0, width: 300, height: 400, clientWidth: 300, clientHeight: 400 },
-    matchingPairCount: 1,
-    matchingPairs: [{
-      provider: { left: 0, top: 0, width: providerWidth, height: 200, clientWidth: providerWidth, clientHeight: 200 },
-      actionsContainer: { left: 160, top: 0, width: actionsContainerWidth, height: 22, clientWidth: actionsContainerWidth, clientHeight: 22 },
-      matchedActionLabels: [expectedActions[0].label],
-      visibleActionCandidates: [{ label: expectedActions[0].label, className: "action-label codicon-refresh" }],
-    }],
+    renderMode: {
+      directHeaderCount: 1,
+      visibleDirectHeaderCount: 1,
+      directBodyCount: 1,
+      visibleDirectBodyCount: 1,
+      scmProviderCount: 0,
+      bodyActionsContainerCount: 2,
+      directToolbarChainCount: 1,
+      visibleDirectToolbarChainCount: 1,
+      expectedActionsUniqueAndDistinct: true,
+      conflictingPrefixResourceRowCount: 0,
+    },
+    matchingViewPaneHeaderAndActionsContainerCount: 1,
+    viewPaneHeader: { left: 0, top: 0, width: viewPaneHeaderWidth, height: 22, clientWidth: viewPaneHeaderWidth, clientHeight: 22 },
+    actionsContainer: { left: 160, top: 0, width: actionsContainerWidth, height: 22, clientWidth: actionsContainerWidth, clientHeight: 22 },
+    expectedActionMatches: [{ ...expectedActions[0], matchingItemCount: 1, matchingItemIndexes: [0] }],
     globalActionCandidates: [
       { label: expectedActions[0].label, className: "action-label codicon-refresh", scope: "non-target-repositories-view" },
       { label: expectedActions[0].label, className: "action-label codicon-refresh", scope: "target-resource-pane" },
     ],
     paneCandidates: [
-      { scmEditorVisible: false, matchingResourceRowCount: 1, matchingProviderAndActionsContainerCount: 1, className: "pane repositories-view" },
-      { scmEditorVisible: true, matchingResourceRowCount: 1, matchingProviderAndActionsContainerCount: 1, className: "pane scm-view" },
+      { scmEditorVisible: false, matchingResourceRowCount: 1, directToolbarChainCount: 1, className: "pane other-view" },
+      { scmEditorVisible: true, matchingResourceRowCount: 1, directToolbarChainCount: 1, className: "pane scm-view" },
     ],
+    ...overrides,
   });
   const cdpFor = value => ({
     async send(method) {
@@ -1913,27 +2003,87 @@ async function runScmActionLayoutSelfTest() {
     },
   });
 
-  const sufficient = await inspectScmActionLayout(cdpFor(observation(280, 120)), expectedLayout, expectedActions, "tracked.txt");
+  const sufficient = await inspectScmActionLayout(cdpFor(observation(280, 96)), expectedLayout, expectedActions, "tracked.txt");
   if (
     sufficient.assertions.uniqueTargetResourceRow !== true ||
-    sufficient.assertions.uniqueProviderAndActionsContainer !== true ||
-    sufficient.assertions.providerMinimumWidthReached !== true ||
+    sufficient.assertions.uniqueViewPaneHeaderAndActionsContainer !== true ||
+    sufficient.assertions.singleVisibleRepositoryViewPaneTitleMode !== true ||
+    sufficient.assertions.viewPaneHeaderMinimumWidthReached !== true ||
     sufficient.assertions.actionsContainerMinimumWidthReached !== true ||
     sufficient.observed.globalMatchingResourceRowCount !== 2 ||
-    sufficient.observed.provider.width !== 280 ||
-    sufficient.observed.actionsContainer.width !== 120
+    sufficient.observed.viewPaneHeader.width !== 280 ||
+    sufficient.observed.actionsContainer.width !== 96
   ) {
     throw new Error(`SCM action layout sufficient-width self-test failed: ${JSON.stringify(sufficient)}`);
   }
 
-  let rejected = false;
-  try {
-    await inspectScmActionLayout(cdpFor(observation(279, 119)), expectedLayout, expectedActions, "tracked.txt");
-  } catch (error) {
-    rejected = String(error && error.message).includes("minimum 280/120 pixel widths");
+  const invalidObservations = [
+    ["actions only in another pane or globally", { matchingViewPaneHeaderAndActionsContainerCount: 0, expectedActionMatches: [] }],
+    ["target header missing actions", { matchingViewPaneHeaderAndActionsContainerCount: 0, renderMode: { ...observation(280, 96).renderMode, directToolbarChainCount: 0, visibleDirectToolbarChainCount: 0, expectedActionsUniqueAndDistinct: false } }],
+    ["body inline actions container", { matchingViewPaneHeaderAndActionsContainerCount: 0, renderMode: { ...observation(280, 96).renderMode, bodyActionsContainerCount: 1, directToolbarChainCount: 0, visibleDirectToolbarChainCount: 0, expectedActionsUniqueAndDistinct: false } }],
+    ["repository row mode", { matchingViewPaneHeaderAndActionsContainerCount: 0, renderMode: { ...observation(280, 96).renderMode, scmProviderCount: 1 } }],
+    ["duplicate direct toolbar chain", { matchingViewPaneHeaderAndActionsContainerCount: 0, renderMode: { ...observation(280, 96).renderMode, directToolbarChainCount: 2, visibleDirectToolbarChainCount: 2 } }],
+    ["hidden direct toolbar chain", { matchingViewPaneHeaderAndActionsContainerCount: 0, renderMode: { ...observation(280, 96).renderMode, visibleDirectToolbarChainCount: 0 } }],
+    ["duplicate target pane", { matchingTargetPaneCount: 2, targetRoot: null, renderMode: null, matchingViewPaneHeaderAndActionsContainerCount: 0 }],
+    ["duplicate exact resource row", { matchingResourceRowCount: 2, matchingViewPaneHeaderAndActionsContainerCount: 0 }],
+    ["conflicting resource prefix without exact row", { matchingTargetPaneCount: 0, matchingResourceRowCount: 0, targetRoot: null, renderMode: null, matchingViewPaneHeaderAndActionsContainerCount: 0 }],
+    ["279px ViewPane header width", {}],
+    ["95px actions container width", {}],
+  ];
+  for (const [name, overrides] of invalidObservations) {
+    const invalid = name === "279px ViewPane header width"
+      ? observation(279, 96)
+      : name === "95px actions container width"
+        ? observation(280, 95)
+        : observation(280, 96, overrides);
+    let rejected = false;
+    try {
+      await inspectScmActionLayout(cdpFor(invalid), expectedLayout, expectedActions, "tracked.txt");
+    } catch (error) {
+      rejected = String(error && error.message).includes("minimum 280/96 pixel widths");
+    }
+    if (!rejected) {
+      throw new Error(`SCM action layout ${name} self-test did not fail closed.`);
+    }
   }
-  if (!rejected) {
-    throw new Error("SCM action layout insufficient-width self-test did not fail closed.");
+}
+
+function runScmSurfaceContractSelfTest() {
+  const resourceSurface = {
+    forbiddenNotificationTokens: ["SubversionR is ready"],
+    resource: {
+      pathToken: "tracked.txt.mine",
+      expectedNoContextActions: true,
+      inlineActions: [{ label: "SubversionR: Open Conflict Artifact", codicon: "go-to-file" }],
+    },
+  };
+  const parsed = requiredExclusiveScmSurfaceContracts({ scmResourceSurface: resourceSurface });
+  if (parsed.scmActionSurface !== undefined || parsed.scmResourceSurface?.resource.pathToken !== "tracked.txt.mine") {
+    throw new Error("SCM resource-only surface parser self-test did not preserve its exclusive contract.");
+  }
+  const invalid = [
+    ["both contracts", { scmActionSurface: {
+      layout: { prepareCommand: "workbench.action.increaseViewSize", incrementCount: 1, minimumViewPaneHeaderWidth: 280, minimumActionsContainerWidth: 96 },
+      primaryActions: [{ label: "SubversionR: Refresh", codicon: "refresh" }],
+      overflowSubmenus: [{ label: "Commit", commands: ["Commit"] }],
+      ...resourceSurface,
+    }, scmResourceSurface: resourceSurface }],
+    ["missing resource", { scmResourceSurface: { forbiddenNotificationTokens: ["SubversionR is ready"] } }],
+    ["missing forbidden notifications", { scmResourceSurface: { resource: resourceSurface.resource } }],
+    ["full layout field", { scmResourceSurface: { ...resourceSurface, layout: {} } }],
+    ["full primaryActions field", { scmResourceSurface: { ...resourceSurface, primaryActions: [] } }],
+    ["full overflowSubmenus field", { scmResourceSurface: { ...resourceSurface, overflowSubmenus: [] } }],
+  ];
+  for (const [name, value] of invalid) {
+    let rejected = false;
+    try {
+      requiredExclusiveScmSurfaceContracts(value);
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) {
+      throw new Error(`SCM surface contract self-test did not reject ${name}.`);
+    }
   }
 }
 
