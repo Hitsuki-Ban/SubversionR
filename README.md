@@ -12,7 +12,7 @@ The current public target is the Windows `win32-x64` Beta distributed through th
 
 ## Install From Releases
 
-1. Download `subversionr-win32-x64-0.2.4.vsix` from the [`v0.2.4-beta.1` GitHub release](https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.4-beta.1).
+1. Download `subversionr-win32-x64-0.2.5.vsix` from the [`v0.2.5-beta.1` GitHub release](https://github.com/Hitsuki-Ban/SubversionR/releases/tag/v0.2.5-beta.1).
 2. In VS Code, run **Extensions: Install from VSIX...** and select the downloaded file.
 3. Open a local SVN working copy or run **SubversionR: Checkout Repository**.
 
