@@ -102,7 +102,7 @@ async function clearWorkbenchNotificationsBeforePrompt() {
 function Invoke-CommitPromptPhaseProtocolSmoke([string]$WorkflowContent, [string]$TempRoot) {
   $helperMatch = [regex]::Match(
     $WorkflowContent,
-    '(?s)(function Read-SharedPhaseSentinel\(.*?\r?\n\})\r?\n\r?\n(function Wait-FileExpectedPhase\(.*?\r?\n\})'
+    '(?s)(function Read-SharedJsonSentinel\(.*?\r?\n\})\r?\n\r?\n(function Read-SharedPhaseSentinel\(.*?\r?\n\})\r?\n\r?\n(function Wait-FileExpectedPhase\(.*?\r?\n\})'
   )
   Assert-True $helperMatch.Success "Installed commit prompt phase protocol helpers should be extractable for the lightweight state-machine smoke test."
   Invoke-Expression $helperMatch.Value
@@ -118,6 +118,16 @@ function Invoke-CommitPromptPhaseProtocolSmoke([string]$WorkflowContent, [string
     "commitPromptSequenceComplete"
   )
   $sentinelPath = Join-Path $TempRoot "commit-prompt-phase-protocol.json"
+  [pscustomobject]@{
+    phase = $sequence[0]
+    rendererCaptureExpectations = [pscustomobject]@{
+      requiredDomTokens = @("Commit SVN changes")
+    }
+  } | ConvertTo-Json -Depth 4 -Compress | Set-Content -LiteralPath $sentinelPath -NoNewline -Encoding utf8
+  $fullSentinel = Read-SharedJsonSentinel -Path $sentinelPath -Description "initial commit prompt phase"
+  Assert-Equal $sequence[0] $fullSentinel.phase "Shared commit prompt JSON reader should preserve the initial phase."
+  Assert-Equal "Commit SVN changes" $fullSentinel.rendererCaptureExpectations.requiredDomTokens[0] "Shared commit prompt JSON reader should preserve the complete renderer expectations payload."
+
   for ($index = 0; $index -lt $sequence.Count - 1; $index++) {
     [pscustomobject]@{ phase = $sequence[$index + 1] } |
       ConvertTo-Json -Compress |
@@ -9756,14 +9766,17 @@ try {
   Assert-True (-not $realCommitPromptPublisher.Value.Contains('fs.writeFileSync(readyPath')) "Installed commit prompt producer should not directly write the shared ready sentinel."
   Assert-True (-not $realCommitPromptPublisher.Value.Contains('fs.rmSync(readyPath')) "Installed commit prompt producer should not delete the shared ready sentinel between phases."
   Assert-True ($workflowContent -match '(?s)publishCommitPromptReadyAndWait\(commitPromptReadyPath, commitPromptDonePath, "reviewCommitSuccessSelection".*?writeJsonCoordinationFileAtomically\(commitPromptReadyPath, \{\s+ok: true,\s+phase: "commitPromptSequenceComplete",\s+command: "commitPromptSequence"\s+\}\);\s+await successfulReviewCommand') "Installed Review & Commit producer should atomically publish the terminal phase immediately after the seventh handshake."
-  $sharedPhaseReaderMatch = [regex]::Match(
+  $sharedJsonReaderMatch = [regex]::Match(
     $workflowContent,
-    '(?s)function Read-SharedPhaseSentinel\(.*?\r?\n\}'
+    '(?s)function Read-SharedJsonSentinel\(.*?\r?\n\}'
   )
-  Assert-True $sharedPhaseReaderMatch.Success "Installed commit prompt phase protocol should expose a dedicated shared sentinel reader."
-  Assert-True ($sharedPhaseReaderMatch.Value -match '\[System\.IO\.FileStream\]::new\([\s\S]*?\[System\.IO\.FileMode\]::Open[\s\S]*?\[System\.IO\.FileAccess\]::Read[\s\S]*?\[System\.IO\.FileShare\]::ReadWrite -bor \[System\.IO\.FileShare\]::Delete') "Installed commit prompt phase reader should permit atomic replacement while its read handle is open."
-  Assert-True (-not $sharedPhaseReaderMatch.Value.Contains('Get-Content')) "Installed commit prompt phase reader should use the explicitly shared FileStream instead of Get-Content."
-  Assert-True (-not $sharedPhaseReaderMatch.Value.Contains('Start-Sleep')) "Installed commit prompt phase reader should reject missing or malformed sentinels without retrying them."
+  Assert-True $sharedJsonReaderMatch.Success "Installed commit prompt phase protocol should expose one shared JSON sentinel reader."
+  Assert-True ($sharedJsonReaderMatch.Value -match '\[System\.IO\.FileStream\]::new\([\s\S]*?\[System\.IO\.FileMode\]::Open[\s\S]*?\[System\.IO\.FileAccess\]::Read[\s\S]*?\[System\.IO\.FileShare\]::ReadWrite -bor \[System\.IO\.FileShare\]::Delete') "Installed commit prompt JSON reader should permit atomic replacement while its read handle is open."
+  Assert-True (-not $sharedJsonReaderMatch.Value.Contains('Get-Content')) "Installed commit prompt JSON reader should use the explicitly shared FileStream instead of Get-Content."
+  Assert-True (-not $sharedJsonReaderMatch.Value.Contains('Start-Sleep')) "Installed commit prompt JSON reader should reject missing or malformed sentinels without retrying them."
+  Assert-True ($workflowContent -match '(?s)function Read-SharedPhaseSentinel\(.*?Read-SharedJsonSentinel -Path \$Path -Description \$Description.*?\$sentinel\.phase') "Installed commit prompt phase reader should derive its phase from the one shared JSON reader without reopening the sentinel."
+  Assert-True ($workflowContent -match '\$commitPromptReady = Read-SharedJsonSentinel -Path \$harness\.CommitPromptReadyPath -Description') "Installed commit prompt consumer should read each initial full payload through the delete-share-safe JSON reader."
+  Assert-True (-not ($workflowContent -match '\$commitPromptReady = Get-Content -Raw -LiteralPath \$harness\.CommitPromptReadyPath')) "Installed commit prompt consumer should not open the shared ready sentinel through Get-Content."
   Assert-True ($workflowContent -match 'function Wait-FileExpectedPhase\(\[string\]\$Path, \[string\]\$CompletedPhase, \[string\]\$ExpectedNextPhase, \[int\]\$TimeoutSeconds, \[string\]\$Description\)') "Installed commit prompt phase wait should require the explicit expected next phase."
   Assert-True ($workflowContent -match 'Wait-FileExpectedPhase -Path \$harness\.CommitPromptReadyPath -CompletedPhase \$commitPromptPhase -ExpectedNextPhase \$expectedNextCommitPromptPhase') "Installed commit prompt consumer should advance through the fixed expected phase sequence."
   Assert-True ($workflowContent -match '(?s)\$commitPromptPhases = @\(\s+"commitAllMessagePrompt",\s+"reviewCommitInitialSelection",\s+"reviewCommitMessageCancellation",\s+"reviewCommitFailureSelection",\s+"reviewCommitFailureMessage",\s+"reviewCommitFailureObserved",\s+"reviewCommitSuccessSelection"\s+\)\s+\$commitPromptTerminalPhase = "commitPromptSequenceComplete"') "Installed commit prompt consumer should preserve the fixed seven-phase order followed by the terminal phase."

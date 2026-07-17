@@ -11952,7 +11952,7 @@ function Wait-File([string]$Path, [int]$TimeoutSeconds, [string]$Description) {
   throw "$Description timed out after $TimeoutSeconds seconds."
 }
 
-function Read-SharedPhaseSentinel([string]$Path, [string]$Description) {
+function Read-SharedJsonSentinel([string]$Path, [string]$Description) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     throw "$Description disappeared before the expected next phase was published."
   }
@@ -11980,6 +11980,11 @@ function Read-SharedPhaseSentinel([string]$Path, [string]$Description) {
   catch {
     throw "$Description contains malformed JSON."
   }
+  $sentinel
+}
+
+function Read-SharedPhaseSentinel([string]$Path, [string]$Description) {
+  $sentinel = Read-SharedJsonSentinel -Path $Path -Description $Description
   $phase = [string]$sentinel.phase
   if ([string]::IsNullOrWhiteSpace($phase)) {
     throw "$Description does not contain a non-empty phase."
@@ -14746,7 +14751,7 @@ try {
       $commitPromptTerminalPhase
     }
     Wait-File -Path $harness.CommitPromptReadyPath -TimeoutSeconds $UiReadyTimeoutSeconds -Description "Installed Source Control UI E2E $commitPromptPhase sentinel"
-    $commitPromptReady = Get-Content -Raw -LiteralPath $harness.CommitPromptReadyPath | ConvertFrom-Json
+    $commitPromptReady = Read-SharedJsonSentinel -Path $harness.CommitPromptReadyPath -Description "Installed Source Control UI E2E $commitPromptPhase sentinel"
     if ($commitPromptReady.ok -ne $true -or $commitPromptReady.command -notin @("subversionr.reviewCommit", "subversionr.commitAll") -or $commitPromptReady.phase -ne $commitPromptPhase) {
       throw "Installed Source Control UI E2E commit prompt sentinel did not match phase $commitPromptPhase."
     }
