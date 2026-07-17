@@ -1,8 +1,9 @@
 # M8 unified remote-access design
 
-Status: proposed design candidate for issue #121 and parent tracker #113. This
-document defines the implementation contract for M8. It does not change product
-code, protocol v1.30, dependencies, release gates, or public support claims.
+Status: accepted design from issue #121, narrowed by the I1 evidence in issue
+#123. This document defines the implementation contract for M8. It does not
+change product code, protocol v1.30, dependencies, release gates, or public
+support claims.
 
 Target: SubversionR `0.3.0` on Windows `win32-x64`.
 
@@ -30,9 +31,9 @@ The implementation-level constraints are additionally grounded in the primary
 and [Job accounting](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information)
 contracts; the Apache Subversion
 [authentication API](https://subversion.apache.org/docs/api/latest/group__auth__fns.html),
-[`auth.c`](https://github.com/apache/subversion/blob/trunk/subversion/libsvn_subr/auth.c),
-[ra_svn auth](https://github.com/apache/subversion/blob/trunk/subversion/libsvn_ra_svn/internal_auth.c),
-and [ra_serf auth handling](https://github.com/apache/subversion/blob/trunk/subversion/libsvn_ra_serf/util.c);
+[`auth.c`](https://github.com/apache/subversion/blob/1.14.5/subversion/libsvn_subr/auth.c),
+[ra_svn auth](https://github.com/apache/subversion/blob/1.14.5/subversion/libsvn_ra_svn/internal_auth.c),
+and [ra_serf auth handling](https://github.com/apache/subversion/blob/1.14.5/subversion/libsvn_ra_serf/util.c);
 and the OpenBSD [ssh](https://man.openbsd.org/ssh.1),
 [ssh_config](https://man.openbsd.org/ssh_config.5), and
 [ssh-keyscan](https://man.openbsd.org/ssh-keyscan.1) manuals. These sources
@@ -67,12 +68,12 @@ The design uses these terms precisely:
 | config owner | TypeScript owns validated user intent; the parent daemon validates the typed snapshot; the worker constructs a fresh allowlisted in-memory Subversion config. System/user config, registry config, `%APPDATA%\\Subversion`, `SVN_SSH`, and `[tunnels]` are never read. |
 | credential persistence | `SecretStorage` is the only M8 persistence owner. Session credentials are memory-only. Standard SVN/Wincrypt auth-cache interoperability remains deferred and is not a read fallback or write mirror. |
 | server password auth | libsvn simple credentials are brokered by authority. A credential is persisted only after the remote operation proves it was accepted. |
-| TLS server trust | Normal certificate verification runs first. Remaining failure bits may enter the existing foreground trust broker. Background work never prompts. Changed fingerprints always fail and require a new explicit decision. |
-| proxy auth | A configured proxy is the only optional second member of the operation authority set. Its credential lease is acquired before worker start and supplied only to the worker's in-memory config; it is not written to a `servers` file or persisted without a proved non-407 acceptance signal. |
+| TLS server trust | Normal certificate verification runs first. Remaining failure bits may enter the foreground trust broker. Ordinary operations apply trust-once only; permanent trust is written only after a separate successful foreground RA-session-open verification. Background work never prompts. Changed fingerprints always fail and require a new explicit decision. |
+| proxy auth | The locked Serf path exposes neither an application callback for accepted CONNECT nor I1 controlled evidence for 407/origin/bypass separation. Every proxy profile and capability is therefore deferred; the initial worker rejects proxy selection before network. |
 | SSPI | Compiled availability is not enablement. Negotiate/NTLM is disabled unless a later, separately evidenced `windowsIntegrated` profile selects the operation worker's process token explicitly. It is not a `0.3.0` Tier-1 claim cell. |
-| direct `svn://` | M8 Tier 1 supports the locked build's internal `ANONYMOUS` and `CRAM-MD5` mechanisms. Cyrus SASL remains unsupported until introduced as a separately locked build variant. |
-| `svn+ssh` | All allowed tunnels use the application opener. Windows OpenSSH and Plink/Pageant are different explicit providers and never fall back to each other. The first `0.3.0` claim targets Windows OpenSSH; Plink/Pageant remains a later cell. |
-| external repositories | Externals remain outside the first `0.3.0` claim. Remote operations must force externals off or fail before network access when the requested operation cannot enforce that boundary. A worker may contact only its prevalidated origin and optional proxy. |
+| direct `svn://` | The locked build's internal `ANONYMOUS` and `CRAM-MD5` mechanisms are eligible only after the ra_svn repository-root authority hook passes its malicious fixture. Cyrus SASL remains unsupported until introduced as a separately locked build variant. |
+| `svn+ssh` | All allowed tunnels use the application opener. The first `0.3.0` claim is limited to the verified Windows inbox OpenSSH with a pre-pinned Ed25519 host key and agent or unencrypted identity-file authentication. Askpass and Plink/Pageant remain later cells. |
+| external repositories | Externals remain outside the first `0.3.0` claim. Remote operations must force externals off or fail before network access when the requested operation cannot enforce that boundary. An initial worker may contact only its prevalidated origin. |
 | public hosts | Public hosted repositories may be permission-reviewed, low-frequency compatibility canaries only. They are not release gates and cannot replace controlled fixtures. |
 | background access | No default remote polling. Background operations are non-interactive and cannot create credentials, certificate trust, host-key trust, or adapter configuration. |
 | failure behavior | Missing profile, unsupported auth mode, unsafe Workspace Trust state, ambiguous profile match, expired deadline, and invalid executable/configuration all fail with stable typed errors. There is no compatibility alias, ambient lookup, or silent retry through another mode. |
@@ -185,8 +186,16 @@ or local tunnel descendant remains and that the parent serves a subsequent
 request.
 
 Killing a client process cannot prove a remote `svnserve -t` process exited.
-The controlled SSH fixture must expose a server-side residue oracle. A clean
-local process tree without that oracle is incomplete evidence.
+The controlled `sshd` forced-command fixture assigns every tunnel an
+unpredictable session id and exposes before/after snapshots of that session's
+server PID and descendants, live connection count, and fixture temporary
+artifacts. Normal completion, cancellation, timeout, and client crash must each
+reach `activePids=0`, `connections=0`, and `tempArtifacts=0` inside one absolute
+cleanup deadline. The client must simultaneously observe Job
+`ActiveProcesses=0` and deletion of the operation temp root, after which a new
+session must succeed. A clean local tree without those server observations is
+incomplete evidence; until this fixture and the post-auth greeting hook pass,
+no OpenSSH transport capability is advertised.
 
 ### 4.4 Scheduling
 
@@ -235,7 +244,7 @@ RemoteOperationEnvelope {
   trustEpoch: monotonic positive integer
   profile: RemoteAccessProfileSnapshot
   expectedOrigin: CanonicalEndpoint
-  expectedProxy?: CanonicalEndpoint
+  expectedProxy?: CanonicalEndpoint // reserved; rejected by initial slices
 }
 ```
 
@@ -250,23 +259,31 @@ Normative validation:
   new operation with its own bounded deadline. No later mutation may start for
   that working copy until recovery succeeds or returns an explicit blocked
   state.
-- The extension sends ordered `workspaceTrust/update { trusted, trustEpoch }`
-  requests to the parent and waits for
-  `{ acknowledgedTrustEpoch: trustEpoch }`. An operation requires
+- Each Extension Host connection initializes one monotonic trust epoch. A trust
+  grant sends an ordered `workspaceTrust/update { trusted: true, trustEpoch }`
+  request and waits for `{ acknowledgedTrustEpoch: trustEpoch }`; remote submit
+  remains disabled until that acknowledgement arrives. An operation requires
   `workspaceTrust=trusted` and an epoch equal to the parent's latest
   acknowledged epoch. A stale or future value returns
-  `SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH`. Trust revocation cancels
-  interactive waits and prevents worker/network launch for queued operations.
+  `SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH`.
+- VS Code's public API does not expose a revocation event. The primary revocation
+  boundary is therefore Extension Host stop/restart or remote-window reload:
+  parent stdio EOF/disconnect is a highest-priority supervisor signal that
+  cancels broker waits, terminates every operation Job, and observes zero live
+  descendants before the connection is discarded. The next host initializes
+  from the current trust state. `workspaceTrust/update { trusted: false, ... }`
+  remains a defensive and testable path, not the primary VS Code path; it is
+  acknowledged only after queued/reserved work is cancelled and active Jobs
+  have terminated to zero.
 - A remote URL without an envelope fails before network access. A `file` URL
   with a remote envelope fails as a caller contract error.
 - The daemon independently canonicalizes every explicit input URL and compares
-  it with the selected profile and `expectedOrigin`. When a proxy is selected,
-  `expectedProxy` is required and must exactly match the profile; without a
-  proxy profile it is forbidden. The extension's
-  classification is not sufficient authority.
-- One initial worker may contact only the prevalidated origin, or only the exact
-  proxy socket that carries requests for that origin. Direct proxy bypass is a
-  typed failure. Externals are disabled. Multi-URL copy, switch, relocate, or
+  it with the selected profile and `expectedOrigin`. The initial schema rejects
+  any `expectedProxy` or proxy profile before worker/network launch; reserving
+  the field does not enable it. The extension's classification is not sufficient
+  authority.
+- One initial worker may contact only the prevalidated origin. Externals are
+  disabled. Multi-URL copy, switch, relocate, or
   other operations whose targets cannot all be proven to use that origin fail
   before worker/network launch.
   Redirects are rejected until a transport slice proves enforcement before any
@@ -288,13 +305,13 @@ Protocol negotiation advertises granular capabilities instead of one broad
 - `remoteWorkerIsolation`;
 - `remoteConnectionState`;
 - `credentialLeaseSettlement`;
-- `certificateTrustLeaseSettlement`, `proxyCredentialLeaseSettlement`, and
-  `sshSecretLeaseSettlement` only after their distinct contracts pass evidence;
+- `certificateTrustLeaseSettlement` and `sshSecretLeaseSettlement` only after
+  their distinct contracts pass evidence;
 - `sshHostKeyChallenge` only after that contract is implemented.
 
 Each enabled transport and auth mode has a separate capability, for example
 `remoteSvnAnonymous`, `remoteSvnCramMd5`, `remoteHttpsAnonymous`,
-`remoteHttpsBasic`, `remoteHttpsBasicProxy`, `remoteSvnSshOpenSshAgent`, and
+`remoteHttpsBasic`, `remoteSvnSshOpenSshAgent`, and
 `remoteSvnSshOpenSshIdentityFile`. Reserved profile enum values do not cause
 their capabilities to be advertised. The exact protocol minor is allocated in
 each implementation slice and older peers fail negotiation for required
@@ -328,20 +345,33 @@ RemoteAccessProfileSnapshot {
   authority: { scheme, canonicalHost, effectivePort }
   serverAuth: anonymous | basic | cramMd5 | windowsIntegrated
   serverAccount: none | { mode: fixed, username } | { mode: chooseForeground }
-  credentialPersistence: secretStorage
+  serverCredentialPersistence: secretStorage
   tls?: { trust: windowsRootsThenBroker | explicitCaThenBroker,
           caBundlePath?: absolute canonical path }
   proxy: none | { authority, auth: anonymous | basic,
                   account: none | { mode: fixed, username } }
   ssh: none | OpenSshProfile | PlinkProfile
-  redirectPolicy: sameAuthorityOnly
+  redirectPolicy: rejectAll | sameAuthorityInitialOptions301
+}
+
+OpenSshProfile {
+  adapter: windowsInboxOpenSsh
+  sshUsername: normalized non-empty value
+  auth: agent | { identityFilePath: absolute canonical unencrypted key }
+  hostKey: { algorithm: ssh-ed25519,
+             publicKeyBlob: canonical base64,
+             fingerprint: canonical SHA-256 }
 }
 ```
 
 The Tier-1 implementation accepts only the modes required by its slice.
-`windowsIntegrated`, `explicitCaThenBroker`, and `PlinkProfile` are rejected
-until their own evidence slice enables them. Reserving a name in this design is
-not a product capability.
+`windowsIntegrated`, `explicitCaThenBroker`, every non-`none` proxy value, and
+`PlinkProfile` are rejected until their own evidence slice enables them.
+Reserving a name in this design is not a product capability.
+`redirectPolicy=rejectAll` is the only initial value, but it does not enable an
+HTTPS capability until section 8.1's high-level auto-follow blocker and
+zero-contact fixture pass. `sameAuthorityInitialOptions301` remains rejected
+until its separate enablement evidence passes.
 
 The parent serializes a canonical form, validates it again, and records only a
 SHA-256 profile hash plus safe enum fields in diagnostics. Raw usernames,
@@ -351,10 +381,11 @@ Anonymous modes require `serverAccount=none`. Password modes require either a
 fixed normalized username or `chooseForeground`. The latter is valid only for
 a foreground interactive operation: the controller always shows an attributed
 account chooser before releasing a lease, even if one stored account exists.
-Background operations require `fixed`; a missing fixed entry fails without a
-prompt, and multiple matching entries are a storage-integrity error. Accounts
-are never attempted in sequence. Proxy Basic always requires one fixed username
-because its lease must exist before worker/network launch.
+Background server-auth operations require `fixed`; a missing fixed entry fails
+without a prompt, and multiple matching entries are a storage-integrity error.
+Accounts are never attempted in sequence. `proxySecret/request` is reserved but
+not advertised or sent by the initial implementation; every proxy profile fails
+before network until section 7.3's exact blocker is resolved.
 
 ### 6.2 In-memory Subversion config
 
@@ -365,7 +396,7 @@ allowlist is:
 
 - explicit `http-auth-types` for the selected server auth mode;
 - server timeout derived from the remaining envelope budget;
-- explicit proxy host, port, username, and ephemeral password when selected;
+- no proxy keys until section 7.3's separately reviewed feasibility gate passes;
 - selected certificate authority inputs;
 - `auth:store-auth-creds = no` and `auth:store-passwords = no`;
 - no `[tunnels]` entries.
@@ -442,6 +473,23 @@ are attribution fields only. They never make two authority keys equivalent.
 Safe logs use the authority hash and enum fields; UI may display the canonical
 host and a bounded repository label.
 
+The daemon performs this complete initial operation classification before
+worker launch:
+
+| Operation group | Authority inputs | Initial rule |
+| --- | --- | --- |
+| checkout/open, remote status, content, log, blame | explicit URL plus any opened-session/WC repository URL | every value must equal the profile authority |
+| update, commit, lock, unlock | WC repository URL plus every explicit target URL | every value must equal the profile authority |
+| branch create / repository copy | source WC/URL and destination URL | source and destination must equal one profile authority |
+| switch | WC repository URL and switch destination URL | both must equal one profile authority |
+| merge | every source URL, peg URL, and target WC repository URL | all must equal one profile authority |
+| relocate | old/new repository authorities | rejected for the first scope |
+| externals | discovered external URL | disabled; an operation that cannot enforce that fails before network |
+
+A server-derived repository root is never allowed to add or replace an entry in
+this set. ra_svn remains disabled until its reviewed greeting hook proves that
+rule before later use of the root.
+
 ### 7.2 Credential lease
 
 `credentials/request` evolves to include the canonical endpoint/auth fields and
@@ -474,10 +522,13 @@ previous lease as `rejected` before requesting another credential, and
 libsvn authentication iterator signals; SubversionR must not infer acceptance
 from a translated top-level error or stderr. A later authz, path-not-found,
 conflict, or out-of-date error does not turn an already accepted credential into
-a rejected one. If the selected RA/auth path does not invoke the custom
+a rejected one. The I1 probes lock two distinct accepted points: ra_svn
+CRAM-MD5 calls `save_credentials` after the server accepts the CRAM exchange;
+ra_serf Basic calls it only after at least one 401 challenge is followed by a
+response below 400. A direct 403 or another path without that sequence does not
+settle accepted. If the selected RA/auth path does not invoke the custom
 provider's `save_credentials`, the lease remains `unused`; top-level success is
-not a substitute signal. A feasibility gate must prove `save_credentials`
-behavior for every claimed RA/auth cell. The provider baton maps the exact
+not a substitute signal. The provider baton maps the exact
 credential object to its opaque `leaseId`; it does not settle by realm alone.
 `save_credentials` sets libsvn's `saved` result and settlement is idempotent by
 `leaseId`, so repeated cache/challenge signals cannot emit a second settlement.
@@ -491,42 +542,47 @@ top-level SVN operation after it returns. The evidence suite covers stale
 password, password rotation, cancel-then-retry, simultaneous same-realm
 operations, and independent different-realm operations.
 
-### 7.3 Proxy and tunnel-secret leases
+### 7.3 Blocked proxy settlement and future tunnel-secret leases
 
-Proxy Basic does not use the server-password realm key. Its storage identity is
-`proxy endpoint + basic + normalized fixed username`. A
-`proxyCredentials/request` creates a pending opaque lease before worker launch;
-the worker receives only that ephemeral value. ra_serf must expose a controlled
-signal that the proxy advanced beyond its 407 challenge before the parent may
-settle `accepted`. A repeated 407 settles `rejected`; termination before a
-conclusive signal settles `unused`, `cancelled`, or `timedOut`. I10 remains
-disabled and does not advertise `remoteHttpsBasicProxy` until its feasibility
-probe proves that signal and direct-bypass rejection.
+Proxy Basic does not use the server-password realm key. In Serf 1.3.10
+`ssltunnel.c::handle_response`, the accepted CONNECT 2xx branch sets
+`conn->state = SERF_CONN_CONNECTED` internally; the public credentials callback
+is invoked for 401/407 challenges and never receives that accepted transition.
+The exact missing hook is an application callback at the CONNECT 2xx branch that
+identifies the canonical proxy endpoint and current credential attempt before
+origin traffic continues. Operation success, absence of a later 407, or origin
+authentication is not a substitute.
+
+I1 also did not execute the required controlled 407, CONNECT/origin, and
+direct-bypass matrix. Consequently `proxySecret/request`,
+`remoteHttpsBasicProxyEphemeral`, `proxyCredentialLeaseSettlement`, and
+`remoteHttpsBasicProxy` all remain unadvertised, and every proxy profile fails
+before network. A later bounded feasibility issue must add the hook or the full
+loopback matrix before a product proxy slice can be scheduled.
 
 OpenSSH password and private-key passphrase secrets have no libsvn realm and
-never use `credentials/request`. `sshSecret/request` keys password by
-`adapter + host + port + normalized SSH username + password`, and a passphrase
-by `adapter + host + port + exact public-key fingerprint + keyPassphrase`.
-Each returns an operation- and secret-kind-bound lease. It settles `accepted`
-only after the controlled tunnel reaches the SVN protocol greeting, which proves
-SSH authentication completed; authentication rejection settles `rejected`, and
-earlier termination settles conservatively. Agent mode creates no secret lease.
-The askpass capability is rejected and unadvertised until I12 proves this signal
-and exact-once settlement.
+never use `credentials/request`. The locked OpenSSH interface exposes exit 255
+for both authentication and transport failures, and stderr parsing is not a
+stable settlement contract. Password and encrypted-key askpass modes therefore
+remain rejected and unadvertised beyond the first `0.3.0` scope. A later slice
+must provide a structured rejection signal as well as a narrow exact-once SVN
+greeting hook before it can define or persist `sshSecret/request` leases. Agent
+and unencrypted identity-file modes create no secret lease.
 
 ### 7.4 TLS and SSH trust are different contracts
 
 TLS server trust continues through `certificate/request`, keyed by endpoint,
-realm, exact SHA-256 DER fingerprint, and failure bits. The response returns a
-`trustLeaseId`; reject, trust-once, and trust-permanent are intents rather than
-immediate persistent writes. The controller keeps a pending permanent decision
-in memory. An instrumented ra_serf path settles `accepted` only after the TLS
-handshake and initial SVN protocol exchange complete for the exact endpoint;
-otherwise it settles `unused`, `rejected`, `cancelled`, or `timedOut`. Only
-accepted trust-permanent writes SecretStorage. A changed fingerprint never
-consumes the old decision. The HTTPS TLS slice must replace the current
-prompt-time store and prove this signal before advertising
-`certificateTrustLeaseSettlement`.
+realm, exact SHA-256 DER fingerprint, and failure bits. A certificate-provider
+`save_credentials` callback occurs before the TLS handshake and is not an
+accepted signal. Ordinary remote operations may therefore apply a brokered
+decision only as trust-once and never persist it. Trust-permanent starts a
+separate foreground verification operation using
+`svn_client_open_ra_session2`; only successful RA-session open for the exact
+endpoint, which includes TLS and the initial DAV exchange, settles the pending
+decision and writes SecretStorage. Failure, cancellation, timeout, or daemon
+disconnect discards it. A changed fingerprint never consumes the old decision.
+I8 must replace the current prompt-time store and prove this separate path
+before advertising `certificateTrustLeaseSettlement`.
 
 SSH adds `sshHostKey/request`; it must not reuse the X.509 contract. The request
 contains adapter, host, port, algorithm, SHA-256 fingerprint, state
@@ -552,13 +608,23 @@ been selected.
   separate test cell.
 - HTTPS uses the selected trust chain and the broker only for remaining failure
   bits. Trust decisions never disable hostname or expiry checks globally.
-- Manual proxy selection is explicit. Origin and proxy credentials have
-  different authority keys and failure states. Environment/system proxy, PAC,
-  and browser proxy discovery are outside Tier 1.
-- Redirects are initially rejected. Same-endpoint redirects may be enabled by a
-  later HTTPS slice only after evidence proves scheme, canonical host, and port
-  are checked before credential forwarding. Cross-authority and HTTPS-to-HTTP
-  redirects always fail.
+- Every proxy selection is initially rejected before network. A future explicit
+  proxy mode keeps origin and proxy credentials in different authority/failure
+  states; environment/system proxy, PAC, and browser discovery remain outside
+  scope.
+- Redirects are initially rejected. The locked ra_serf OPTIONS exchange returns
+  a corrected URL only for an initial 301, but high-level callers can opt in
+  internally: `update_internal`, for example, always passes `&corrected_url` and
+  may relocate the working copy after the follow loop. I8 therefore adds a
+  reviewed policy hook in `svn_client__open_ra_session_internal` immediately
+  after `svn_ra_open5` returns a non-null corrected URL and before notification
+  or a second loop iteration changes `base_url`. `rejectAll` returns the typed
+  failure there. A controlled origin-301/forbidden-target fixture must prove the
+  forbidden target observes zero connections, requests, and credentials for
+  every claimed high-level entrypoint. No HTTPS capability is advertised before
+  that proof. A same-origin 301 remains a later independent enablement cell.
+  Initial 302, 307, and 308 do not enter the corrected-URL path.
+  Cross-authority and HTTPS-to-HTTP redirects always fail.
 - `windowsIntegrated` explicitly restricts `http-auth-types` to the reviewed
   integrated modes and records that identity comes from the worker process
   token. It remains disabled until a private domain-lab gate distinguishes
@@ -569,6 +635,15 @@ been selected.
 - `anonymous` permits only the internal anonymous route.
 - `cramMd5` permits the internal CRAM-MD5 username/password route through the
   broker.
+- The ra_svn greeting supplies a server-selected repository root before the
+  client has a public interception point. I6 and I7 require a narrow reviewed
+  authority hook immediately after the post-auth
+  `read_cmd_response("c?c?l", uuid, repos_root, capabilities)` succeeds and
+  before the root is canonicalized, stored, or used. Every reconnecting
+  `open_session` traverses the same hook. A malicious-root fixture must prove a
+  mismatched authority receives zero follow-up connections/commands before any
+  direct `svn://` capability is advertised; without that hook those slices
+  remain deferred.
 - A server that offers only SASL produces an exact unsupported-mechanism state.
   The client does not add Cyrus SASL or retry another transport.
 - The controlled matrix includes authz denial, wrong/stale password, blackhole
@@ -577,27 +652,36 @@ been selected.
 
 ### 8.3 `svn+ssh` with Windows OpenSSH
 
-The profile requires absolute canonical `ssh.exe`, `ssh-keyscan.exe`, and
-`ssh-keygen.exe` paths from one verified OpenSSH installation, one explicit host
-key algorithm, and one auth mode: `agent`, `identityFile`, or `askpass`. PATH
-lookup, Windows optional-capability installation, `~/.ssh/config`, an arbitrary
-`SSH_AUTH_SOCK`, and `SVN_SSH` are not implicit inputs. Agent mode explicitly
-permits the Windows OpenSSH agent service; identity-file mode names one absolute
-user-selected key; askpass mode uses a private broker shim owned by the
-operation.
+The first `0.3.0` profile accepts only the Windows inbox
+`%SystemRoot%\System32\OpenSSH` `ssh.exe`, `ssh-keyscan.exe`, and
+`ssh-keygen.exe`. All three must resolve to the same canonical non-reparse
+directory, pass Windows catalog-aware OS-binary and Microsoft Windows publisher
+verification, report one locked compatible version set, and have recorded
+SHA-256 hashes. One explicit `ssh-ed25519` host-key algorithm and one auth mode,
+`agent` or unencrypted `identityFile`, is selected. PATH lookup, another
+OpenSSH distribution, `~/.ssh/config`, arbitrary `SSH_AUTH_SOCK`, `SVN_SSH`,
+password askpass, and encrypted-key passphrase askpass are not implicit inputs.
+Agent mode explicitly permits the Windows OpenSSH agent service; identity-file
+mode names one absolute user-selected unencrypted key.
 
 The custom RA opener owns every accepted tunnel name and returns an exact
 unsupported-tunnel error for all others. It never declines into libsvn's default
-opener. The first OpenSSH claim requires an already pinned exact public key in
-the profile-owned known-hosts file. A separate enrollment slice may run the
-configured `ssh-keyscan.exe` for one selected algorithm inside the same deadline
-and Job, validate its known-hosts output, and compute the SHA-256 fingerprint in
-SubversionR (or cross-check it with the configured `ssh-keygen.exe`). Keyscan
-does not authenticate the result, so that slice requires out-of-band fingerprint
-verification before writing the key. A changed scan result becomes a structured
-`changed` request; it is never accepted from SSH stderr or askpass text. Until
-the enrollment feasibility gate passes, unknown or changed keys are typed
-failures and no `sshHostKeyChallenge` capability is advertised.
+opener. Initial onboarding has one non-network import path: in a trusted
+foreground flow the user pastes a complete Ed25519 known-hosts record obtained
+out of band, the parser requires its host and port to equal the profile
+authority, recomputes the SHA-256 fingerprint, and requires explicit
+confirmation of that fingerprint before storing the public blob and fingerprint
+in the non-secret machine profile. Each operation renders exactly that snapshot
+to a private temporary known-hosts file; no ambient or persistent OpenSSH file
+is read. Unknown or changed keys are typed failures, and replacement requires
+repeating the explicit out-of-band import.
+
+A later enrollment slice may run the verified `ssh-keyscan.exe` for one selected
+algorithm inside the same deadline and Job, validate its output, and compute the
+fingerprint. Keyscan does not authenticate the result, so that slice still
+requires out-of-band fingerprint verification. It never accepts a key from SSH
+stderr or askpass text. No `sshHostKeyChallenge` capability is advertised by the
+initial import-only flow.
 
 The tunnel then creates SSH with a structured argv, `-F NUL`, the isolated
 `UserKnownHostsFile`, no global known-hosts file, `StrictHostKeyChecking=yes`,
@@ -606,23 +690,21 @@ matching `ssh-keyscan -t`. It disables connection sharing, bounds stderr, and
 reserves stdin/stdout exclusively for the SVN tunnel. Host, port, username, and
 remote `svnserve -t` arguments are validated fields, never a shell fragment.
 
-Authentication argv is mode-specific. Password mode selects only `password`,
-disables public-key and keyboard-interactive auth, permits one password prompt,
-and forces a one-shot askpass shim. Identity-file mode selects only `publickey`,
-sets `IdentitiesOnly=yes`, and passes one exact absolute key path; an encrypted
-key uses a distinct key-passphrase shim. Agent mode selects public-key auth and
-never injects askpass. Every shim is created for one operation and one secret
-kind, ignores localized prompt text, returns only its pre-bound secret over the
-private channel, and cannot handle host-key decisions.
+Authentication argv is mode-specific. Identity-file mode selects only
+`publickey`, sets `IdentitiesOnly=yes`, and passes one exact absolute
+unencrypted key path. Agent mode selects public-key auth and never injects
+askpass. Password, keyboard-interactive, and encrypted-key prompt paths are
+disabled for the first claim.
 
 The OpenSSH version/path hash, profile hash, host-key fingerprint, auth mode,
-exit class, and residue result enter evidence. Password/passphrase prompts use
-the broker only for a foreground operation. Background mode uses non-interactive
-SSH behavior and fails on missing agent/key or unknown host.
+exit class, and residue result enter evidence. Background mode uses
+non-interactive SSH behavior and fails on missing agent/key or unknown host.
 
-Future host-key `trust once` writes only an operation-scoped temporary
-known-hosts file. `pin` and explicit changed-key replacement are the only paths
-that atomically replace the persistent profile-owned file.
+Every initial operation writes only its verified profile snapshot to an
+operation-scoped temporary known-hosts file. A future `trust once` challenge
+would do the same without changing the profile. `pin` and explicit changed-key
+replacement are the only paths that may atomically replace the non-secret public
+blob and fingerprint in the machine profile.
 
 ### 8.4 Plink/Pageant and standard SVN cache
 
@@ -698,14 +780,15 @@ redacted.
 | `svn://` anonymous | source-built `svnserve`; checkout/open, remote status, content, history/blame, update, commit, copy/switch, lock/unlock; authz and deadline negatives |
 | `svn://` CRAM-MD5 | the same operation groups; correct/stale/wrong/cancelled credentials, multiple accounts, realm changes, single-flight, no cache/config ambient route |
 | HTTPS Basic | source-built Apache/mod_dav_svn; the same applicable operation groups; system/explicit CA, reject/once/permanent/change, redirect and authz negatives |
-| HTTPS through Basic proxy | controlled forward proxy; CONNECT, 407, wrong/cancelled credential, bypass rejection, origin/proxy separation, timeout and redaction |
-| `svn+ssh` OpenSSH | pinned Windows client and controlled server; key/agent/askpass modes selected by their slice, unknown/changed host key, timeout/cancel/crash, 100-cycle local and server residue check |
+| `svn+ssh` OpenSSH | pinned Windows inbox client and controlled server; agent and unencrypted identity-file modes, unknown/changed host key, timeout/cancel/crash, 100-cycle local and server residue check |
 
 For each row, evidence records the packaged client and native artifact hashes,
 RA/build capability manifest, server/proxy/SSH versions and config hashes,
 profile hash, operation, interaction mode, prompt count, settlement, deadline,
 process cleanup, reconcile result, stable error class, and redaction assertion.
-Fixture startup or a source skeleton is not a completed row.
+Fixture startup or a source skeleton is not a completed row. HTTPS through a
+Basic proxy is excluded from this matrix until section 7.3's missing callback or
+controlled feasibility matrix is resolved by a separate reviewed issue.
 
 ### 10.2 Claim boundaries
 
@@ -716,7 +799,7 @@ evidence-contract gates for its exact claim cells pass.
 
 The first eligible `0.3.0` wording is bounded to Windows `win32-x64` remote
 repositories over direct `svn://` anonymous/CRAM-MD5, HTTPS Basic with explicit
-TLS/proxy policy, and explicitly configured Windows OpenSSH `svn+ssh`. It does
+TLS policy, and explicitly configured Windows OpenSSH `svn+ssh`. It does
 not imply Digest, IWA/Kerberos/NTLM, SASL, client certificates, Plink/Pageant,
 standard SVN credential cache, mixed-transport externals, public-host uptime,
 cross-platform packages, or default remote polling.
@@ -725,42 +808,40 @@ SourceForge, ASF, Assembla, VisualSVN, or another vendor can add a named manual
 compatibility observation only after terms/permission and rate limits are
 recorded. Passing such an observation never broadens the controlled claim.
 
-## 11. Required feasibility gates
+## 11. I1 feasibility decisions
 
-These questions must be answered by source probes or controlled executable
-fixtures before the dependent product slice starts. A negative result changes
-the design or removes the claim cell; it does not trigger a fallback path.
+The locked source analysis and executable results are recorded in
+`docs/research/m8-remote-feasibility-probes.md`. A negative result narrows or
+defers the dependent product slice; it never enables a fallback path.
 
-1. **Auth settlement.** Instrument custom provider `first_credentials`,
-   `next_credentials`, and `save_credentials` callbacks for ra_svn CRAM-MD5 and
-   ra_serf Basic. Prove how accepted credentials settle when the final operation
-   result is success, authz denial, missing path, or conflict. Any path without a
-   reliable `save_credentials` signal remains non-persistent.
-2. **Proxy settlement.** Prove the ra_serf signal that distinguishes accepted
-   Basic proxy authentication from repeated 407, origin auth, later origin
-   failure, and bypass. Confirm the proxy storage identity needs no libsvn realm.
-3. **TLS trust settlement.** Prove the exact ra_serf point that establishes the
-   selected certificate was accepted for the endpoint and protocol exchange,
-   including later authz/path failure and handshake termination. Without it,
-   permanent trust remains disabled and pending decisions are never stored.
-4. **Authority attribution.** Prove the native interception points for HTTP
-   redirects and every multi-URL operation. Until a point can reject before
-   credential forwarding or network contact, redirects and operations not
-   statically confined to one endpoint stay disabled.
-5. **Worker containment and IPC.** On the supported Windows host, GitHub Actions,
-   and an Extension Host launched inside a parent Job, prove suspended creation,
-   nested Job assignment, handle allowlisting, duplex broker traffic under
-   backpressure, Job close, descendant cleanup, and a subsequent parent request.
-6. **Trust ordering.** Prove acknowledged trust-epoch updates cannot race a
-   queued operation into worker/network launch after trust revocation.
-7. **OpenSSH provenance, host keys, and secret settlement.** Lock the supported
-   Windows OpenSSH
-   source/version, executable relationship checks, known-hosts grammar, keyscan
-   validation, out-of-band fingerprint UX, and local plus server-side residue
-   oracle. Prove that an SVN protocol greeting is a reliable post-authentication
-   signal for password/passphrase settlement. The first product slice uses only
-   a pre-pinned key and non-interactive key/agent auth; enrollment and askpass
-   remain later gates.
+1. **Auth settlement — usable with per-path rules.** ra_svn CRAM-MD5 and
+   challenged ra_serf Basic expose the accepted callbacks described in section
+   7.2. All other paths remain non-persistent until independently proved.
+2. **Proxy settlement — entire cell blocked.** Fixed Serf exposes no application
+   callback for the accepted CONNECT transition, and I1 did not execute the
+   controlled 407/origin/bypass matrix. No proxy capability is eligible.
+3. **TLS trust settlement — separate verification required.** The provider save
+   callback is too early. Permanent trust uses the distinct successful
+   RA-session-open contract in section 7.4.
+4. **Authority attribution — native hooks required.** High-level HTTPS callers
+   that request corrected URLs need the reject-policy hook and zero-contact
+   fixture in section 8.1 before any capability; direct ra_svn repository roots
+   need section 8.2's hook. Relocate remains rejected; other multi-URL inputs
+   must share one canonical authority before worker launch.
+5. **Worker containment and IPC — foundation proved.** The Windows process-shape
+   probe covers suspended creation, nested Job assignment, inherited-handle
+   allowlisting, overlapped duplex backpressure, normal `TerminateJobObject`
+   hard-stop with `ActiveProcesses == 0`, last-handle kill-on-close cleanup as a
+   crash/disconnect backstop, unassigned-suspended-child RAII, and a subsequent
+   request. Packaged Extension Host evidence remains an I3 release artifact.
+6. **Trust ordering — contract proved.** Grant acknowledgement gates submit;
+   defensive false acknowledgement and parent disconnect both wait for zero
+   active Jobs as defined in section 5.
+7. **OpenSSH — non-interactive subset only.** The Windows inbox executable set,
+   Ed25519 known-hosts grammar, argv, and local provenance gates are locked.
+   Agent and unencrypted identity-file modes remain eligible after a narrow SVN
+   greeting hook and end-to-end residue proof. Askpass modes are deferred because
+   OpenSSH has no structured authentication-rejection signal.
 
 ## 12. Implementation slices
 
@@ -774,12 +855,14 @@ reconcile, and claim/evidence wording together as required by `AGENTS.md`.
 2. **I2 — envelope and trusted config foundation.** Add trust-epoch ordering,
    typed profile/envelope validation, granular capabilities, an allowlisted
    in-memory libsvn config, removal of the two unused future SVN config/tunnel
-   settings, remote ambient username-provider exclusion, and poison-config
-   sentinels. No remote claim changes.
+   settings, remote ambient username-provider exclusion, an ordered TypeScript
+   write queue that respects `write(false)`/`drain`, and poison-config sentinels.
+   No remote claim changes.
 3. **I3 — disposable worker and deadline recovery.** Add versioned private duplex
    IPC, one-operation workers, suspended Job containment, absolute deadline,
-   cancellation/hard termination, separate bounded recovery, and subsequent
-   request evidence. No transport claim changes.
+   cancellation/hard termination, concurrent parent-stdio EOF/disconnect
+   supervision during worker and broker waits, separate bounded recovery, and
+   subsequent request evidence. No transport claim changes.
 4. **I4 — server credential v2 and leases.** Perform the explicit v1 clear
    cutover; add fixed/foreground account selection, endpoint/realm/auth/account
    keys, custom provider leases and exact-once settlement, same-realm
@@ -789,30 +872,36 @@ reconcile, and claim/evidence wording together as required by `AGENTS.md`.
    residue blocking, separately bounded reconcile, stale Incoming behavior, and
    local-event zero-network evidence. No transport claim changes.
 6. **I6 — direct `svn://` anonymous.** Close every claimed anonymous operation
-   group, authz/deadline negatives, installed-product flows, reconciliation, and
-   exact anonymous claim cells.
+   group, the reviewed repository-root authority hook and malicious-root
+   zero-contact fixture, authz/deadline negatives, installed-product flows,
+   reconciliation, and exact anonymous claim cells.
 7. **I7 — direct `svn://` CRAM-MD5.** Close credential rotation, multiple
    accounts, realm changes, provider iteration, installed-product negatives,
    reconciliation, and exact CRAM-MD5 claim cells.
 8. **I8 — HTTPS anonymous and TLS trust.** Move ra_serf into workers; replace
-   prompt-time permanent storage with trust leases; close anonymous HTTPS,
-   system/explicit CA, certificate reject/once/permanent/change, strict initial
-   redirect rejection, installed UI, and exact claim cells.
+   prompt-time permanent storage with trust-once for ordinary operations and a
+   separate RA-session-open permanent-verification flow; close anonymous HTTPS,
+   system/explicit CA, certificate reject/once/permanent/change; add the reviewed
+   high-level redirect-policy hook and per-entrypoint origin-301/forbidden-target
+   zero-contact proof; then close installed UI and exact claim cells.
 9. **I9 — HTTPS Basic.** Add Basic-only origin credentials and close provider
-   settlement, authz, same-endpoint redirect only if its feasibility proof
-   passed, installed negatives, and exact Basic claim cells.
-10. **I10 — explicit Basic proxy.** Add proxy authority/profile fields, proxy
-    leases and proved settlement, ephemeral in-memory proxy config, 407/CONNECT,
-    origin/proxy separation, bypass rejection, timeout/redaction evidence, and
-    exact proxy claim cells.
-11. **I11 — OpenSSH pre-pinned key.** Add the strict custom opener, verified
-    executable set, product-owned pre-pinned known-hosts file, non-interactive
-    identity-file/agent modes, Job-contained pipes/stderr, poison-default-tunnel
-    gate, installed UI, and 100-cycle local/server residue evidence.
-12. **I12 — OpenSSH interaction.** Only after the host-key and secret-settlement
-    feasibility gates, add explicit scan/out-of-band enrollment and replacement;
-    add exact-once password or key-passphrase leases through the proven private
-    askpass channel. Unsupported submodes remain rejected and unadvertised.
+   settlement, authz, strict redirect rejection, installed negatives, and exact
+   Basic claim cells. Same-origin 301 remains a later independently proved cell.
+10. **I10 — proxy feasibility revisit (deferred).** Only a separately reviewed
+    issue may add the exact CONNECT-accepted callback or controlled
+    407/CONNECT/origin/bypass matrix. It changes no product capability; a later
+    implementation slice is scheduled only after that gate passes.
+11. **I11 — OpenSSH isolated foundation.** Add the strict custom opener, verified
+    Windows inbox executable set, trusted foreground out-of-band Ed25519 import,
+    operation-private known-hosts rendering, agent/unencrypted-identity argv,
+    Job-contained pipes/stderr, poison-default-tunnel gate, and the narrow
+    exact-once SVN greeting hook. No transport claim changes.
+12. **I12 — OpenSSH non-interactive integration.** Close installed UI and
+    agent/unencrypted-identity flows, out-of-band host-key import and replacement,
+    host-key negatives, authority enforcement, and 100-cycle local/server
+    residue evidence before advertising their exact capabilities. Network
+    enrollment, password, and encrypted-key askpass remain later independent
+    issues.
 13. **I13 — `0.3.0` seal.** Run the complete packaged Tier-1 matrix, installed
     VSIX evidence, exact claim/readiness flips, candidate/release attestation,
     and Marketplace pre-release chain for `0.3.0`.

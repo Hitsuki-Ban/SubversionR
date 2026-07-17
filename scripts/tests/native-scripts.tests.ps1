@@ -13,6 +13,14 @@ $smokeBridgeScript = Join-Path $repoRoot "scripts\native\smoke-bridge.ps1"
 $smokeHttpdDavHttpsScript = Join-Path $repoRoot "scripts\native\smoke-httpd-dav-https.ps1"
 $smokeMaliciousDavXmlScript = Join-Path $repoRoot "scripts\native\smoke-malicious-dav-xml.ps1"
 $smokeMaliciousSvnServerResponseScript = Join-Path $repoRoot "scripts\native\smoke-malicious-svn-server-response.ps1"
+$smokeM8RemoteSettlementScript = Join-Path $repoRoot "scripts\native\smoke-m8-remote-settlement.ps1"
+$smokeM8RemoteSettlementFixturesScript = Join-Path $repoRoot "scripts\native\smoke-m8-remote-settlement-fixtures.ps1"
+$m8RemoteSettlementProbeSource = Join-Path $repoRoot "native\feasibility\m8-remote-settlement\probe.c"
+$m8RemoteSettlementHttpFixture = Join-Path $repoRoot "native\feasibility\m8-remote-settlement\http-fixture.ps1"
+$m8RemoteSettlementOpenSslConfig = Join-Path $repoRoot "native\feasibility\m8-remote-settlement\openssl-fixture.cnf"
+$m8RemoteSettlementReadme = Join-Path $repoRoot "native\feasibility\m8-remote-settlement\README.md"
+$m8OpenSshProbeScript = Join-Path $repoRoot "scripts\research\m8-i1-openssh-probe.ps1"
+$m8OpenSshKeyscanFixture = Join-Path $repoRoot "scripts\research\fixtures\m8-i1\ssh-keyscan-ed25519.txt"
 $ciWorkflow = Join-Path $repoRoot ".github\workflows\ci.yml"
 $fastPrWorkflow = Join-Path $repoRoot ".github\workflows\pr-fast.yml"
 $packageJsonPath = Join-Path $repoRoot "package.json"
@@ -242,6 +250,79 @@ New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
   Import-Module $modulePath -Force
+
+  foreach ($path in @(
+    $smokeM8RemoteSettlementScript,
+    $smokeM8RemoteSettlementFixturesScript,
+    $m8RemoteSettlementProbeSource,
+    $m8RemoteSettlementHttpFixture,
+    $m8RemoteSettlementOpenSslConfig,
+    $m8RemoteSettlementReadme,
+    $m8OpenSshProbeScript,
+    $m8OpenSshKeyscanFixture
+  )) {
+    Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "M8 I1 probe artifact should exist: $path"
+  }
+
+  foreach ($scriptPath in @(
+    $smokeM8RemoteSettlementScript,
+    $smokeM8RemoteSettlementFixturesScript,
+    $m8RemoteSettlementHttpFixture,
+    $m8OpenSshProbeScript
+  )) {
+    $tokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile(
+      $scriptPath,
+      [ref]$tokens,
+      [ref]$parseErrors
+    )
+    Assert-Equal 0 $parseErrors.Count "M8 I1 PowerShell probe should parse: $scriptPath"
+  }
+
+  $settlementWrapperText = Get-Content -Raw -LiteralPath $smokeM8RemoteSettlementScript
+  $settlementFixtureHarnessText = Get-Content -Raw -LiteralPath $smokeM8RemoteSettlementFixturesScript
+  $settlementHttpFixtureText = Get-Content -Raw -LiteralPath $m8RemoteSettlementHttpFixture
+  $settlementReadmeText = Get-Content -Raw -LiteralPath $m8RemoteSettlementReadme
+  $settlementProbeText = Get-Content -Raw -LiteralPath $m8RemoteSettlementProbeSource
+  Assert-True ($settlementWrapperText.Contains('PasswordEnvironmentVariable')) "M8 settlement wrapper should accept a credential environment-variable name."
+  Assert-True (-not $settlementWrapperText.Contains('[string]$Password,')) "M8 settlement wrapper must not accept a raw password argument."
+  Assert-True (-not $settlementWrapperText.Contains('[string]$NextPassword,')) "M8 settlement wrapper must not accept a raw next-password argument."
+  Assert-True ($settlementProbeText.Contains('--credential-env')) "M8 settlement C probe should use the environment-variable credential contract."
+  Assert-True (-not $settlementProbeText.Contains('"--credential"')) "M8 settlement C probe must not retain the raw credential argument."
+  Assert-True ($settlementProbeText.Contains('SUBVERSIONR_M8_')) "M8 settlement C probe should restrict credential environment-variable names."
+  Assert-True ($settlementWrapperText.Contains('serf-1.3.10/ssltunnel.c::handle_response')) "M8 proxy blocker should identify the exact locked Serf transition."
+  Assert-True ($settlementWrapperText.Contains('controlledProxyMatrix = "not-executed"')) "M8 proxy blocker must not present source analysis as a controlled fixture."
+  foreach ($scenario in @(
+    'basic-success',
+    'basic-direct-403',
+    'basic-later-dav-failure',
+    'basic-rejection',
+    'basic-termination',
+    'basic-later-403',
+    'basic-later-404',
+    'basic-later-409',
+    'tls-success',
+    'tls-later-403',
+    'tls-later-404',
+    'tls-termination-before-dav'
+  )) {
+    Assert-True ($settlementFixtureHarnessText.Contains('"' + $scenario + '"')) "M8 settlement fixture harness should retain scenario: $scenario"
+    Assert-True ($settlementHttpFixtureText.Contains('"' + $scenario + '"')) "M8 HTTP fixture should retain scenario: $scenario"
+  }
+  Assert-Equal 2 ([regex]::Matches($settlementFixtureHarnessText, 'verdict = "closed-by-controlled-fixture"').Count) "M8 settlement harness should emit exactly two controlled fixture verdicts."
+  Assert-Equal 2 ([regex]::Matches($settlementFixtureHarnessText, 'gateClosed = \$true').Count) "M8 settlement harness should close exactly the server-auth and TLS fixture gates."
+  Assert-True (-not $settlementReadmeText.Contains('gateClosed=false')) "M8 settlement README must not retain the superseded partial verdict."
+
+  $openSshProbeText = Get-Content -Raw -LiteralPath $m8OpenSshProbeScript
+  Assert-True ($openSshProbeText.Contains('[CmdletBinding()]')) "M8 OpenSSH probe should reject unknown named parameters."
+  Assert-True ($openSshProbeText -match '(?s)^\[CmdletBinding\(\)\]\r?\nparam\(\r?\n  \[Parameter\(Mandatory = \$true\)\]\r?\n  \[string\]\$KeyscanInputPath,\r?\n\r?\n  \[Parameter\(Mandatory = \$true\)\]\r?\n  \[string\]\$ExpectedKnownHost') "M8 OpenSSH parser fixture inputs should both be mandatory."
+  Assert-True ($openSshProbeText.Contains('networkAccess = "none"')) "M8 OpenSSH probe should declare its no-network boundary."
+  Assert-True ($openSshProbeText.Contains('userSshState = "notReadOrWritten"')) "M8 OpenSSH probe should declare its user-state boundary."
+  Assert-True ($openSshProbeText.Contains('sshSecretRejectionSettlement = "notProbed"')) "M8 OpenSSH probe must not overstate secret-rejection settlement."
+  Assert-True ($openSshProbeText.Contains('serverResidueOracle = "notProbed"')) "M8 OpenSSH probe must not overstate the server-side residue oracle."
+  Assert-True (-not $openSshProbeText.Contains('ReadToEndAsync')) "M8 OpenSSH probe must not buffer unbounded child output before checking its limit."
+  Assert-True ($openSshProbeText.Contains('${FailurePrefix}_OUTPUT_TOO_LARGE')) "M8 OpenSSH probe should fail at its streaming child-output limit."
 
   $deterministicPePath = Join-Path $tempRoot "deterministic.dll"
   New-TestPeFile -Path $deterministicPePath -DebugType 16
