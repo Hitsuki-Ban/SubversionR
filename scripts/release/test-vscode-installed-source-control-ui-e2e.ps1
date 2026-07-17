@@ -4065,25 +4065,30 @@ async function runCommitSelectedWorkflow(commitSelectedWorkingCopyRoot) {
       60000
     );
 
-    const postCommitFreshnessReport = await collectFreshnessReportWithSurfaceRetry(
+    const expectedRefreshTarget = {
+      path: selected.path,
+      depth: "empty",
+      reason: "operationCommit"
+    };
+    const postCommitObservation = await collectFreshnessReportUntilPathsAbsent(
       {
         repositoryId: commitSelectedOpenReport.repository.repositoryId,
         epoch: commitSelectedOpenReport.repository.epoch,
         scenario: "partial"
       },
       "subversionr.diagnostics.installedSourceControlUiE2eFreshnessReport/commitSelected",
+      [selected.path],
+      commitSelectedOpenReport,
+      [expectedRefreshTarget],
       30000
     );
+    const postCommitFreshnessReport = postCommitObservation.report;
     if (!postCommitFreshnessReport || postCommitFreshnessReport.kind !== "subversionr.installedSourceControlUiE2eFreshnessReport") {
       throw new Error(`Unexpected installed Source Control UI E2E Commit Selected freshness report kind: ${postCommitFreshnessReport && postCommitFreshnessReport.kind}`);
     }
     const selectedResourceAfter = findAnyResource(postCommitFreshnessReport, selected.path);
     const unselectedResourceAfter = findResource(postCommitFreshnessReport, "changes", unselected.path, unselected.contextValue);
-    const coverageReport = validateLastCompletedRefreshCoverage(postCommitFreshnessReport, commitSelectedOpenReport, {
-      path: selected.path,
-      depth: "empty",
-      reason: "operationCommit"
-    });
+    const coverageReport = postCommitObservation.coverageReport;
 
     const inputProbeAfterCommit = await withTimeout(
       vscode.commands.executeCommand("subversionr.diagnostics.installedSourceControlUiE2eSetInputMessage", {
@@ -12356,7 +12361,8 @@ function Assert-HarnessResult(
     $Result.commitSelectedReport.assertions.unselectedFileStillModified -ne $true -or
     $Result.commitSelectedReport.assertions.sourceControlProjectionClearedCommittedPath -ne $true -or
     $Result.commitSelectedReport.assertions.targetedReconcileAfterCommit -ne $true) {
-    throw "Installed Source Control UI E2E result must include a Commit Selected workflow proving SCM resource command execution, input clearing, target isolation, and targeted post-commit reconcile."
+    $commitSelectedSummary = $Result.commitSelectedReport | ConvertTo-Json -Depth 8 -Compress
+    throw "Installed Source Control UI E2E result must include a Commit Selected workflow proving SCM resource command execution, input clearing, target isolation, and targeted post-commit reconcile. Report: $commitSelectedSummary"
   }
   if ($Result.commitSelectedMultiSelectionReport.kind -ne "subversionr.installedSourceControlUiE2eCommitSelectedMultiSelectionWorkflow" -or
     $Result.commitSelectedMultiSelectionReport.command.command -ne "subversionr.commitResource" -or
