@@ -18,14 +18,14 @@
     "status": "pre-existing-manual-publication"
   },
   "currentCandidate": {
-    "version": "0.2.4",
+    "version": "0.2.5",
     "publishedByEntraPipeline": false,
     "publicationEvidenceRecorded": false
   },
   "nonClaims": [
     "This observation does not prove Marketplace public install or acquisition.",
     "This observation does not prove publisher membership or Entra pipeline publication.",
-    "This observation does not claim that version 0.2.4 is published.",
+    "This observation does not claim that version 0.2.5 is published.",
     "This observation does not claim public release readiness."
   ]
 }

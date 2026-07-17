@@ -140,7 +140,7 @@ $windowNormalizerResolved = Assert-RepoFile `
   -AllowedRoot ([System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release"))) `
   -Description "scripts/release"
 
-$vsixPath = "target/vsix/subversionr-win32-x64-0.2.4.vsix"
+$vsixPath = "target/vsix/subversionr-win32-x64-0.2.5.vsix"
 $packageRoot = "target/vscode-package/subversionr-$Target"
 $releaseEvidenceRoot = "target/release-evidence"
 $artifactBundleManifestOutputPath = Resolve-RepoPath "$releaseEvidenceRoot/subversionr-beta-artifact-bundle-manifest-$Target.json"

@@ -323,7 +323,7 @@ function New-BetaArtifactBundleFileRecord([string]$Path, [string]$Role) {
 
 function Get-ExpectedUploadPaths([string]$Target) {
   @(
-    "target/vsix/subversionr-win32-x64-0.2.4.vsix",
+    "target/vsix/subversionr-win32-x64-0.2.5.vsix",
     "target/release-evidence/subversionr-source-sbom.cdx.json",
     "target/release-evidence/subversionr-vsix-package-$Target.json",
     "target/release-evidence/subversionr-vsix-cli-install-$Target.json",
@@ -1460,7 +1460,7 @@ Assert-Equal (Split-Path -Leaf $vsixResolved) (Get-RequiredString $candidateAtte
 Assert-Equal ([string]$vsixSize) ([string](Get-RequiredProperty $candidateAttestation "subjectSize" "marketplaceProvenance.candidateAttestation")) "marketplaceProvenance candidate attestation size must match current VSIX."
 Assert-RequiredBooleanTrue $candidateAttestation "preReleaseProperty" "marketplaceProvenance.candidateAttestation"
 Assert-RequiredBooleanFalse $candidateAttestation "liveEvidenceRecorded" "marketplaceProvenance.candidateAttestation"
-Assert-Equal "v0.2.4-beta.1" (Get-RequiredString $candidateAttestation "releaseTag" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate release tag must match."
+Assert-Equal "v0.2.5-beta.1" (Get-RequiredString $candidateAttestation "releaseTag" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate release tag must match."
 $candidateContractEvidence = Get-RequiredProperty $provenanceEvidence "candidateAttestationContract" "marketplaceProvenance.evidence"
 Assert-Equal (Get-RequiredString $candidateContractEvidence "path" "marketplaceProvenance.evidence.candidateAttestationContract") (Get-RequiredString $candidateAttestation "contractPath" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate contract path must match hash-bound evidence."
 Assert-Equal (Get-RequiredString $candidateContractEvidence "sha256" "marketplaceProvenance.evidence.candidateAttestationContract") (Get-RequiredString $candidateAttestation "contractSha256" "marketplaceProvenance.candidateAttestation") "marketplaceProvenance candidate contract SHA256 must match hash-bound evidence."

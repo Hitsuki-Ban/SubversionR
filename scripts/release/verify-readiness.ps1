@@ -458,15 +458,15 @@ function Invoke-RequirementEvidenceRuleChecks() {
     Assert-RequirementEvidenceStatus $requirementsEvidence $id "blocked"
   }
   foreach ($id in @("SEC-015", "MIG-010", "MIG-012")) {
-    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.4.md"
+    Assert-RequirementOwnerException $requirementsEvidence $id "docs/release/marketplace-pre-release-owner-exception-0.2.5.md"
   }
-  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.4.md"
+  $marketplaceOwnerException = Read-RequiredDocument "docs/release/marketplace-pre-release-owner-exception-0.2.5.md"
   Assert-Terms $marketplaceOwnerException @(
-    "# Marketplace 0.2.4 Pre-release Owner Exception",
+    "# Marketplace 0.2.5 Pre-release Owner Exception",
     "public issues [#14]",
-    "[#56]",
-    'release tag: `v0.2.4-beta.1`',
-    'asset name: `subversionr-win32-x64-0.2.4.vsix`',
+    "[#75]",
+    'release tag: `v0.2.5-beta.1`',
+    'asset name: `subversionr-win32-x64-0.2.5.vsix`',
     "880e7937423695ca772436f01e2419498463ebd7cc25ba8a283a135530418249",
     '`SEC-015`, `MIG-010`, and `MIG-012`',
     "It cannot transfer to different bytes, another tag, or a later version",
@@ -7157,8 +7157,8 @@ $candidateSealStepCondition = "if: `${{ env.SUBVERSIONR_RELEASE_CI_MODE == 'cand
 if (([regex]::Matches($ciWorkflow.Content, [regex]::Escape($candidateSealStepCondition))).Count -ne 3) {
   throw "Beta-G candidate evidence CI coverage must apply the explicit candidate-seal condition exactly to manifest generation, candidate verification, and candidate upload."
 }
-if ($releaseBuildEpoch.Content.Replace("`r`n", "`n") -ne "1783993493`n") {
-  throw "native/release-build-epoch.txt: 0.2.4 release epoch must remain bound to the public release-slice base commit timestamp 1783993493."
+if ($releaseBuildEpoch.Content.Replace("`r`n", "`n") -ne "1784241450`n") {
+  throw "native/release-build-epoch.txt: 0.2.5 release epoch must remain bound to the final pre-candidate main commit timestamp 1784241450."
 }
 Assert-DoesNotContain $ciWorkflow "target/release-evidence/*.json" "Beta-G candidate evidence CI coverage should not use broad release evidence JSON globs"
 Assert-Terms $releaseGates @(
@@ -7176,7 +7176,7 @@ Assert-Terms $releaseGates @(
   "subversionr-win32-x64-beta-candidate",
   "actions/upload-artifact@v7",
   "Continuous-validation runs never enter this candidate-only sequence",
-  'does not claim the `0.2.4` release or live attestation exists',
+  'does not claim the `0.2.5` release or live attestation exists',
   "coverage-guided fuzzing"
 ) "Beta-G candidate evidence release gate documentation"
 Assert-Terms $m7Plan @(
@@ -7572,7 +7572,7 @@ Assert-Terms $m7Plan @(
   "pnpm release:verify-publication-gaps:win32-x64",
   "pnpm release:test-marketplace-publication-scripts",
   "subversionr.release.marketplace-publication.win32-x64.v1",
-  "docs/release/marketplace-pre-release-owner-exception-0.2.4.md",
+  "docs/release/marketplace-pre-release-owner-exception-0.2.5.md",
   "docs/release/github-attestation-candidate-contract.win32-x64.json",
   "docs/release/marketplace-identity-bootstrap-evidence.json",
   "docs/release/marketplace-publisher-authorization-evidence.json",
