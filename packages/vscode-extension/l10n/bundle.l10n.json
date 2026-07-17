@@ -599,5 +599,6 @@
   "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.": "The selected SVN lock target is no longer current. Select the current resource in Source Control and try Lock again.",
   "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.": "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.",
   "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.": "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.",
-  "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.": "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again."
+  "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.": "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.",
+  "SubversionR could not acknowledge the Workspace Trust update: {0}": "SubversionR could not acknowledge the Workspace Trust update: {0}"
 }

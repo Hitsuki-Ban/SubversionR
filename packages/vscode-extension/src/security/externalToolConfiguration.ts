@@ -3,19 +3,15 @@ import path from "node:path";
 export const EXTERNAL_TOOL_RESTRICTED_CONFIGURATION_KEYS = [
   "subversionr.tortoise.executablePath",
   "subversionr.tortoise.configDirectory",
-  "subversionr.svn.configDirectory",
-  "subversionr.svn.tunnelCommand",
 ] as const;
 
 export type ExternalToolRestrictedConfigurationKey = (typeof EXTERNAL_TOOL_RESTRICTED_CONFIGURATION_KEYS)[number];
-export type ExternalToolFeature = "tortoise" | "svnRuntimeConfig";
+export type ExternalToolFeature = "tortoise";
 export type ExternalToolErrorCategory = "configuration" | "lifecycle";
 
 export interface ExternalToolSettings {
   tortoiseExecutablePath?: string;
   tortoiseConfigDirectory?: string;
-  svnConfigDirectory?: string;
-  svnTunnelCommand?: string;
 }
 
 export interface ExternalToolConfigurationInspection<T> {
@@ -52,23 +48,17 @@ const SETTINGS: ReadonlyArray<{
 }> = [
   { section: "tortoise.executablePath", fullKey: "subversionr.tortoise.executablePath" },
   { section: "tortoise.configDirectory", fullKey: "subversionr.tortoise.configDirectory" },
-  { section: "svn.configDirectory", fullKey: "subversionr.svn.configDirectory" },
-  { section: "svn.tunnelCommand", fullKey: "subversionr.svn.tunnelCommand" },
 ];
 
 interface ExternalToolSettingsBySection {
   "tortoise.executablePath": string | undefined;
   "tortoise.configDirectory": string | undefined;
-  "svn.configDirectory": string | undefined;
-  "svn.tunnelCommand": string | undefined;
 }
 
 export function readExternalToolSettings(configuration: ExternalToolConfigurationReader): ExternalToolSettings {
   return {
     tortoiseExecutablePath: configuration.get<string>("tortoise.executablePath"),
     tortoiseConfigDirectory: configuration.get<string>("tortoise.configDirectory"),
-    svnConfigDirectory: configuration.get<string>("svn.configDirectory"),
-    svnTunnelCommand: configuration.get<string>("svn.tunnelCommand"),
   };
 }
 
@@ -105,7 +95,7 @@ export function assertExternalToolSettingsTrusted(
 }
 
 export function normalizeExternalToolPath(
-  setting: Exclude<ExternalToolRestrictedConfigurationKey, "subversionr.svn.tunnelCommand">,
+  setting: ExternalToolRestrictedConfigurationKey,
   value: string | undefined,
 ): string | undefined {
   if (value === undefined || value.trim().length === 0) {

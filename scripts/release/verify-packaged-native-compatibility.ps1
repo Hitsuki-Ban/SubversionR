@@ -109,7 +109,7 @@ try {
     $probeResult["status"] -ne "passed" `
     -or $protocol -isnot [System.Collections.IDictionary] `
     -or [int]$protocol["major"] -ne 1 `
-    -or [int]$protocol["minor"] -lt 30 `
+    -or [int]$protocol["minor"] -lt 31 `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["backendVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["bridgeVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["libsvnVersion"])

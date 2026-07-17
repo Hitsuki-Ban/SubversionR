@@ -11,7 +11,7 @@ import {
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const MINIMUM_PROTOCOL_MINOR = 30;
+const MINIMUM_PROTOCOL_MINOR = 31;
 const EXPECTED_CACHE_SCHEMA_ID = "subversionr.cache.v1";
 const EXPECTED_CACHE_SCHEMA_VERSION = 1;
 const EXPECTED_CACHE_SCHEMA_ROLLBACK = "delete-and-reconcile";
@@ -58,6 +58,8 @@ const REQUIRED_CAPABILITIES: Array<keyof InitializeResult["capabilities"]> = [
   "diagnosticsGet",
   "credentialRequest",
   "certificateRequest",
+  "remoteOperationEnvelope",
+  "trustedConfigSnapshot",
 ];
 
 export type WorkspaceTrustState = "trusted" | "untrusted";
@@ -98,6 +100,7 @@ export interface InitializeParams {
   clientVersion: string;
   locale: string;
   workspaceTrust: WorkspaceTrustState;
+  trustEpoch: number;
   cacheRoot: string;
 }
 
@@ -163,11 +166,16 @@ export interface InitializeResult {
     diagnosticsGet: boolean;
     credentialRequest: boolean;
     certificateRequest: boolean;
+    remoteOperationEnvelope: boolean;
+    trustedConfigSnapshot: boolean;
   };
+  acknowledgedTrustEpoch: number;
 }
 
 export interface BackendConnection extends JsonRpcSender {
   readonly initializeResult: InitializeResult;
+  isRemoteSubmissionEnabled(): boolean;
+  updateWorkspaceTrust(trusted: boolean): Promise<number>;
   onDidTerminate(listener: (event: BackendConnectionTermination) => void): BackendConnectionTerminationSubscription;
   shutdown(): Promise<void>;
   dispose(): void;
@@ -356,7 +364,13 @@ export async function startBackendProcess(
         child.off("exit", handleExit);
         child.off("close", handleClose);
         child.off("error", handleProcessError);
-        const connection = new BackendConnectionImpl(child, rpc, collectStderr, initializeResult);
+        const connection = new BackendConnectionImpl(
+          child,
+          rpc,
+          collectStderr,
+          initializeResult,
+          config.workspaceTrust === "trusted",
+        );
         activeConnection = connection;
         resolve(connection);
       })
@@ -441,6 +455,7 @@ function initializeParams(config: BackendLaunchConfig): InitializeParams {
     clientVersion: config.clientVersion,
     locale: config.locale,
     workspaceTrust: config.workspaceTrust,
+    trustEpoch: 1,
     cacheRoot: config.cacheRoot,
   };
 }
@@ -499,6 +514,13 @@ function parseInitializeResult(rawResult: unknown): InitializeResult {
   const platform = requireRecord(result.platform, "platform");
   const cacheSchema = requireCacheSchema(result.cacheSchema);
   const capabilities = requireRecord(result.capabilities, "capabilities");
+  const acknowledgedTrustEpoch = requirePositiveInteger(
+    result.acknowledgedTrustEpoch,
+    "acknowledgedTrustEpoch",
+  );
+  if (acknowledgedTrustEpoch !== 1) {
+    throw invalidInitializeResponse("acknowledgedTrustEpoch");
+  }
   requireSupportedCacheSchema(cacheSchema);
 
   return {
@@ -514,6 +536,7 @@ function parseInitializeResult(rawResult: unknown): InitializeResult {
       arch: requireString(platform.arch, "platform.arch"),
     },
     cacheSchema,
+    acknowledgedTrustEpoch,
     capabilities: {
       contentLengthFraming: requireBoolean(
         capabilities.contentLengthFraming,
@@ -594,6 +617,14 @@ function parseInitializeResult(rawResult: unknown): InitializeResult {
       diagnosticsGet: requireBoolean(capabilities.diagnosticsGet, "capabilities.diagnosticsGet"),
       credentialRequest: requireBoolean(capabilities.credentialRequest, "capabilities.credentialRequest"),
       certificateRequest: requireBoolean(capabilities.certificateRequest, "capabilities.certificateRequest"),
+      remoteOperationEnvelope: requireBoolean(
+        capabilities.remoteOperationEnvelope,
+        "capabilities.remoteOperationEnvelope",
+      ),
+      trustedConfigSnapshot: requireBoolean(
+        capabilities.trustedConfigSnapshot,
+        "capabilities.trustedConfigSnapshot",
+      ),
     },
   };
 }
@@ -617,10 +648,18 @@ function requireString(value: unknown, field: string): string {
 }
 
 function requireNumber(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
     throw invalidInitializeResponse(field);
   }
   return value;
+}
+
+function requirePositiveInteger(value: unknown, field: string): number {
+  const number = requireNumber(value, field);
+  if (number <= 0) {
+    throw invalidInitializeResponse(field);
+  }
+  return number;
 }
 
 function requireBoolean(value: unknown, field: string): boolean {
@@ -680,6 +719,24 @@ function requireCapabilities(initializeResult: InitializeResult): void {
   }
 }
 
+function requireExactTrustUpdateResponse(rawResult: unknown): { acknowledgedTrustEpoch: number } {
+  const result = requireRecord(rawResult, "workspaceTrust.update.result");
+  const keys = Object.keys(result);
+  if (keys.length !== 1 || keys[0] !== "acknowledgedTrustEpoch") {
+    throw new BackendLaunchError(
+      "SUBVERSIONR_REMOTE_TRUST_ACK_INVALID",
+      "protocol",
+      "error.remote.trustAckInvalid",
+    );
+  }
+  return {
+    acknowledgedTrustEpoch: requirePositiveInteger(
+      result.acknowledgedTrustEpoch,
+      "workspaceTrust.update.acknowledgedTrustEpoch",
+    ),
+  };
+}
+
 function terminateChild(child: BackendChildProcess): void {
   child.kill("SIGTERM");
 }
@@ -689,16 +746,80 @@ class BackendConnectionImpl implements BackendConnection {
   private disposed = false;
   private shutdownPromise: Promise<void> | undefined;
   private terminationEmitted = false;
+  private currentTrustEpoch: number;
+  private remoteSubmissionEnabled: boolean;
+  private trustUpdatePromise: Promise<number> | undefined;
 
   public constructor(
     private readonly child: BackendChildProcess,
     private readonly rpc: JsonRpcStreamClient,
     private readonly collectStderr: (chunk: Buffer | string) => void,
     public readonly initializeResult: InitializeResult,
+    initiallyTrusted: boolean,
   ) {
+    this.currentTrustEpoch = initializeResult.acknowledgedTrustEpoch;
+    this.remoteSubmissionEnabled = initiallyTrusted;
     this.child.once("exit", this.handleExit);
     this.child.once("close", this.handleClose);
     this.child.once("error", this.handleProcessError);
+  }
+
+  public isRemoteSubmissionEnabled(): boolean {
+    return this.remoteSubmissionEnabled && !this.disposed;
+  }
+
+  public updateWorkspaceTrust(trusted: boolean): Promise<number> {
+    if (this.disposed) {
+      return Promise.reject(
+        new BackendLaunchError(
+          "SUBVERSIONR_REMOTE_TRUST_CONNECTION_CLOSED",
+          "process",
+          "error.remote.trustConnectionClosed",
+        ),
+      );
+    }
+    if (this.trustUpdatePromise) {
+      return Promise.reject(
+        new BackendLaunchError(
+          "SUBVERSIONR_REMOTE_TRUST_UPDATE_IN_PROGRESS",
+          "protocol",
+          "error.remote.trustUpdateInProgress",
+        ),
+      );
+    }
+    const trustEpoch = this.currentTrustEpoch + 1;
+    if (!Number.isSafeInteger(trustEpoch)) {
+      return Promise.reject(
+        new BackendLaunchError(
+          "SUBVERSIONR_REMOTE_TRUST_EPOCH_EXHAUSTED",
+          "protocol",
+          "error.remote.trustEpochExhausted",
+        ),
+      );
+    }
+    this.remoteSubmissionEnabled = false;
+    const update = this.rpc
+      .sendRequest<unknown>("workspaceTrust/update", { trusted, trustEpoch })
+      .then((rawResult) => {
+        const result = requireExactTrustUpdateResponse(rawResult);
+        if (result.acknowledgedTrustEpoch !== trustEpoch) {
+          throw new BackendLaunchError(
+            "SUBVERSIONR_REMOTE_TRUST_ACK_INVALID",
+            "protocol",
+            "error.remote.trustAckInvalid",
+          );
+        }
+        this.currentTrustEpoch = trustEpoch;
+        this.remoteSubmissionEnabled = trusted;
+        return trustEpoch;
+      })
+      .finally(() => {
+        if (this.trustUpdatePromise === update) {
+          this.trustUpdatePromise = undefined;
+        }
+      });
+    this.trustUpdatePromise = update;
+    return update;
   }
 
   public onDidTerminate(
@@ -718,6 +839,7 @@ class BackendConnectionImpl implements BackendConnection {
     }
 
     this.detachTerminationListeners();
+    this.remoteSubmissionEnabled = false;
     this.shutdownPromise = this.rpc
       .sendRequest<{ accepted: boolean }>("shutdown", {})
       .then(() => {
@@ -735,6 +857,7 @@ class BackendConnectionImpl implements BackendConnection {
       return;
     }
     this.disposed = true;
+    this.remoteSubmissionEnabled = false;
     this.detachTerminationListeners();
     this.child.stderr.off("data", this.collectStderr);
     this.rpc.dispose(new Error("backend connection disposed"));

@@ -14,8 +14,6 @@ describe("external tool configuration trust policy", () => {
     expect(EXTERNAL_TOOL_RESTRICTED_CONFIGURATION_KEYS).toEqual([
       "subversionr.tortoise.executablePath",
       "subversionr.tortoise.configDirectory",
-      "subversionr.svn.configDirectory",
-      "subversionr.svn.tunnelCommand",
     ]);
   });
 
@@ -24,16 +22,12 @@ describe("external tool configuration trust policy", () => {
       fakeConfiguration({
         "tortoise.executablePath": "C:\\Tools\\TortoiseSVN\\bin\\TortoiseProc.exe",
         "tortoise.configDirectory": "C:\\Users\\Alice\\AppData\\Roaming\\Subversion",
-        "svn.configDirectory": "C:\\Users\\Alice\\AppData\\Roaming\\Subversion",
-        "svn.tunnelCommand": "ssh -q",
       }),
     );
 
     expect(settings).toEqual({
       tortoiseExecutablePath: "C:\\Tools\\TortoiseSVN\\bin\\TortoiseProc.exe",
       tortoiseConfigDirectory: "C:\\Users\\Alice\\AppData\\Roaming\\Subversion",
-      svnConfigDirectory: "C:\\Users\\Alice\\AppData\\Roaming\\Subversion",
-      svnTunnelCommand: "ssh -q",
     });
   });
 
@@ -41,8 +35,6 @@ describe("external tool configuration trust policy", () => {
     expect(readExternalToolSettings(fakeConfiguration({}))).toEqual({
       tortoiseExecutablePath: undefined,
       tortoiseConfigDirectory: undefined,
-      svnConfigDirectory: undefined,
-      svnTunnelCommand: undefined,
     });
     expect(normalizeExternalToolPath("subversionr.tortoise.executablePath", undefined)).toBeUndefined();
   });
@@ -78,12 +70,12 @@ describe("external tool configuration trust policy", () => {
     );
   });
 
-  it("blocks folder and language scoped tunnel settings in an untrusted workspace", () => {
+  it("blocks folder and language scoped Tortoise settings in an untrusted workspace", () => {
     const configuration = fakeConfiguration(
       {},
       {
-        "svn.tunnelCommand": {
-          workspaceFolderLanguageValue: "ssh -o ProxyCommand=bad",
+        "tortoise.configDirectory": {
+          workspaceFolderLanguageValue: "C:\\malicious\\Subversion",
         },
       },
     );
@@ -91,7 +83,7 @@ describe("external tool configuration trust policy", () => {
     expect(() => assertExternalToolSettingsTrusted(configuration, false)).toThrowError(
       expect.objectContaining({
         code: "SUBVERSIONR_EXTERNAL_TOOL_WORKSPACE_SETTING_UNTRUSTED",
-        safeArgs: { setting: "subversionr.svn.tunnelCommand" },
+        safeArgs: { setting: "subversionr.tortoise.configDirectory" },
       }),
     );
   });
@@ -100,7 +92,7 @@ describe("external tool configuration trust policy", () => {
     const configuration = fakeConfiguration(
       {},
       {
-        "svn.configDirectory": {
+        "tortoise.configDirectory": {
           workspaceValue: "C:\\wc\\.subversion-config",
         },
       },
@@ -109,14 +101,14 @@ describe("external tool configuration trust policy", () => {
     expect(() => assertExternalToolSettingsTrusted(configuration, true)).not.toThrow();
   });
 
-  it("accepts absolute executable and config paths without expanding them", () => {
+  it("accepts absolute Tortoise executable and config paths without expanding them", () => {
     expect(
       normalizeExternalToolPath(
         "subversionr.tortoise.executablePath",
         "C:\\Tools\\TortoiseSVN\\bin\\TortoiseProc.exe",
       ),
     ).toBe("C:\\Tools\\TortoiseSVN\\bin\\TortoiseProc.exe");
-    expect(normalizeExternalToolPath("subversionr.svn.configDirectory", "/home/alice/.subversion")).toBe(
+    expect(normalizeExternalToolPath("subversionr.tortoise.configDirectory", "/home/alice/.subversion")).toBe(
       "/home/alice/.subversion",
     );
   });
@@ -124,7 +116,6 @@ describe("external tool configuration trust policy", () => {
   it.each([
     ["subversionr.tortoise.executablePath", "TortoiseProc.exe"],
     ["subversionr.tortoise.configDirectory", ".svn-config"],
-    ["subversionr.svn.configDirectory", "%USERPROFILE%\\.subversion"],
   ] as const)("rejects non-absolute external tool path setting %s", (setting, value) => {
     expect(() => normalizeExternalToolPath(setting, value)).toThrowError(
       expect.objectContaining({

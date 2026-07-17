@@ -121,7 +121,10 @@ fn initialize_result(protocol_minor: u64, backend_version: &str, bridge_version:
             "diagnosticsGet": true,
             "credentialRequest": true,
             "certificateRequest": true,
+            "remoteOperationEnvelope": true,
+            "trustedConfigSnapshot": true,
         },
+        "acknowledgedTrustEpoch": 1,
     })
 }
 

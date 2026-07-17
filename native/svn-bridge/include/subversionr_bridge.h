@@ -12,12 +12,58 @@
 #endif
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct subversionr_bridge_runtime subversionr_bridge_runtime;
+typedef struct subversionr_bridge_remote_context subversionr_bridge_remote_context;
+
+enum { SUBVERSIONR_BRIDGE_REMOTE_CONFIG_ABI_VERSION = 1 };
+
+enum {
+  SUBVERSIONR_BRIDGE_REMOTE_SCHEME_HTTP = 1,
+  SUBVERSIONR_BRIDGE_REMOTE_SCHEME_HTTPS = 2,
+  SUBVERSIONR_BRIDGE_REMOTE_SCHEME_SVN = 3
+};
+
+enum {
+  SUBVERSIONR_BRIDGE_REMOTE_AUTH_ANONYMOUS = 1,
+  SUBVERSIONR_BRIDGE_REMOTE_AUTH_BASIC = 2,
+  SUBVERSIONR_BRIDGE_REMOTE_AUTH_CRAM_MD5 = 3
+};
+
+enum {
+  SUBVERSIONR_BRIDGE_REMOTE_CATEGORY_CONFIG = 1u << 0,
+  SUBVERSIONR_BRIDGE_REMOTE_CATEGORY_SERVERS = 1u << 1
+};
+
+enum {
+  SUBVERSIONR_BRIDGE_REMOTE_OPTION_STORE_AUTH_CREDS = 1u << 0,
+  SUBVERSIONR_BRIDGE_REMOTE_OPTION_STORE_PASSWORDS = 1u << 1,
+  SUBVERSIONR_BRIDGE_REMOTE_OPTION_PASSWORD_STORES = 1u << 2,
+  SUBVERSIONR_BRIDGE_REMOTE_OPTION_HTTP_AUTH_TYPES = 1u << 3,
+  SUBVERSIONR_BRIDGE_REMOTE_OPTION_HTTP_TIMEOUT = 1u << 4,
+  SUBVERSIONR_BRIDGE_REMOTE_OPTION_SSL_TRUST_DEFAULT_CA = 1u << 5
+};
+
+typedef struct subversionr_bridge_remote_config_v1 {
+  unsigned int abi_version;
+  unsigned int scheme;
+  unsigned int server_auth;
+  uint64_t timeout_ms;
+  int trust_windows_roots;
+} subversionr_bridge_remote_config_v1;
+
+typedef struct subversionr_bridge_remote_config_inspection {
+  unsigned int abi_version;
+  unsigned int category_mask;
+  unsigned int option_mask;
+  unsigned int provider_mask;
+  unsigned int forbidden_input_mask;
+} subversionr_bridge_remote_config_inspection;
 
 enum { SUBVERSIONR_BRIDGE_ERROR_ENTRY_LIMIT = 8 };
 
@@ -260,6 +306,17 @@ typedef struct subversionr_bridge_operation_result {
 
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_runtime_create(subversionr_bridge_runtime **runtime);
 SUBVERSIONR_BRIDGE_API void subversionr_bridge_runtime_destroy(subversionr_bridge_runtime *runtime);
+SUBVERSIONR_BRIDGE_API int subversionr_bridge_remote_context_create(
+  const subversionr_bridge_remote_config_v1 *config,
+  subversionr_bridge_remote_context **context
+);
+SUBVERSIONR_BRIDGE_API int subversionr_bridge_remote_context_inspect(
+  const subversionr_bridge_remote_context *context,
+  subversionr_bridge_remote_config_inspection *inspection
+);
+SUBVERSIONR_BRIDGE_API void subversionr_bridge_remote_context_destroy(
+  subversionr_bridge_remote_context *context
+);
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_last_error_diagnostics(
   subversionr_bridge_runtime *runtime,
   subversionr_bridge_error_diagnostics *diagnostics

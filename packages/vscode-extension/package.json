@@ -25,9 +25,7 @@
       "description": "%workspaceTrust.description%",
       "restrictedConfigurations": [
         "subversionr.tortoise.executablePath",
-        "subversionr.tortoise.configDirectory",
-        "subversionr.svn.configDirectory",
-        "subversionr.svn.tunnelCommand"
+        "subversionr.tortoise.configDirectory"
       ]
     }
   },
@@ -1498,15 +1496,318 @@
           "scope": "machine-overridable",
           "markdownDescription": "%configuration.tortoise.configDirectory.description%"
         },
-        "subversionr.svn.configDirectory": {
-          "type": "string",
-          "scope": "machine-overridable",
-          "markdownDescription": "%configuration.svn.configDirectory.description%"
-        },
-        "subversionr.svn.tunnelCommand": {
-          "type": "string",
-          "scope": "machine-overridable",
-          "markdownDescription": "%configuration.svn.tunnelCommand.description%"
+        "subversionr.remote.profiles": {
+          "type": "array",
+          "scope": "machine",
+          "markdownDescription": "%configuration.remote.profiles.description%",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema",
+              "profileId",
+              "authority",
+              "serverAuth",
+              "serverAccount",
+              "serverCredentialPersistence",
+              "proxy",
+              "ssh",
+              "redirectPolicy"
+            ],
+            "properties": {
+              "schema": {
+                "type": "string",
+                "enum": [
+                  "subversionr.remote-profile.v1"
+                ]
+              },
+              "profileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "authority": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "scheme",
+                  "canonicalHost",
+                  "effectivePort"
+                ],
+                "properties": {
+                  "scheme": {
+                    "type": "string",
+                    "enum": [
+                      "http",
+                      "https",
+                      "svn",
+                      "svn+ssh"
+                    ]
+                  },
+                  "canonicalHost": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "effectivePort": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  }
+                }
+              },
+              "serverAuth": {
+                "type": "string",
+                "enum": [
+                  "anonymous",
+                  "basic",
+                  "cramMd5",
+                  "windowsIntegrated"
+                ]
+              },
+              "serverAccount": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "none"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "mode",
+                      "username"
+                    ],
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "fixed"
+                        ]
+                      },
+                      "username": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "mode"
+                    ],
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "chooseForeground"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              "serverCredentialPersistence": {
+                "type": "string",
+                "enum": [
+                  "secretStorage"
+                ]
+              },
+              "tls": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "trust"
+                ],
+                "properties": {
+                  "trust": {
+                    "type": "string",
+                    "enum": [
+                      "windowsRootsThenBroker",
+                      "explicitCaThenBroker"
+                    ]
+                  },
+                  "caBundlePath": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "proxy": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "none"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "auth",
+                      "account"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "scheme",
+                          "canonicalHost",
+                          "effectivePort"
+                        ],
+                        "properties": {
+                          "scheme": {
+                            "type": "string",
+                            "enum": [
+                              "http",
+                              "https"
+                            ]
+                          },
+                          "canonicalHost": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "effectivePort": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          }
+                        }
+                      },
+                      "auth": {
+                        "type": "string",
+                        "enum": [
+                          "anonymous",
+                          "basic"
+                        ]
+                      },
+                      "account": {
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "none"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "mode",
+                              "username"
+                            ],
+                            "properties": {
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "fixed"
+                                ]
+                              },
+                              "username": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              "ssh": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "none"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "adapter",
+                      "sshUsername",
+                      "auth",
+                      "hostKey"
+                    ],
+                    "properties": {
+                      "adapter": {
+                        "type": "string",
+                        "enum": [
+                          "windowsInboxOpenSsh"
+                        ]
+                      },
+                      "sshUsername": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "auth": {
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "agent"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "identityFilePath"
+                            ],
+                            "properties": {
+                              "identityFilePath": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "hostKey": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "algorithm",
+                          "publicKeyBlob",
+                          "fingerprint"
+                        ],
+                        "properties": {
+                          "algorithm": {
+                            "type": "string",
+                            "enum": [
+                              "ssh-ed25519"
+                            ]
+                          },
+                          "publicKeyBlob": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "fingerprint": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "redirectPolicy": {
+                "type": "string",
+                "enum": [
+                  "rejectAll",
+                  "sameAuthorityInitialOptions301"
+                ]
+              }
+            }
+          }
         },
         "subversionr.status.countUnversioned": {
           "type": "boolean",

@@ -5,6 +5,28 @@ use subversionr_protocol::{
     RepositoryIdentity, StatusSnapshot, default_capabilities,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteConfigScheme {
+    Http,
+    Https,
+    Svn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteConfigServerAuth {
+    Anonymous,
+    Basic,
+    CramMd5,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteConfigPlan {
+    pub scheme: RemoteConfigScheme,
+    pub server_auth: RemoteConfigServerAuth,
+    pub timeout_ms: u64,
+    pub trust_windows_roots: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeInfo {
     pub bridge_version: String,
@@ -391,6 +413,19 @@ impl BridgeFailure {
 
 pub trait BridgeApi {
     fn info(&self) -> BridgeInfo;
+
+    fn create_remote_context_foundation(
+        &self,
+        _plan: RemoteConfigPlan,
+    ) -> Result<(), BridgeFailure> {
+        Err(BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_CONFIG_UNAVAILABLE",
+            "native",
+            "error.remote.configUnavailable",
+            json!({}),
+            false,
+        ))
+    }
 
     fn open_working_copy(&self, path: &str) -> Result<RepositoryIdentity, BridgeFailure>;
 

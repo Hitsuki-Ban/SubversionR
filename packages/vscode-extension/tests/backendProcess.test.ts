@@ -113,6 +113,7 @@ describe("startBackendProcess", () => {
         clientVersion: "0.1.0",
         locale: "ja",
         workspaceTrust: "trusted",
+        trustEpoch: 1,
         cacheRoot: "C:\\SubversionR\\cache",
       },
     });
@@ -142,6 +143,88 @@ describe("startBackendProcess", () => {
     spawner.child.stdout.write(jsonRpcResponse(request.id, initializeResponse()));
 
     const connection = await start;
+    expect(connection.isRemoteSubmissionEnabled()).toBe(false);
+    connection.dispose();
+  });
+
+  it("keeps remote submission disabled until the exact trust update acknowledgement arrives", async () => {
+    const spawner = new RecordingSpawner();
+    const start = startBackendProcess(
+      backendConfig({ workspaceTrust: "untrusted" }),
+      backendDeps({ spawner }),
+    );
+    const initialize = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(initialize.id, initializeResponse()));
+    const connection = await start;
+
+    const update = connection.updateWorkspaceTrust(true);
+    expect(connection.isRemoteSubmissionEnabled()).toBe(false);
+    const updateRequest = await readJsonRpcRequest(spawner.child.stdin);
+    expect(updateRequest).toEqual({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "workspaceTrust/update",
+      params: { trusted: true, trustEpoch: 2 },
+    });
+    expect(connection.isRemoteSubmissionEnabled()).toBe(false);
+
+    spawner.child.stdout.write(
+      jsonRpcResponse(updateRequest.id, { acknowledgedTrustEpoch: 2 }),
+    );
+
+    await expect(update).resolves.toBe(2);
+    expect(connection.isRemoteSubmissionEnabled()).toBe(true);
+    connection.dispose();
+  });
+
+  it("rejects concurrent trust updates and disables remote submission while revocation is pending", async () => {
+    const spawner = new RecordingSpawner();
+    const start = startBackendProcess(backendConfig(), backendDeps({ spawner }));
+    const initialize = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(initialize.id, initializeResponse()));
+    const connection = await start;
+    expect(connection.isRemoteSubmissionEnabled()).toBe(true);
+
+    const update = connection.updateWorkspaceTrust(false);
+    expect(connection.isRemoteSubmissionEnabled()).toBe(false);
+    await expect(connection.updateWorkspaceTrust(true)).rejects.toMatchObject({
+      code: "SUBVERSIONR_REMOTE_TRUST_UPDATE_IN_PROGRESS",
+      category: "protocol",
+      messageKey: "error.remote.trustUpdateInProgress",
+    });
+    const updateRequest = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(
+      jsonRpcResponse(updateRequest.id, { acknowledgedTrustEpoch: 2 }),
+    );
+
+    await expect(update).resolves.toBe(2);
+    expect(connection.isRemoteSubmissionEnabled()).toBe(false);
+    connection.dispose();
+  });
+
+  it.each([
+    { acknowledgedTrustEpoch: 3 },
+    { acknowledgedTrustEpoch: 2, unexpected: true },
+  ])("rejects a non-exact trust update acknowledgement and remains disabled", async (acknowledgement) => {
+    const spawner = new RecordingSpawner();
+    const start = startBackendProcess(
+      backendConfig({ workspaceTrust: "untrusted" }),
+      backendDeps({ spawner }),
+    );
+    const initialize = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(initialize.id, initializeResponse()));
+    const connection = await start;
+
+    const update = connection.updateWorkspaceTrust(true);
+    const updateRequest = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(updateRequest.id, acknowledgement));
+
+    await expect(update).rejects.toMatchObject({
+      code: "SUBVERSIONR_REMOTE_TRUST_ACK_INVALID",
+      category: "protocol",
+      messageKey: "error.remote.trustAckInvalid",
+    });
+    expect(connection.isRemoteSubmissionEnabled()).toBe(false);
     connection.dispose();
   });
 
@@ -172,7 +255,7 @@ describe("startBackendProcess", () => {
     expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
   });
 
-  it("rejects initialize and terminates the sidecar when protocol minor is too old for required status fields", async () => {
+  it("rejects initialize and terminates the sidecar when protocol minor is too old", async () => {
     const spawner = new RecordingSpawner();
 
     const start = startBackendProcess(backendConfig(), backendDeps({ spawner }));
@@ -182,7 +265,7 @@ describe("startBackendProcess", () => {
       jsonRpcResponse(
         request.id,
         initializeResponse({
-          protocol: { major: 1, minor: 29 },
+          protocol: { major: 1, minor: 30 },
         }),
       ),
     );
@@ -192,8 +275,8 @@ describe("startBackendProcess", () => {
       category: "protocol",
       messageKey: "error.backend.protocolMinorUnsupported",
       safeArgs: {
-        expectedMinimum: 30,
-        actual: 29,
+        expectedMinimum: 31,
+        actual: 30,
       },
     });
     expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
@@ -218,6 +301,23 @@ describe("startBackendProcess", () => {
       safeArgs: {
         field: "backendVersion",
       },
+    });
+    expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
+  });
+
+  it("rejects initialize when the sidecar acknowledges a different initial trust epoch", async () => {
+    const spawner = new RecordingSpawner();
+    const start = startBackendProcess(backendConfig(), backendDeps({ spawner }));
+    const request = await readJsonRpcRequest(spawner.child.stdin);
+
+    spawner.child.stdout.write(
+      jsonRpcResponse(request.id, initializeResponse({ acknowledgedTrustEpoch: 2 })),
+    );
+
+    await expect(start).rejects.toMatchObject({
+      code: "SUBVERSIONR_INITIALIZE_RESPONSE_INVALID",
+      category: "protocol",
+      safeArgs: { field: "acknowledgedTrustEpoch" },
     });
     expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
   });
@@ -374,6 +474,8 @@ describe("startBackendProcess", () => {
     "diagnosticsGet",
     "credentialRequest",
     "certificateRequest",
+    "remoteOperationEnvelope",
+    "trustedConfigSnapshot",
   ] as const)(
     "rejects initialize and terminates the sidecar when %s is unavailable",
     async (capability) => {
@@ -817,7 +919,7 @@ function initializeResponse(
 
 function initializeResponseBase() {
   return {
-    protocol: { major: 1, minor: 30 },
+    protocol: { major: 1, minor: 31 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -868,7 +970,10 @@ function initializeResponseBase() {
       diagnosticsGet: true,
       credentialRequest: true,
       certificateRequest: true,
+      remoteOperationEnvelope: true,
+      trustedConfigSnapshot: true,
     },
+    acknowledgedTrustEpoch: 1,
   };
 }
 

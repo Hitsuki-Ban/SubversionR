@@ -1009,9 +1009,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void repositoryLifecycleCoordinator.recoverBackendRestartedRepositories();
   });
   const workspaceTrustGrant = vscode.workspace.onDidGrantWorkspaceTrust(() => {
-    refreshWorkspaceTrustUi();
-    refreshTortoiseAvailability();
-    void repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("workspaceTrust");
+    void service
+      .updateWorkspaceTrust(true)
+      .then(async () => {
+        refreshWorkspaceTrustUi();
+        refreshTortoiseAvailability();
+        await repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("workspaceTrust");
+      })
+      .catch(async (error: unknown) => {
+        await vscode.window.showErrorMessage(
+          vscode.l10n.t(
+            "SubversionR could not acknowledge the Workspace Trust update: {0}",
+            extensionErrorCode(error),
+          ),
+        );
+      });
   });
   const workspaceFolderChange = vscode.workspace.onDidChangeWorkspaceFolders(() => {
     void repositoryLifecycleCoordinator.reconcileWorkspaceRepositories("workspaceFolders");

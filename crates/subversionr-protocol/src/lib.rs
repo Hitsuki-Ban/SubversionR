@@ -17,6 +17,37 @@ pub struct PlatformDescriptor {
     pub arch: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceTrustState {
+    Trusted,
+    Untrusted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct InitializeParams {
+    pub client_name: String,
+    pub client_version: String,
+    pub locale: String,
+    pub workspace_trust: WorkspaceTrustState,
+    pub trust_epoch: u64,
+    pub cache_root: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceTrustUpdateParams {
+    pub trusted: bool,
+    pub trust_epoch: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceTrustUpdateResponse {
+    pub acknowledged_trust_epoch: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
@@ -61,6 +92,234 @@ pub struct Capabilities {
     pub diagnostics_get: bool,
     pub credential_request: bool,
     pub certificate_request: bool,
+    pub remote_operation_envelope: bool,
+    pub trusted_config_snapshot: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteScheme {
+    Http,
+    Https,
+    Svn,
+    #[serde(rename = "svn+ssh")]
+    SvnSsh,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CanonicalEndpoint {
+    pub scheme: RemoteScheme,
+    pub canonical_host: String,
+    pub effective_port: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteServerAuth {
+    Anonymous,
+    Basic,
+    CramMd5,
+    WindowsIntegrated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoServerAccount {
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ServerAccountSelection {
+    Fixed { username: String },
+    ChooseForeground,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ServerAccountSnapshot {
+    None(NoServerAccount),
+    Selection(ServerAccountSelection),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ServerCredentialPersistence {
+    SecretStorage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TlsTrustPolicy {
+    WindowsRootsThenBroker,
+    ExplicitCaThenBroker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TlsProfileSnapshot {
+    pub trust: TlsTrustPolicy,
+    pub ca_bundle_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoProxyProfile {
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyAuth {
+    Anonymous,
+    Basic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FixedProxyAccount {
+    pub mode: FixedAccountMode,
+    pub username: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FixedAccountMode {
+    Fixed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProxyAccountSnapshot {
+    None(NoServerAccount),
+    Fixed(FixedProxyAccount),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProxyProfileConfiguration {
+    pub authority: CanonicalEndpoint,
+    pub auth: ProxyAuth,
+    pub account: ProxyAccountSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProxyProfileSnapshot {
+    None(NoProxyProfile),
+    Configuration(ProxyProfileConfiguration),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoSshProfile {
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OpenSshAdapter {
+    WindowsInboxOpenSsh,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OpenSshAgentAuth {
+    Agent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OpenSshIdentityFileAuth {
+    pub identity_file_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OpenSshAuth {
+    Agent(OpenSshAgentAuth),
+    IdentityFile(OpenSshIdentityFileAuth),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OpenSshHostKey {
+    pub algorithm: String,
+    pub public_key_blob: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OpenSshProfileSnapshot {
+    pub adapter: OpenSshAdapter,
+    pub ssh_username: String,
+    pub auth: OpenSshAuth,
+    pub host_key: OpenSshHostKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SshProfileSnapshot {
+    None(NoSshProfile),
+    OpenSsh(OpenSshProfileSnapshot),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RedirectPolicy {
+    RejectAll,
+    SameAuthorityInitialOptions301,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RemoteAccessProfileSnapshot {
+    pub schema: String,
+    pub profile_id: String,
+    pub authority: CanonicalEndpoint,
+    pub server_auth: RemoteServerAuth,
+    pub server_account: ServerAccountSnapshot,
+    pub server_credential_persistence: ServerCredentialPersistence,
+    pub tls: Option<TlsProfileSnapshot>,
+    pub proxy: ProxyProfileSnapshot,
+    pub ssh: SshProfileSnapshot,
+    pub redirect_policy: RedirectPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteOperationIntent {
+    Foreground,
+    Background,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteInteraction {
+    Allowed,
+    Forbidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrustedWorkspaceState {
+    Trusted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RemoteOperationEnvelope {
+    pub version: u16,
+    pub operation_id: String,
+    pub intent: RemoteOperationIntent,
+    pub interaction: RemoteInteraction,
+    pub timeout_ms: u64,
+    pub workspace_trust: TrustedWorkspaceState,
+    pub trust_epoch: u64,
+    pub profile: RemoteAccessProfileSnapshot,
+    pub expected_origin: CanonicalEndpoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +340,7 @@ pub struct InitializeResponse {
     pub platform: PlatformDescriptor,
     pub cache_schema: CacheSchema,
     pub capabilities: Capabilities,
+    pub acknowledged_trust_epoch: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -628,11 +888,12 @@ impl InitializeResponse {
         libsvn_version: String,
         platform: PlatformDescriptor,
         capabilities: Capabilities,
+        acknowledged_trust_epoch: u64,
     ) -> Self {
         Self {
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 30,
+                minor: 31,
             },
             backend_version,
             bridge_version,
@@ -640,6 +901,7 @@ impl InitializeResponse {
             platform,
             cache_schema: default_cache_schema(),
             capabilities,
+            acknowledged_trust_epoch,
         }
     }
 }
@@ -695,6 +957,8 @@ pub fn default_capabilities() -> Capabilities {
         diagnostics_get: true,
         credential_request: true,
         certificate_request: true,
+        remote_operation_envelope: true,
+        trusted_config_snapshot: true,
     }
 }
 

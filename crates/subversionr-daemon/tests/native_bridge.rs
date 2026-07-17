@@ -18,7 +18,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use subversionr_daemon::{
     AuthRequestBroker, BridgeApi, BridgeCancellationToken, BridgeFailure, HistoryBlameRequest,
-    HistoryLogRequest, NativeBridge, UnavailableAuthRequestBroker, run_json_rpc_stdio,
+    HistoryLogRequest, NativeBridge, RemoteConfigPlan, RemoteConfigScheme, RemoteConfigServerAuth,
+    UnavailableAuthRequestBroker, run_json_rpc_stdio,
 };
 use subversionr_protocol::{
     CertificateTrustError, CertificateTrustRequest, CertificateTrustResponse, Credential,
@@ -26,6 +27,80 @@ use subversionr_protocol::{
 };
 
 static NATIVE_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+#[test]
+fn native_remote_context_source_uses_only_explicit_in_memory_configuration() {
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../native/svn-bridge/src/subversionr_bridge.c");
+    let source = fs::read_to_string(&source_path)
+        .expect("native bridge source should be readable")
+        .replace("\r\n", "\n");
+    let create_start = source
+        .find("int subversionr_bridge_remote_context_create(")
+        .expect("remote context constructor should exist");
+    let create_end = source[create_start..]
+        .find("\nint subversionr_bridge_remote_context_inspect(")
+        .map(|offset| create_start + offset)
+        .expect("remote context constructor should be bounded");
+    let create = &source[create_start..create_end];
+
+    assert_eq!(
+        create.matches("svn_config_create2(").count(),
+        2,
+        "remote config and servers categories must each be created in memory"
+    );
+    for option in [
+        "SVN_CONFIG_OPTION_STORE_AUTH_CREDS",
+        "SVN_CONFIG_OPTION_STORE_PASSWORDS",
+        "SVN_CONFIG_OPTION_PASSWORD_STORES",
+        "SVN_CONFIG_OPTION_HTTP_AUTH_TYPES",
+        "SVN_CONFIG_OPTION_HTTP_TIMEOUT",
+        "SVN_CONFIG_OPTION_SSL_TRUST_DEFAULT_CA",
+    ] {
+        assert_eq!(
+            create.matches(option).count(),
+            1,
+            "{option} must be configured exactly once"
+        );
+    }
+    assert_eq!(
+        create.matches("SVN_CONFIG_OPTION_").count(),
+        6,
+        "the remote-context option allowlist must stay exact"
+    );
+    assert_eq!(
+        create.matches("SUBVERSIONR_BRIDGE_REMOTE_OPTION_").count(),
+        6,
+        "the inspection mask must report every allowlisted option and no others"
+    );
+    assert!(create.contains("apr_array_make(\n    pool,\n    0,"));
+    assert!(create.contains("created->inspection.provider_mask = 0;"));
+    assert!(create.contains("created->inspection.forbidden_input_mask = 0;"));
+
+    for forbidden in [
+        "svn_config_get_config",
+        "svn_config_get(",
+        "svn_config_read",
+        "svn_config_merge",
+        "svn_user_get_name",
+        "getenv(",
+        "RegOpenKey",
+        "RegGetValue",
+        "SHGetFolderPath",
+        "APR_ARRAY_PUSH",
+        "svn_auth_get_",
+        "svn_config_read_auth_data",
+        "svn_config_write_auth_data",
+        "SVN_AUTH_PARAM_DEFAULT_USERNAME",
+        "SVN_CONFIG_SECTION_TUNNELS",
+        "SVN_CONFIG_OPTION_HTTP_PROXY",
+    ] {
+        assert!(
+            !create.contains(forbidden),
+            "remote context constructor must not use ambient input or provider API {forbidden}"
+        );
+    }
+}
 
 #[test]
 fn native_bridge_configures_file_commit_author_before_commit_mutation() {
@@ -197,6 +272,23 @@ fn native_bridge_loads_built_dll_and_reports_libsvn_version() {
         format!("subversionr-svn-bridge/{}", env!("CARGO_PKG_VERSION"))
     );
     assert!(info.libsvn_version.starts_with("1.14.5"));
+}
+
+#[test]
+#[ignore = "requires a verified native bridge DLL built from staged Apache Subversion"]
+fn native_bridge_remote_context_foundation_accepts_the_exact_allowlist() {
+    let _guard = native_test_guard();
+    let bridge_path = native_bridge_path();
+    let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
+
+    bridge
+        .create_remote_context_foundation(RemoteConfigPlan {
+            scheme: RemoteConfigScheme::Https,
+            server_auth: RemoteConfigServerAuth::Basic,
+            timeout_ms: 1_234,
+            trust_windows_roots: true,
+        })
+        .expect("real DLL create/inspect/destroy should accept the exact remote allowlist");
 }
 
 #[test]
@@ -403,7 +495,7 @@ fn native_stdio_rpc_opens_working_copy_with_real_bridge() {
     let wc_path_json =
         serde_json::to_string(&fixture.wc_path()).expect("WC path should serialize as JSON");
     let input = [
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(&format!(
             r#"{{"jsonrpc":"2.0","id":2,"method":"repository/open","params":{{"path":{wc_path_json}}}}}"#
         )),
@@ -474,6 +566,7 @@ fn native_stdio_rpc_file_url_lock_operation_run_uses_non_empty_default_username(
                     "clientVersion": "0.0.0",
                     "locale": "en",
                     "workspaceTrust": "trusted",
+                    "trustEpoch": 1,
                     "cacheRoot": "C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"
                 }
             })
@@ -625,7 +718,7 @@ fn native_stdio_rpc_discovers_multiple_working_copy_roots_with_real_bridge() {
     })
     .to_string();
     let input = [
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(&discover),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
@@ -706,7 +799,7 @@ fn native_stdio_rpc_discovers_nested_working_copy_roots_with_real_bridge() {
     })
     .to_string();
     let input = [
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(&discover),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
@@ -787,7 +880,7 @@ fn native_stdio_rpc_discovers_directory_external_with_real_bridge() {
     })
     .to_string();
     let input = [
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(&discover),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
@@ -882,7 +975,7 @@ fn native_stdio_rpc_parent_status_excludes_nested_working_copy_changes_with_boun
         r#"{{"jsonrpc":"2.0","id":3,"method":"status/getSnapshot","params":{{"repositoryId":{repository_id_json},"epoch":1}}}}"#
     );
     let input = [
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(&open),
         frame(&snapshot),
         frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
@@ -982,7 +1075,7 @@ fn native_stdio_rpc_discovers_and_excludes_file_external_boundaries_with_real_br
         r#"{{"jsonrpc":"2.0","id":2,"method":"repository/discover","params":{{"workspaceRoots":[{parent_wc_json}],"discoverNested":false,"discoveryDepth":0,"discoveryIgnore":[],"ignoredRoots":[],"externalsMode":"lazy"}}}}"#
     );
     let discovery_input = [
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(&discover),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
@@ -1020,7 +1113,7 @@ fn native_stdio_rpc_discovers_and_excludes_file_external_boundaries_with_real_br
         r#"{{"jsonrpc":"2.0","id":5,"method":"status/getSnapshot","params":{{"repositoryId":{repository_id_json},"epoch":1}}}}"#
     );
     let bounded_status_input = [
-        frame(r#"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
         frame(&open),
         frame(&snapshot),
         frame(r#"{"jsonrpc":"2.0","id":6,"method":"shutdown","params":{}}"#),

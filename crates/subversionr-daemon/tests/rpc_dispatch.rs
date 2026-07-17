@@ -81,6 +81,7 @@ struct FakeBridge {
     commit_results:
         BTreeMap<String, Result<subversionr_daemon::CommitOperationResult, BridgeFailure>>,
     commit_requests: RefCell<Vec<subversionr_daemon::CommitOperationRequest>>,
+    remote_context_requests: RefCell<Vec<subversionr_daemon::RemoteConfigPlan>>,
     history_requires_auth: bool,
     blame_requires_auth: bool,
     commit_requires_auth: bool,
@@ -287,6 +288,7 @@ impl FakeBridge {
             merge_requests: RefCell::new(Vec::new()),
             commit_results: BTreeMap::new(),
             commit_requests: RefCell::new(Vec::new()),
+            remote_context_requests: RefCell::new(Vec::new()),
             history_requires_auth: false,
             blame_requires_auth: false,
             commit_requires_auth: false,
@@ -759,6 +761,7 @@ impl FakeBridge {
             merge_requests: RefCell::new(Vec::new()),
             commit_results: BTreeMap::new(),
             commit_requests: RefCell::new(Vec::new()),
+            remote_context_requests: RefCell::new(Vec::new()),
             history_requires_auth: false,
             blame_requires_auth: false,
             commit_requires_auth: false,
@@ -834,6 +837,14 @@ fn open_result_key(path: &str) -> String {
 impl BridgeApi for FakeBridge {
     fn info(&self) -> BridgeInfo {
         BridgeInfo::available("subversionr-svn-bridge/0.1.0-test", "1.14.5 (r1922182)")
+    }
+
+    fn create_remote_context_foundation(
+        &self,
+        plan: subversionr_daemon::RemoteConfigPlan,
+    ) -> Result<(), BridgeFailure> {
+        self.remote_context_requests.borrow_mut().push(plan);
+        Ok(())
     }
 
     fn open_working_copy(&self, path: &str) -> Result<RepositoryIdentity, BridgeFailure> {
@@ -1723,7 +1734,7 @@ impl BridgeApi for FakeBridge {
 
 #[test]
 fn initialize_request_returns_versions_and_keeps_process_running() {
-    let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#;
+    let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#;
     let bridge = FakeBridge::open_success();
 
     let outcome =
@@ -1732,13 +1743,13 @@ fn initialize_request_returns_versions_and_keeps_process_running() {
     assert_eq!(outcome, DispatchOutcome::Continue);
     assert_eq!(outcome.response()["id"], 1);
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 30);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 31);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["schemaId"],
         "subversionr.cache.v1"
     );
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 30);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 31);
     assert_eq!(outcome.response()["result"]["cacheSchema"]["version"], 1);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["rollback"],
@@ -1890,7 +1901,7 @@ fn initialize_request_requires_cache_root_param() {
 
 #[test]
 fn initialize_request_rejects_relative_cache_root_param() {
-    let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","cacheRoot":"subversionr/cache"}}"#;
+    let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"subversionr/cache"}}"#;
     let bridge = FakeBridge::open_success();
 
     let outcome =
@@ -2074,9 +2085,9 @@ fn repository_open_returns_identity_from_loaded_bridge() {
 
 #[test]
 fn repository_checkout_returns_working_copy_path_and_revision_from_loaded_bridge() {
-    let request = r#"{"jsonrpc":"2.0","id":60,"method":"repository/checkout","params":{"url":"https://svn.example.invalid/project/trunk","targetPath":"C:/checkout/project","revision":9,"depth":"files","ignoreExternals":true}}"#;
+    let request = r#"{"jsonrpc":"2.0","id":60,"method":"repository/checkout","params":{"url":"file:///C:/repo/project/trunk","targetPath":"C:/checkout/project","revision":9,"depth":"files","ignoreExternals":true}}"#;
     let bridge = FakeBridge::open_success().with_checkout_result(
-        "https://svn.example.invalid/project/trunk",
+        "file:///C:/repo/project/trunk",
         Ok(subversionr_daemon::RepositoryCheckoutResult {
             working_copy_path: "C:/checkout/project".to_string(),
             revision: 9,
@@ -2096,7 +2107,7 @@ fn repository_checkout_returns_working_copy_path_and_revision_from_loaded_bridge
     assert_eq!(
         bridge.checkout_requests.borrow().as_slice(),
         &[subversionr_daemon::RepositoryCheckoutRequest {
-            url: "https://svn.example.invalid/project/trunk".to_string(),
+            url: "file:///C:/repo/project/trunk".to_string(),
             target_path: "C:/checkout/project".to_string(),
             revision: "9".to_string(),
             depth: "files".to_string(),
@@ -2107,7 +2118,7 @@ fn repository_checkout_returns_working_copy_path_and_revision_from_loaded_bridge
 
 #[test]
 fn repository_checkout_returns_structured_error_until_bridge_is_loaded() {
-    let request = r#"{"jsonrpc":"2.0","id":61,"method":"repository/checkout","params":{"url":"https://svn.example.invalid/project/trunk","targetPath":"C:/checkout/project","revision":"head","depth":"infinity","ignoreExternals":false}}"#;
+    let request = r#"{"jsonrpc":"2.0","id":61,"method":"repository/checkout","params":{"url":"file:///C:/repo/project/trunk","targetPath":"C:/checkout/project","revision":"head","depth":"infinity","ignoreExternals":false}}"#;
 
     let outcome = dispatch_json_rpc(request).expect("repository/checkout should dispatch");
 
@@ -5296,7 +5307,7 @@ fn operation_run_relocate_returns_full_reconcile() {
 
     let outcome = state
         .dispatch_json_rpc_with_bridge(
-            r#"{"jsonrpc":"2.0","id":211,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"relocate","options":{"version":1,"fromUrl":"file:///repo","toUrl":"https://svn.example.invalid/repo","ignoreExternals":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":211,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"relocate","options":{"version":1,"fromUrl":"file:///repo","toUrl":"file:///relocated-repo","ignoreExternals":true}}}"#,
             &bridge,
         )
         .expect("operation/run relocate should dispatch");
@@ -5331,7 +5342,7 @@ fn operation_run_relocate_returns_full_reconcile() {
         requests[0],
         subversionr_daemon::RelocateOperationRequest {
             from_url: "file:///repo".to_string(),
-            to_url: "https://svn.example.invalid/repo".to_string(),
+            to_url: "file:///relocated-repo".to_string(),
             ignore_externals: true,
         }
     );
@@ -5356,7 +5367,7 @@ fn operation_run_relocate_refreshes_open_session_identity() {
 
     state
         .dispatch_json_rpc_with_bridge(
-            r#"{"jsonrpc":"2.0","id":211,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"relocate","options":{"version":1,"fromUrl":"file:///C:/repo","toUrl":"https://svn.example.invalid/repo","ignoreExternals":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":211,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"relocate","options":{"version":1,"fromUrl":"file:///C:/repo","toUrl":"file:///C:/relocated-repo","ignoreExternals":true}}}"#,
             &bridge,
         )
         .expect("operation/run relocate should dispatch");
@@ -5370,7 +5381,7 @@ fn operation_run_relocate_refreshes_open_session_identity() {
 
     assert_eq!(
         snapshot.response()["result"]["identity"]["repositoryRootUrl"],
-        "https://svn.example.invalid/repo"
+        "file:///C:/relocated-repo"
     );
 }
 
@@ -5396,7 +5407,7 @@ fn operation_run_relocate_maps_bridge_failure_to_structured_error() {
 
     let outcome = state
         .dispatch_json_rpc_with_bridge(
-            r#"{"jsonrpc":"2.0","id":213,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"relocate","options":{"version":1,"fromUrl":"file:///repo","toUrl":"https://svn.example.invalid/repo","ignoreExternals":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":213,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"relocate","options":{"version":1,"fromUrl":"file:///repo","toUrl":"file:///relocated-repo","ignoreExternals":false}}}"#,
             &bridge,
         )
         .expect("operation/run relocate should dispatch");
@@ -8964,4 +8975,276 @@ fn repository_open_maps_loaded_bridge_failure_to_structured_error() {
         "error.native.workingCopyNotFound"
     );
     assert_eq!(outcome.response()["error"]["args"]["path"], "C:\\missing");
+}
+
+#[test]
+fn remote_checkout_requires_initialized_current_trust_and_never_calls_legacy_checkout() {
+    let bridge = FakeBridge::open_success();
+    let mut state = DaemonState::new();
+    initialize_remote_state(&mut state, &bridge, "trusted");
+
+    let missing_envelope = serde_json::json!({
+        "jsonrpc": "2.0", "id": 501, "method": "repository/checkout",
+        "params": {
+            "url": "https://svn.example.invalid/project/trunk",
+            "targetPath": "C:/checkout/project", "revision": "head",
+            "depth": "infinity", "ignoreExternals": true
+        }
+    });
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(&missing_envelope.to_string(), &bridge)
+        .expect("remote checkout should fail closed");
+    assert_eq!(
+        outcome.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_ENVELOPE_REQUIRED"
+    );
+    assert!(bridge.remote_context_requests.borrow().is_empty());
+    assert!(bridge.checkout_requests.borrow().is_empty());
+
+    let request = remote_checkout_request(502, 1);
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(&request.to_string(), &bridge)
+        .expect("validated remote checkout should remain unsupported");
+    assert_eq!(
+        outcome.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED"
+    );
+    assert_eq!(bridge.remote_context_requests.borrow().len(), 1);
+    assert!(bridge.checkout_requests.borrow().is_empty());
+}
+
+#[test]
+fn remote_trust_epochs_are_exactly_ordered_and_replays_never_create_contexts() {
+    let bridge = FakeBridge::open_success();
+    let mut state = DaemonState::new();
+    initialize_remote_state(&mut state, &bridge, "untrusted");
+
+    let denied = remote_checkout_request(510, 1);
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(&denied.to_string(), &bridge)
+        .expect("untrusted checkout should fail closed");
+    assert_eq!(
+        outcome.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH"
+    );
+    assert!(bridge.remote_context_requests.borrow().is_empty());
+
+    let grant = r#"{"jsonrpc":"2.0","id":511,"method":"workspaceTrust/update","params":{"trusted":true,"trustEpoch":2}}"#;
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(grant, &bridge)
+        .expect("exact next trust epoch should dispatch");
+    assert_eq!(outcome.response()["result"]["acknowledgedTrustEpoch"], 2);
+
+    let replay = state
+        .dispatch_json_rpc_with_bridge(grant, &bridge)
+        .expect("replayed trust epoch should fail");
+    assert_eq!(
+        replay.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH"
+    );
+    let future = state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":512,"method":"workspaceTrust/update","params":{"trusted":true,"trustEpoch":4}}"#,
+            &bridge,
+        )
+        .expect("future trust epoch should fail");
+    assert_eq!(
+        future.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH"
+    );
+
+    let stale_envelope = remote_checkout_request(513, 1);
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(&stale_envelope.to_string(), &bridge)
+        .expect("stale envelope should fail");
+    assert_eq!(
+        outcome.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH"
+    );
+    let current_envelope = remote_checkout_request(514, 2);
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(&current_envelope.to_string(), &bridge)
+        .expect("current envelope should validate but remain unsupported");
+    assert_eq!(
+        outcome.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED"
+    );
+    assert_eq!(bridge.remote_context_requests.borrow().len(), 1);
+    assert!(bridge.checkout_requests.borrow().is_empty());
+}
+
+#[test]
+fn local_file_checkout_rejects_remote_envelope_before_bridge_call() {
+    let bridge = FakeBridge::open_success();
+    let mut state = DaemonState::new();
+    initialize_remote_state(&mut state, &bridge, "trusted");
+    let mut request = remote_checkout_request(520, 1);
+    request["params"]["url"] = serde_json::json!("file:///C:/repo/project/trunk");
+
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(&request.to_string(), &bridge)
+        .expect("file checkout with envelope should fail");
+    assert_eq!(
+        outcome.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_ENVELOPE_FORBIDDEN"
+    );
+    assert!(bridge.remote_context_requests.borrow().is_empty());
+    assert!(bridge.checkout_requests.borrow().is_empty());
+}
+
+#[test]
+fn remote_checkout_rejects_contract_and_policy_variants_before_context_creation() {
+    let bridge = FakeBridge::open_success();
+    let mut state = DaemonState::new();
+    initialize_remote_state(&mut state, &bridge, "trusted");
+
+    let mut cases = Vec::new();
+    let mut expected_proxy = remote_checkout_request(530, 1);
+    expected_proxy["params"]["remote"]["expectedProxy"] = serde_json::Value::Null;
+    cases.push((expected_proxy, "SUBVERSIONR_REMOTE_CONTRACT_INVALID"));
+    let mut future_version = remote_checkout_request(531, 1);
+    future_version["params"]["remote"]["version"] = serde_json::json!(2);
+    cases.push((future_version, "SUBVERSIONR_REMOTE_CONTRACT_INVALID"));
+    let mut zero_timeout = remote_checkout_request(532, 1);
+    zero_timeout["params"]["remote"]["timeoutMs"] = serde_json::json!(0);
+    cases.push((zero_timeout, "SUBVERSIONR_REMOTE_CONTRACT_INVALID"));
+    let mut interactive_background = remote_checkout_request(533, 1);
+    interactive_background["params"]["remote"]["intent"] = serde_json::json!("background");
+    cases.push((
+        interactive_background,
+        "SUBVERSIONR_REMOTE_CONTRACT_INVALID",
+    ));
+    let mut origin_mismatch = remote_checkout_request(534, 1);
+    origin_mismatch["params"]["remote"]["expectedOrigin"]["effectivePort"] =
+        serde_json::json!(8443);
+    cases.push((origin_mismatch, "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"));
+    let mut proxy = remote_checkout_request(535, 1);
+    proxy["params"]["remote"]["profile"]["proxy"] = serde_json::json!({
+        "authority": { "scheme": "https", "canonicalHost": "proxy.example.invalid", "effectivePort": 443 },
+        "auth": "anonymous", "account": "none"
+    });
+    cases.push((proxy, "SUBVERSIONR_REMOTE_PROXY_UNSUPPORTED"));
+
+    for (request, expected_code) in cases {
+        let outcome = state
+            .dispatch_json_rpc_with_bridge(&request.to_string(), &bridge)
+            .expect("invalid remote contract should fail closed");
+        assert_eq!(outcome.response()["error"]["code"], expected_code);
+    }
+    assert!(bridge.remote_context_requests.borrow().is_empty());
+    assert!(bridge.checkout_requests.borrow().is_empty());
+}
+
+#[test]
+fn remote_working_copy_status_check_is_gated_before_the_legacy_remote_bridge_path() {
+    let mut bridge = FakeBridge::open_success();
+    bridge.open_result = Ok(RepositoryIdentity {
+        repository_root_url: "https://svn.example.invalid/project".to_string(),
+        ..FakeBridge::identity()
+    });
+    let mut state = DaemonState::new();
+    initialize_remote_state(&mut state, &bridge, "trusted");
+    state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":540,"method":"repository/open","params":{"path":"C:\\wc"}}"#,
+            &bridge,
+        )
+        .expect("remote working copy should open locally");
+
+    let missing = state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":541,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#,
+            &bridge,
+        )
+        .expect("remote status should fail closed");
+    assert_eq!(
+        missing.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_ENVELOPE_REQUIRED"
+    );
+    assert_eq!(*bridge.remote_requests.borrow(), 0);
+
+    let envelope = remote_checkout_request(542, 1)["params"]["remote"].clone();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0", "id": 542, "method": "status/checkRemote",
+        "params": { "repositoryId": "repo-uuid:C:/wc", "epoch": 1, "remote": envelope }
+    });
+    let unsupported = state
+        .dispatch_json_rpc_with_bridge(&request.to_string(), &bridge)
+        .expect("valid envelope should remain transport unsupported");
+    assert_eq!(
+        unsupported.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED"
+    );
+    assert_eq!(bridge.remote_context_requests.borrow().len(), 1);
+    assert_eq!(*bridge.remote_requests.borrow(), 0);
+}
+
+#[test]
+fn remote_working_copy_relocate_cannot_hide_behind_file_url_options() {
+    let mut bridge = FakeBridge::open_success();
+    bridge.open_result = Ok(RepositoryIdentity {
+        repository_root_url: "https://svn.example.invalid/project".to_string(),
+        ..FakeBridge::identity()
+    });
+    let mut state = DaemonState::new();
+    initialize_remote_state(&mut state, &bridge, "trusted");
+    state
+        .dispatch_json_rpc_with_bridge(
+            r#"{"jsonrpc":"2.0","id":550,"method":"repository/open","params":{"path":"C:\\wc"}}"#,
+            &bridge,
+        )
+        .expect("remote working copy should open locally");
+
+    let request = r#"{"jsonrpc":"2.0","id":551,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"relocate","options":{"version":1,"fromUrl":"file:///repo","toUrl":"file:///relocated","ignoreExternals":true}}}"#;
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(request, &bridge)
+        .expect("mixed remote working copy relocate should fail closed");
+    assert_eq!(
+        outcome.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
+    );
+    assert!(bridge.remote_context_requests.borrow().is_empty());
+    assert!(bridge.relocate_requests.borrow().is_empty());
+}
+
+fn initialize_remote_state(state: &mut DaemonState, bridge: &FakeBridge, trust: &str) {
+    let request = serde_json::json!({
+        "jsonrpc": "2.0", "id": 500, "method": "initialize",
+        "params": {
+            "clientName": "test", "clientVersion": "0.0.0", "locale": "en",
+            "workspaceTrust": trust, "trustEpoch": 1,
+            "cacheRoot": "C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"
+        }
+    });
+    let outcome = state
+        .dispatch_json_rpc_with_bridge(&request.to_string(), bridge)
+        .expect("initialize should dispatch");
+    assert_eq!(outcome.response()["result"]["acknowledgedTrustEpoch"], 1);
+}
+
+fn remote_checkout_request(id: u64, trust_epoch: u64) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "repository/checkout",
+        "params": {
+            "url": "https://svn.example.invalid/project/trunk",
+            "targetPath": "C:/checkout/project", "revision": "head",
+            "depth": "infinity", "ignoreExternals": true,
+            "remote": {
+                "version": 1,
+                "operationId": "01234567-89ab-cdef-0123-456789abcdef",
+                "intent": "foreground", "interaction": "allowed", "timeoutMs": 30000,
+                "workspaceTrust": "trusted", "trustEpoch": trust_epoch,
+                "profile": {
+                    "schema": "subversionr.remote-profile.v1", "profileId": "corp-svn",
+                    "authority": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 },
+                    "serverAuth": "basic",
+                    "serverAccount": { "mode": "fixed", "username": "alice" },
+                    "serverCredentialPersistence": "secretStorage",
+                    "tls": { "trust": "windowsRootsThenBroker" },
+                    "proxy": "none", "ssh": "none", "redirectPolicy": "rejectAll"
+                },
+                "expectedOrigin": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 }
+            }
+        }
+    })
 }

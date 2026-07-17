@@ -54,6 +54,12 @@ struct subversionr_bridge_runtime {
   int last_error_truncated;
 };
 
+struct subversionr_bridge_remote_context {
+  apr_pool_t *pool;
+  svn_client_ctx_t *ctx;
+  subversionr_bridge_remote_config_inspection inspection;
+};
+
 static void bridge_clear_last_error(subversionr_bridge_runtime *runtime) {
   runtime->last_error_entry_count = 0;
   runtime->last_error_truncated = 0;
@@ -1391,6 +1397,189 @@ static svn_error_t *bridge_create_auth_baton(
 
   svn_auth_open(auth_baton, providers, pool);
   return SVN_NO_ERROR;
+}
+
+static int bridge_remote_config_is_valid(
+  const subversionr_bridge_remote_config_v1 *config
+) {
+  if (
+    config == NULL ||
+    config->abi_version != SUBVERSIONR_BRIDGE_REMOTE_CONFIG_ABI_VERSION ||
+    config->timeout_ms == 0 ||
+    config->timeout_ms > 300000 ||
+    (config->trust_windows_roots != 0 && config->trust_windows_roots != 1)
+  ) {
+    return 0;
+  }
+  switch (config->scheme) {
+    case SUBVERSIONR_BRIDGE_REMOTE_SCHEME_HTTP:
+      return config->trust_windows_roots == 0 &&
+        (
+          config->server_auth == SUBVERSIONR_BRIDGE_REMOTE_AUTH_ANONYMOUS ||
+          config->server_auth == SUBVERSIONR_BRIDGE_REMOTE_AUTH_BASIC
+        );
+    case SUBVERSIONR_BRIDGE_REMOTE_SCHEME_HTTPS:
+      return config->trust_windows_roots == 1 &&
+        (
+          config->server_auth == SUBVERSIONR_BRIDGE_REMOTE_AUTH_ANONYMOUS ||
+          config->server_auth == SUBVERSIONR_BRIDGE_REMOTE_AUTH_BASIC
+        );
+    case SUBVERSIONR_BRIDGE_REMOTE_SCHEME_SVN:
+      return config->trust_windows_roots == 0 &&
+        (
+          config->server_auth == SUBVERSIONR_BRIDGE_REMOTE_AUTH_ANONYMOUS ||
+          config->server_auth == SUBVERSIONR_BRIDGE_REMOTE_AUTH_CRAM_MD5
+        );
+    default:
+      return 0;
+  }
+}
+
+int subversionr_bridge_remote_context_create(
+  const subversionr_bridge_remote_config_v1 *config,
+  subversionr_bridge_remote_context **context
+) {
+  if (context == NULL || !bridge_remote_config_is_valid(config)) {
+    return 1;
+  }
+  *context = NULL;
+
+  int process_status = bridge_initialize_process();
+  if (process_status != 0) {
+    return process_status;
+  }
+
+  apr_pool_t *pool = NULL;
+  if (apr_pool_create(&pool, NULL) != APR_SUCCESS) {
+    return 3;
+  }
+
+  apr_hash_t *config_hash = apr_hash_make(pool);
+  svn_config_t *client_config = NULL;
+  svn_config_t *servers_config = NULL;
+  svn_error_t *err = svn_config_create2(&client_config, FALSE, FALSE, pool);
+  if (err == NULL) {
+    err = svn_config_create2(&servers_config, FALSE, FALSE, pool);
+  }
+  if (err != NULL) {
+    svn_error_clear(err);
+    apr_pool_destroy(pool);
+    return 6;
+  }
+
+  svn_config_set_bool(
+    client_config,
+    SVN_CONFIG_SECTION_AUTH,
+    SVN_CONFIG_OPTION_STORE_AUTH_CREDS,
+    FALSE
+  );
+  svn_config_set_bool(
+    client_config,
+    SVN_CONFIG_SECTION_AUTH,
+    SVN_CONFIG_OPTION_STORE_PASSWORDS,
+    FALSE
+  );
+  svn_config_set(
+    client_config,
+    SVN_CONFIG_SECTION_AUTH,
+    SVN_CONFIG_OPTION_PASSWORD_STORES,
+    ""
+  );
+
+  const char *http_auth_types =
+    config->server_auth == SUBVERSIONR_BRIDGE_REMOTE_AUTH_BASIC ? "Basic" : "";
+  svn_config_set(
+    servers_config,
+    SVN_CONFIG_SECTION_GLOBAL,
+    SVN_CONFIG_OPTION_HTTP_AUTH_TYPES,
+    http_auth_types
+  );
+  apr_int64_t timeout_seconds = (apr_int64_t)((config->timeout_ms + 999) / 1000);
+  svn_config_set_int64(
+    servers_config,
+    SVN_CONFIG_SECTION_GLOBAL,
+    SVN_CONFIG_OPTION_HTTP_TIMEOUT,
+    timeout_seconds
+  );
+  svn_config_set_bool(
+    servers_config,
+    SVN_CONFIG_SECTION_GLOBAL,
+    SVN_CONFIG_OPTION_SSL_TRUST_DEFAULT_CA,
+    config->trust_windows_roots ? TRUE : FALSE
+  );
+
+  apr_hash_set(
+    config_hash,
+    SVN_CONFIG_CATEGORY_CONFIG,
+    APR_HASH_KEY_STRING,
+    client_config
+  );
+  apr_hash_set(
+    config_hash,
+    SVN_CONFIG_CATEGORY_SERVERS,
+    APR_HASH_KEY_STRING,
+    servers_config
+  );
+
+  svn_client_ctx_t *ctx = NULL;
+  err = svn_client_create_context2(&ctx, config_hash, pool);
+  if (err != NULL) {
+    svn_error_clear(err);
+    apr_pool_destroy(pool);
+    return 4;
+  }
+
+  apr_array_header_t *providers = apr_array_make(
+    pool,
+    0,
+    sizeof(svn_auth_provider_object_t *)
+  );
+  svn_auth_baton_t *auth_baton = NULL;
+  svn_auth_open(&auth_baton, providers, pool);
+  ctx->auth_baton = auth_baton;
+
+  subversionr_bridge_remote_context *created = apr_pcalloc(
+    pool,
+    sizeof(subversionr_bridge_remote_context)
+  );
+  created->pool = pool;
+  created->ctx = ctx;
+  created->inspection.abi_version = SUBVERSIONR_BRIDGE_REMOTE_CONFIG_ABI_VERSION;
+  created->inspection.category_mask =
+    SUBVERSIONR_BRIDGE_REMOTE_CATEGORY_CONFIG |
+    SUBVERSIONR_BRIDGE_REMOTE_CATEGORY_SERVERS;
+  created->inspection.option_mask =
+    SUBVERSIONR_BRIDGE_REMOTE_OPTION_STORE_AUTH_CREDS |
+    SUBVERSIONR_BRIDGE_REMOTE_OPTION_STORE_PASSWORDS |
+    SUBVERSIONR_BRIDGE_REMOTE_OPTION_PASSWORD_STORES |
+    SUBVERSIONR_BRIDGE_REMOTE_OPTION_HTTP_AUTH_TYPES |
+    SUBVERSIONR_BRIDGE_REMOTE_OPTION_HTTP_TIMEOUT |
+    SUBVERSIONR_BRIDGE_REMOTE_OPTION_SSL_TRUST_DEFAULT_CA;
+  created->inspection.provider_mask = 0;
+  created->inspection.forbidden_input_mask = 0;
+  *context = created;
+  return 0;
+}
+
+int subversionr_bridge_remote_context_inspect(
+  const subversionr_bridge_remote_context *context,
+  subversionr_bridge_remote_config_inspection *inspection
+) {
+  if (context == NULL || inspection == NULL) {
+    return 1;
+  }
+  *inspection = context->inspection;
+  return 0;
+}
+
+void subversionr_bridge_remote_context_destroy(
+  subversionr_bridge_remote_context *context
+) {
+  if (context == NULL) {
+    return;
+  }
+  apr_pool_t *pool = context->pool;
+  apr_pool_destroy(pool);
 }
 
 int subversionr_bridge_runtime_create(subversionr_bridge_runtime **runtime) {

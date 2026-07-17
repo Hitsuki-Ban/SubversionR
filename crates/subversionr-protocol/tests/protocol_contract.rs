@@ -5,12 +5,61 @@ use subversionr_protocol::{
     HistoryLogChangedPath, HistoryLogEntry, HistoryLogResponse, InitializeResponse, LockInfo,
     OperationFailureCause, OperationFailureDiagnostics, OperationReconcileHint,
     OperationRunResponse, OperationSummary, OperationWarning, PropertiesListResponse,
-    PropertyEntry, ProtocolVersion, RepositoryCheckoutParams, RepositoryCheckoutRevision,
-    RepositoryCloseResponse, RepositoryDiscoverResponse, RepositoryDiscoveryCandidate,
-    RepositoryIdentity, StatusCoverageScope, StatusDelta, StatusEntry, StatusRefreshTarget,
-    StatusSnapshot, StatusSummary, StatusSummaryDelta, SvnErrorDiagnosticEntry,
-    SvnErrorDiagnostics, current_platform, default_cache_schema, default_capabilities,
+    PropertyEntry, ProtocolVersion, RemoteOperationEnvelope, RepositoryCheckoutParams,
+    RepositoryCheckoutRevision, RepositoryCloseResponse, RepositoryDiscoverResponse,
+    RepositoryDiscoveryCandidate, RepositoryIdentity, StatusCoverageScope, StatusDelta,
+    StatusEntry, StatusRefreshTarget, StatusSnapshot, StatusSummary, StatusSummaryDelta,
+    SvnErrorDiagnosticEntry, SvnErrorDiagnostics, current_platform, default_cache_schema,
+    default_capabilities,
 };
+
+#[test]
+fn remote_operation_envelope_rejects_unknown_fields_versions_and_enums() {
+    let valid = serde_json::json!({
+        "version": 1,
+        "operationId": "01234567-89ab-cdef-0123-456789abcdef",
+        "intent": "foreground",
+        "interaction": "allowed",
+        "timeoutMs": 30000,
+        "workspaceTrust": "trusted",
+        "trustEpoch": 1,
+        "profile": {
+            "schema": "subversionr.remote-profile.v1",
+            "profileId": "corp-svn",
+            "authority": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 },
+            "serverAuth": "basic",
+            "serverAccount": { "mode": "fixed", "username": "alice" },
+            "serverCredentialPersistence": "secretStorage",
+            "tls": { "trust": "windowsRootsThenBroker" },
+            "proxy": "none",
+            "ssh": "none",
+            "redirectPolicy": "rejectAll"
+        },
+        "expectedOrigin": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 }
+    });
+    serde_json::from_value::<RemoteOperationEnvelope>(valid.clone())
+        .expect("the strict v1 envelope should deserialize");
+
+    for invalid in [
+        {
+            let mut value = valid.clone();
+            value["expectedProxy"] = serde_json::Value::Null;
+            value
+        },
+        {
+            let mut value = valid.clone();
+            value["profile"]["unknown"] = serde_json::json!(true);
+            value
+        },
+        {
+            let mut value = valid.clone();
+            value["intent"] = serde_json::json!("automatic");
+            value
+        },
+    ] {
+        assert!(serde_json::from_value::<RemoteOperationEnvelope>(invalid).is_err());
+    }
+}
 
 #[test]
 fn operation_failure_diagnostics_serialize_strict_safe_shape() {
@@ -43,13 +92,14 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
         "1.14.5".to_string(),
         current_platform(),
         default_capabilities(),
+        1,
     );
 
     assert_eq!(
         response.protocol,
         ProtocolVersion {
             major: 1,
-            minor: 30
+            minor: 31
         }
     );
     assert_eq!(response.cache_schema, default_cache_schema());
@@ -94,6 +144,9 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
     assert!(response.capabilities.diagnostics_get);
     assert!(response.capabilities.credential_request);
     assert!(response.capabilities.certificate_request);
+    assert!(response.capabilities.remote_operation_envelope);
+    assert!(response.capabilities.trusted_config_snapshot);
+    assert_eq!(response.acknowledged_trust_epoch, 1);
 }
 
 #[test]
@@ -104,12 +157,13 @@ fn initialize_response_serializes_stable_wire_field_names() {
         "1.14.5".to_string(),
         current_platform(),
         default_capabilities(),
+        1,
     );
 
     let json = serde_json::to_value(response).expect("initialize response must serialize");
 
     assert_eq!(json["protocol"]["major"], 1);
-    assert_eq!(json["protocol"]["minor"], 30);
+    assert_eq!(json["protocol"]["minor"], 31);
     assert_eq!(json["cacheSchema"]["schemaId"], "subversionr.cache.v1");
     assert_eq!(json["cacheSchema"]["version"], 1);
     assert_eq!(json["cacheSchema"]["rollback"], "delete-and-reconcile");
@@ -157,6 +211,9 @@ fn initialize_response_serializes_stable_wire_field_names() {
     assert_eq!(json["capabilities"]["diagnosticsGet"], true);
     assert_eq!(json["capabilities"]["credentialRequest"], true);
     assert_eq!(json["capabilities"]["certificateRequest"], true);
+    assert_eq!(json["capabilities"]["remoteOperationEnvelope"], true);
+    assert_eq!(json["capabilities"]["trustedConfigSnapshot"], true);
+    assert_eq!(json["acknowledgedTrustEpoch"], 1);
     assert!(json["capabilities"].get("authCallbacks").is_none());
 }
 

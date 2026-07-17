@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { encodeContentLengthFrame } from "../src/transport/framing";
+import { decodeContentLengthFrame, encodeContentLengthFrame } from "../src/transport/framing";
 import {
   JsonRpcRequestCancelledError,
   JsonRpcStreamClient,
@@ -35,6 +35,93 @@ describe("JsonRpcStreamClient", () => {
 
     await expect(second).resolves.toBe("second-result");
     await expect(first).resolves.toBe("first-result");
+  });
+
+  it("serializes outbound frames behind writable backpressure", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const write = vi.spyOn(stdin, "write").mockReturnValueOnce(false).mockReturnValue(true);
+    const client = new JsonRpcStreamClient({ readable: stdout, writable: stdin });
+
+    const first = client.sendRequest<string>("first", {});
+    const second = client.sendRequest<string>("second", {});
+
+    expect(outboundMessages(write)).toEqual([{ jsonrpc: "2.0", id: 1, method: "first", params: {} }]);
+
+    stdin.emit("drain");
+
+    expect(outboundMessages(write)).toEqual([
+      { jsonrpc: "2.0", id: 1, method: "first", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "second", params: {} },
+    ]);
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "first-result" }));
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 2, result: "second-result" }));
+    await expect(first).resolves.toBe("first-result");
+    await expect(second).resolves.toBe("second-result");
+    client.dispose();
+  });
+
+  it("preserves request and cancellation frame order while backpressured", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const write = vi.spyOn(stdin, "write").mockReturnValueOnce(false).mockReturnValue(true);
+    const client = new JsonRpcStreamClient({ readable: stdout, writable: stdin });
+    const controller = new AbortController();
+
+    const request = client.sendRequest("status/refresh", {}, { signal: controller.signal });
+    controller.abort();
+    const followUp = client.sendRequest("shutdown", {});
+    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+
+    expect(outboundMessages(write)).toEqual([
+      { jsonrpc: "2.0", id: 1, method: "status/refresh", params: {} },
+    ]);
+
+    stdin.emit("drain");
+
+    expect(outboundMessages(write)).toEqual([
+      { jsonrpc: "2.0", id: 1, method: "status/refresh", params: {} },
+      { jsonrpc: "2.0", method: "$/cancelRequest", params: { id: 1 } },
+      { jsonrpc: "2.0", id: 2, method: "shutdown", params: {} },
+    ]);
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 2, result: { accepted: true } }));
+    await expect(followUp).resolves.toEqual({ accepted: true });
+    client.dispose();
+  });
+
+  it("queues daemon initiated responses behind earlier backpressured frames", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const write = vi.spyOn(stdin, "write").mockReturnValueOnce(false).mockReturnValue(true);
+    const client = new JsonRpcStreamClient({
+      readable: stdout,
+      writable: stdin,
+      requestHandler: () => ({ action: "cancel" }),
+    });
+
+    const blocker = client.sendRequest("initialize", {});
+    stdout.write(
+      framePayload({
+        jsonrpc: "2.0",
+        id: 9,
+        method: "credentials/request",
+        params: { requestId: "cred-1" },
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(outboundMessages(write)).toEqual([
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    ]);
+
+    stdin.emit("drain");
+
+    expect(outboundMessages(write)).toEqual([
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+      { jsonrpc: "2.0", id: 9, result: { action: "cancel" } },
+    ]);
+    client.dispose(new Error("test complete"));
+    await expect(blocker).rejects.toThrow("test complete");
   });
 
   it("sends a cancel notification and ignores a later response when an outbound request is aborted", async () => {
@@ -389,6 +476,12 @@ async function readFrame(stream: PassThrough): Promise<string> {
 
 function framePayload(payload: unknown): string {
   return encodeContentLengthFrame(JSON.stringify(payload));
+}
+
+function outboundMessages(write: ReturnType<typeof vi.spyOn>): unknown[] {
+  return write.mock.calls.map((call: unknown[]) =>
+    JSON.parse(decodeContentLengthFrame(String(call[0]))) as unknown,
+  );
 }
 
 async function flushMicrotasks(): Promise<void> {
