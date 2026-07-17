@@ -24,3 +24,4 @@ These Architecture Decision Records (ADRs) document the accepted architectural b
 - [ADR-010: Credential Storage](ADR-010-credential-storage.md)
 - [ADR-011: Cache Source of Truth](ADR-011-cache-source-of-truth.md)
 - [ADR-012: SVN Terminology](ADR-012-svn-terminology.md)
+- [ADR-013: Disposable Remote Operation Workers](ADR-013-disposable-remote-operation-workers.md)
