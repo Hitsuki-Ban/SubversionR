@@ -21,6 +21,8 @@ $m8RemoteSettlementOpenSslConfig = Join-Path $repoRoot "native\feasibility\m8-re
 $m8RemoteSettlementReadme = Join-Path $repoRoot "native\feasibility\m8-remote-settlement\README.md"
 $m8OpenSshProbeScript = Join-Path $repoRoot "scripts\research\m8-i1-openssh-probe.ps1"
 $m8OpenSshKeyscanFixture = Join-Path $repoRoot "scripts\research\fixtures\m8-i1\ssh-keyscan-ed25519.txt"
+$descendantWcActivationProbeScript = Join-Path $repoRoot "scripts\research\probe-descendant-wc-activation.ps1"
+$descendantWcActivationEvidence = Join-Path $repoRoot "docs\research\evidence\descendant-wc-activation-vscode-1.129.0-win32-x64.json"
 $ciWorkflow = Join-Path $repoRoot ".github\workflows\ci.yml"
 $fastPrWorkflow = Join-Path $repoRoot ".github\workflows\pr-fast.yml"
 $packageJsonPath = Join-Path $repoRoot "package.json"
@@ -259,16 +261,19 @@ try {
     $m8RemoteSettlementOpenSslConfig,
     $m8RemoteSettlementReadme,
     $m8OpenSshProbeScript,
-    $m8OpenSshKeyscanFixture
+    $m8OpenSshKeyscanFixture,
+    $descendantWcActivationProbeScript,
+    $descendantWcActivationEvidence
   )) {
-    Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "M8 I1 probe artifact should exist: $path"
+    Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Native/research probe artifact should exist: $path"
   }
 
   foreach ($scriptPath in @(
     $smokeM8RemoteSettlementScript,
     $smokeM8RemoteSettlementFixturesScript,
     $m8RemoteSettlementHttpFixture,
-    $m8OpenSshProbeScript
+    $m8OpenSshProbeScript,
+    $descendantWcActivationProbeScript
   )) {
     $tokens = $null
     $parseErrors = $null
@@ -277,7 +282,7 @@ try {
       [ref]$tokens,
       [ref]$parseErrors
     )
-    Assert-Equal 0 $parseErrors.Count "M8 I1 PowerShell probe should parse: $scriptPath"
+    Assert-Equal 0 $parseErrors.Count "Native/research PowerShell probe should parse: $scriptPath"
   }
 
   $settlementWrapperText = Get-Content -Raw -LiteralPath $smokeM8RemoteSettlementScript
@@ -323,6 +328,111 @@ try {
   Assert-True ($openSshProbeText.Contains('serverResidueOracle = "notProbed"')) "M8 OpenSSH probe must not overstate the server-side residue oracle."
   Assert-True (-not $openSshProbeText.Contains('ReadToEndAsync')) "M8 OpenSSH probe must not buffer unbounded child output before checking its limit."
   Assert-True ($openSshProbeText.Contains('${FailurePrefix}_OUTPUT_TOO_LARGE')) "M8 OpenSSH probe should fail at its streaming child-output limit."
+
+  $descendantWcActivationProbeText = Get-Content -Raw -LiteralPath $descendantWcActivationProbeScript
+  Assert-True ($descendantWcActivationProbeText.Contains('[ValidateSet("Run", "VerifyEvidence")]')) "Descendant-WC activation probe should expose explicit run and offline verification modes."
+  Assert-True ($descendantWcActivationProbeText.Contains('125df4672b8a6a34975303c6b0baa124e560a4f7')) "Descendant-WC activation probe should pin the exact tested VS Code commit."
+  Assert-True ($descendantWcActivationProbeText.Contains('productClaim = $false')) "Descendant-WC activation evidence must remain research-only."
+  Assert-True ($descendantWcActivationProbeText.Contains('installedProbes')) "Descendant-WC activation evidence should prove every probe exists inside each Extension Host session."
+  Assert-True ($descendantWcActivationProbeText.Contains('definitionSha256') -and $descendantWcActivationProbeText.Contains('extensionJsSha256')) "Descendant-WC activation evidence should bind installed probes to offline-recomputable definition and source hashes."
+  Assert-True (-not $descendantWcActivationProbeText.Contains('ReadToEndAsync')) "Descendant-WC activation probe must not buffer unbounded child output."
+  & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+    -Mode VerifyEvidence `
+    -EvidencePath $descendantWcActivationEvidence
+  Assert-Equal 0 $LASTEXITCODE "Committed descendant-WC activation evidence should pass offline verification."
+
+  $descendantWcEvidenceRoot = Split-Path -Parent $descendantWcActivationEvidence
+  $descendantWcTamperedEvidence = Join-Path $descendantWcEvidenceRoot ".native-test-tampered-$([Guid]::NewGuid().ToString('N')).json"
+  $descendantWcWrongVersionEvidence = Join-Path $descendantWcEvidenceRoot ".native-test-wrong-version-$([Guid]::NewGuid().ToString('N')).json"
+  $descendantWcWrongVersionWorkRoot = Join-Path $repoRoot ".cache\research\native-test-wrong-version-$([Guid]::NewGuid().ToString('N'))"
+  $descendantWcLargeOutputEvidence = Join-Path $descendantWcEvidenceRoot ".native-test-large-output-$([Guid]::NewGuid().ToString('N')).json"
+  $descendantWcLargeOutputWorkRoot = Join-Path $repoRoot ".cache\research\native-test-large-output-$([Guid]::NewGuid().ToString('N'))"
+  try {
+    $tamperedEvidence = Get-Content -Raw -LiteralPath $descendantWcActivationEvidence | ConvertFrom-Json
+    $tamperedEvidence.environment.vscodeVersion = "1.129.1"
+    [IO.File]::WriteAllText($descendantWcTamperedEvidence, ($tamperedEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+        -Mode VerifyEvidence `
+        -EvidencePath $descendantWcTamperedEvidence
+    } "evidence.environment.vscodeVersion" "Descendant-WC evidence verification should reject a different VS Code version."
+
+    $tamperedEvidence = Get-Content -Raw -LiteralPath $descendantWcActivationEvidence | ConvertFrom-Json
+    $tamperedEvidence.runs[1].cases[0].active = @()
+    [IO.File]::WriteAllText($descendantWcTamperedEvidence, ($tamperedEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+        -Mode VerifyEvidence `
+        -EvidencePath $descendantWcTamperedEvidence
+    } "active expected 1 entries" "Descendant-WC evidence verification should reject a tampered activation matrix."
+
+    $tamperedEvidence = Get-Content -Raw -LiteralPath $descendantWcActivationEvidence | ConvertFrom-Json
+    $tamperedEvidence.runs[2].cases[1].installedProbes = @($tamperedEvidence.runs[2].cases[1].installedProbes | Select-Object -First 4)
+    [IO.File]::WriteAllText($descendantWcTamperedEvidence, ($tamperedEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+        -Mode VerifyEvidence `
+        -EvidencePath $descendantWcTamperedEvidence
+    } "installedProbes count expected '5'" "Descendant-WC evidence verification should reject a session that does not prove all five installed probes."
+
+    $tamperedEvidence = Get-Content -Raw -LiteralPath $descendantWcActivationEvidence | ConvertFrom-Json
+    $tamperedEvidence.fixtures[1].treeSha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+    [IO.File]::WriteAllText($descendantWcTamperedEvidence, ($tamperedEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+        -Mode VerifyEvidence `
+        -EvidencePath $descendantWcTamperedEvidence
+    } "evidence.fixtures[1].treeSha256" "Descendant-WC evidence verification should reject a tampered fixture hash."
+
+    $tamperedEvidence = Get-Content -Raw -LiteralPath $descendantWcActivationEvidence | ConvertFrom-Json
+    $tamperedEvidence.probes[0].definitionSha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+    [IO.File]::WriteAllText($descendantWcTamperedEvidence, ($tamperedEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+        -Mode VerifyEvidence `
+        -EvidencePath $descendantWcTamperedEvidence
+    } "evidence.probes[0].definitionSha256" "Descendant-WC evidence verification should reject a probe definition hash that cannot be recomputed."
+
+    $tamperedEvidence = Get-Content -Raw -LiteralPath $descendantWcActivationEvidence | ConvertFrom-Json
+    $tamperedEvidence.nonClaims = @($tamperedEvidence.nonClaims | Select-Object -First 2)
+    [IO.File]::WriteAllText($descendantWcTamperedEvidence, ($tamperedEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+        -Mode VerifyEvidence `
+        -EvidencePath $descendantWcTamperedEvidence
+    } "evidence.nonClaims expected 3 entries" "Descendant-WC evidence verification should reject missing research non-claims."
+
+    $fakeCodeCli = Join-Path $tempRoot "fake-code-wrong-version.cmd"
+    $fakeCodeLog = Join-Path $tempRoot "fake-code-wrong-version.log"
+    "@echo off`r`necho %*>>`"$fakeCodeLog`"`r`necho 1.128.0`r`necho 0000000000000000000000000000000000000000`r`necho x64`r`nexit /b 0`r`n" |
+      Set-Content -LiteralPath $fakeCodeCli -Encoding ascii -NoNewline
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+        -Mode Run `
+        -CodeCliPath $fakeCodeCli `
+        -WorkRoot $descendantWcWrongVersionWorkRoot `
+        -EvidencePath $descendantWcWrongVersionEvidence
+    } "VS Code version expected '1.129.0'" "Descendant-WC runner should reject the wrong VS Code binary before starting a GUI session."
+    Assert-Equal "--version" (Get-Content -Raw -LiteralPath $fakeCodeLog).Trim() "Wrong-version rejection should invoke only the Code version probe."
+
+    $fakeLargeOutputCodeCli = Join-Path $tempRoot "fake-code-large-output.cmd"
+    @'
+@echo off
+for /L %%i in (1,1,8192) do echo 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+exit /b 0
+'@ | Set-Content -LiteralPath $fakeLargeOutputCodeCli -Encoding ascii -NoNewline
+    Assert-NativeCommandFailsContaining {
+      & pwsh -NoProfile -ExecutionPolicy Bypass -File $descendantWcActivationProbeScript `
+        -Mode Run `
+        -CodeCliPath $fakeLargeOutputCodeCli `
+        -WorkRoot $descendantWcLargeOutputWorkRoot `
+        -EvidencePath $descendantWcLargeOutputEvidence
+    } "VS Code version probe exceeded the 262144 byte output limit" "Descendant-WC runner should reject fast oversized output even when the process exits between polling intervals."
+  }
+  finally {
+    Remove-Item -LiteralPath $descendantWcTamperedEvidence, $descendantWcWrongVersionEvidence, $descendantWcLargeOutputEvidence -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $descendantWcWrongVersionWorkRoot, $descendantWcLargeOutputWorkRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
 
   $deterministicPePath = Join-Path $tempRoot "deterministic.dll"
   New-TestPeFile -Path $deterministicPePath -DebugType 16
