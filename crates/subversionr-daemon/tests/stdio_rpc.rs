@@ -3785,7 +3785,8 @@ fn stdio_eof_disconnects_an_active_remote_worker_before_returning() {
 fn stdio_remote_worker_auth_wait_is_interrupted_by_outer_cancellation() {
     let worker = Arc::new(AuthWaitingRemoteWorker::default());
     let operation_id = "41234567-89ab-4def-8123-456789abcdef";
-    let reader = DelayedChunksReader::new(
+    let stage = Arc::new(AtomicUsize::new(0));
+    let reader = BrokerRoundTripReader::new(
         vec![
             [
                 frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
@@ -3795,10 +3796,10 @@ fn stdio_remote_worker_auth_wait_is_interrupted_by_outer_cancellation() {
             frame(r#"{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":2}}"#),
             frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
         ],
-        Duration::from_millis(25),
-        Duration::from_millis(50),
+        vec![1, 3],
+        stage.clone(),
     );
-    let mut output = Vec::new();
+    let mut output = BrokerRoundTripWriter::new(stage);
     let started = Instant::now();
 
     run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
@@ -3806,7 +3807,7 @@ fn stdio_remote_worker_auth_wait_is_interrupted_by_outer_cancellation() {
 
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(worker.started.load(Ordering::SeqCst));
-    let responses = decode_frames(&output).expect("responses should remain framed");
+    let responses = decode_frames(output.as_bytes()).expect("responses should remain framed");
     let checkout = responses
         .iter()
         .find(|response| response["id"] == 2)
@@ -3818,7 +3819,8 @@ fn stdio_remote_worker_auth_wait_is_interrupted_by_outer_cancellation() {
 fn stdio_remote_worker_auth_wait_is_interrupted_by_trust_revoke() {
     let worker = Arc::new(AuthWaitingRemoteWorker::default());
     let operation_id = "51234567-89ab-4def-8123-456789abcdef";
-    let reader = DelayedChunksReader::new(
+    let stage = Arc::new(AtomicUsize::new(0));
+    let reader = BrokerRoundTripReader::new(
         vec![
             [
                 frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
@@ -3828,10 +3830,10 @@ fn stdio_remote_worker_auth_wait_is_interrupted_by_trust_revoke() {
             frame(r#"{"jsonrpc":"2.0","id":3,"method":"workspaceTrust/update","params":{"trusted":false,"trustEpoch":2}}"#),
             frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
         ],
-        Duration::from_millis(25),
-        Duration::from_millis(50),
+        vec![1, 3],
+        stage.clone(),
     );
-    let mut output = Vec::new();
+    let mut output = BrokerRoundTripWriter::new(stage);
     let started = Instant::now();
 
     run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
@@ -3839,7 +3841,7 @@ fn stdio_remote_worker_auth_wait_is_interrupted_by_trust_revoke() {
 
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(worker.auth_wait_cancelled.load(Ordering::SeqCst));
-    let responses = decode_frames(&output).expect("responses should remain framed");
+    let responses = decode_frames(output.as_bytes()).expect("responses should remain framed");
     assert!(responses.iter().any(|response| {
         response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_CANCELLED"
     }));
@@ -4233,14 +4235,6 @@ impl Read for DelayedSecondChunkReader {
     }
 }
 
-struct DelayedChunksReader {
-    chunks: Vec<io::Cursor<Vec<u8>>>,
-    next_chunk: usize,
-    chunk_delay: Duration,
-    eof_delay: Duration,
-    eof_delayed: bool,
-}
-
 struct BrokerRoundTripReader {
     chunks: Vec<io::Cursor<Vec<u8>>>,
     gates: Vec<usize>,
@@ -4335,41 +4329,6 @@ impl Read for BrokerRoundTripReader {
             self.next_chunk += 1;
             if let Some(required) = self.gates.get(self.next_chunk - 1) {
                 self.wait_for_stage(*required)?;
-            }
-        }
-    }
-}
-
-impl DelayedChunksReader {
-    fn new(chunks: Vec<Vec<u8>>, chunk_delay: Duration, eof_delay: Duration) -> Self {
-        assert!(!chunks.is_empty());
-        Self {
-            chunks: chunks.into_iter().map(io::Cursor::new).collect(),
-            next_chunk: 0,
-            chunk_delay,
-            eof_delay,
-            eof_delayed: false,
-        }
-    }
-}
-
-impl Read for DelayedChunksReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        loop {
-            if self.next_chunk >= self.chunks.len() {
-                if !self.eof_delayed {
-                    self.eof_delayed = true;
-                    thread::sleep(self.eof_delay);
-                }
-                return Ok(0);
-            }
-            let bytes_read = self.chunks[self.next_chunk].read(buffer)?;
-            if bytes_read > 0 {
-                return Ok(bytes_read);
-            }
-            self.next_chunk += 1;
-            if self.next_chunk < self.chunks.len() {
-                thread::sleep(self.chunk_delay);
             }
         }
     }
