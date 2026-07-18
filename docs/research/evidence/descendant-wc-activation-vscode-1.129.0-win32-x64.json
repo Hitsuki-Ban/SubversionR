@@ -1,0 +1,495 @@
+{
+  "schema": "subversionr.research.descendant-wc-activation.v1",
+  "generatedAt": "2026-07-18T05:03:37.1721478+00:00",
+  "productClaim": false,
+  "source": "installed-vsix-extension-host",
+  "environment": {
+    "platform": "win32",
+    "architecture": "x64",
+    "vscodeVersion": "1.129.0",
+    "vscodeCommit": "125df4672b8a6a34975303c6b0baa124e560a4f7",
+    "vscodeArchitecture": "x64"
+  },
+  "probes": [
+    {
+      "id": "subversionr-research.descendant-wc-exact",
+      "activationEvent": "workspaceContains:.svn/wc.db",
+      "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+      "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+    },
+    {
+      "id": "subversionr-research.descendant-wc-glob-file",
+      "activationEvent": "workspaceContains:**/.svn/wc.db",
+      "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+      "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+    },
+    {
+      "id": "subversionr-research.descendant-wc-glob-directory",
+      "activationEvent": "workspaceContains:**/.svn",
+      "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+      "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+    },
+    {
+      "id": "subversionr-research.descendant-wc-one-level",
+      "activationEvent": "workspaceContains:*/.svn",
+      "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+      "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+    },
+    {
+      "id": "subversionr-research.descendant-wc-two-level",
+      "activationEvent": "workspaceContains:*/*/.svn",
+      "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+      "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "wc-root",
+      "sentinel": ".svn/wc.db",
+      "treeSha256": "fb00d4e8ff09eb80c24b175ca2a4454bef5a1a0b2006220180166632d191c41c"
+    },
+    {
+      "id": "parent-ws",
+      "sentinel": "child/.svn/wc.db",
+      "treeSha256": "91b310df5cbac0303d6630076e47c8d4321e94a4450a745f9b8f4fc4fa4abbd2"
+    },
+    {
+      "id": "no-svn",
+      "sentinel": "plain.txt",
+      "treeSha256": "7c570a0cd36cf7e3cb12f0113398685772cd74d7d75911e466025df76f986fca"
+    }
+  ],
+  "runs": [
+    {
+      "run": 1,
+      "cases": [
+        {
+          "fixture": "wc-root",
+          "active": [
+            "subversionr-research.descendant-wc-exact"
+          ],
+          "markers": [
+            "subversionr-research.descendant-wc-exact"
+          ],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [
+              ".svn/wc.db"
+            ],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        },
+        {
+          "fixture": "parent-ws",
+          "active": [],
+          "markers": [],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [
+              "child/.svn/wc.db"
+            ],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        },
+        {
+          "fixture": "no-svn",
+          "active": [],
+          "markers": [],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "cases": [
+        {
+          "fixture": "wc-root",
+          "active": [
+            "subversionr-research.descendant-wc-exact"
+          ],
+          "markers": [
+            "subversionr-research.descendant-wc-exact"
+          ],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [
+              ".svn/wc.db"
+            ],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        },
+        {
+          "fixture": "parent-ws",
+          "active": [],
+          "markers": [],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [
+              "child/.svn/wc.db"
+            ],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        },
+        {
+          "fixture": "no-svn",
+          "active": [],
+          "markers": [],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        }
+      ]
+    },
+    {
+      "run": 3,
+      "cases": [
+        {
+          "fixture": "wc-root",
+          "active": [
+            "subversionr-research.descendant-wc-exact"
+          ],
+          "markers": [
+            "subversionr-research.descendant-wc-exact"
+          ],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [
+              ".svn/wc.db"
+            ],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        },
+        {
+          "fixture": "parent-ws",
+          "active": [],
+          "markers": [],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [
+              "child/.svn/wc.db"
+            ],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        },
+        {
+          "fixture": "no-svn",
+          "active": [],
+          "markers": [],
+          "installedProbes": [
+            {
+              "id": "subversionr-research.descendant-wc-exact",
+              "source": "extensions-dir",
+              "definitionSha256": "1f6e0050ec646360f24352035c8b840f90f3e41bbfa11ca018e7094b77985ea9",
+              "extensionJsSha256": "2f2457428ed4cd121865878d4297c6d14487f06d974dacb173f13d8674adc3f7"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-file",
+              "source": "extensions-dir",
+              "definitionSha256": "7b9d0025f6672b098c3ce61d120f7927f9ccc50e2c7d762e8b8f22f37a33a256",
+              "extensionJsSha256": "c715d26d46e8752d33686de2f50dc87ece535f53e6d07e644d5fbf3e82b02f75"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-glob-directory",
+              "source": "extensions-dir",
+              "definitionSha256": "9fc72e60ba9d0135a7b7dd424eaad48428dd6523ca8e5ea02e7a2ab18c14fa18",
+              "extensionJsSha256": "3b068ec4d6254e5090b3f6e8eb4f6d99069437f8f4cde4f6913cbfefcd34e983"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-one-level",
+              "source": "extensions-dir",
+              "definitionSha256": "480cac65d503ff1368370028526de611a78688af21e32a494cca1e17b98f7317",
+              "extensionJsSha256": "cfeb3d5623f467b766038c24dc262a1304a90a25406b2a1b72a3e29ad5df5aa1"
+            },
+            {
+              "id": "subversionr-research.descendant-wc-two-level",
+              "source": "extensions-dir",
+              "definitionSha256": "75f4d6e13fbbc6d1a0661dc533111232c0435e5b3f622dd733ece6d6732735d1",
+              "extensionJsSha256": "1daf6beeb6e8388e90cc6f5a12394794b811c784ef5bf31e573093e01ca37cce"
+            }
+          ],
+          "findFiles": {
+            "defaultWcDb": [],
+            "noExcludeWcDb": [],
+            "defaultSvnDirectory": [],
+            "noExcludeSvnDirectory": []
+          }
+        }
+      ]
+    }
+  ],
+  "nonClaims": [
+    "doesNotChangeProductActivationEvents",
+    "doesNotEstablishDescendantWorkingCopySupport",
+    "doesNotCoverRemoteOrUntrustedWorkspaces"
+  ]
+}

@@ -5,6 +5,22 @@ Executed 2026-07-18 by the director per the #36 "Fable packet"; complements the
 source-level analysis recorded on #36 (VS Code commit
 `125df4672b8a6a34975303c6b0baa124e560a4f7`).
 
+The machine-readable evidence is committed at
+[`evidence/descendant-wc-activation-vscode-1.129.0-win32-x64.json`](evidence/descendant-wc-activation-vscode-1.129.0-win32-x64.json).
+It can be reproduced and then checked without launching VS Code with:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/research/probe-descendant-wc-activation.ps1 `
+  -Mode Run `
+  -CodeCliPath "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" `
+  -WorkRoot .cache/research/descendant-wc-activation `
+  -EvidencePath docs/research/evidence/descendant-wc-activation-vscode-1.129.0-win32-x64.json
+
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/research/probe-descendant-wc-activation.ps1 `
+  -Mode VerifyEvidence `
+  -EvidencePath docs/research/evidence/descendant-wc-activation-vscode-1.129.0-win32-x64.json
+```
+
 ## Environment
 
 - VS Code 1.129.0, commit `125df4672b8a6a34975303c6b0baa124e560a4f7` (x64) —
@@ -29,12 +45,12 @@ The wc-root row is decisive: the exact pattern and the file-shaped glob
 describe the same existing file in the same launch, and only the exact
 `exists()` branch fires.
 
-## findFiles differential (diagnostic run inside the activated exact probe)
+## findFiles differential (controller in the same real Extension Host session)
 
 - `findFiles('**/.svn/wc.db', undefined, 10)` -> `[]` (default excludes applied)
-- `findFiles('**/.svn/wc.db', null, 10)` -> finds `.svn/wc.db` at wc-root, and
-  finds **both** `.svn/wc.db` and `child/.svn/wc.db` in the parent fixture —
-  the search engine sees descendant working copies once excludes are disabled.
+- `findFiles('**/.svn/wc.db', null, 10)` -> finds `.svn/wc.db` at wc-root and
+  `child/.svn/wc.db` in the parent fixture — the search engine sees each
+  fixture's working copy once excludes are disabled.
 - `findFiles('**/.svn', undefined | null, 10)` -> `[]` both ways — directory-
   shaped patterns never match regardless of excludes (file search matches
   files; upstream microsoft/vscode#2739).
@@ -88,10 +104,14 @@ Recommended disposition:
 ## Appendix: upstream issue (filed with owner approval)
 
 Filed 2026-07-18 as [microsoft/vscode#326423](https://github.com/microsoft/vscode/issues/326423).
-Triage-bot version check answered same day: reproduced on stable 1.129.1
-(commit `8a7abeba`), and the four cited source files are byte-identical
-between the tested commit and the `1.129.1` tag.
-Original prepared text follows.
+The upstream issue received a same-day report that stable 1.129.1 behaved the
+same and that the cited source files were unchanged. That follow-up is not part
+of this repository's committed installed-host evidence, which remains pinned to
+the fully recorded 1.129.0 binary above.
+The verbatim upstream text below also describes a separate diagnostic workspace
+that contained both root and child sentinels. Its two-result `findFiles` example
+is not one of the three independent fixture cases recorded in the committed
+evidence above. Original prepared text follows.
 
 ## Title
 
