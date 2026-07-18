@@ -236,3 +236,10 @@ to the checkout target and origin operation. They do not satisfy the
 timeout rather than checkout recovery, or the complete `recoveryBlocked` cell,
 which additionally requires restart, explicit disposition confirmation, journal
 clearance, and a subsequent successful checkout.
+
+The installed-negative VSIX/user-data environment uses a bounded disposable
+work root under repository `target/i6n`, separate from the evidence fixture
+tree, so the staged native bridge remains within the reviewed Windows path
+budget. Scenario fixture state and all reportable observations remain under the
+I6 fixture root. The driver verifies the disposable root stays below repository
+`target`, removes it in `finally`, and rejects any cleanup residue.

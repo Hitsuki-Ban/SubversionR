@@ -839,6 +839,11 @@ try {
       'Complete-ProcessStartEventDrain',
       'Get-PackagedNegativeProcessObservation',
       'Get-InstalledNegativeProcessObservation',
+      '"i6n\$([Guid]',
+      'installedNegativeWorkRoot.Length -le 120',
+      '"-FixtureRoot", $scenarioWorkRoot',
+      '"-CheckoutPath", (Join-Path $scenarioWorkRoot "checkout")',
+      'The installed-negative short work root remained after cleanup.',
       'Get-InstalledLocalEventProcessObservation',
       'Start-CountingProxy',
       '$proxyFinalState = Stop-CountingProxy $countingProxy',
@@ -859,6 +864,7 @@ try {
   foreach ($forbiddenObservationText in @(
       'Get-WmiObject',
       'networkAttempts = 1',
+      '"-FixtureRoot", (Join-Path $scenarioRoot "extension-host")',
       'workerDescendantsAfter = 0'
     )) {
     Assert-True (-not $driverText.Contains($forbiddenObservationText)) "Packaged-negative evidence must not contain synthetic/fallback observation '$forbiddenObservationText'."

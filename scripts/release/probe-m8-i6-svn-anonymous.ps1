@@ -1113,6 +1113,7 @@ $installedNegativeContracts = @(
   [pscustomobject]@{
     Scenario = "maliciousRoot"
     FaultScenario = "malicious-root"
+    WorkRoot = "m"
     Code = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
     Reason = "crossAuthorityRejected"
     SettlementCode = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
@@ -1127,6 +1128,7 @@ $installedNegativeContracts = @(
   [pscustomobject]@{
     Scenario = "saslOnly"
     FaultScenario = "sasl-only"
+    WorkRoot = "s"
     Code = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
     Reason = "remoteCapabilityUnsupported"
     SettlementCode = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
@@ -1141,6 +1143,7 @@ $installedNegativeContracts = @(
   [pscustomobject]@{
     Scenario = "greetingStall"
     FaultScenario = "greeting-stall"
+    WorkRoot = "g"
     Code = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
     Reason = "operationDeadlineExceeded"
     SettlementCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
@@ -1155,6 +1158,7 @@ $installedNegativeContracts = @(
   [pscustomobject]@{
     Scenario = "connectedStall"
     FaultScenario = "connected-stall"
+    WorkRoot = "c"
     Code = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
     Reason = "operationDeadlineExceeded"
     SettlementCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
@@ -1167,128 +1171,144 @@ $installedNegativeContracts = @(
     ReposInfoSent = 0
   }
 )
+$repoTargetRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target"))
+$installedNegativeWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6n\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $installedNegativeWorkRoot $repoTargetRoot) "The installed-negative short work root escaped repo target."
+Assert-True ($installedNegativeWorkRoot.Length -le 120) "The installed-negative short work root exceeds the reviewed 120-character budget."
+Assert-True (-not (Test-Path -LiteralPath $installedNegativeWorkRoot)) "The installed-negative short work root already exists."
+New-Item -ItemType Directory -Path $installedNegativeWorkRoot | Out-Null
 $installedNegativeObservations = @()
-foreach ($contract in $installedNegativeContracts) {
-  $scenarioRoot = Join-Path $probeRoot "installed-negative-$($contract.FaultScenario)"
-  $scenarioStatePath = Join-Path $scenarioRoot "fixture-state.json"
-  New-Item -ItemType Directory -Force -Path $scenarioRoot | Out-Null
-  Assert-CandidateProcessAbsent $daemonResolved "The $($contract.FaultScenario) installed-negative preflight"
-  $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved $contract.FaultScenario $scenarioStatePath
-  $processStartSourceIdentifier = "subversionr-m8-i6-installed-negative-$([Guid]::NewGuid().ToString('N'))"
-  $processStartSubscriber = $null
-  $processStartEvents = [System.Collections.Generic.List[object]]::new()
-  $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-  try {
+try {
+  foreach ($contract in $installedNegativeContracts) {
+    $scenarioRoot = Join-Path $probeRoot "installed-negative-$($contract.FaultScenario)"
+    $scenarioWorkRoot = Join-Path $installedNegativeWorkRoot ([string]$contract.WorkRoot)
+    $scenarioStatePath = Join-Path $scenarioRoot "fixture-state.json"
+    New-Item -ItemType Directory -Force -Path $scenarioRoot, $scenarioWorkRoot | Out-Null
+    Assert-CandidateProcessAbsent $daemonResolved "The $($contract.FaultScenario) installed-negative preflight"
+    $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved $contract.FaultScenario $scenarioStatePath
+    $processStartSourceIdentifier = "subversionr-m8-i6-installed-negative-$([Guid]::NewGuid().ToString('N'))"
+    $processStartSubscriber = $null
+    $processStartEvents = [System.Collections.Generic.List[object]]::new()
+    $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     try {
-      Register-CimIndicationEvent `
-        -ClassName Win32_ProcessStartTrace `
-        -SourceIdentifier $processStartSourceIdentifier `
-        -ErrorAction Stop | Out-Null
-    }
-    catch {
-      throw "Win32_ProcessStartTrace is required for the $($contract.FaultScenario) installed-negative process observation: $($_.Exception.Message)"
-    }
-    $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
-    Assert-True ($matchingSubscribers.Count -eq 1) "The $($contract.FaultScenario) installed-negative process-start subscription was not created exactly once."
-    $processStartSubscriber = $matchingSubscribers[0]
-    Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+      try {
+        Register-CimIndicationEvent `
+          -ClassName Win32_ProcessStartTrace `
+          -SourceIdentifier $processStartSourceIdentifier `
+          -ErrorAction Stop | Out-Null
+      }
+      catch {
+        throw "Win32_ProcessStartTrace is required for the $($contract.FaultScenario) installed-negative process observation: $($_.Exception.Message)"
+      }
+      $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
+      Assert-True ($matchingSubscribers.Count -eq 1) "The $($contract.FaultScenario) installed-negative process-start subscription was not created exactly once."
+      $processStartSubscriber = $matchingSubscribers[0]
+      Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
 
-    $negativeRepositoryUrl = "svn://127.0.0.1:$([int]$faultFixture.State.port)/repo/trunk"
-    $installedNegativeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy", "Bypass",
-      "-File", $installedNegativeProbeResolved,
-      "-VsixPath", $vsixResolved,
-      "-CodeCliPath", $codeCliResolved,
-      "-FixtureRoot", (Join-Path $scenarioRoot "extension-host"),
-      "-RepositoryUrl", $negativeRepositoryUrl,
-      "-CheckoutPath", (Join-Path $scenarioRoot "extension-host\checkout"),
-      "-Scenario", ([string]$contract.Scenario),
-      "-OperationTimeoutMilliseconds", ([string]$contract.TimeoutMs),
-      "-ExpectedProductVersion", $ExpectedProductVersion,
-      "-DaemonPath", $daemonResolved,
-      "-BridgePath", $bridgeResolved,
-      "-TimeoutSeconds", "180"
-    ) 240
-    $installedNegativeFailure = $installedNegativeResult.Stderr.Trim()
-    Assert-True (
-      $installedNegativeResult.ExitCode -eq 0 -and
-      $installedNegativeResult.Stderr.Length -eq 0
-    ) "The installed VSIX $($contract.FaultScenario) negative probe failed: $installedNegativeFailure"
-    $installedNegativeReport = Convert-JsonObject $installedNegativeResult.Stdout.Trim() "installed VSIX $($contract.FaultScenario) negative probe stdout"
-    Assert-True (
-      [string]$installedNegativeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-negative.v1" -and
-      [string]$installedNegativeReport.status -ceq "passed" -and
-      [string]$installedNegativeReport.surface -ceq "installed-vsix-extension-host" -and
-      [string]$installedNegativeReport.scenario -ceq [string]$contract.Scenario -and
-      [string]$installedNegativeReport.originCode -ceq [string]$contract.Code -and
-      [string]$installedNegativeReport.originReason -ceq [string]$contract.Reason -and
-      [string]$installedNegativeReport.settlementCode -ceq [string]$contract.SettlementCode -and
-      [string]$installedNegativeReport.settlementReason -ceq [string]$contract.SettlementReason -and
-      [int]$installedNegativeReport.protocol.major -eq 1 -and
-      [int]$installedNegativeReport.protocol.minor -eq 35 -and
-      [int]$installedNegativeReport.authActivity.credentialRequests -eq 0 -and
-      [int]$installedNegativeReport.authActivity.credentialSettlements -eq 0 -and
-      [int]$installedNegativeReport.authActivity.certificateRequests -eq 0 -and
-      [int]$installedNegativeReport.temporaryRootsAfter -eq 0 -and
-      [int]$installedNegativeReport.checkoutJournalEntriesAfter -eq [int]$contract.JournalEntriesAfter -and
-      $installedNegativeReport.diagnosticsRedacted -eq $true -and
-      $installedNegativeReport.candidateDaemonExitedAfter -eq $true
-    ) "The installed VSIX $($contract.FaultScenario) negative observation was incomplete."
+      $negativeRepositoryUrl = "svn://127.0.0.1:$([int]$faultFixture.State.port)/repo/trunk"
+      $installedNegativeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $installedNegativeProbeResolved,
+        "-VsixPath", $vsixResolved,
+        "-CodeCliPath", $codeCliResolved,
+        "-FixtureRoot", $scenarioWorkRoot,
+        "-RepositoryUrl", $negativeRepositoryUrl,
+        "-CheckoutPath", (Join-Path $scenarioWorkRoot "checkout"),
+        "-Scenario", ([string]$contract.Scenario),
+        "-OperationTimeoutMilliseconds", ([string]$contract.TimeoutMs),
+        "-ExpectedProductVersion", $ExpectedProductVersion,
+        "-DaemonPath", $daemonResolved,
+        "-BridgePath", $bridgeResolved,
+        "-TimeoutSeconds", "180"
+      ) 240
+      $installedNegativeFailure = $installedNegativeResult.Stderr.Trim()
+      Assert-True (
+        $installedNegativeResult.ExitCode -eq 0 -and
+        $installedNegativeResult.Stderr.Length -eq 0
+      ) "The installed VSIX $($contract.FaultScenario) negative probe failed: $installedNegativeFailure"
+      $installedNegativeReport = Convert-JsonObject $installedNegativeResult.Stdout.Trim() "installed VSIX $($contract.FaultScenario) negative probe stdout"
+      Assert-True (
+        [string]$installedNegativeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-negative.v1" -and
+        [string]$installedNegativeReport.status -ceq "passed" -and
+        [string]$installedNegativeReport.surface -ceq "installed-vsix-extension-host" -and
+        [string]$installedNegativeReport.scenario -ceq [string]$contract.Scenario -and
+        [string]$installedNegativeReport.originCode -ceq [string]$contract.Code -and
+        [string]$installedNegativeReport.originReason -ceq [string]$contract.Reason -and
+        [string]$installedNegativeReport.settlementCode -ceq [string]$contract.SettlementCode -and
+        [string]$installedNegativeReport.settlementReason -ceq [string]$contract.SettlementReason -and
+        [int]$installedNegativeReport.protocol.major -eq 1 -and
+        [int]$installedNegativeReport.protocol.minor -eq 35 -and
+        [int]$installedNegativeReport.authActivity.credentialRequests -eq 0 -and
+        [int]$installedNegativeReport.authActivity.credentialSettlements -eq 0 -and
+        [int]$installedNegativeReport.authActivity.certificateRequests -eq 0 -and
+        [int]$installedNegativeReport.temporaryRootsAfter -eq 0 -and
+        [int]$installedNegativeReport.checkoutJournalEntriesAfter -eq [int]$contract.JournalEntriesAfter -and
+        $installedNegativeReport.diagnosticsRedacted -eq $true -and
+        $installedNegativeReport.candidateDaemonExitedAfter -eq $true
+      ) "The installed VSIX $($contract.FaultScenario) negative observation was incomplete."
 
-    $faultState = Get-Content -Raw -LiteralPath $scenarioStatePath | ConvertFrom-Json -Depth 16
-    Assert-True (
-      [int]$faultState.connections -eq 1 -and
-      [int]$faultState.greetingSent -eq [int]$contract.GreetingSent -and
-      [int]$faultState.clientResponseReceived -eq [int]$contract.ClientResponseReceived -and
-      [int]$faultState.authRequestSent -eq [int]$contract.AuthRequestSent -and
-      [int]$faultState.reposInfoSent -eq [int]$contract.ReposInfoSent -and
-      [int]$faultState.commandsReceived -eq 0 -and
-      [int]$faultState.followupContacts -eq 0 -and
-      [int]$faultState.suppliedAuthorityConnections -eq 0
-    ) "The installed VSIX $($contract.FaultScenario) network-stage observation was invalid."
-    Complete-ProcessStartEventDrain `
-      $processStartSourceIdentifier `
-      $processStartEvents `
-      $processStartEventKeys `
-      $ProcessStartEventSettlementMilliseconds
-    $processObservation = Get-InstalledNegativeProcessObservation `
-      -AllEvents @($processStartEvents) `
-      -ProbePid ([long]$installedNegativeResult.ProcessId) `
-      -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
-      -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
-      -ForbiddenFixtureProcessNames @(
-        [System.IO.Path]::GetFileName($svnResolved),
-        [System.IO.Path]::GetFileName($svnadminResolved),
-        [System.IO.Path]::GetFileName($svnserveResolved)
-      ) `
-      -SettlementSnapshot (Get-CimProcessSnapshot)
-    Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The installed VSIX $($contract.FaultScenario) product surface invoked a fixture CLI."
-    $installedNegativeObservations += [pscustomobject]@{
-      scenario = [string]$contract.Scenario
-      code = [string]$installedNegativeReport.originCode
-      reason = [string]$installedNegativeReport.originReason
-      settlementCode = [string]$installedNegativeReport.settlementCode
-      settlementReason = [string]$installedNegativeReport.settlementReason
-      networkAttempts = [int]$faultState.connections
-      networkConnections = [int]$faultState.connections
-      followupNetworkContacts = [int]$faultState.followupContacts
-      workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
-      temporaryRootsAfter = [int]$installedNegativeReport.temporaryRootsAfter
-      checkoutJournalEntriesAfter = [int]$installedNegativeReport.checkoutJournalEntriesAfter
-      diagnosticsRedacted = [bool]$installedNegativeReport.diagnosticsRedacted
-      fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+      $faultState = Get-Content -Raw -LiteralPath $scenarioStatePath | ConvertFrom-Json -Depth 16
+      Assert-True (
+        [int]$faultState.connections -eq 1 -and
+        [int]$faultState.greetingSent -eq [int]$contract.GreetingSent -and
+        [int]$faultState.clientResponseReceived -eq [int]$contract.ClientResponseReceived -and
+        [int]$faultState.authRequestSent -eq [int]$contract.AuthRequestSent -and
+        [int]$faultState.reposInfoSent -eq [int]$contract.ReposInfoSent -and
+        [int]$faultState.commandsReceived -eq 0 -and
+        [int]$faultState.followupContacts -eq 0 -and
+        [int]$faultState.suppliedAuthorityConnections -eq 0
+      ) "The installed VSIX $($contract.FaultScenario) network-stage observation was invalid."
+      Complete-ProcessStartEventDrain `
+        $processStartSourceIdentifier `
+        $processStartEvents `
+        $processStartEventKeys `
+        $ProcessStartEventSettlementMilliseconds
+      $processObservation = Get-InstalledNegativeProcessObservation `
+        -AllEvents @($processStartEvents) `
+        -ProbePid ([long]$installedNegativeResult.ProcessId) `
+        -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+        -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+        -ForbiddenFixtureProcessNames @(
+          [System.IO.Path]::GetFileName($svnResolved),
+          [System.IO.Path]::GetFileName($svnadminResolved),
+          [System.IO.Path]::GetFileName($svnserveResolved)
+        ) `
+        -SettlementSnapshot (Get-CimProcessSnapshot)
+      Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The installed VSIX $($contract.FaultScenario) product surface invoked a fixture CLI."
+      $installedNegativeObservations += [pscustomobject]@{
+        scenario = [string]$contract.Scenario
+        code = [string]$installedNegativeReport.originCode
+        reason = [string]$installedNegativeReport.originReason
+        settlementCode = [string]$installedNegativeReport.settlementCode
+        settlementReason = [string]$installedNegativeReport.settlementReason
+        networkAttempts = [int]$faultState.connections
+        networkConnections = [int]$faultState.connections
+        followupNetworkContacts = [int]$faultState.followupContacts
+        workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+        temporaryRootsAfter = [int]$installedNegativeReport.temporaryRootsAfter
+        checkoutJournalEntriesAfter = [int]$installedNegativeReport.checkoutJournalEntriesAfter
+        diagnosticsRedacted = [bool]$installedNegativeReport.diagnosticsRedacted
+        fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+      }
+    }
+    finally {
+      if ($null -ne $processStartSubscriber) {
+        Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+      }
+      Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue |
+        Remove-Event -ErrorAction SilentlyContinue
+      Stop-FaultFixture $faultFixture $contract.FaultScenario
     }
   }
-  finally {
-    if ($null -ne $processStartSubscriber) {
-      Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
-    }
-    Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue |
-      Remove-Event -ErrorAction SilentlyContinue
-    Stop-FaultFixture $faultFixture $contract.FaultScenario
+}
+finally {
+  if (Test-Path -LiteralPath $installedNegativeWorkRoot) {
+    Assert-True (Test-PathWithin $installedNegativeWorkRoot $repoTargetRoot) "The installed-negative cleanup root escaped repo target."
+    Remove-Item -LiteralPath $installedNegativeWorkRoot -Recurse -Force
   }
+  Assert-True (-not (Test-Path -LiteralPath $installedNegativeWorkRoot)) "The installed-negative short work root remained after cleanup."
 }
 Assert-True ($installedNegativeObservations.Count -eq 4) "The installed VSIX malicious-root, SASL-only, greeting-stall, and connected-stall negative probe set was incomplete."
 
