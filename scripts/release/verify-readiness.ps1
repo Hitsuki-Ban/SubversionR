@@ -1539,20 +1539,30 @@ Assert-Terms $backendProcessTests @(
 ) "MIG-008 backend cache schema validation test coverage"
 Assert-Terms $packagedNativeProbe @(
   "startBackendProcess",
+  'activeConnection.sendRequest("repository/checkout"',
   'connection.sendRequest("repository/discover"',
-  "workspaceRoots",
+  'connection.sendRequest("diagnostics/get"',
+  "tempRootCleanup",
+  "sameLaneSubsequent",
+  "remoteWorkerIsolation",
+  "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",
+  "svn.example.invalid",
   "connection.shutdown()",
-  "subversionr.release.packaged-native-compatibility.v1",
+  "subversionr.release.packaged-native-compatibility.v2",
   "APPDATA: options.profileRoot",
   "LOCALAPPDATA: options.profileRoot",
   "USERPROFILE: options.profileRoot",
   "HOME: options.profileRoot"
-) "packaged native startup, protocol, ABI, and read-only bridge probe coverage"
+) "packaged native startup, protocol, ABI, one-operation worker, and subsequent request probe coverage"
 Assert-Terms $packagedNativeProbeVerifier @(
   "backendProcess.js",
   "WaitForExit(30000)",
   '"--profile-root", $profileRoot',
   "SUBVERSIONR_PACKAGED_NATIVE_PROBE_TIMEOUT",
+  "subversionr.release.packaged-native-version-evidence.v2",
+  "remoteWorkerIsolation",
+  "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",
+  "subsequentDiagnostics",
   "ExpectedProductVersion",
   "SUBVERSIONR_PACKAGED_NATIVE_BACKEND_VERSION_MISMATCH",
   "SUBVERSIONR_PACKAGED_NATIVE_BRIDGE_VERSION_MISMATCH"
@@ -1616,10 +1626,11 @@ Assert-Terms $betaCandidateOrchestration @(
 ) "Beta candidate install rollback exact extension contract coverage"
 Assert-Terms $releaseGates @(
   "fail-closed packaged-native startup probe",
-  "read-only libsvn-backed discovery operation",
+  "one-operation remote worker",
+  "subsequent daemon diagnostics request",
   "reject stale protocol daemons",
   "no probe skip switch or compatibility fallback"
-) "packaged native compatibility release gate documentation"
+) "packaged native worker-isolation release gate documentation"
 Assert-Terms $protocolContractTests @(
   'json["cacheSchema"]["schemaId"], "subversionr.cache.v1"',
   'json["cacheSchema"]["version"], 1',
@@ -2651,8 +2662,8 @@ Assert-Terms $protocolContractTests @(
 Assert-Terms $backendProcessTests @(
   "rejects initialize and terminates the sidecar when protocol minor is too old",
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
-  "expectedMinimum: 31"
-) "REP-004 protocol v1.31 startup gate"
+  "expectedMinimum: 32"
+) "REP-004 protocol v1.32 startup gate"
 Assert-Terms $protocolSource @(
   "OperationFailureDiagnostics",
   "OperationFailureCause",

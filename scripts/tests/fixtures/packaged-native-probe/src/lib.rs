@@ -14,6 +14,7 @@ pub fn run_daemon(
     let mut reader = stdin.lock();
     let stdout = io::stdout();
     let mut writer = stdout.lock();
+    let mut remote_worker_operation_completed = false;
 
     loop {
         let Some(request) = read_frame(&mut reader)? else {
@@ -41,6 +42,55 @@ pub fn run_daemon(
                 }),
                 false,
             ),
+            "repository/checkout" => {
+                if strict_remote_checkout_request(&request) {
+                    remote_worker_operation_completed = true;
+                    (
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",
+                                "category": "unsupported",
+                                "messageKey": "error.remote.transportUnsupported",
+                                "args": { "scheme": "https" },
+                                "retryable": false,
+                                "diagnostics": null,
+                            },
+                        }),
+                        false,
+                    )
+                } else {
+                    (
+                        invalid_request(id, "SUBVERSIONR_REMOTE_ENVELOPE_INVALID"),
+                        false,
+                    )
+                }
+            }
+            "diagnostics/get" => {
+                if remote_worker_operation_completed {
+                    (
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocol": { "major": 1, "minor": protocol_minor },
+                                "backendVersion": backend_version,
+                                "bridgeVersion": bridge_version,
+                                "libsvnVersion": "fixture",
+                                "capabilities": initialize_result(protocol_minor, backend_version, bridge_version)["capabilities"].clone(),
+                                "source": "subversionr-daemon",
+                            },
+                        }),
+                        false,
+                    )
+                } else {
+                    (
+                        invalid_request(id, "SUBVERSIONR_REMOTE_WORKER_EVIDENCE_MISSING"),
+                        false,
+                    )
+                }
+            }
             "shutdown" => (
                 json!({
                     "jsonrpc": "2.0",
@@ -66,6 +116,82 @@ pub fn run_daemon(
             return Ok(());
         }
     }
+}
+
+fn strict_remote_checkout_request(request: &Value) -> bool {
+    let Some(params) = request.get("params") else {
+        return false;
+    };
+    let Some(target_path) = params.get("targetPath").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(operation_id) = params
+        .get("remote")
+        .and_then(|remote| remote.get("operationId"))
+        .and_then(Value::as_str)
+        .filter(|operation_id| {
+            matches!(
+                *operation_id,
+                "12700000-0000-4000-8000-000000000003"
+                    | "12700000-0000-4000-8000-000000000004"
+            )
+        })
+    else {
+        return false;
+    };
+    if !target_path.ends_with("packaged-native-worker-target") {
+        return false;
+    }
+    let endpoint = json!({
+        "scheme": "https",
+        "canonicalHost": "svn.example.invalid",
+        "effectivePort": 443,
+    });
+    *params
+        == json!({
+            "url": "https://svn.example.invalid/project/trunk",
+            "targetPath": target_path,
+            "revision": "head",
+            "depth": "infinity",
+            "ignoreExternals": true,
+            "remote": {
+                "version": 1,
+                "operationId": operation_id,
+                "intent": "foreground",
+                "interaction": "forbidden",
+                "timeoutMs": 10000,
+                "workspaceTrust": "trusted",
+                "trustEpoch": 1,
+                "profile": {
+                    "schema": "subversionr.remote-profile.v1",
+                    "profileId": "packaged-native-worker",
+                    "authority": endpoint,
+                    "serverAuth": "anonymous",
+                    "serverAccount": "none",
+                    "serverCredentialPersistence": "secretStorage",
+                    "tls": { "trust": "windowsRootsThenBroker" },
+                    "proxy": "none",
+                    "ssh": "none",
+                    "redirectPolicy": "rejectAll",
+                },
+                "expectedOrigin": endpoint,
+            },
+        })
+}
+
+fn invalid_request(id: Value, code: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "category": "configuration",
+            "messageKey": "error.remote.envelopeInvalid",
+            "args": {},
+            "retryable": false,
+            "diagnostics": null,
+        },
+    })
 }
 
 fn initialize_result(protocol_minor: u64, backend_version: &str, bridge_version: &str) -> Value {
@@ -123,6 +249,7 @@ fn initialize_result(protocol_minor: u64, backend_version: &str, bridge_version:
             "certificateRequest": true,
             "remoteOperationEnvelope": true,
             "trustedConfigSnapshot": true,
+            "remoteWorkerIsolation": true,
         },
         "acknowledgedTrustEpoch": 1,
     })

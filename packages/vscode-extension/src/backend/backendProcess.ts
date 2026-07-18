@@ -11,7 +11,7 @@ import {
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const MINIMUM_PROTOCOL_MINOR = 31;
+const MINIMUM_PROTOCOL_MINOR = 32;
 const EXPECTED_CACHE_SCHEMA_ID = "subversionr.cache.v1";
 const EXPECTED_CACHE_SCHEMA_VERSION = 1;
 const EXPECTED_CACHE_SCHEMA_ROLLBACK = "delete-and-reconcile";
@@ -60,6 +60,7 @@ const REQUIRED_CAPABILITIES: Array<keyof InitializeResult["capabilities"]> = [
   "certificateRequest",
   "remoteOperationEnvelope",
   "trustedConfigSnapshot",
+  "remoteWorkerIsolation",
 ];
 
 export type WorkspaceTrustState = "trusted" | "untrusted";
@@ -168,6 +169,7 @@ export interface InitializeResult {
     certificateRequest: boolean;
     remoteOperationEnvelope: boolean;
     trustedConfigSnapshot: boolean;
+    remoteWorkerIsolation: boolean;
   };
   acknowledgedTrustEpoch: number;
 }
@@ -624,6 +626,10 @@ function parseInitializeResult(rawResult: unknown): InitializeResult {
       trustedConfigSnapshot: requireBoolean(
         capabilities.trustedConfigSnapshot,
         "capabilities.trustedConfigSnapshot",
+      ),
+      remoteWorkerIsolation: requireBoolean(
+        capabilities.remoteWorkerIsolation,
+        "capabilities.remoteWorkerIsolation",
       ),
     },
   };

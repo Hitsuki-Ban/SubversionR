@@ -265,7 +265,7 @@ describe("startBackendProcess", () => {
       jsonRpcResponse(
         request.id,
         initializeResponse({
-          protocol: { major: 1, minor: 30 },
+          protocol: { major: 1, minor: 31 },
         }),
       ),
     );
@@ -275,8 +275,8 @@ describe("startBackendProcess", () => {
       category: "protocol",
       messageKey: "error.backend.protocolMinorUnsupported",
       safeArgs: {
-        expectedMinimum: 31,
-        actual: 30,
+        expectedMinimum: 32,
+        actual: 31,
       },
     });
     expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
@@ -476,6 +476,7 @@ describe("startBackendProcess", () => {
     "certificateRequest",
     "remoteOperationEnvelope",
     "trustedConfigSnapshot",
+    "remoteWorkerIsolation",
   ] as const)(
     "rejects initialize and terminates the sidecar when %s is unavailable",
     async (capability) => {
@@ -919,7 +920,7 @@ function initializeResponse(
 
 function initializeResponseBase() {
   return {
-    protocol: { major: 1, minor: 31 },
+    protocol: { major: 1, minor: 32 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -972,6 +973,7 @@ function initializeResponseBase() {
       certificateRequest: true,
       remoteOperationEnvelope: true,
       trustedConfigSnapshot: true,
+      remoteWorkerIsolation: true,
     },
     acknowledgedTrustEpoch: 1,
   };

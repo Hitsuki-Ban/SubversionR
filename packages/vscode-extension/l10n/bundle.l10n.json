@@ -600,5 +600,9 @@
   "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.": "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.",
   "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.": "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.",
   "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.": "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.",
-  "SubversionR could not acknowledge the Workspace Trust update: {0}": "SubversionR could not acknowledge the Workspace Trust update: {0}"
+  "SubversionR could not acknowledge the Workspace Trust update: {0}": "SubversionR could not acknowledge the Workspace Trust update: {0}",
+  "SubversionR could not start or complete the isolated SVN remote worker. Retry the SVN operation.": "SubversionR could not start or complete the isolated SVN remote worker. Retry the SVN operation.",
+  "The isolated SVN remote operation exceeded its deadline. Retry the operation.": "The isolated SVN remote operation exceeded its deadline. Retry the operation.",
+  "Another isolated SVN operation is still using this working copy. Wait for it to finish and retry.": "Another isolated SVN operation is still using this working copy. Wait for it to finish and retry.",
+  "SubversionR blocked this working copy because isolated worker cleanup could not be verified. Restart VS Code before retrying SVN operations.": "SubversionR blocked this working copy because isolated worker cleanup could not be verified. Restart VS Code before retrying SVN operations."
 }

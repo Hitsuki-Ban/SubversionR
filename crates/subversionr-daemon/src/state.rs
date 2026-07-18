@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -19,8 +20,10 @@ use subversionr_protocol::{
     default_cache_schema,
 };
 
-use crate::remote::RemoteTrustState;
-use crate::remote::{envelope_value, preflight_repository_urls};
+use crate::remote::{
+    RemoteLaunchPlan, RemoteTrustState, envelope_value, preflight_repository_urls,
+    unsupported_transport,
+};
 use crate::{
     AddOperationRequest, AuthRequestBroker, BranchCreateOperationRequest, BridgeApi,
     BridgeCancellationToken, BridgeFailure, ChangelistClearOperationRequest,
@@ -33,18 +36,28 @@ use crate::{
     UnlockOperationRequest, UpdateOperationRequest, UpgradeOperationRequest, bridge_error,
     current_timestamp, rpc_error,
 };
+use crate::{InlineRemoteWorkerSupervisor, RemoteWorkerSupervisor};
 
 const MAX_SVN_REVNUM: u64 = 2_147_483_647;
 const SVN_ADMIN_DIR_NAME: &str = ".svn";
 const MAX_REPOSITORY_DISCOVERY_DEPTH: u64 = 64;
 
-#[derive(Debug, Default)]
 pub struct DaemonState {
     repositories: BTreeMap<String, RepositorySession>,
     next_epoch: u64,
     next_operation_id: u64,
     pending_notifications: Vec<Value>,
     remote_trust: Option<RemoteTrustState>,
+    remote_worker: Arc<dyn RemoteWorkerSupervisor>,
+    pending_remote_launch: Option<RemoteLaunchPlan>,
+    remote_native_lanes: BTreeMap<String, RemoteNativeLaneState>,
+    active_remote_operation_ids: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RemoteNativeLaneState {
+    Active { operation_id: String },
+    Blocked { operation_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -86,12 +99,20 @@ struct OperationRunRemoteSuccess<'a> {
 
 impl DaemonState {
     pub fn new() -> Self {
+        Self::with_remote_worker(Arc::new(InlineRemoteWorkerSupervisor::default()))
+    }
+
+    pub fn with_remote_worker(remote_worker: Arc<dyn RemoteWorkerSupervisor>) -> Self {
         Self {
             repositories: BTreeMap::new(),
             next_epoch: 1,
             next_operation_id: 1,
             pending_notifications: Vec::new(),
             remote_trust: None,
+            remote_worker,
+            pending_remote_launch: None,
+            remote_native_lanes: BTreeMap::new(),
+            active_remote_operation_ids: BTreeSet::new(),
         }
     }
 
@@ -122,6 +143,18 @@ impl DaemonState {
         auth: &mut dyn AuthRequestBroker,
         cancellation: &dyn BridgeCancellationToken,
     ) -> DispatchResult {
+        if let Some(failure) = self.native_lane_failure_for_request(&request) {
+            return DispatchResult {
+                outcome: DispatchOutcome::Continue,
+                response: json!({
+                    "jsonrpc": "2.0",
+                    "id": request.id,
+                    "error": bridge_error(failure),
+                }),
+                notifications: std::mem::take(&mut self.pending_notifications),
+                remote_launch: None,
+            };
+        }
         let (outcome, response) = match request.method.as_str() {
             "initialize" => self.dispatch_initialize(&request, bridge),
             "workspaceTrust/update" => self.dispatch_workspace_trust_update(&request),
@@ -138,12 +171,13 @@ impl DaemonState {
             "status/checkRemote" => {
                 self.dispatch_status_check_remote(&request, bridge, auth, cancellation)
             }
-            "content/get" => self.dispatch_content_get(&request, bridge, auth),
+            "content/get" => self.dispatch_content_get(&request, bridge, auth, cancellation),
             "properties/list" => self.dispatch_properties_list(&request, bridge),
-            "history/log" => self.dispatch_history_log(&request, bridge, auth),
-            "history/blame" => self.dispatch_history_blame(&request, bridge, auth),
+            "history/log" => self.dispatch_history_log(&request, bridge, auth, cancellation),
+            "history/blame" => self.dispatch_history_blame(&request, bridge, auth, cancellation),
             "operation/run" => self.dispatch_operation_run(&request, bridge, auth, cancellation),
             "diagnostics/get" => self.dispatch_diagnostics_get(&request, bridge),
+            "shutdown" => self.dispatch_shutdown(&request),
             _ => crate::dispatch_known_request(&request, bridge),
         };
 
@@ -152,6 +186,7 @@ impl DaemonState {
             outcome,
             response,
             notifications,
+            remote_launch: self.pending_remote_launch.take(),
         }
     }
 
@@ -231,15 +266,23 @@ impl DaemonState {
             Ok(trust) => trust,
             Err(failure) => return bridge_failure_response(request, failure),
         };
+        if let Err(failure) = self
+            .remote_worker
+            .update_workspace_trust(params.workspace_trust == WorkspaceTrustState::Trusted)
+        {
+            return bridge_failure_response(request, failure);
+        }
         let acknowledged_trust_epoch = trust.acknowledged_epoch();
         self.remote_trust = Some(trust);
         let bridge_info = bridge.info();
+        let mut capabilities = bridge_info.capabilities();
+        capabilities.remote_worker_isolation = self.remote_worker.capability_available();
         let result = InitializeResponse::new(
             env!("CARGO_PKG_VERSION").to_string(),
             bridge_info.bridge_version.clone(),
             bridge_info.libsvn_version.clone(),
             current_platform(),
-            bridge_info.capabilities(),
+            capabilities,
             acknowledged_trust_epoch,
         );
         (
@@ -262,7 +305,7 @@ impl DaemonState {
         let Ok(params) = serde_json::from_value::<WorkspaceTrustUpdateParams>(params_value) else {
             return invalid_param(request, "params");
         };
-        let Some(trust) = self.remote_trust.as_mut() else {
+        let Some(trust) = self.remote_trust.as_ref() else {
             return (
                 DispatchOutcome::Continue,
                 json!({
@@ -278,11 +321,17 @@ impl DaemonState {
                 }),
             );
         };
-        let acknowledged_trust_epoch = match trust.apply_update(params.trusted, params.trust_epoch)
-        {
-            Ok(epoch) => epoch,
-            Err(failure) => return bridge_failure_response(request, failure),
-        };
+        if let Err(failure) = trust.validate_update(params.trust_epoch) {
+            return bridge_failure_response(request, failure);
+        }
+        if let Err(failure) = self.remote_worker.update_workspace_trust(params.trusted) {
+            return bridge_failure_response(request, failure);
+        }
+        let acknowledged_trust_epoch = self
+            .remote_trust
+            .as_mut()
+            .expect("validated trust state must remain initialized")
+            .commit_update(params.trusted, params.trust_epoch);
         (
             DispatchOutcome::Continue,
             json!({
@@ -302,14 +351,15 @@ impl DaemonState {
             return invalid_param(request, &field);
         }
         let bridge_info = bridge.info();
-        let capabilities = bridge_info.capabilities();
+        let mut capabilities = bridge_info.capabilities();
+        capabilities.remote_worker_isolation = self.remote_worker.capability_available();
         let response = DiagnosticsGetResponse {
             backend_version: env!("CARGO_PKG_VERSION").to_string(),
             bridge_version: bridge_info.bridge_version,
             libsvn_version: bridge_info.libsvn_version,
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 31,
+                minor: 32,
             },
             platform: current_platform(),
             cache_schema: default_cache_schema(),
@@ -575,13 +625,14 @@ impl DaemonState {
             Ok(checkout_request) => checkout_request,
             Err(field) => return invalid_param(request, &field),
         };
-        if let Err(failure) = preflight_repository_urls(
+        if let Some(response) = self.begin_remote_preflight(
             request,
             &[&checkout_request.url],
-            self.remote_trust.as_ref(),
+            &checkout_request.target_path,
             bridge,
+            cancellation,
         ) {
-            return bridge_failure_response(request, failure);
+            return response;
         }
 
         match bridge.repository_checkout_with_cancellation(&checkout_request, auth, cancellation) {
@@ -890,20 +941,27 @@ impl DaemonState {
         let Some(epoch) = epoch_param(request) else {
             return invalid_param(request, "epoch");
         };
-        let Some(session) = self.repositories.get_mut(repository_id) else {
+        let Some(session) = self.repositories.get(repository_id) else {
             return repository_not_open(request, repository_id);
         };
         if epoch != session.epoch {
             return repository_not_open(request, repository_id);
         }
-        if let Err(failure) = preflight_repository_urls(
+        let lane_key = session.identity.working_copy_root.clone();
+        let repository_root_url = session.identity.repository_root_url.clone();
+        if let Some(response) = self.begin_remote_preflight(
             request,
-            &[&session.identity.repository_root_url],
-            self.remote_trust.as_ref(),
+            &[&repository_root_url],
+            &lane_key,
             bridge,
+            cancellation,
         ) {
-            return bridge_failure_response(request, failure);
+            return response;
         }
+        let session = self
+            .repositories
+            .get_mut(repository_id)
+            .expect("preflight does not remove repository sessions");
 
         let generation = session.next_generation;
         let mut snapshot = match bridge.status_remote_check_with_cancellation(
@@ -985,10 +1043,11 @@ impl DaemonState {
     }
 
     fn dispatch_content_get(
-        &self,
+        &mut self,
         request: &JsonRpcRequest,
         bridge: &dyn BridgeApi,
         auth: &mut dyn AuthRequestBroker,
+        cancellation: &dyn BridgeCancellationToken,
     ) -> (DispatchOutcome, Value) {
         if let Some(field) = unexpected_param(
             request,
@@ -1015,17 +1074,24 @@ impl DaemonState {
             return repository_not_open(request, repository_id);
         }
         if revision != "base" {
-            if let Err(failure) = preflight_repository_urls(
+            let repository_root_url = session.identity.repository_root_url.clone();
+            let lane_key = session.identity.working_copy_root.clone();
+            if let Some(response) = self.begin_remote_preflight(
                 request,
-                &[&session.identity.repository_root_url],
-                self.remote_trust.as_ref(),
+                &[&repository_root_url],
+                &lane_key,
                 bridge,
+                cancellation,
             ) {
-                return bridge_failure_response(request, failure);
+                return response;
             }
         } else if envelope_value(request).is_some() {
             return invalid_param(request, "remote");
         }
+        let session = self
+            .repositories
+            .get(repository_id)
+            .expect("preflight does not remove repository sessions");
 
         match bridge.content_get(&session.identity, path, revision, auth) {
             Ok(blob) => {
@@ -1122,10 +1188,11 @@ impl DaemonState {
     }
 
     fn dispatch_history_log(
-        &self,
+        &mut self,
         request: &JsonRpcRequest,
         bridge: &dyn BridgeApi,
         auth: &mut dyn AuthRequestBroker,
+        cancellation: &dyn BridgeCancellationToken,
     ) -> (DispatchOutcome, Value) {
         if let Some(field) = unexpected_param(
             request,
@@ -1160,14 +1227,21 @@ impl DaemonState {
         if epoch != session.epoch {
             return repository_not_open(request, repository_id);
         }
-        if let Err(failure) = preflight_repository_urls(
+        let repository_root_url = session.identity.repository_root_url.clone();
+        let lane_key = session.identity.working_copy_root.clone();
+        if let Some(response) = self.begin_remote_preflight(
             request,
-            &[&session.identity.repository_root_url],
-            self.remote_trust.as_ref(),
+            &[&repository_root_url],
+            &lane_key,
             bridge,
+            cancellation,
         ) {
-            return bridge_failure_response(request, failure);
+            return response;
         }
+        let session = self
+            .repositories
+            .get(repository_id)
+            .expect("preflight does not remove repository sessions");
 
         match bridge.history_log(&session.identity, &log_request, auth) {
             Ok(log) => {
@@ -1202,10 +1276,11 @@ impl DaemonState {
     }
 
     fn dispatch_history_blame(
-        &self,
+        &mut self,
         request: &JsonRpcRequest,
         bridge: &dyn BridgeApi,
         auth: &mut dyn AuthRequestBroker,
+        cancellation: &dyn BridgeCancellationToken,
     ) -> (DispatchOutcome, Value) {
         if let Some(field) = unexpected_param(
             request,
@@ -1243,14 +1318,21 @@ impl DaemonState {
         if epoch != session.epoch {
             return repository_not_open(request, repository_id);
         }
-        if let Err(failure) = preflight_repository_urls(
+        let repository_root_url = session.identity.repository_root_url.clone();
+        let lane_key = session.identity.working_copy_root.clone();
+        if let Some(response) = self.begin_remote_preflight(
             request,
-            &[&session.identity.repository_root_url],
-            self.remote_trust.as_ref(),
+            &[&repository_root_url],
+            &lane_key,
             bridge,
+            cancellation,
         ) {
-            return bridge_failure_response(request, failure);
+            return response;
         }
+        let session = self
+            .repositories
+            .get(repository_id)
+            .expect("preflight does not remove repository sessions");
 
         match bridge.history_blame(&session.identity, &blame_request, auth) {
             Ok(blame) => {
@@ -1453,10 +1535,14 @@ impl DaemonState {
             _ => None,
         };
         if let Some(urls) = remote_preflight {
-            if let Err(failure) =
-                preflight_repository_urls(request, &urls, self.remote_trust.as_ref(), bridge)
-            {
-                return bridge_failure_response(request, failure);
+            if let Some(response) = self.begin_remote_preflight(
+                request,
+                &urls,
+                &session_identity.working_copy_root,
+                bridge,
+                cancellation,
+            ) {
+                return response;
             }
         } else if envelope_value(request).is_some() {
             return invalid_param(request, "remote");
@@ -2246,6 +2332,213 @@ impl DaemonState {
                 "error": bridge_error(failure),
             }),
         )
+    }
+
+    fn dispatch_shutdown(&self, request: &JsonRpcRequest) -> (DispatchOutcome, Value) {
+        if let Some(field) = unexpected_param(request, &[]) {
+            return invalid_param(request, &field);
+        }
+        if let Err(failure) = self.remote_worker.disconnect() {
+            return bridge_failure_response(request, failure);
+        }
+        (
+            DispatchOutcome::Shutdown,
+            json!({
+                "jsonrpc": "2.0",
+                "id": request.id,
+                "result": { "accepted": true },
+            }),
+        )
+    }
+
+    fn begin_remote_preflight(
+        &mut self,
+        request: &JsonRpcRequest,
+        urls: &[&str],
+        lane_key: &str,
+        bridge: &dyn BridgeApi,
+        cancellation: &dyn BridgeCancellationToken,
+    ) -> Option<(DispatchOutcome, Value)> {
+        let operation = match preflight_repository_urls(request, urls, self.remote_trust.as_ref()) {
+            Ok(None) => return None,
+            Ok(Some(operation)) => operation,
+            Err(failure) => return Some(bridge_failure_response(request, failure)),
+        };
+
+        if !self.remote_worker.capability_available() {
+            let endpoint = operation.endpoint.clone();
+            return Some(
+                match self.remote_worker.execute(
+                    &operation.envelope,
+                    operation.config,
+                    lane_key,
+                    cancellation,
+                    bridge,
+                    operation.deadline,
+                ) {
+                    Ok(()) => bridge_failure_response(request, unsupported_transport(&endpoint)),
+                    Err(failure) => bridge_failure_response(request, failure),
+                },
+            );
+        }
+
+        let normalized_lane = absolute_path_key(&normalize_absolute_path_text(lane_key));
+        if let Some(failure) =
+            self.reserve_remote_lane(&normalized_lane, &operation.envelope.operation_id)
+        {
+            return Some(bridge_failure_response(request, failure));
+        }
+        self.pending_remote_launch = Some(RemoteLaunchPlan {
+            request_id: request.id.clone(),
+            lane_key: normalized_lane,
+            operation,
+        });
+        Some((DispatchOutcome::Continue, Value::Null))
+    }
+
+    fn reserve_remote_lane(&mut self, lane_key: &str, operation_id: &str) -> Option<BridgeFailure> {
+        if self.active_remote_operation_ids.contains(operation_id) {
+            return Some(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_OPERATION_IN_PROGRESS",
+                "state",
+                "error.remote.operationInProgress",
+                json!({}),
+                false,
+            ));
+        }
+        if let Some(state) = self.remote_native_lanes.get(lane_key) {
+            return Some(match state {
+                RemoteNativeLaneState::Active { .. } => BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
+                    "state",
+                    "error.remote.nativeLaneBusy",
+                    json!({}),
+                    true,
+                ),
+                RemoteNativeLaneState::Blocked { .. } => BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+                    "state",
+                    "error.remote.recoveryBlocked",
+                    json!({}),
+                    false,
+                ),
+            });
+        }
+        self.active_remote_operation_ids
+            .insert(operation_id.to_string());
+        self.remote_native_lanes.insert(
+            lane_key.to_string(),
+            RemoteNativeLaneState::Active {
+                operation_id: operation_id.to_string(),
+            },
+        );
+        None
+    }
+
+    pub(crate) fn settle_remote_launch(
+        &mut self,
+        lane_key: &str,
+        operation_id: &str,
+        recovery_blocked: bool,
+    ) {
+        let matches = self.remote_native_lanes.get(lane_key).is_some_and(|state| {
+            matches!(
+                state,
+                RemoteNativeLaneState::Active { operation_id: active } if active == operation_id
+            )
+        });
+        if !matches {
+            return;
+        }
+        self.active_remote_operation_ids.remove(operation_id);
+        if recovery_blocked {
+            self.remote_native_lanes.insert(
+                lane_key.to_string(),
+                RemoteNativeLaneState::Blocked {
+                    operation_id: operation_id.to_string(),
+                },
+            );
+        } else {
+            self.remote_native_lanes.remove(lane_key);
+        }
+    }
+
+    fn native_lane_failure_for_request(&self, request: &JsonRpcRequest) -> Option<BridgeFailure> {
+        if matches!(
+            request.method.as_str(),
+            "initialize"
+                | "workspaceTrust/update"
+                | "diagnostics/get"
+                | "repository/close"
+                | "shutdown"
+        ) {
+            return None;
+        }
+        let mut request_path_keys = BTreeSet::new();
+        if let Some(working_copy_root) = request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("repositoryId"))
+            .and_then(Value::as_str)
+            .and_then(|repository_id| self.repositories.get(repository_id))
+            .map(|session| session.identity.working_copy_root.as_str())
+        {
+            request_path_keys.insert(absolute_path_key(&normalize_absolute_path_text(
+                working_copy_root,
+            )));
+        }
+        if let Some(path) = request.params.as_ref().and_then(|params| {
+            params
+                .get("targetPath")
+                .or_else(|| params.get("path"))
+                .and_then(Value::as_str)
+        }) && Path::new(path).is_absolute()
+        {
+            request_path_keys.insert(absolute_path_key(&normalize_absolute_path_text(path)));
+        }
+        if request.method == "repository/discover"
+            && let Some(workspace_roots) = request
+                .params
+                .as_ref()
+                .and_then(|params| params.get("workspaceRoots"))
+                .and_then(Value::as_array)
+        {
+            request_path_keys.extend(workspace_roots.iter().filter_map(Value::as_str).filter_map(
+                |path| {
+                    Path::new(path)
+                        .is_absolute()
+                        .then(|| absolute_path_key(&normalize_absolute_path_text(path)))
+                },
+            ));
+        }
+
+        for request_path_key in request_path_keys {
+            for (lane_key, state) in &self.remote_native_lanes {
+                if request_path_key != *lane_key
+                    && !is_descendant_path_key(&request_path_key, lane_key)
+                    && !is_descendant_path_key(lane_key, &request_path_key)
+                {
+                    continue;
+                }
+                return Some(match state {
+                    RemoteNativeLaneState::Active { .. } => BridgeFailure::new(
+                        "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
+                        "state",
+                        "error.remote.nativeLaneBusy",
+                        json!({}),
+                        true,
+                    ),
+                    RemoteNativeLaneState::Blocked { .. } => BridgeFailure::new(
+                        "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+                        "state",
+                        "error.remote.recoveryBlocked",
+                        json!({}),
+                        false,
+                    ),
+                });
+            }
+        }
+        None
     }
 }
 

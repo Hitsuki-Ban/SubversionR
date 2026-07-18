@@ -47,6 +47,7 @@ import {
   type DiagnosticsContext,
 } from "./diagnostics/diagnosticsReportService";
 import { collectInstalledRedactionReport } from "./diagnostics/installedRedactionReport";
+import { collectInstalledRemoteWorkerReport } from "./diagnostics/installedRemoteWorkerReport";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
@@ -1156,6 +1157,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               }),
           }),
         );
+  const installedRemoteWorkerReportToken = consumeInstalledRemoteWorkerReportToken();
+  const installedRemoteWorkerReportCommand =
+    installedRemoteWorkerReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand("subversionr.diagnostics.installedRemoteWorkerReport", (request: unknown) =>
+          collectInstalledRemoteWorkerReport({
+            expectedToken: installedRemoteWorkerReportToken,
+            request,
+            targetPath: nodePath.join(context.globalStorageUri.fsPath, "installed-remote-worker-report-target"),
+            initialize: () => service.initialize(),
+          }),
+        );
   const installedCoreWorkflowReportCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedCoreWorkflowReport",
     (request: unknown) =>
@@ -1843,6 +1856,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   if (installedRedactionReportCommand !== undefined) {
     context.subscriptions.push(installedRedactionReportCommand);
+  }
+  if (installedRemoteWorkerReportCommand !== undefined) {
+    context.subscriptions.push(installedRemoteWorkerReportCommand);
   }
   if (installedSourceControlUiE2eExecuteResourceCommand !== undefined) {
     context.subscriptions.push(installedSourceControlUiE2eExecuteResourceCommand);
@@ -3718,6 +3734,12 @@ function isAbsoluteCheckoutPath(value: string): boolean {
 function consumeInstalledRedactionReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledRemoteWorkerReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 

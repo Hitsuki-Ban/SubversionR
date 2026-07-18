@@ -1305,14 +1305,36 @@ Assert-Equal $extensionId (Get-RequiredString $vsixPackageJson.extension "id" "v
 Assert-OrdinalEqual $extensionVersion (Get-RequiredString $vsixPackageJson.extension "version" "vsixPackage.extension") "vsixPackage extension version must match current VSIX package.json."
 Assert-RequiredBooleanTrue $vsixPackageJson.extension "preRelease" "vsixPackage.extension"
 $nativeCompatibility = Get-RequiredProperty $vsixPackageJson "nativeCompatibility" "vsixPackage"
-Assert-Equal "subversionr.release.packaged-native-version-evidence.v1" (Get-RequiredString $nativeCompatibility "schema" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility schema must match the release contract."
+Assert-Equal "subversionr.release.packaged-native-version-evidence.v2" (Get-RequiredString $nativeCompatibility "schema" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility schema must match the release contract."
 Assert-OrdinalEqual $extensionVersion (Get-RequiredString $nativeCompatibility "expectedProductVersion" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility expectedProductVersion must match current VSIX package.json."
 Assert-OrdinalEqual $extensionVersion (Get-RequiredString $nativeCompatibility "backendVersion" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility backendVersion must match current VSIX package.json."
 Assert-OrdinalEqual "subversionr-svn-bridge/$extensionVersion" (Get-RequiredString $nativeCompatibility "bridgeVersion" "vsixPackage.nativeCompatibility") "vsixPackage native compatibility bridgeVersion must match current VSIX package.json."
 $packagedLibsvnVersion = Get-RequiredString $nativeCompatibility "libsvnVersion" "vsixPackage.nativeCompatibility"
 $nativeProtocol = Get-RequiredProperty $nativeCompatibility "protocol" "vsixPackage.nativeCompatibility"
 Assert-Equal 1 ([int](Get-RequiredProperty $nativeProtocol "major" "vsixPackage.nativeCompatibility.protocol")) "vsixPackage native compatibility protocol major must match the release contract."
-Assert-True ([int](Get-RequiredProperty $nativeProtocol "minor" "vsixPackage.nativeCompatibility.protocol") -ge 31) "vsixPackage native compatibility protocol minor must be at least 31."
+Assert-Equal 32 ([int](Get-RequiredProperty $nativeProtocol "minor" "vsixPackage.nativeCompatibility.protocol")) "vsixPackage native compatibility protocol minor must be exactly 32."
+$nativeCapabilities = Get-RequiredProperty $nativeCompatibility "capabilities" "vsixPackage.nativeCompatibility"
+Assert-RequiredBooleanTrue $nativeCapabilities "remoteWorkerIsolation" "vsixPackage.nativeCompatibility.capabilities"
+$localDiscovery = Get-RequiredProperty $nativeCompatibility "localDiscovery" "vsixPackage.nativeCompatibility"
+Assert-OrdinalEqual "passed" (Get-RequiredString $localDiscovery "status" "vsixPackage.nativeCompatibility.localDiscovery") "vsixPackage native compatibility must retain the packaged local discovery smoke."
+Assert-Equal 0 ([int](Get-RequiredProperty $localDiscovery "candidateCount" "vsixPackage.nativeCompatibility.localDiscovery")) "vsixPackage local discovery fixture candidate count must remain empty."
+Assert-Equal 0 ([int](Get-RequiredProperty $localDiscovery "fileExternalBoundaryCount" "vsixPackage.nativeCompatibility.localDiscovery")) "vsixPackage local discovery fixture boundary count must remain empty."
+$workerIsolation = Get-RequiredProperty $nativeCompatibility "workerIsolation" "vsixPackage.nativeCompatibility"
+Assert-OrdinalEqual "repository/checkout" (Get-RequiredString $workerIsolation "operation" "vsixPackage.nativeCompatibility.workerIsolation") "vsixPackage native compatibility worker operation must match the release contract."
+Assert-OrdinalEqual "https" (Get-RequiredString $workerIsolation "expectedOriginScheme" "vsixPackage.nativeCompatibility.workerIsolation") "vsixPackage native compatibility worker origin scheme must match the release contract."
+Assert-OrdinalEqual "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED" (Get-RequiredString $workerIsolation "resultCode" "vsixPackage.nativeCompatibility.workerIsolation") "vsixPackage native compatibility worker result must remain transport unsupported."
+$tempRootCleanup = Get-RequiredProperty $workerIsolation "tempRootCleanup" "vsixPackage.nativeCompatibility.workerIsolation"
+Assert-OrdinalEqual "passed" (Get-RequiredString $tempRootCleanup "status" "vsixPackage.nativeCompatibility.workerIsolation.tempRootCleanup") "vsixPackage native compatibility worker temp-root cleanup must pass."
+Assert-Equal 0 ([int](Get-RequiredProperty $tempRootCleanup "residualEntryCount" "vsixPackage.nativeCompatibility.workerIsolation.tempRootCleanup")) "vsixPackage native compatibility worker temp root must be empty."
+$sameLaneSubsequent = Get-RequiredProperty $workerIsolation "sameLaneSubsequent" "vsixPackage.nativeCompatibility.workerIsolation"
+Assert-OrdinalEqual "passed" (Get-RequiredString $sameLaneSubsequent "status" "vsixPackage.nativeCompatibility.workerIsolation.sameLaneSubsequent") "vsixPackage native compatibility must prove same-lane recovery."
+Assert-OrdinalEqual "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED" (Get-RequiredString $sameLaneSubsequent "resultCode" "vsixPackage.nativeCompatibility.workerIsolation.sameLaneSubsequent") "vsixPackage same-lane recovery must remain transport unsupported."
+$subsequentDiagnostics = Get-RequiredProperty $workerIsolation "subsequentDiagnostics" "vsixPackage.nativeCompatibility.workerIsolation"
+Assert-OrdinalEqual "passed" (Get-RequiredString $subsequentDiagnostics "status" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics") "vsixPackage native compatibility must prove a subsequent daemon request succeeded."
+Assert-OrdinalEqual "subversionr-daemon" (Get-RequiredString $subsequentDiagnostics "source" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics") "vsixPackage native compatibility subsequent diagnostics source must be the daemon."
+$subsequentProtocol = Get-RequiredProperty $subsequentDiagnostics "protocol" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics"
+Assert-Equal 1 ([int](Get-RequiredProperty $subsequentProtocol "major" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics.protocol")) "vsixPackage native compatibility subsequent diagnostics protocol major must match."
+Assert-Equal 32 ([int](Get-RequiredProperty $subsequentProtocol "minor" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics.protocol")) "vsixPackage native compatibility subsequent diagnostics protocol minor must match."
 $vsixPackageRootPath = Assert-Directory (Resolve-RepoPath (Get-RequiredString $vsixPackageJson.inputs "packageRoot" "vsixPackage.inputs")) "vsixPackage input packageRoot"
 $vsixPackageBackendManifestPath = Assert-File (Join-Path $vsixPackageRootPath "resources\backend\$Target\subversionr-backend-package-manifest.json") "vsixPackage input backend manifest"
 $vsixPackageBackendManifestSha256 = Get-Sha256 $vsixPackageBackendManifestPath
@@ -1331,7 +1353,7 @@ Assert-Equal $vsixEntrypointSha256 (Get-RequiredString $vsixCliInstall.json.hash
 Add-VerifiedEvidence $vsixCliInstall "cli-installed-vsix-sha256-and-entrypoint-match-current-vsix"
 
 $installedEvidenceSpecs = @(
-  @{ FileName = "subversionr-installed-extension-host-$Target.json"; Name = "installedExtensionHost"; Schema = "subversionr.release.installed-extension-host.$Target.v1" },
+  @{ FileName = "subversionr-installed-extension-host-$Target.json"; Name = "installedExtensionHost"; Schema = "subversionr.release.installed-extension-host.$Target.v2" },
   @{ FileName = "subversionr-installed-core-workflow-$Target.json"; Name = "installedCoreWorkflow"; Schema = "subversionr.release.installed-core-workflow.$Target.v2" },
   @{ FileName = "subversionr-installed-source-control-surface-$Target.json"; Name = "installedSourceControlSurface"; Schema = "subversionr.release.installed-source-control-surface.$Target.v1" },
   @{ FileName = "subversionr-installed-source-control-ui-e2e-$Target.json"; Name = "installedSourceControlUiE2e"; Schema = "subversionr.release.installed-source-control-ui-e2e.$Target.v1" }

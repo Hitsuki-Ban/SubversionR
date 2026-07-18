@@ -491,14 +491,43 @@ function New-BetaCandidateFixture([string]$Root) {
       preRelease = $true
     }
     nativeCompatibility = [pscustomobject]@{
-      schema = "subversionr.release.packaged-native-version-evidence.v1"
+      schema = "subversionr.release.packaged-native-version-evidence.v2"
       expectedProductVersion = "0.2.5"
       backendVersion = "0.2.5"
       bridgeVersion = "subversionr-svn-bridge/0.2.5"
       libsvnVersion = "1.14.5"
       protocol = [pscustomobject]@{
         major = 1
-        minor = 31
+        minor = 32
+      }
+      capabilities = [pscustomobject]@{
+        remoteWorkerIsolation = $true
+      }
+      localDiscovery = [pscustomobject]@{
+        status = "passed"
+        candidateCount = 0
+        fileExternalBoundaryCount = 0
+      }
+      workerIsolation = [pscustomobject]@{
+        operation = "repository/checkout"
+        expectedOriginScheme = "https"
+        resultCode = "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED"
+        tempRootCleanup = [pscustomobject]@{
+          status = "passed"
+          residualEntryCount = 0
+        }
+        sameLaneSubsequent = [pscustomobject]@{
+          status = "passed"
+          resultCode = "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED"
+        }
+        subsequentDiagnostics = [pscustomobject]@{
+          status = "passed"
+          source = "subversionr-daemon"
+          protocol = [pscustomobject]@{
+            major = 1
+            minor = 32
+          }
+        }
       }
     }
     inputs = [pscustomobject]@{
@@ -537,7 +566,7 @@ function New-BetaCandidateFixture([string]$Root) {
     }
   })
 
-  Write-InstalledEvidence $evidenceRoot "installed-extension-host" "installed-extension-host" $vsix
+  Write-InstalledEvidence $evidenceRoot "installed-extension-host" "installed-extension-host" $vsix 2
   Write-InstalledEvidence $evidenceRoot "installed-core-workflow" "installed-core-workflow" $vsix 2
   Write-InstalledEvidence $evidenceRoot "installed-source-control-surface" "installed-source-control-surface" $vsix
   Write-InstalledSourceControlUiE2eEvidence $evidenceRoot $vsix
@@ -1057,6 +1086,51 @@ try {
       Invoke-BetaCandidateVerifier $fixture
     } $case.Expected "Beta candidate consistency should reject stale packaged native $($case.Property) evidence."
   }
+
+  $legacyNativeSchemaFixture = New-BetaCandidateFixture (Join-Path $tempRoot "legacy-packaged-native-schema")
+  $legacyNativeSchemaPath = New-EvidencePath $legacyNativeSchemaFixture.evidenceRoot "vsix-package"
+  $legacyNativeSchemaEvidence = Get-Content -Raw -LiteralPath $legacyNativeSchemaPath | ConvertFrom-Json
+  $legacyNativeSchemaEvidence.nativeCompatibility.schema = "subversionr.release.packaged-native-version-evidence.v1"
+  Write-Json $legacyNativeSchemaPath $legacyNativeSchemaEvidence
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $legacyNativeSchemaFixture
+  } "vsixPackage native compatibility schema must match the release contract" "Beta candidate consistency should reject the retired packaged native v1 schema without compatibility fallback."
+
+  $missingWorkerCapabilityFixture = New-BetaCandidateFixture (Join-Path $tempRoot "missing-packaged-worker-capability")
+  $missingWorkerCapabilityPath = New-EvidencePath $missingWorkerCapabilityFixture.evidenceRoot "vsix-package"
+  $missingWorkerCapabilityEvidence = Get-Content -Raw -LiteralPath $missingWorkerCapabilityPath | ConvertFrom-Json
+  $missingWorkerCapabilityEvidence.nativeCompatibility.PSObject.Properties.Remove("capabilities")
+  Write-Json $missingWorkerCapabilityPath $missingWorkerCapabilityEvidence
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $missingWorkerCapabilityFixture
+  } "vsixPackage.nativeCompatibility must define capabilities" "Beta candidate consistency should require packaged worker capability evidence."
+
+  $missingLocalDiscoveryFixture = New-BetaCandidateFixture (Join-Path $tempRoot "missing-packaged-local-discovery")
+  $missingLocalDiscoveryPath = New-EvidencePath $missingLocalDiscoveryFixture.evidenceRoot "vsix-package"
+  $missingLocalDiscoveryEvidence = Get-Content -Raw -LiteralPath $missingLocalDiscoveryPath | ConvertFrom-Json
+  $missingLocalDiscoveryEvidence.nativeCompatibility.PSObject.Properties.Remove("localDiscovery")
+  Write-Json $missingLocalDiscoveryPath $missingLocalDiscoveryEvidence
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $missingLocalDiscoveryFixture
+  } "vsixPackage.nativeCompatibility must define localDiscovery" "Beta candidate consistency should preserve the packaged local discovery smoke."
+
+  $wrongWorkerResultFixture = New-BetaCandidateFixture (Join-Path $tempRoot "wrong-packaged-worker-result")
+  $wrongWorkerResultPath = New-EvidencePath $wrongWorkerResultFixture.evidenceRoot "vsix-package"
+  $wrongWorkerResultEvidence = Get-Content -Raw -LiteralPath $wrongWorkerResultPath | ConvertFrom-Json
+  $wrongWorkerResultEvidence.nativeCompatibility.workerIsolation.resultCode = "SUBVERSIONR_REMOTE_WORKER_START_FAILED"
+  Write-Json $wrongWorkerResultPath $wrongWorkerResultEvidence
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $wrongWorkerResultFixture
+  } "worker result must remain transport unsupported" "Beta candidate consistency should reject packaged worker evidence that does not stop at the transport boundary."
+
+  $missingSubsequentRequestFixture = New-BetaCandidateFixture (Join-Path $tempRoot "missing-packaged-subsequent-request")
+  $missingSubsequentRequestPath = New-EvidencePath $missingSubsequentRequestFixture.evidenceRoot "vsix-package"
+  $missingSubsequentRequestEvidence = Get-Content -Raw -LiteralPath $missingSubsequentRequestPath | ConvertFrom-Json
+  $missingSubsequentRequestEvidence.nativeCompatibility.workerIsolation.PSObject.Properties.Remove("subsequentDiagnostics")
+  Write-Json $missingSubsequentRequestPath $missingSubsequentRequestEvidence
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $missingSubsequentRequestFixture
+  } "workerIsolation must define subsequentDiagnostics" "Beta candidate consistency should require subsequent daemon serviceability evidence."
 
   foreach ($case in @(
     @{ Name = "stale-installed-backend-version"; Property = "backendVersion"; Value = "0.2.4"; Expected = "installedCoreWorkflow version report backendVersion must match current VSIX package.json" },

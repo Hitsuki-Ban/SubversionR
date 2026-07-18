@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use subversionr_protocol::{
     Capabilities, CertificateTrustRequest, CertificateTrustResponse, CredentialRequest,
@@ -5,21 +6,24 @@ use subversionr_protocol::{
     RepositoryIdentity, StatusSnapshot, default_capabilities,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RemoteConfigScheme {
     Http,
     Https,
     Svn,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RemoteConfigServerAuth {
     Anonymous,
     Basic,
     CramMd5,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RemoteConfigPlan {
     pub scheme: RemoteConfigScheme,
     pub server_auth: RemoteConfigServerAuth,

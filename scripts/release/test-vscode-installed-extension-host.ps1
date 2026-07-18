@@ -305,7 +305,8 @@ async function run() {
   const resultPath = process.env.SUBVERSIONR_INSTALLED_E2E_RESULT;
   const extensionsRoot = process.env.SUBVERSIONR_INSTALLED_E2E_EXTENSIONS_ROOT;
   const redactionReportToken = process.env.SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN;
-  if (!resultPath || !extensionsRoot || !redactionReportToken) {
+  const remoteWorkerReportToken = process.env.SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN;
+  if (!resultPath || !extensionsRoot || !redactionReportToken || !remoteWorkerReportToken) {
     throw new Error("Required installed-host harness environment variables are missing.");
   }
 
@@ -340,6 +341,9 @@ async function run() {
   }
   if (!commands.includes("subversionr.diagnostics.installedRedactionReport")) {
     throw new Error("Installed SubversionR command subversionr.diagnostics.installedRedactionReport was not registered after activation.");
+  }
+  if (!commands.includes("subversionr.diagnostics.installedRemoteWorkerReport")) {
+    throw new Error("Installed SubversionR command subversionr.diagnostics.installedRemoteWorkerReport was not registered after activation.");
   }
 
   const versionReportDocument = vscode.workspace.textDocuments.find(document => document.uri.scheme === "svn-r-diagnostics");
@@ -385,6 +389,24 @@ async function run() {
     }
   }
 
+  const installedRemoteWorkerReport = await Promise.race([
+    vscode.commands.executeCommand("subversionr.diagnostics.installedRemoteWorkerReport", { token: remoteWorkerReportToken }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("subversionr.diagnostics.installedRemoteWorkerReport timed out.")), 30000))
+  ]);
+  if (
+    !installedRemoteWorkerReport ||
+    installedRemoteWorkerReport.schemaVersion !== 1 ||
+    installedRemoteWorkerReport.kind !== "subversionr.installedRemoteWorkerReport" ||
+    installedRemoteWorkerReport.protocol?.major !== 1 ||
+    installedRemoteWorkerReport.protocol?.minor !== 32 ||
+    installedRemoteWorkerReport.remoteWorkerIsolation !== true ||
+    installedRemoteWorkerReport.transportResult !== "unsupportedAfterWorker" ||
+    installedRemoteWorkerReport.sameLaneSubsequent !== true ||
+    installedRemoteWorkerReport.subsequentDiagnostics !== true
+  ) {
+    throw new Error("Installed remote worker report did not prove the v1.32 isolated worker boundary, same-lane recovery, and follow-up request.");
+  }
+
   fs.writeFileSync(resultPath, JSON.stringify({
     id: extension.id,
     version: extension.packageJSON.version,
@@ -393,11 +415,14 @@ async function run() {
     extensionPath: extension.extensionPath,
     invokedCommand: "subversionr.diagnostics.versionReport",
     redactionCommand: "subversionr.diagnostics.installedRedactionReport",
+    remoteWorkerCommand: "subversionr.diagnostics.installedRemoteWorkerReport",
     hasVersionReportCommand: true,
     hasInstalledRedactionReportCommand: true,
+    hasInstalledRemoteWorkerReportCommand: true,
     source: "installed-vsix",
     versionReport,
-    installedRedactionReport
+    installedRedactionReport,
+    installedRemoteWorkerReport
   }, null, 2));
 }
 
@@ -438,6 +463,9 @@ function Assert-HarnessResult(
   if ($Result.redactionCommand -ne "subversionr.diagnostics.installedRedactionReport" -or $Result.hasInstalledRedactionReportCommand -ne $true) {
     throw "Installed-host result must prove installed redaction report command execution."
   }
+  if ($Result.remoteWorkerCommand -ne "subversionr.diagnostics.installedRemoteWorkerReport" -or $Result.hasInstalledRemoteWorkerReportCommand -ne $true) {
+    throw "Installed-host result must prove installed remote worker report command execution."
+  }
   if ($Result.versionReport.kind -ne "subversionr.versionReport") {
     throw "Installed-host result must include a SubversionR version report."
   }
@@ -472,6 +500,18 @@ function Assert-HarnessResult(
     if (-not $installedRedactionText.Contains($marker)) {
       throw "Installed-host installed redaction report is missing marker: $marker"
     }
+  }
+  if (
+    $Result.installedRemoteWorkerReport.schemaVersion -ne 1 -or
+    $Result.installedRemoteWorkerReport.kind -ne "subversionr.installedRemoteWorkerReport" -or
+    $Result.installedRemoteWorkerReport.protocol.major -ne 1 -or
+    $Result.installedRemoteWorkerReport.protocol.minor -ne 32 -or
+    $Result.installedRemoteWorkerReport.remoteWorkerIsolation -ne $true -or
+    $Result.installedRemoteWorkerReport.transportResult -ne "unsupportedAfterWorker" -or
+    $Result.installedRemoteWorkerReport.sameLaneSubsequent -ne $true -or
+    $Result.installedRemoteWorkerReport.subsequentDiagnostics -ne $true
+  ) {
+    throw "Installed-host result must prove the v1.32 isolated remote worker boundary, same-lane recovery, and a subsequent diagnostics request."
   }
   $extensionPath = [string]$Result.extensionPath
   if (-not (Test-IsPathWithin -Path $extensionPath -Root $ExtensionsRoot)) {
@@ -551,9 +591,11 @@ $harness = Write-HarnessPackage -HarnessRoot $harnessRoot -ResultPath $harnessRe
 $previousResultEnv = Get-ProcessEnvironmentValue "SUBVERSIONR_INSTALLED_E2E_RESULT"
 $previousExtensionsRootEnv = Get-ProcessEnvironmentValue "SUBVERSIONR_INSTALLED_E2E_EXTENSIONS_ROOT"
 $previousRedactionReportTokenEnv = Get-ProcessEnvironmentValue "SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN"
+$previousRemoteWorkerReportTokenEnv = Get-ProcessEnvironmentValue "SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN"
 $env:SUBVERSIONR_INSTALLED_E2E_RESULT = $harness.ResultPath
 $env:SUBVERSIONR_INSTALLED_E2E_EXTENSIONS_ROOT = $harness.ExtensionsRoot
 $env:SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN = [Guid]::NewGuid().ToString("N")
+$env:SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN = [Guid]::NewGuid().ToString("N")
 try {
   Invoke-CodeCliWithTimeout -Path $codeCliResolved -Arguments @(
     "--user-data-dir",
@@ -574,6 +616,7 @@ finally {
   Restore-ProcessEnvironmentValue "SUBVERSIONR_INSTALLED_E2E_RESULT" $previousResultEnv
   Restore-ProcessEnvironmentValue "SUBVERSIONR_INSTALLED_E2E_EXTENSIONS_ROOT" $previousExtensionsRootEnv
   Restore-ProcessEnvironmentValue "SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN" $previousRedactionReportTokenEnv
+  Restore-ProcessEnvironmentValue "SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN" $previousRemoteWorkerReportTokenEnv
 }
 
 if (-not (Test-Path -LiteralPath $harnessResultPath -PathType Leaf)) {
@@ -584,8 +627,8 @@ Assert-HarnessResult -Result $harnessResult -ExpectedVersion $extensionVersion -
 $sentinelAfter = Assert-WorkingCopySentinelUnchanged -Sentinel $sentinel
 
 $report = [pscustomobject]@{
-  schemaVersion = 1
-  schema = "subversionr.release.installed-extension-host.win32-x64.v1"
+  schemaVersion = 2
+  schema = "subversionr.release.installed-extension-host.win32-x64.v2"
   publicReadinessClaim = $false
   target = $Target
   traceIds = @("MIG-009", "TST-024")
@@ -599,11 +642,14 @@ $report = [pscustomobject]@{
     afterActive = [bool]$harnessResult.afterActive
     invokedCommand = [string]$harnessResult.invokedCommand
     redactionCommand = [string]$harnessResult.redactionCommand
+    remoteWorkerCommand = [string]$harnessResult.remoteWorkerCommand
     hasVersionReportCommand = [bool]$harnessResult.hasVersionReportCommand
     hasInstalledRedactionReportCommand = [bool]$harnessResult.hasInstalledRedactionReportCommand
+    hasInstalledRemoteWorkerReportCommand = [bool]$harnessResult.hasInstalledRemoteWorkerReportCommand
   }
   versionReport = $harnessResult.versionReport
   installedRedactionReport = $harnessResult.installedRedactionReport
+  installedRemoteWorkerReport = $harnessResult.installedRemoteWorkerReport
   codeCli = [pscustomobject]@{
     path = $codeCliResolved
     sha256 = $codeCliSha256
@@ -640,6 +686,7 @@ $report = [pscustomobject]@{
     "SubversionR became active inside a real VS Code Extension Host",
     "SubversionR version report command executed and opened a readonly report document",
     "SubversionR installed redaction report command executed and returned a redacted diagnostics bundle",
+    "SubversionR installed remote worker report proved protocol v1.32 isolation, transport boundary, same-lane recovery, and subsequent diagnostics",
     "working-copy sentinel .svn tree hash was unchanged",
     "publicReadinessClaim remains false"
   )

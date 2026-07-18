@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::str;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -17,9 +17,11 @@ use subversionr_protocol::{
     CredentialRequest, CredentialResponse,
 };
 
+use crate::remote::{RemoteLaunchPlan, unsupported_transport};
 use crate::{
     AuthRequestBroker, BridgeApi, BridgeCancellationToken, BridgeFailure, DaemonState,
-    DispatchOutcome, JsonRpcRequest, rpc_error,
+    DispatchOutcome, InlineRemoteWorkerSupervisor, JsonRpcRequest, RemoteWorkerSupervisor,
+    UnavailableBridge, bridge_error, rpc_error,
 };
 
 const MAX_JSON_RPC_FRAME_BYTES: usize = 4 * 1024 * 1024;
@@ -35,9 +37,73 @@ where
     R: Read + Send + 'static,
     W: Write,
 {
-    let mut frames = StdioFrameReceiver::spawn(reader)?;
-    let mut state = DaemonState::new();
-    while let Some(payload) = frames.recv()? {
+    run_json_rpc_stdio_with_remote_worker(
+        reader,
+        &mut writer,
+        bridge,
+        Arc::new(InlineRemoteWorkerSupervisor::default()),
+    )
+}
+
+pub fn run_json_rpc_stdio_with_remote_worker<R, W>(
+    reader: R,
+    mut writer: W,
+    bridge: &dyn BridgeApi,
+    remote_worker: Arc<dyn RemoteWorkerSupervisor>,
+) -> io::Result<()>
+where
+    R: Read + Send + 'static,
+    W: Write,
+{
+    let mut frames = StdioFrameReceiver::spawn(reader, remote_worker.clone())?;
+    let mut state = DaemonState::with_remote_worker(remote_worker.clone());
+    let (worker_sender, worker_receiver) = mpsc::channel::<RemoteWorkerCompletion>();
+    let mut pending = BTreeMap::<String, PendingRemoteRequest>::new();
+    let mut terminal = false;
+
+    loop {
+        if !terminal && !pending.is_empty() && frames.connection_terminal() {
+            terminal = true;
+        }
+        while let Ok(completion) = worker_receiver.try_recv() {
+            settle_remote_completion(
+                &mut state,
+                &mut pending,
+                completion,
+                terminal || frames.connection_terminal(),
+                &mut writer,
+            )?;
+        }
+        if terminal {
+            if pending.is_empty() {
+                break;
+            }
+            match worker_receiver.recv_timeout(Duration::from_millis(10)) {
+                Ok(completion) => settle_remote_completion(
+                    &mut state,
+                    &mut pending,
+                    completion,
+                    true,
+                    &mut writer,
+                )?,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(io::Error::other(
+                        "remote worker completion channel closed with pending operations",
+                    ));
+                }
+            }
+            continue;
+        }
+
+        let payload = match frames.recv_until(Instant::now() + Duration::from_millis(10))? {
+            TimedStdioFrame::Payload(payload) => payload,
+            TimedStdioFrame::Timeout => continue,
+            TimedStdioFrame::Eof => {
+                terminal = true;
+                continue;
+            }
+        };
         if cancel_notification_id(&payload).is_some() {
             continue;
         }
@@ -46,9 +112,9 @@ where
         let request: JsonRpcRequest = serde_json::from_str(request)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let cancellation = StdioCancellationToken::new();
-        let _active_cancellation =
+        let active_cancellation =
             frames.activate_request_cancellation(request.id.clone(), cancellation.clone());
-        let result = {
+        let mut result = {
             let mut auth = StdioAuthRequestBroker {
                 frames: &mut frames,
                 writer: &mut writer,
@@ -60,6 +126,42 @@ where
                 &cancellation,
             )
         };
+        if let Some(launch) = result.take_remote_launch() {
+            let operation_id = launch.operation.envelope.operation_id.clone();
+            if frames.connection_terminal() {
+                state.settle_remote_launch(&launch.lane_key, &operation_id, false);
+                drop(active_cancellation);
+                continue;
+            }
+            let pending_request = PendingRemoteRequest {
+                _cancellation: active_cancellation,
+                notifications: result.notifications().to_vec(),
+            };
+            match spawn_remote_worker(
+                remote_worker.clone(),
+                launch,
+                cancellation,
+                worker_sender.clone(),
+            ) {
+                Ok(()) => {
+                    pending.insert(operation_id, pending_request);
+                }
+                Err(error) => {
+                    drop(pending_request);
+                    state.settle_remote_launch(
+                        error.lane_key.as_str(),
+                        error.operation_id.as_str(),
+                        false,
+                    );
+                    write_content_length_frame(
+                        &mut writer,
+                        &remote_worker_start_error_response(error.request_id),
+                    )?;
+                    writer.flush()?;
+                }
+            }
+            continue;
+        }
         write_content_length_frame(&mut writer, result.response())?;
         for notification in result.notifications() {
             write_content_length_frame(&mut writer, notification)?;
@@ -67,11 +169,137 @@ where
         writer.flush()?;
 
         if result.outcome() == DispatchOutcome::Shutdown {
-            break;
+            terminal = true;
         }
     }
 
     Ok(())
+}
+
+struct PendingRemoteRequest {
+    _cancellation: ActiveStdioRequestCancellationGuard,
+    notifications: Vec<Value>,
+}
+
+struct RemoteWorkerCompletion {
+    request_id: Value,
+    operation_id: String,
+    lane_key: String,
+    endpoint: subversionr_protocol::CanonicalEndpoint,
+    result: Result<(), BridgeFailure>,
+}
+
+struct RemoteWorkerSpawnError {
+    request_id: Value,
+    operation_id: String,
+    lane_key: String,
+}
+
+fn spawn_remote_worker(
+    remote_worker: Arc<dyn RemoteWorkerSupervisor>,
+    launch: RemoteLaunchPlan,
+    cancellation: StdioCancellationToken,
+    sender: mpsc::Sender<RemoteWorkerCompletion>,
+) -> Result<(), RemoteWorkerSpawnError> {
+    let request_id = launch.request_id.clone();
+    let operation_id = launch.operation.envelope.operation_id.clone();
+    let lane_key = launch.lane_key.clone();
+    let endpoint = launch.operation.endpoint.clone();
+    let spawn_error = RemoteWorkerSpawnError {
+        request_id: request_id.clone(),
+        operation_id: operation_id.clone(),
+        lane_key: lane_key.clone(),
+    };
+    thread::Builder::new()
+        .name(format!("subversionr-remote-worker-{operation_id}"))
+        .spawn(move || {
+            let unavailable_bridge = UnavailableBridge;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                remote_worker.execute(
+                    &launch.operation.envelope,
+                    launch.operation.config,
+                    &lane_key,
+                    &cancellation,
+                    &unavailable_bridge,
+                    launch.operation.deadline,
+                )
+            }))
+            .unwrap_or_else(|_| {
+                Err(BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_WORKER_CRASHED",
+                    "process",
+                    "error.remote.workerCrashed",
+                    json!({ "stage": "supervisor" }),
+                    false,
+                ))
+            });
+            let _ = sender.send(RemoteWorkerCompletion {
+                request_id,
+                operation_id,
+                lane_key,
+                endpoint,
+                result,
+            });
+        })
+        .map(|_| ())
+        .map_err(|_| spawn_error)
+}
+
+fn settle_remote_completion<W: Write>(
+    state: &mut DaemonState,
+    pending: &mut BTreeMap<String, PendingRemoteRequest>,
+    completion: RemoteWorkerCompletion,
+    terminal: bool,
+    writer: &mut W,
+) -> io::Result<()> {
+    let recovery_blocked = completion
+        .result
+        .as_ref()
+        .is_err_and(|failure| failure.code() == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED");
+    state.settle_remote_launch(
+        &completion.lane_key,
+        &completion.operation_id,
+        recovery_blocked,
+    );
+    let Some(pending_request) = pending.remove(&completion.operation_id) else {
+        return Err(io::Error::other(
+            "remote worker completed without a pending request",
+        ));
+    };
+    if terminal {
+        return Ok(());
+    }
+    let response = match completion.result {
+        Ok(()) => json!({
+            "jsonrpc": "2.0",
+            "id": completion.request_id,
+            "error": bridge_error(unsupported_transport(&completion.endpoint)),
+        }),
+        Err(failure) => json!({
+            "jsonrpc": "2.0",
+            "id": completion.request_id,
+            "error": bridge_error(failure),
+        }),
+    };
+    write_content_length_frame(writer, &response)?;
+    for notification in pending_request.notifications {
+        write_content_length_frame(writer, &notification)?;
+    }
+    writer.flush()
+}
+
+fn remote_worker_start_error_response(request_id: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": bridge_error(BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_WORKER_START_FAILED",
+            "process",
+            "error.remote.workerStartFailed",
+            json!({ "stage": "supervisorThread" }),
+            false,
+        )),
+    })
 }
 
 struct StdioFrameReceiver {
@@ -80,6 +308,7 @@ struct StdioFrameReceiver {
     terminal_consumed: bool,
     retired_auth_request_ids: RetiredAuthRequestIds,
     active_cancellation: ActiveStdioRequestCancellation,
+    connection_terminal: Arc<AtomicBool>,
 }
 
 enum StdioFrameEvent {
@@ -124,7 +353,7 @@ struct ActiveStdioRequestCancellation {
 
 #[derive(Debug, Default)]
 struct ActiveStdioRequestCancellationState {
-    active: Option<ActiveStdioRequest>,
+    active: Vec<ActiveStdioRequest>,
     pending_cancel_ids: VecDeque<Value>,
 }
 
@@ -157,7 +386,7 @@ impl ActiveStdioRequestCancellation {
         if remove_pending_cancel_id(&mut state.pending_cancel_ids, &id) {
             token.cancel();
         }
-        state.active = Some(ActiveStdioRequest {
+        state.active.push(ActiveStdioRequest {
             id: id.clone(),
             token,
         });
@@ -175,9 +404,7 @@ impl ActiveStdioRequestCancellation {
             .state
             .lock()
             .expect("stdio request cancellation state should not be poisoned");
-        if let Some(active) = &state.active
-            && active.id == cancel_id
-        {
+        if let Some(active) = state.active.iter().find(|active| active.id == cancel_id) {
             active.token.cancel();
             return true;
         }
@@ -190,8 +417,18 @@ impl ActiveStdioRequestCancellation {
             .state
             .lock()
             .expect("stdio request cancellation state should not be poisoned");
-        if state.active.as_ref().is_some_and(|active| &active.id == id) {
-            state.active = None;
+        if let Some(index) = state.active.iter().position(|active| &active.id == id) {
+            state.active.remove(index);
+        }
+    }
+
+    fn cancel_all(&self) {
+        let state = self
+            .state
+            .lock()
+            .expect("stdio request cancellation state should not be poisoned");
+        for active in &state.active {
+            active.token.cancel();
         }
     }
 }
@@ -219,13 +456,15 @@ fn remove_pending_cancel_id(pending: &mut VecDeque<Value>, id: &Value) -> bool {
 }
 
 impl StdioFrameReceiver {
-    fn spawn<R>(reader: R) -> io::Result<Self>
+    fn spawn<R>(reader: R, remote_worker: Arc<dyn RemoteWorkerSupervisor>) -> io::Result<Self>
     where
         R: Read + Send + 'static,
     {
         let (sender, receiver) = mpsc::sync_channel(MAX_STDIN_FRAME_QUEUE);
         let active_cancellation = ActiveStdioRequestCancellation::new();
         let reader_active_cancellation = active_cancellation.clone();
+        let connection_terminal = Arc::new(AtomicBool::new(false));
+        let reader_connection_terminal = Arc::clone(&connection_terminal);
         let reader_thread = thread::Builder::new()
             .name("subversionr-stdio-reader".to_string())
             .spawn(move || {
@@ -243,6 +482,11 @@ impl StdioFrameReceiver {
                     };
                     let terminal =
                         matches!(event, StdioFrameEvent::Eof | StdioFrameEvent::Error(_));
+                    if terminal {
+                        reader_connection_terminal.store(true, Ordering::Release);
+                        reader_active_cancellation.cancel_all();
+                        let _ = remote_worker.disconnect();
+                    }
                     if sender.send(event).is_err() || terminal {
                         break;
                     }
@@ -255,7 +499,12 @@ impl StdioFrameReceiver {
             terminal_consumed: false,
             retired_auth_request_ids: RetiredAuthRequestIds::new(),
             active_cancellation,
+            connection_terminal,
         })
+    }
+
+    fn connection_terminal(&self) -> bool {
+        self.connection_terminal.load(Ordering::Acquire)
     }
 
     fn activate_request_cancellation(
@@ -266,6 +515,7 @@ impl StdioFrameReceiver {
         self.active_cancellation.activate(request_id, token)
     }
 
+    #[cfg(test)]
     fn recv(&mut self) -> io::Result<Option<Vec<u8>>> {
         loop {
             if self.terminal_consumed {
@@ -283,6 +533,9 @@ impl StdioFrameReceiver {
 
     fn recv_until(&mut self, deadline: Instant) -> io::Result<TimedStdioFrame> {
         loop {
+            if self.terminal_consumed {
+                return Ok(TimedStdioFrame::Eof);
+            }
             let now = Instant::now();
             if now >= deadline {
                 return Ok(TimedStdioFrame::Timeout);
@@ -308,6 +561,7 @@ impl StdioFrameReceiver {
         }
     }
 
+    #[cfg(test)]
     fn handle_event(&mut self, event: StdioFrameEvent) -> io::Result<Option<Vec<u8>>> {
         match event {
             StdioFrameEvent::Payload(payload) => Ok(Some(payload)),
@@ -1052,6 +1306,7 @@ mod tests {
             terminal_consumed: false,
             retired_auth_request_ids: RetiredAuthRequestIds::new(),
             active_cancellation: ActiveStdioRequestCancellation::new(),
+            connection_terminal: Arc::new(AtomicBool::new(false)),
         };
 
         let error = frames
@@ -1068,6 +1323,7 @@ mod tests {
             terminal_consumed: false,
             retired_auth_request_ids: RetiredAuthRequestIds::new(),
             active_cancellation: ActiveStdioRequestCancellation::new(),
+            connection_terminal: Arc::new(AtomicBool::new(false)),
         };
 
         let error = match frames.recv_until(Instant::now() + Duration::from_millis(1)) {
@@ -1088,6 +1344,7 @@ mod tests {
             terminal_consumed: false,
             retired_auth_request_ids: RetiredAuthRequestIds::new(),
             active_cancellation: ActiveStdioRequestCancellation::new(),
+            connection_terminal: Arc::new(AtomicBool::new(false)),
         };
 
         for index in 0..=MAX_RETIRED_AUTH_REQUEST_IDS {

@@ -1,7 +1,11 @@
 import { createRequire } from "node:module";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 
-const PROBE_SCHEMA = "subversionr.release.packaged-native-compatibility.v1";
+const PROBE_SCHEMA = "subversionr.release.packaged-native-compatibility.v2";
+const EXPECTED_PROTOCOL_MAJOR = 1;
+const EXPECTED_PROTOCOL_MINOR = 32;
+const EXPECTED_REMOTE_RESULT_CODE = "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED";
 
 class ProbeError extends Error {
   constructor(code, messageKey, safeArgs = {}) {
@@ -44,12 +48,32 @@ try {
         LOCALAPPDATA: options.profileRoot,
         USERPROFILE: options.profileRoot,
         HOME: options.profileRoot,
+        TEMP: options.profileRoot,
+        TMP: options.profileRoot,
       },
     },
     {
       notificationHandler: () => undefined,
     },
   );
+
+  const initializeResult = connection.initializeResult;
+  if (
+    !isRecord(initializeResult.protocol) ||
+    initializeResult.protocol.major !== EXPECTED_PROTOCOL_MAJOR ||
+    initializeResult.protocol.minor !== EXPECTED_PROTOCOL_MINOR
+  ) {
+    throw new ProbeError(
+      "SUBVERSIONR_PACKAGED_NATIVE_PROTOCOL_INVALID",
+      "error.release.packagedNativeProtocolInvalid",
+    );
+  }
+  if (initializeResult.capabilities?.remoteWorkerIsolation !== true) {
+    throw new ProbeError(
+      "SUBVERSIONR_PACKAGED_NATIVE_REMOTE_WORKER_CAPABILITY_MISSING",
+      "error.release.packagedNativeRemoteWorkerCapabilityMissing",
+    );
+  }
 
   const discovery = await connection.sendRequest("repository/discover", {
     workspaceRoots: [options.workspaceRoot],
@@ -72,7 +96,39 @@ try {
     );
   }
 
-  const initializeResult = connection.initializeResult;
+  const remoteResultCode = await requireRemoteUnsupported(
+    connection,
+    remoteCheckoutRequest(options.workspaceRoot, "12700000-0000-4000-8000-000000000003"),
+  );
+  const workerTempRoot = path.join(options.profileRoot, "SubversionR", "remote-workers");
+  const residualWorkerTempEntries = await readDirectoryIfPresent(workerTempRoot);
+  if (residualWorkerTempEntries.length !== 0) {
+    throw new ProbeError(
+      "SUBVERSIONR_PACKAGED_NATIVE_REMOTE_WORKER_CLEANUP_INVALID",
+      "error.release.packagedNativeRemoteWorkerCleanupInvalid",
+    );
+  }
+  const sameLaneResultCode = await requireRemoteUnsupported(
+    connection,
+    remoteCheckoutRequest(options.workspaceRoot, "12700000-0000-4000-8000-000000000004"),
+  );
+
+  const diagnostics = await connection.sendRequest("diagnostics/get", {});
+  if (
+    !isRecord(diagnostics) ||
+    !isRecord(diagnostics.protocol) ||
+    diagnostics.protocol.major !== EXPECTED_PROTOCOL_MAJOR ||
+    diagnostics.protocol.minor !== EXPECTED_PROTOCOL_MINOR ||
+    !isRecord(diagnostics.capabilities) ||
+    diagnostics.capabilities.remoteWorkerIsolation !== true ||
+    diagnostics.source !== "subversionr-daemon"
+  ) {
+    throw new ProbeError(
+      "SUBVERSIONR_PACKAGED_NATIVE_SUBSEQUENT_DIAGNOSTICS_INVALID",
+      "error.release.packagedNativeSubsequentDiagnosticsInvalid",
+    );
+  }
+
   await connection.shutdown();
   connection = undefined;
   process.stdout.write(
@@ -83,6 +139,32 @@ try {
       backendVersion: initializeResult.backendVersion,
       bridgeVersion: initializeResult.bridgeVersion,
       libsvnVersion: initializeResult.libsvnVersion,
+      capabilities: {
+        remoteWorkerIsolation: true,
+      },
+      localDiscovery: {
+        status: "passed",
+        candidateCount: discovery.candidates.length,
+        fileExternalBoundaryCount: discovery.fileExternalBoundaries.length,
+      },
+      workerIsolation: {
+        operation: "repository/checkout",
+        expectedOriginScheme: "https",
+        resultCode: remoteResultCode,
+        tempRootCleanup: {
+          status: "passed",
+          residualEntryCount: residualWorkerTempEntries.length,
+        },
+        sameLaneSubsequent: {
+          status: "passed",
+          resultCode: sameLaneResultCode,
+        },
+        subsequentDiagnostics: {
+          status: "passed",
+          source: diagnostics.source,
+          protocol: diagnostics.protocol,
+        },
+      },
     })}\n`,
   );
 } catch (error) {
@@ -95,6 +177,69 @@ try {
     })}\n`,
   );
   process.exitCode = 1;
+}
+
+async function requireRemoteUnsupported(activeConnection, request) {
+  try {
+    await activeConnection.sendRequest("repository/checkout", request);
+    throw new ProbeError(
+      "SUBVERSIONR_PACKAGED_NATIVE_REMOTE_WORKER_RESULT_INVALID",
+      "error.release.packagedNativeRemoteWorkerResultInvalid",
+    );
+  } catch (error) {
+    if (!isRecord(error) || error.code !== EXPECTED_REMOTE_RESULT_CODE) {
+      throw error;
+    }
+    return error.code;
+  }
+}
+
+async function readDirectoryIfPresent(directory) {
+  try {
+    return await readdir(directory);
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function remoteCheckoutRequest(workspaceRoot, operationId) {
+  const endpoint = {
+    scheme: "https",
+    canonicalHost: "svn.example.invalid",
+    effectivePort: 443,
+  };
+  return {
+    url: "https://svn.example.invalid/project/trunk",
+    targetPath: path.join(workspaceRoot, "packaged-native-worker-target"),
+    revision: "head",
+    depth: "infinity",
+    ignoreExternals: true,
+    remote: {
+      version: 1,
+      operationId,
+      intent: "foreground",
+      interaction: "forbidden",
+      timeoutMs: 10_000,
+      workspaceTrust: "trusted",
+      trustEpoch: 1,
+      profile: {
+        schema: "subversionr.remote-profile.v1",
+        profileId: "packaged-native-worker",
+        authority: endpoint,
+        serverAuth: "anonymous",
+        serverAccount: "none",
+        serverCredentialPersistence: "secretStorage",
+        tls: { trust: "windowsRootsThenBroker" },
+        proxy: "none",
+        ssh: "none",
+        redirectPolicy: "rejectAll",
+      },
+      expectedOrigin: endpoint,
+    },
+  };
 }
 
 function parseOptions(args) {

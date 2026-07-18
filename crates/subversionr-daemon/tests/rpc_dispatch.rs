@@ -3,17 +3,21 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use subversionr_daemon::{
-    BridgeApi, BridgeFailure, BridgeInfo, ContentBlob, DaemonState, DispatchOutcome,
-    HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
-    dispatch_json_rpc, dispatch_json_rpc_with_bridge,
+    BridgeApi, BridgeCancellationToken, BridgeFailure, BridgeInfo, ContentBlob, DaemonState,
+    DispatchOutcome, HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
+    RemoteConfigPlan, RemoteWorkerSupervisor, dispatch_json_rpc, dispatch_json_rpc_with_bridge,
 };
 
 use subversionr_protocol::{
     CredentialRequest, HistoryBlameLine, HistoryLogChangedPath, HistoryLogEntry, LockInfo,
-    RepositoryIdentity, StatusEntry, StatusSnapshot, StatusSummary,
+    RemoteOperationEnvelope, RepositoryIdentity, StatusEntry, StatusSnapshot, StatusSummary,
 };
 
 #[derive(Debug)]
@@ -1743,13 +1747,13 @@ fn initialize_request_returns_versions_and_keeps_process_running() {
     assert_eq!(outcome, DispatchOutcome::Continue);
     assert_eq!(outcome.response()["id"], 1);
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 31);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 32);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["schemaId"],
         "subversionr.cache.v1"
     );
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 31);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 32);
     assert_eq!(outcome.response()["result"]["cacheSchema"]["version"], 1);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["rollback"],
@@ -9071,6 +9075,73 @@ fn remote_trust_epochs_are_exactly_ordered_and_replays_never_create_contexts() {
     );
     assert_eq!(bridge.remote_context_requests.borrow().len(), 1);
     assert!(bridge.checkout_requests.borrow().is_empty());
+}
+
+#[derive(Debug, Default)]
+struct RetryableTrustUpdateSupervisor {
+    revoke_attempts: AtomicUsize,
+}
+
+impl RemoteWorkerSupervisor for RetryableTrustUpdateSupervisor {
+    fn execute(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        _cancellation: &dyn BridgeCancellationToken,
+        _bridge: &dyn BridgeApi,
+        _deadline: Instant,
+    ) -> Result<(), BridgeFailure> {
+        unreachable!("trust transaction test never launches a worker")
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn update_workspace_trust(&self, trusted: bool) -> Result<(), BridgeFailure> {
+        if trusted || self.revoke_attempts.fetch_add(1, Ordering::SeqCst) > 0 {
+            return Ok(());
+        }
+        Err(BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+            "state",
+            "error.remote.recoveryBlocked",
+            serde_json::json!({}),
+            false,
+        ))
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn trust_revoke_commits_the_epoch_only_after_worker_cleanup_acknowledges() {
+    let bridge = FakeBridge::open_success();
+    let supervisor = Arc::new(RetryableTrustUpdateSupervisor::default());
+    let mut state = DaemonState::with_remote_worker(supervisor.clone());
+    initialize_remote_state(&mut state, &bridge, "trusted");
+    let revoke = r#"{"jsonrpc":"2.0","id":515,"method":"workspaceTrust/update","params":{"trusted":false,"trustEpoch":2}}"#;
+
+    let blocked = state
+        .dispatch_json_rpc_with_bridge(revoke, &bridge)
+        .expect("failed cleanup must return a structured response");
+    assert_eq!(
+        blocked.response()["error"]["code"],
+        "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    );
+
+    let retried = state
+        .dispatch_json_rpc_with_bridge(revoke, &bridge)
+        .expect("the same unacknowledged epoch must remain retryable");
+    assert_eq!(retried.response()["result"]["acknowledgedTrustEpoch"], 2);
+    assert_eq!(supervisor.revoke_attempts.load(Ordering::SeqCst), 2);
 }
 
 #[test]

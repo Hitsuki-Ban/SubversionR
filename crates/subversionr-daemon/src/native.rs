@@ -720,6 +720,31 @@ impl NativeSymbols {
     }
 }
 
+#[derive(Clone, Copy)]
+struct RemoteNativeSymbols {
+    remote_context_create: RemoteContextCreate,
+    remote_context_inspect: RemoteContextInspect,
+    remote_context_destroy: RemoteContextDestroy,
+    version: Version,
+}
+
+impl RemoteNativeSymbols {
+    unsafe fn load_foundation(library: &Library) -> Result<Self, libloading::Error> {
+        Ok(Self {
+            remote_context_create: *unsafe {
+                library.get(b"subversionr_bridge_remote_context_create\0")
+            }?,
+            remote_context_inspect: *unsafe {
+                library.get(b"subversionr_bridge_remote_context_inspect\0")
+            }?,
+            remote_context_destroy: *unsafe {
+                library.get(b"subversionr_bridge_remote_context_destroy\0")
+            }?,
+            version: *unsafe { library.get(b"subversionr_bridge_version\0") }?,
+        })
+    }
+}
+
 #[derive(Debug)]
 pub enum NativeBridgeLoadError {
     PathMustBeAbsolute(PathBuf),
@@ -839,6 +864,49 @@ pub struct NativeBridge {
     runtime: NonNull<c_void>,
     symbols: NativeSymbols,
     _library: Library,
+}
+
+pub struct RemoteNativeBridge {
+    symbols: RemoteNativeSymbols,
+    _library: Library,
+}
+
+impl RemoteNativeBridge {
+    pub fn load_foundation(path: impl AsRef<Path>) -> Result<Self, NativeBridgeLoadError> {
+        let path = path.as_ref();
+        if !path.is_absolute() {
+            return Err(NativeBridgeLoadError::PathMustBeAbsolute(
+                path.to_path_buf(),
+            ));
+        }
+        if !path.is_file() {
+            return Err(NativeBridgeLoadError::MissingLibrary(path.to_path_buf()));
+        }
+        let library =
+            unsafe { load_library(path) }.map_err(|source| NativeBridgeLoadError::LoadLibrary {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        let symbols = unsafe { RemoteNativeSymbols::load_foundation(&library) }
+            .map_err(NativeBridgeLoadError::MissingSymbol)?;
+        unsafe { format_libsvn_version((symbols.version)())? };
+        Ok(Self {
+            symbols,
+            _library: library,
+        })
+    }
+
+    pub fn create_remote_context_foundation(
+        &self,
+        plan: RemoteConfigPlan,
+    ) -> Result<(), BridgeFailure> {
+        create_remote_context_foundation_raw(
+            self.symbols.remote_context_create,
+            self.symbols.remote_context_inspect,
+            self.symbols.remote_context_destroy,
+            plan,
+        )
+    }
 }
 
 impl NativeBridge {
@@ -987,64 +1055,12 @@ impl BridgeApi for NativeBridge {
         &self,
         plan: RemoteConfigPlan,
     ) -> Result<(), BridgeFailure> {
-        let config = RawRemoteConfigV1 {
-            abi_version: RAW_REMOTE_CONFIG_ABI_VERSION,
-            scheme: match plan.scheme {
-                RemoteConfigScheme::Http => 1,
-                RemoteConfigScheme::Https => 2,
-                RemoteConfigScheme::Svn => 3,
-            },
-            server_auth: match plan.server_auth {
-                RemoteConfigServerAuth::Anonymous => 1,
-                RemoteConfigServerAuth::Basic => 2,
-                RemoteConfigServerAuth::CramMd5 => 3,
-            },
-            timeout_ms: plan.timeout_ms,
-            trust_windows_roots: i32::from(plan.trust_windows_roots),
-        };
-        let mut context = ptr::null_mut();
-        let status = unsafe { (self.symbols.remote_context_create)(&config, &mut context) };
-        if status != 0 {
-            return Err(remote_context_failure(
-                "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED",
-                "error.remote.configCreateFailed",
-                status,
-            ));
-        }
-        let Some(context) = NonNull::new(context) else {
-            return Err(remote_context_failure(
-                "SUBVERSIONR_REMOTE_CONFIG_CREATE_NULL",
-                "error.remote.configCreateNull",
-                0,
-            ));
-        };
-
-        let mut inspection = RawRemoteConfigInspection::default();
-        let inspect_status =
-            unsafe { (self.symbols.remote_context_inspect)(context.as_ptr(), &mut inspection) };
-        unsafe { (self.symbols.remote_context_destroy)(context.as_ptr()) };
-        if inspect_status != 0 {
-            return Err(remote_context_failure(
-                "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_FAILED",
-                "error.remote.configInspectionFailed",
-                inspect_status,
-            ));
-        }
-        if inspection.abi_version != RAW_REMOTE_CONFIG_ABI_VERSION
-            || inspection.category_mask != RAW_REMOTE_CATEGORY_MASK
-            || inspection.option_mask != RAW_REMOTE_OPTION_MASK
-            || inspection.provider_mask != 0
-            || inspection.forbidden_input_mask != 0
-        {
-            return Err(BridgeFailure::new(
-                "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_INVALID",
-                "native",
-                "error.remote.configInspectionInvalid",
-                json!({}),
-                false,
-            ));
-        }
-        Ok(())
+        create_remote_context_foundation_raw(
+            self.symbols.remote_context_create,
+            self.symbols.remote_context_inspect,
+            self.symbols.remote_context_destroy,
+            plan,
+        )
     }
 
     fn open_working_copy(&self, path: &str) -> Result<RepositoryIdentity, BridgeFailure> {
@@ -1065,7 +1081,6 @@ impl BridgeApi for NativeBridge {
 
         repository_identity_from_raw(path, info)
     }
-
     fn open_working_copy_with_auth(
         &self,
         path: &str,
@@ -3952,6 +3967,70 @@ fn remote_context_failure(code: &str, message_key: &str, status: c_int) -> Bridg
     )
 }
 
+fn create_remote_context_foundation_raw(
+    create: RemoteContextCreate,
+    inspect: RemoteContextInspect,
+    destroy: RemoteContextDestroy,
+    plan: RemoteConfigPlan,
+) -> Result<(), BridgeFailure> {
+    let config = RawRemoteConfigV1 {
+        abi_version: RAW_REMOTE_CONFIG_ABI_VERSION,
+        scheme: match plan.scheme {
+            RemoteConfigScheme::Http => 1,
+            RemoteConfigScheme::Https => 2,
+            RemoteConfigScheme::Svn => 3,
+        },
+        server_auth: match plan.server_auth {
+            RemoteConfigServerAuth::Anonymous => 1,
+            RemoteConfigServerAuth::Basic => 2,
+            RemoteConfigServerAuth::CramMd5 => 3,
+        },
+        timeout_ms: plan.timeout_ms,
+        trust_windows_roots: i32::from(plan.trust_windows_roots),
+    };
+    let mut context = ptr::null_mut();
+    let status = unsafe { create(&config, &mut context) };
+    if status != 0 {
+        return Err(remote_context_failure(
+            "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED",
+            "error.remote.configCreateFailed",
+            status,
+        ));
+    }
+    let Some(context) = NonNull::new(context) else {
+        return Err(remote_context_failure(
+            "SUBVERSIONR_REMOTE_CONFIG_CREATE_NULL",
+            "error.remote.configCreateNull",
+            0,
+        ));
+    };
+    let mut inspection = RawRemoteConfigInspection::default();
+    let inspect_status = unsafe { inspect(context.as_ptr(), &mut inspection) };
+    unsafe { destroy(context.as_ptr()) };
+    if inspect_status != 0 {
+        return Err(remote_context_failure(
+            "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_FAILED",
+            "error.remote.configInspectionFailed",
+            inspect_status,
+        ));
+    }
+    if inspection.abi_version != RAW_REMOTE_CONFIG_ABI_VERSION
+        || inspection.category_mask != RAW_REMOTE_CATEGORY_MASK
+        || inspection.option_mask != RAW_REMOTE_OPTION_MASK
+        || inspection.provider_mask != 0
+        || inspection.forbidden_input_mask != 0
+    {
+        return Err(BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_INVALID",
+            "native",
+            "error.remote.configInspectionInvalid",
+            json!({}),
+            false,
+        ));
+    }
+    Ok(())
+}
+
 fn open_working_copy_failure(status: c_int, path: &str) -> BridgeFailure {
     let (code, message_key) = match status {
         1 => (
@@ -5813,6 +5892,26 @@ unsafe fn optional_c_string_to_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_foundation_loader_never_resolves_or_creates_local_runtime() {
+        let source = include_str!("native.rs");
+        let remote_symbols = source
+            .split("impl RemoteNativeSymbols")
+            .nth(1)
+            .and_then(|tail| tail.split("pub enum NativeBridgeLoadError").next())
+            .expect("remote-only symbol loader source section must remain present");
+        assert!(!remote_symbols.contains("runtime_create"));
+        assert!(!remote_symbols.contains("runtime_destroy"));
+
+        let remote_bridge = source
+            .split("impl RemoteNativeBridge")
+            .nth(1)
+            .and_then(|tail| tail.split("impl NativeBridge").next())
+            .expect("remote-only bridge source section must remain present");
+        assert!(!remote_bridge.contains("runtime_create"));
+        assert!(!remote_bridge.contains("svn_config_get_config"));
+    }
 
     #[test]
     fn native_bridge_startup_errors_are_stable_and_path_safe() {
