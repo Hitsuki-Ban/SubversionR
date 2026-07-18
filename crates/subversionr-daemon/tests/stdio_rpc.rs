@@ -3881,8 +3881,7 @@ fn stdio_remote_worker_auth_wait_obeys_the_operation_deadline() {
         response["id"] == "worker-auth-wait"
             && response["method"] == "credentials/request"
             && response["params"]["requestId"] == "worker-auth-wait"
-            && response["params"]["operationId"]
-                == "61234567-89ab-4def-8123-456789abcdef"
+            && response["params"]["operationId"] == "61234567-89ab-4def-8123-456789abcdef"
     }));
     assert!(responses.iter().any(|response| {
         response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_TIMEOUT"
