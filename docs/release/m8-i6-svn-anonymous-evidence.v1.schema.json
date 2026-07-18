@@ -207,49 +207,14 @@
     "recoverySettlements": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["surfaces", "safe", "indeterminate", "blocked"],
+      "required": ["surfaceObservations"],
       "properties": {
-        "surfaces": {
-          "const": ["packaged-native", "installed-vsix-extension-host"]
-        },
-        "safe": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["outcome", "freshReconcile", "nativeLaneReleased", "subsequentRequestPassed"],
-          "properties": {
-            "outcome": { "const": "Safe" },
-            "freshReconcile": { "const": true },
-            "nativeLaneReleased": { "const": true },
-            "subsequentRequestPassed": { "const": true }
-          }
-        },
-        "indeterminate": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["outcome", "stableCode", "reason", "nativeLaneBlocked", "explicitRecoveryRequired"],
-          "properties": {
-            "outcome": { "const": "Indeterminate" },
-            "stableCode": { "const": "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" },
-            "reason": { "const": "remoteOperationIndeterminate" },
-            "nativeLaneBlocked": { "const": true },
-            "explicitRecoveryRequired": { "const": true }
-          }
-        },
-        "blocked": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["outcome", "stableCode", "reason", "restartRestoredBlocked", "automaticClear", "requiredConfirmation", "exactTargetPathHashMatched", "exactOriginMatched", "confirmedEntryRemoved", "subsequentCheckoutPassed"],
-          "properties": {
-            "outcome": { "const": "Blocked" },
-            "stableCode": { "const": "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" },
-            "reason": { "const": "remoteRecoveryBlocked" },
-            "restartRestoredBlocked": { "const": true },
-            "automaticClear": { "const": false },
-            "requiredConfirmation": { "const": "reviewedAndResolved" },
-            "exactTargetPathHashMatched": { "const": true },
-            "exactOriginMatched": { "const": true },
-            "confirmedEntryRemoved": { "const": true },
-            "subsequentCheckoutPassed": { "const": true }
+        "surfaceObservations": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/recoverySurfaceObservation"
           }
         }
       }
@@ -261,6 +226,8 @@
         "surface",
         "cycles",
         "status",
+        "cycleObservations",
+        "subsequentObservation",
         "maxWorkerDescendantsAfterCycle",
         "maxTemporaryRootsAfterCycle",
         "maxFixtureServerChildrenAfterCycle",
@@ -276,14 +243,28 @@
         "status": {
           "const": "passed"
         },
+        "cycleObservations": {
+          "type": "array",
+          "minItems": 100,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/stressCycleObservation"
+          }
+        },
+        "subsequentObservation": {
+          "$ref": "#/$defs/stressCycleObservation"
+        },
         "maxWorkerDescendantsAfterCycle": {
-          "const": 0
+          "type": "integer",
+          "minimum": 0
         },
         "maxTemporaryRootsAfterCycle": {
-          "const": 0
+          "type": "integer",
+          "minimum": 0
         },
         "maxFixtureServerChildrenAfterCycle": {
-          "const": 0
+          "type": "integer",
+          "minimum": 0
         },
         "subsequentRequestPassed": {
           "const": true
@@ -435,6 +416,88 @@
         }
       }
     },
+    "stressCycleObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cycle",
+        "operationIdSha256",
+        "targetPathSha256",
+        "extensionHostSessionSha256",
+        "operation",
+        "faultMode",
+        "status",
+        "checkoutRevision",
+        "fixtureCliInvocations",
+        "credentialRequests",
+        "credentialSettlements",
+        "workerDescendantsAfter",
+        "temporaryRootsAfter",
+        "fixtureServerChildrenAfter",
+        "checkoutJournalEntriesAfter",
+        "diagnosticsRedacted"
+      ],
+      "properties": {
+        "cycle": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 101
+        },
+        "operationIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "targetPathSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "extensionHostSessionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "operation": {
+          "const": "checkoutOpen"
+        },
+        "faultMode": {
+          "const": "none"
+        },
+        "status": {
+          "const": "passed"
+        },
+        "checkoutRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "fixtureCliInvocations": {
+          "const": 0
+        },
+        "credentialRequests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "credentialSettlements": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workerDescendantsAfter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "temporaryRootsAfter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fixtureServerChildrenAfter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checkoutJournalEntriesAfter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnosticsRedacted": {
+          "const": true
+        }
+      }
+    },
     "surfaceBase": {
       "type": "object",
       "additionalProperties": false,
@@ -493,6 +556,120 @@
         }
       ]
     },
+    "negativeSurfaceObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surface",
+        "stableCode",
+        "reason",
+        "networkProgress",
+        "networkAttempts",
+        "networkConnections",
+        "fixtureCliInvocations",
+        "credentialRequests",
+        "credentialSettlements",
+        "followupNetworkContacts",
+        "workerDescendantsAfter",
+        "temporaryRootsAfter",
+        "diagnosticsRedacted"
+      ],
+      "properties": {
+        "surface": {
+          "enum": ["packaged-native", "installed-vsix-extension-host"]
+        },
+        "stableCode": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "networkProgress": {
+          "enum": ["none", "connected", "greeting", "authenticated", "command"]
+        },
+        "networkAttempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "networkConnections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fixtureCliInvocations": {
+          "const": 0
+        },
+        "credentialRequests": {
+          "const": 0
+        },
+        "credentialSettlements": {
+          "const": 0
+        },
+        "followupNetworkContacts": {
+          "const": 0
+        },
+        "workerDescendantsAfter": {
+          "const": 0
+        },
+        "temporaryRootsAfter": {
+          "const": 0
+        },
+        "diagnosticsRedacted": {
+          "const": true
+        }
+      }
+    },
+    "recoverySurfaceObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface", "safe", "indeterminate", "blocked"],
+      "properties": {
+        "surface": {
+          "enum": ["packaged-native", "installed-vsix-extension-host"]
+        },
+        "safe": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "freshReconcile", "nativeLaneReleased", "subsequentRequestPassed"],
+          "properties": {
+            "outcome": { "const": "Safe" },
+            "freshReconcile": { "const": true },
+            "nativeLaneReleased": { "const": true },
+            "subsequentRequestPassed": { "const": true }
+          }
+        },
+        "indeterminate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "stableCode", "reason", "nativeLaneBlocked", "explicitRecoveryRequired"],
+          "properties": {
+            "outcome": { "const": "Indeterminate" },
+            "stableCode": { "const": "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" },
+            "reason": { "const": "remoteOperationIndeterminate" },
+            "nativeLaneBlocked": { "const": true },
+            "explicitRecoveryRequired": { "const": true }
+          }
+        },
+        "blocked": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "stableCode", "reason", "restartRestoredBlocked", "automaticClear", "requiredConfirmation", "armedTargetPathSha256", "confirmedTargetPathSha256", "armedOriginOperationIdSha256", "confirmedOriginOperationIdSha256", "confirmedEntryRemoved", "subsequentCheckoutPassed"],
+          "properties": {
+            "outcome": { "const": "Blocked" },
+            "stableCode": { "const": "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" },
+            "reason": { "const": "remoteRecoveryBlocked" },
+            "restartRestoredBlocked": { "const": true },
+            "automaticClear": { "const": false },
+            "requiredConfirmation": { "const": "reviewedAndResolved" },
+            "armedTargetPathSha256": { "$ref": "#/$defs/sha256" },
+            "confirmedTargetPathSha256": { "$ref": "#/$defs/sha256" },
+            "armedOriginOperationIdSha256": { "$ref": "#/$defs/sha256" },
+            "confirmedOriginOperationIdSha256": { "$ref": "#/$defs/sha256" },
+            "confirmedEntryRemoved": { "const": true },
+            "subsequentCheckoutPassed": { "const": true }
+          }
+        }
+      }
+    },
     "negativeCell": {
       "type": "object",
       "additionalProperties": false,
@@ -501,11 +678,7 @@
         "status",
         "stableCode",
         "reason",
-        "surfaces",
-        "followupNetworkContacts",
-        "workerDescendantsAfter",
-        "temporaryRootsAfter",
-        "diagnosticsRedacted"
+        "surfaceObservations"
       ],
       "properties": {
         "cell": {
@@ -537,20 +710,13 @@
         "reason": {
           "type": "string"
         },
-        "surfaces": {
-          "const": ["packaged-native", "installed-vsix-extension-host"]
-        },
-        "followupNetworkContacts": {
-          "const": 0
-        },
-        "workerDescendantsAfter": {
-          "const": 0
-        },
-        "temporaryRootsAfter": {
-          "const": 0
-        },
-        "diagnosticsRedacted": {
-          "const": true
+        "surfaceObservations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/negativeSurfaceObservation"
+          }
         }
       }
     },

@@ -199,27 +199,146 @@ function Assert-Surface([object]$Surface, [string]$ExpectedKind, [string]$Expect
   }
 }
 
-function Assert-NegativeCell([object]$Cell, [string]$ExpectedCell, [string]$ExpectedCode, [string]$ExpectedReason, [string]$Context) {
-  Assert-ExactProperties $Cell @(
-    "cell",
-    "status",
+function Assert-NegativeSurfaceObservation(
+  [object]$Observation,
+  [string]$ExpectedSurface,
+  [string]$ExpectedCode,
+  [string]$ExpectedReason,
+  [string]$ExpectedNetworkProgress,
+  [int]$ExpectedNetworkAttempts,
+  [int]$ExpectedNetworkConnections,
+  [string]$Context
+) {
+  Assert-ExactProperties $Observation @(
+    "surface",
     "stableCode",
     "reason",
-    "surfaces",
+    "networkProgress",
+    "networkAttempts",
+    "networkConnections",
+    "fixtureCliInvocations",
+    "credentialRequests",
+    "credentialSettlements",
     "followupNetworkContacts",
     "workerDescendantsAfter",
     "temporaryRootsAfter",
     "diagnosticsRedacted"
   ) $Context
+  Assert-Equal $ExpectedSurface ([string]$Observation.surface) "$Context surface must match."
+  Assert-Equal $ExpectedCode ([string]$Observation.stableCode) "$Context stable code must match the controlled result."
+  Assert-Equal $ExpectedReason ([string]$Observation.reason) "$Context stable reason must match the controlled result."
+  Assert-Equal $ExpectedNetworkProgress ([string]$Observation.networkProgress) "$Context network progress must match the controlled fixture stage."
+  Assert-Equal $ExpectedNetworkAttempts ([int]$Observation.networkAttempts) "$Context network attempt count must match the controlled fixture."
+  Assert-Equal $ExpectedNetworkConnections ([int]$Observation.networkConnections) "$Context successful connection count must match the controlled fixture."
+  foreach ($field in @(
+      "fixtureCliInvocations",
+      "credentialRequests",
+      "credentialSettlements",
+      "followupNetworkContacts",
+      "workerDescendantsAfter",
+      "temporaryRootsAfter"
+    )) {
+    Assert-Equal 0 ([int]$Observation.$field) "$Context.$field must be zero."
+  }
+  Assert-Equal $true ([bool]$Observation.diagnosticsRedacted) "$Context diagnostics must be redacted."
+}
+
+function Assert-NegativeCell(
+  [object]$Cell,
+  [string]$ExpectedCell,
+  [string]$ExpectedCode,
+  [string]$ExpectedReason,
+  [string]$ExpectedNetworkProgress,
+  [int]$ExpectedNetworkAttempts,
+  [int]$ExpectedNetworkConnections,
+  [bool]$InstalledOnly,
+  [string]$Context
+) {
+  Assert-ExactProperties $Cell @(
+    "cell",
+    "status",
+    "stableCode",
+    "reason",
+    "surfaceObservations"
+  ) $Context
   Assert-Equal $ExpectedCell ([string]$Cell.cell) "$Context cell must match its matrix slot."
   Assert-Equal "passed" ([string]$Cell.status) "$Context must pass."
   Assert-Equal $ExpectedCode ([string]$Cell.stableCode) "$Context stable code must match the controlled failure."
   Assert-Equal $ExpectedReason ([string]$Cell.reason) "$Context stable failure reason must match."
-  Assert-Equal "packaged-native,installed-vsix-extension-host" (@($Cell.surfaces) -join ",") "$Context must pass on both packaged and installed product surfaces."
-  Assert-Equal 0 ([int]$Cell.followupNetworkContacts) "$Context must make zero forbidden follow-up contacts."
-  Assert-Equal 0 ([int]$Cell.workerDescendantsAfter) "$Context must leave zero worker descendants."
-  Assert-Equal 0 ([int]$Cell.temporaryRootsAfter) "$Context must leave zero operation temporary roots."
-  Assert-Equal $true ([bool]$Cell.diagnosticsRedacted) "$Context diagnostics must be redacted."
+  $observations = @($Cell.surfaceObservations)
+  if ($InstalledOnly) {
+    Assert-Equal 1 $observations.Count "$Context must contain the installed product observation exactly once."
+    Assert-NegativeSurfaceObservation $observations[0] "installed-vsix-extension-host" $ExpectedCode $ExpectedReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[0]"
+  }
+  else {
+    Assert-Equal 2 $observations.Count "$Context must contain packaged and installed product observations exactly once."
+    Assert-NegativeSurfaceObservation $observations[0] "packaged-native" $ExpectedCode $ExpectedReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[0]"
+    Assert-NegativeSurfaceObservation $observations[1] "installed-vsix-extension-host" $ExpectedCode $ExpectedReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[1]"
+  }
+}
+
+function Assert-RecoverySurfaceObservation([object]$Observation, [string]$ExpectedSurface, [string]$Context) {
+  Assert-ExactProperties $Observation @("surface", "safe", "indeterminate", "blocked") $Context
+  Assert-Equal $ExpectedSurface ([string]$Observation.surface) "$Context surface must match."
+  Assert-ExactProperties $Observation.safe @("outcome", "freshReconcile", "nativeLaneReleased", "subsequentRequestPassed") "$Context.safe"
+  Assert-Equal "Safe" ([string]$Observation.safe.outcome) "$Context Safe outcome must be exact."
+  foreach ($field in @("freshReconcile", "nativeLaneReleased", "subsequentRequestPassed")) {
+    Assert-Equal $true ([bool]$Observation.safe.$field) "$Context.safe.$field must be true."
+  }
+  Assert-ExactProperties $Observation.indeterminate @("outcome", "stableCode", "reason", "nativeLaneBlocked", "explicitRecoveryRequired") "$Context.indeterminate"
+  Assert-Equal "Indeterminate" ([string]$Observation.indeterminate.outcome) "$Context Indeterminate outcome must be exact."
+  Assert-Equal "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" ([string]$Observation.indeterminate.stableCode) "$Context Indeterminate code must be exact."
+  Assert-Equal "remoteOperationIndeterminate" ([string]$Observation.indeterminate.reason) "$Context Indeterminate reason must be exact."
+  Assert-Equal $true ([bool]$Observation.indeterminate.nativeLaneBlocked) "$Context Indeterminate recovery must block the native lane."
+  Assert-Equal $true ([bool]$Observation.indeterminate.explicitRecoveryRequired) "$Context Indeterminate recovery must require explicit recovery."
+  Assert-ExactProperties $Observation.blocked @("outcome", "stableCode", "reason", "restartRestoredBlocked", "automaticClear", "requiredConfirmation", "armedTargetPathSha256", "confirmedTargetPathSha256", "armedOriginOperationIdSha256", "confirmedOriginOperationIdSha256", "confirmedEntryRemoved", "subsequentCheckoutPassed") "$Context.blocked"
+  Assert-Equal "Blocked" ([string]$Observation.blocked.outcome) "$Context Blocked outcome must be exact."
+  Assert-Equal "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" ([string]$Observation.blocked.stableCode) "$Context Blocked code must be exact."
+  Assert-Equal "remoteRecoveryBlocked" ([string]$Observation.blocked.reason) "$Context Blocked reason must be exact."
+  Assert-Equal $true ([bool]$Observation.blocked.restartRestoredBlocked) "$Context checkout recovery must restore armed targets as blocked after restart."
+  Assert-Equal $false ([bool]$Observation.blocked.automaticClear) "$Context checkout recovery must never clear automatically."
+  Assert-Equal "reviewedAndResolved" ([string]$Observation.blocked.requiredConfirmation) "$Context checkout recovery must require exact explicit confirmation."
+  foreach ($field in @("armedTargetPathSha256", "confirmedTargetPathSha256", "armedOriginOperationIdSha256", "confirmedOriginOperationIdSha256")) {
+    Assert-Hash ([string]$Observation.blocked.$field) "$Context.blocked.$field"
+  }
+  Assert-Equal ([string]$Observation.blocked.armedTargetPathSha256) ([string]$Observation.blocked.confirmedTargetPathSha256) "$Context blocked confirmation must match the exact armed target-path hash."
+  Assert-Equal ([string]$Observation.blocked.armedOriginOperationIdSha256) ([string]$Observation.blocked.confirmedOriginOperationIdSha256) "$Context blocked confirmation must match the exact armed origin-operation-ID hash."
+  foreach ($field in @("confirmedEntryRemoved", "subsequentCheckoutPassed")) {
+    Assert-Equal $true ([bool]$Observation.blocked.$field) "$Context.blocked.$field must be true."
+  }
+}
+
+function Assert-StressCycleObservation([object]$Observation, [int]$ExpectedCycle, [string]$Context) {
+  Assert-ExactProperties $Observation @(
+    "cycle",
+    "operationIdSha256",
+    "targetPathSha256",
+    "extensionHostSessionSha256",
+    "operation",
+    "faultMode",
+    "status",
+    "checkoutRevision",
+    "fixtureCliInvocations",
+    "credentialRequests",
+    "credentialSettlements",
+    "workerDescendantsAfter",
+    "temporaryRootsAfter",
+    "fixtureServerChildrenAfter",
+    "checkoutJournalEntriesAfter",
+    "diagnosticsRedacted"
+  ) $Context
+  Assert-Equal $ExpectedCycle ([int]$Observation.cycle) "$Context cycle must be exact and ordered."
+  Assert-Hash ([string]$Observation.operationIdSha256) "$Context.operationIdSha256"
+  Assert-Hash ([string]$Observation.targetPathSha256) "$Context.targetPathSha256"
+  Assert-Hash ([string]$Observation.extensionHostSessionSha256) "$Context.extensionHostSessionSha256"
+  Assert-Equal "checkoutOpen" ([string]$Observation.operation) "$Context must execute the reviewed native checkout operation."
+  Assert-Equal "none" ([string]$Observation.faultMode) "$Context must use the reviewed no-fault stress mode."
+  Assert-Equal "passed" ([string]$Observation.status) "$Context must pass."
+  Assert-True ([int]$Observation.checkoutRevision -ge 0) "$Context checkout revision must be non-negative."
+  foreach ($field in @("fixtureCliInvocations", "credentialRequests", "credentialSettlements", "workerDescendantsAfter", "temporaryRootsAfter", "fixtureServerChildrenAfter", "checkoutJournalEntriesAfter")) {
+    Assert-Equal 0 ([int]$Observation.$field) "$Context.$field must be zero."
+  }
+  Assert-Equal $true ([bool]$Observation.diagnosticsRedacted) "$Context diagnostics must be redacted."
 }
 
 $evidenceResolved = Resolve-RequiredFile $EvidencePath "EvidencePath"
@@ -350,61 +469,40 @@ Assert-Surface $surfaces[1] "installed-vsix-extension-host" ([string]$report.art
 $negativeCells = @($report.negativeCells)
 Assert-Equal $ExpectedNegativeCells.Count $negativeCells.Count "I6 evidence must contain every negative cell exactly once."
 $negativeContracts = @(
-  @("maliciousRoot", "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH", "crossAuthorityRejected"),
-  @("saslOnly", "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED", "remoteCapabilityUnsupported"),
-  @("authzDenied", "SVN_REMOTE_STATUS_AUTH_FAILED", "authorizationDenied"),
-  @("blackholeConnect", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded"),
-  @("stalledMidRead", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded"),
-  @("deadline", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded"),
-  @("cancellation", "SUBVERSIONR_REMOTE_WORKER_CANCELLED", "operationCancelled"),
-  @("workerCrash", "SUBVERSIONR_REMOTE_WORKER_CRASHED", "workerContainmentFailed"),
-  @("daemonDisconnect", "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED", "workerContainmentFailed"),
-  @("trustRevoked", "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH", "remoteConfigurationInvalid"),
-  @("recoverySafe", "none", "none"),
-  @("recoveryIndeterminate", "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE", "remoteOperationIndeterminate"),
-  @("recoveryBlocked", "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED", "remoteRecoveryBlocked"),
-  @("unrelatedRepository", "none", "none"),
-  @("localEventZeroNetwork", "none", "none"),
-  @("redaction", "none", "none")
+  @("maliciousRoot", "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH", "crossAuthorityRejected", "authenticated", 1, 1, $false),
+  @("saslOnly", "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED", "remoteCapabilityUnsupported", "greeting", 1, 1, $false),
+  @("authzDenied", "SVN_REMOTE_STATUS_AUTH_FAILED", "authorizationDenied", "command", 1, 1, $false),
+  @("blackholeConnect", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "none", 1, 0, $false),
+  @("stalledMidRead", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "greeting", 1, 1, $false),
+  @("deadline", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "greeting", 1, 1, $false),
+  @("cancellation", "SUBVERSIONR_REMOTE_WORKER_CANCELLED", "operationCancelled", "greeting", 1, 1, $false),
+  @("workerCrash", "SUBVERSIONR_REMOTE_WORKER_CRASHED", "workerContainmentFailed", "greeting", 1, 1, $false),
+  @("daemonDisconnect", "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED", "workerContainmentFailed", "greeting", 1, 1, $false),
+  @("trustRevoked", "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH", "remoteConfigurationInvalid", "none", 0, 0, $false),
+  @("recoverySafe", "none", "none", "command", 1, 1, $false),
+  @("recoveryIndeterminate", "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE", "remoteOperationIndeterminate", "command", 1, 1, $false),
+  @("recoveryBlocked", "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED", "remoteRecoveryBlocked", "command", 1, 1, $false),
+  @("unrelatedRepository", "none", "none", "command", 1, 1, $false),
+  @("localEventZeroNetwork", "none", "none", "none", 0, 0, $true),
+  @("redaction", "none", "none", "command", 1, 1, $false)
 )
 for ($index = 0; $index -lt $negativeContracts.Count; $index += 1) {
   $contract = $negativeContracts[$index]
-  Assert-NegativeCell $negativeCells[$index] $contract[0] $contract[1] $contract[2] "I6 evidence.negativeCells[$index]"
+  Assert-NegativeCell $negativeCells[$index] $contract[0] $contract[1] $contract[2] $contract[3] $contract[4] $contract[5] $contract[6] "I6 evidence.negativeCells[$index]"
 }
 
-Assert-ExactProperties $report.recoverySettlements @(
-  "surfaces",
-  "safe",
-  "indeterminate",
-  "blocked"
-) "I6 evidence.recoverySettlements"
-Assert-Equal "packaged-native,installed-vsix-extension-host" (@($report.recoverySettlements.surfaces) -join ",") "I6 recovery settlements must pass on both product surfaces."
-Assert-ExactProperties $report.recoverySettlements.safe @("outcome", "freshReconcile", "nativeLaneReleased", "subsequentRequestPassed") "I6 evidence.recoverySettlements.safe"
-Assert-Equal "Safe" ([string]$report.recoverySettlements.safe.outcome) "I6 Safe recovery outcome must be exact."
-foreach ($field in @("freshReconcile", "nativeLaneReleased", "subsequentRequestPassed")) {
-  Assert-Equal $true ([bool]$report.recoverySettlements.safe.$field) "I6 evidence.recoverySettlements.safe.$field must be true."
-}
-Assert-ExactProperties $report.recoverySettlements.indeterminate @("outcome", "stableCode", "reason", "nativeLaneBlocked", "explicitRecoveryRequired") "I6 evidence.recoverySettlements.indeterminate"
-Assert-Equal "Indeterminate" ([string]$report.recoverySettlements.indeterminate.outcome) "I6 Indeterminate recovery outcome must be exact."
-Assert-Equal "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" ([string]$report.recoverySettlements.indeterminate.stableCode) "I6 Indeterminate recovery code must be exact."
-Assert-Equal "remoteOperationIndeterminate" ([string]$report.recoverySettlements.indeterminate.reason) "I6 Indeterminate recovery reason must be exact."
-Assert-Equal $true ([bool]$report.recoverySettlements.indeterminate.nativeLaneBlocked) "I6 Indeterminate recovery must block the native lane."
-Assert-Equal $true ([bool]$report.recoverySettlements.indeterminate.explicitRecoveryRequired) "I6 Indeterminate recovery must require explicit recovery."
-Assert-ExactProperties $report.recoverySettlements.blocked @("outcome", "stableCode", "reason", "restartRestoredBlocked", "automaticClear", "requiredConfirmation", "exactTargetPathHashMatched", "exactOriginMatched", "confirmedEntryRemoved", "subsequentCheckoutPassed") "I6 evidence.recoverySettlements.blocked"
-Assert-Equal "Blocked" ([string]$report.recoverySettlements.blocked.outcome) "I6 Blocked recovery outcome must be exact."
-Assert-Equal "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" ([string]$report.recoverySettlements.blocked.stableCode) "I6 Blocked recovery code must be exact."
-Assert-Equal "remoteRecoveryBlocked" ([string]$report.recoverySettlements.blocked.reason) "I6 Blocked recovery reason must be exact."
-Assert-Equal $true ([bool]$report.recoverySettlements.blocked.restartRestoredBlocked) "I6 checkout recovery must restore armed targets as blocked after restart."
-Assert-Equal $false ([bool]$report.recoverySettlements.blocked.automaticClear) "I6 checkout recovery must never clear automatically."
-Assert-Equal "reviewedAndResolved" ([string]$report.recoverySettlements.blocked.requiredConfirmation) "I6 checkout recovery must require the exact explicit confirmation contract."
-foreach ($field in @("exactTargetPathHashMatched", "exactOriginMatched", "confirmedEntryRemoved", "subsequentCheckoutPassed")) {
-  Assert-Equal $true ([bool]$report.recoverySettlements.blocked.$field) "I6 evidence.recoverySettlements.blocked.$field must be true."
-}
+Assert-ExactProperties $report.recoverySettlements @("surfaceObservations") "I6 evidence.recoverySettlements"
+$recoveryObservations = @($report.recoverySettlements.surfaceObservations)
+Assert-Equal 2 $recoveryObservations.Count "I6 recovery settlements must contain packaged and installed product observations."
+Assert-RecoverySurfaceObservation $recoveryObservations[0] "packaged-native" "I6 evidence.recoverySettlements.surfaceObservations[0]"
+Assert-RecoverySurfaceObservation $recoveryObservations[1] "installed-vsix-extension-host" "I6 evidence.recoverySettlements.surfaceObservations[1]"
 
 Assert-ExactProperties $report.stress @(
   "surface",
   "cycles",
   "status",
+  "cycleObservations",
+  "subsequentObservation",
   "maxWorkerDescendantsAfterCycle",
   "maxTemporaryRootsAfterCycle",
   "maxFixtureServerChildrenAfterCycle",
@@ -413,9 +511,39 @@ Assert-ExactProperties $report.stress @(
 Assert-Equal "installed-vsix-extension-host" ([string]$report.stress.surface) "I6 stress evidence must exercise the installed product."
 Assert-Equal 100 ([int]$report.stress.cycles) "I6 stress evidence must run exactly 100 cycles."
 Assert-Equal "passed" ([string]$report.stress.status) "I6 stress evidence must pass."
-Assert-Equal 0 ([int]$report.stress.maxWorkerDescendantsAfterCycle) "I6 stress evidence must leave zero worker descendants after every cycle."
-Assert-Equal 0 ([int]$report.stress.maxTemporaryRootsAfterCycle) "I6 stress evidence must leave zero temporary roots after every cycle."
-Assert-Equal 0 ([int]$report.stress.maxFixtureServerChildrenAfterCycle) "I6 stress evidence must leave zero fixture server children after every cycle."
+$cycleObservations = @($report.stress.cycleObservations)
+Assert-Equal 100 $cycleObservations.Count "I6 stress evidence must contain exactly 100 per-cycle observations."
+$operationHashes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$targetHashes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$extensionHostSessionHashes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$workerCounts = @()
+$temporaryRootCounts = @()
+$fixtureChildCounts = @()
+for ($index = 0; $index -lt $cycleObservations.Count; $index += 1) {
+  $observation = $cycleObservations[$index]
+  Assert-StressCycleObservation $observation ($index + 1) "I6 evidence.stress.cycleObservations[$index]"
+  Assert-True ($operationHashes.Add([string]$observation.operationIdSha256)) "I6 stress operation hashes must be unique."
+  [void]$targetHashes.Add([string]$observation.targetPathSha256)
+  [void]$extensionHostSessionHashes.Add([string]$observation.extensionHostSessionSha256)
+  $workerCounts += [int]$observation.workerDescendantsAfter
+  $temporaryRootCounts += [int]$observation.temporaryRootsAfter
+  $fixtureChildCounts += [int]$observation.fixtureServerChildrenAfter
+}
+Assert-Equal 1 $targetHashes.Count "I6 stress cycles must reuse one exact checkout target hash."
+Assert-Equal 1 $extensionHostSessionHashes.Count "I6 stress cycles must run in one exact installed Extension Host session."
+Assert-StressCycleObservation $report.stress.subsequentObservation 101 "I6 evidence.stress.subsequentObservation"
+Assert-True (-not $operationHashes.Contains([string]$report.stress.subsequentObservation.operationIdSha256)) "I6 stress subsequent request must use an independent operation hash."
+Assert-True ($targetHashes.Contains([string]$report.stress.subsequentObservation.targetPathSha256)) "I6 stress subsequent request must reuse the exact checkout target hash."
+Assert-True ($extensionHostSessionHashes.Contains([string]$report.stress.subsequentObservation.extensionHostSessionSha256)) "I6 stress subsequent request must run in the same installed Extension Host session."
+$maxWorkers = ($workerCounts | Measure-Object -Maximum).Maximum
+$maxTemporaryRoots = ($temporaryRootCounts | Measure-Object -Maximum).Maximum
+$maxFixtureChildren = ($fixtureChildCounts | Measure-Object -Maximum).Maximum
+Assert-Equal $maxWorkers ([int]$report.stress.maxWorkerDescendantsAfterCycle) "I6 stress worker aggregate must be recomputed from per-cycle observations."
+Assert-Equal $maxTemporaryRoots ([int]$report.stress.maxTemporaryRootsAfterCycle) "I6 stress temporary-root aggregate must be recomputed from per-cycle observations."
+Assert-Equal $maxFixtureChildren ([int]$report.stress.maxFixtureServerChildrenAfterCycle) "I6 stress fixture-child aggregate must be recomputed from per-cycle observations."
+Assert-Equal 0 $maxWorkers "I6 stress evidence must leave zero worker descendants after every cycle."
+Assert-Equal 0 $maxTemporaryRoots "I6 stress evidence must leave zero temporary roots after every cycle."
+Assert-Equal 0 $maxFixtureChildren "I6 stress evidence must leave zero fixture server children after every cycle."
 Assert-Equal $true ([bool]$report.stress.subsequentRequestPassed) "I6 stress evidence must prove a subsequent request."
 
 Assert-ExactProperties $report.privacy @(

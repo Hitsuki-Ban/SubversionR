@@ -97,16 +97,93 @@ function New-Surface([string]$Kind, [string]$ArtifactSha256) {
   }
 }
 
-function New-NegativeCell([string]$Cell, [string]$StableCode, [string]$Reason) {
+function New-NegativeSurfaceObservation([string]$Surface, [string]$StableCode, [string]$Reason, [string]$NetworkProgress, [int]$NetworkAttempts, [int]$NetworkConnections) {
+  return [ordered]@{
+    surface = $Surface
+    stableCode = $StableCode
+    reason = $Reason
+    networkProgress = $NetworkProgress
+    networkAttempts = $NetworkAttempts
+    networkConnections = $NetworkConnections
+    fixtureCliInvocations = 0
+    credentialRequests = 0
+    credentialSettlements = 0
+    followupNetworkContacts = 0
+    workerDescendantsAfter = 0
+    temporaryRootsAfter = 0
+    diagnosticsRedacted = $true
+  }
+}
+
+function New-NegativeCell([string]$Cell, [string]$StableCode, [string]$Reason, [string]$NetworkProgress, [int]$NetworkAttempts, [int]$NetworkConnections, [bool]$InstalledOnly = $false) {
+  [object[]]$surfaceObservations = if ($InstalledOnly) {
+    @((New-NegativeSurfaceObservation "installed-vsix-extension-host" $StableCode $Reason $NetworkProgress $NetworkAttempts $NetworkConnections))
+  }
+  else {
+    @(
+      (New-NegativeSurfaceObservation "packaged-native" $StableCode $Reason $NetworkProgress $NetworkAttempts $NetworkConnections),
+      (New-NegativeSurfaceObservation "installed-vsix-extension-host" $StableCode $Reason $NetworkProgress $NetworkAttempts $NetworkConnections)
+    )
+  }
   return [ordered]@{
     cell = $Cell
     status = "passed"
     stableCode = $StableCode
     reason = $Reason
-    surfaces = @("packaged-native", "installed-vsix-extension-host")
-    followupNetworkContacts = 0
+    surfaceObservations = $surfaceObservations
+  }
+}
+
+function New-RecoverySurfaceObservation([string]$Surface) {
+  return [ordered]@{
+    surface = $Surface
+    safe = [ordered]@{
+      outcome = "Safe"
+      freshReconcile = $true
+      nativeLaneReleased = $true
+      subsequentRequestPassed = $true
+    }
+    indeterminate = [ordered]@{
+      outcome = "Indeterminate"
+      stableCode = "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE"
+      reason = "remoteOperationIndeterminate"
+      nativeLaneBlocked = $true
+      explicitRecoveryRequired = $true
+    }
+    blocked = [ordered]@{
+      outcome = "Blocked"
+      stableCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+      reason = "remoteRecoveryBlocked"
+      restartRestoredBlocked = $true
+      automaticClear = $false
+      requiredConfirmation = "reviewedAndResolved"
+      armedTargetPathSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      confirmedTargetPathSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      armedOriginOperationIdSha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      confirmedOriginOperationIdSha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      confirmedEntryRemoved = $true
+      subsequentCheckoutPassed = $true
+    }
+  }
+}
+
+function New-StressCycleObservation([int]$Cycle) {
+  return [ordered]@{
+    cycle = $Cycle
+    operationIdSha256 = ("{0:x64}" -f [uint64]$Cycle)
+    targetPathSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    extensionHostSessionSha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    operation = "checkoutOpen"
+    faultMode = "none"
+    status = "passed"
+    checkoutRevision = 2
+    fixtureCliInvocations = 0
+    credentialRequests = 0
+    credentialSettlements = 0
     workerDescendantsAfter = 0
     temporaryRootsAfter = 0
+    fixtureServerChildrenAfter = 0
+    checkoutJournalEntriesAfter = 0
     diagnosticsRedacted = $true
   }
 }
@@ -259,55 +336,35 @@ try {
       (New-Surface "installed-vsix-extension-host" $artifactBindings.vsix.sha256)
     )
     negativeCells = @(
-      (New-NegativeCell "maliciousRoot" "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH" "crossAuthorityRejected"),
-      (New-NegativeCell "saslOnly" "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED" "remoteCapabilityUnsupported"),
-      (New-NegativeCell "authzDenied" "SVN_REMOTE_STATUS_AUTH_FAILED" "authorizationDenied"),
-      (New-NegativeCell "blackholeConnect" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded"),
-      (New-NegativeCell "stalledMidRead" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded"),
-      (New-NegativeCell "deadline" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded"),
-      (New-NegativeCell "cancellation" "SUBVERSIONR_REMOTE_WORKER_CANCELLED" "operationCancelled"),
-      (New-NegativeCell "workerCrash" "SUBVERSIONR_REMOTE_WORKER_CRASHED" "workerContainmentFailed"),
-      (New-NegativeCell "daemonDisconnect" "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED" "workerContainmentFailed"),
-      (New-NegativeCell "trustRevoked" "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" "remoteConfigurationInvalid"),
-      (New-NegativeCell "recoverySafe" "none" "none"),
-      (New-NegativeCell "recoveryIndeterminate" "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" "remoteOperationIndeterminate"),
-      (New-NegativeCell "recoveryBlocked" "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" "remoteRecoveryBlocked"),
-      (New-NegativeCell "unrelatedRepository" "none" "none"),
-      (New-NegativeCell "localEventZeroNetwork" "none" "none"),
-      (New-NegativeCell "redaction" "none" "none")
+      (New-NegativeCell "maliciousRoot" "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH" "crossAuthorityRejected" "authenticated" 1 1),
+      (New-NegativeCell "saslOnly" "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED" "remoteCapabilityUnsupported" "greeting" 1 1),
+      (New-NegativeCell "authzDenied" "SVN_REMOTE_STATUS_AUTH_FAILED" "authorizationDenied" "command" 1 1),
+      (New-NegativeCell "blackholeConnect" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded" "none" 1 0),
+      (New-NegativeCell "stalledMidRead" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded" "greeting" 1 1),
+      (New-NegativeCell "deadline" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded" "greeting" 1 1),
+      (New-NegativeCell "cancellation" "SUBVERSIONR_REMOTE_WORKER_CANCELLED" "operationCancelled" "greeting" 1 1),
+      (New-NegativeCell "workerCrash" "SUBVERSIONR_REMOTE_WORKER_CRASHED" "workerContainmentFailed" "greeting" 1 1),
+      (New-NegativeCell "daemonDisconnect" "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED" "workerContainmentFailed" "greeting" 1 1),
+      (New-NegativeCell "trustRevoked" "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" "remoteConfigurationInvalid" "none" 0 0),
+      (New-NegativeCell "recoverySafe" "none" "none" "command" 1 1),
+      (New-NegativeCell "recoveryIndeterminate" "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" "remoteOperationIndeterminate" "command" 1 1),
+      (New-NegativeCell "recoveryBlocked" "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" "remoteRecoveryBlocked" "command" 1 1),
+      (New-NegativeCell "unrelatedRepository" "none" "none" "command" 1 1),
+      (New-NegativeCell "localEventZeroNetwork" "none" "none" "none" 0 0 $true),
+      (New-NegativeCell "redaction" "none" "none" "command" 1 1)
     )
     recoverySettlements = [ordered]@{
-      surfaces = @("packaged-native", "installed-vsix-extension-host")
-      safe = [ordered]@{
-        outcome = "Safe"
-        freshReconcile = $true
-        nativeLaneReleased = $true
-        subsequentRequestPassed = $true
-      }
-      indeterminate = [ordered]@{
-        outcome = "Indeterminate"
-        stableCode = "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE"
-        reason = "remoteOperationIndeterminate"
-        nativeLaneBlocked = $true
-        explicitRecoveryRequired = $true
-      }
-      blocked = [ordered]@{
-        outcome = "Blocked"
-        stableCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
-        reason = "remoteRecoveryBlocked"
-        restartRestoredBlocked = $true
-        automaticClear = $false
-        requiredConfirmation = "reviewedAndResolved"
-        exactTargetPathHashMatched = $true
-        exactOriginMatched = $true
-        confirmedEntryRemoved = $true
-        subsequentCheckoutPassed = $true
-      }
+      surfaceObservations = @(
+        (New-RecoverySurfaceObservation "packaged-native"),
+        (New-RecoverySurfaceObservation "installed-vsix-extension-host")
+      )
     }
     stress = [ordered]@{
       surface = "installed-vsix-extension-host"
       cycles = 100
       status = "passed"
+      cycleObservations = @(1..100 | ForEach-Object { New-StressCycleObservation $_ })
+      subsequentObservation = (New-StressCycleObservation 101)
       maxWorkerDescendantsAfterCycle = 0
       maxTemporaryRootsAfterCycle = 0
       maxFixtureServerChildrenAfterCycle = 0
@@ -369,14 +426,34 @@ try {
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject anonymous credential prompting."
 
   $tampered = Copy-Report $report
-  $tampered.negativeCells[0].followupNetworkContacts = 1
+  $tampered.negativeCells[0].surfaceObservations[0].followupNetworkContacts = 1
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject malicious-root follow-up contact."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].networkAttempts = 0
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "network attempt count must match" "I6 verification must reject a blackhole record without a measured connection attempt."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[14].surfaceObservations[0].networkAttempts = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "network attempt count must match" "I6 verification must reject local-event evidence that attempted remote contact."
 
   $tampered = Copy-Report $report
   $tampered.negativeCells[2].reason = "authenticationRequired"
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "authorizationDenied" "I6 verification must reject generic authentication classification for authz denial."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[2].surfaceObservations[1].stableCode = "SVN_OPERATION_UPDATE_FAILED"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "stable code must match" "I6 verification must reject divergent installed-surface failure evidence."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[14].surfaceObservations = @($tampered.negativeCells[13].surfaceObservations)
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "installed product observation exactly once" "I6 local-event evidence must be installed-surface only."
 
   foreach ($requiredNegative in @(
       "blackholeConnect",
@@ -398,17 +475,84 @@ try {
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject shortened residue stress evidence."
 
   $tampered = Copy-Report $report
-  $tampered.recoverySettlements.blocked.automaticClear = $true
+  $tampered.stress.cycleObservations = @($tampered.stress.cycleObservations | Where-Object { [int]$_.cycle -ne 50 })
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a missing stress cycle."
+
+  $tampered = Copy-Report $report
+  $firstCycle = $tampered.stress.cycleObservations[0]
+  $tampered.stress.cycleObservations[0] = $tampered.stress.cycleObservations[1]
+  $tampered.stress.cycleObservations[1] = $firstCycle
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "cycle must be exact and ordered" "I6 verification must reject out-of-order stress observations."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[1].operationIdSha256 = $tampered.stress.cycleObservations[0].operationIdSha256
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "operation hashes must be unique" "I6 verification must reject duplicate stress operation hashes."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[50].targetPathSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "one exact checkout target hash" "I6 verification must reject stress target drift."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[50].extensionHostSessionSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "one exact installed Extension Host session" "I6 verification must reject stress execution split across Extension Host sessions."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.subsequentObservation.extensionHostSessionSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "same installed Extension Host session" "I6 verification must reject a cycle 101 observation from another Extension Host session."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[0].fixtureCliInvocations = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject fixture CLI use during native checkout stress."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[49].workerDescendantsAfter = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "workerDescendantsAfter must be zero" "I6 verification must reject a nonzero per-cycle worker count."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.maxWorkerDescendantsAfterCycle = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "aggregate must be recomputed" "I6 verification must reject a fabricated stress aggregate."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.PSObject.Properties.Remove("subsequentObservation")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a missing subsequent stress observation."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations[0].blocked.automaticClear = $true
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject automatic checkout-target recovery clearing."
 
   $tampered = Copy-Report $report
-  $tampered.recoverySettlements.safe.freshReconcile = $false
+  $tampered.recoverySettlements.surfaceObservations[0].blocked.confirmedTargetPathSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "target-path hash" "I6 verification must reject recovery confirmation for a different target."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations[1].blocked.confirmedOriginOperationIdSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "origin-operation-ID hash" "I6 verification must reject recovery confirmation for a different origin operation."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations = @($tampered.recoverySettlements.surfaceObservations | Select-Object -First 1)
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject recovery evidence missing the installed surface."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations[0].safe.freshReconcile = $false
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject Safe recovery without fresh reconcile."
 
   $tampered = Copy-Report $report
-  $tampered.recoverySettlements.indeterminate.stableCode = "SUBVERSIONR_REMOTE_WORKER_CRASHED"
+  $tampered.recoverySettlements.surfaceObservations[0].indeterminate.stableCode = "SUBVERSIONR_REMOTE_WORKER_CRASHED"
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must not substitute worker crash for Indeterminate recovery."
 
@@ -585,7 +729,9 @@ try {
       "Fixture startup or a direct bridge/unit probe does not satisfy the",
       "SVN_REMOTE_STATUS_AUTH_FAILED",
       "positive operation matrix",
-      "sixteen cross-surface negative/recovery cells",
+      "separate, ordered",
+      "localEventZeroNetwork",
+      "100 checkout cycles",
       "may not be represented as"
     )) {
     Assert-True ($contractText.Contains($requiredText)) "I6 evidence contract must retain fail-closed boundary '$requiredText'."
@@ -593,6 +739,8 @@ try {
   $schema = Get-Content -Raw -LiteralPath $schemaPath | ConvertFrom-Json
   Assert-Equal "subversionr.release.m8-i6-svn-anonymous.win32-x64.v1" $schema.properties.schema.const "I6 JSON schema must bind the exact evidence schema."
   Assert-Equal "False" ([string]$schema.additionalProperties) "I6 JSON schema must reject unknown top-level fields."
+  $packageJson = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "package.json") | ConvertFrom-Json
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-ra-svn-fault-fixture.tests.mjs")) "PR Fast I6 script tests must execute the controlled ra_svn fault fixture tests."
 
   Write-Host "M8 I6 svn anonymous evidence script tests passed."
 }

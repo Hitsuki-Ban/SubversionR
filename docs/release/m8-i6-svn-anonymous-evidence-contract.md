@@ -132,11 +132,37 @@ The report must contain all of the following controlled cells in exact order:
 - local filesystem events causing zero remote network attempts; and
 - bounded redaction with no forbidden token disclosure.
 
-Each failure cell must pass on both packaged-native and installed-VSIX surfaces
-and records zero forbidden follow-up contacts, worker descendants, and operation
-temporary roots. The separate stress record runs exactly 100 installed-VSIX
-cycles and proves per-cycle worker, temporary-root, and fixture-child cleanup
-plus a subsequent successful request.
+Every controlled failure and recovery cell carries separate, ordered
+`packaged-native` and `installed-vsix-extension-host` observations. Each
+observation records the exact stable result, the furthest controlled network
+progress, the measured network-attempt and successful-connection counts, zero
+product-side fixture CLI use, zero credential activity, zero
+forbidden follow-up contacts, zero worker descendants and operation temporary
+roots, and redacted diagnostics. These values must be measured on the real
+surface; a shared aggregate constant is not evidence. The
+`localEventZeroNetwork` cell is installed-only because #135 requires the real
+Extension Host watcher/dirty-path path and the packaged daemon has no filesystem
+event surface. It requires both network-attempt and successful-connection counts
+to remain zero. The blackhole cell independently requires one measured network
+attempt and zero successful connections.
+
+Safe, Indeterminate, and Blocked recovery settlements are likewise recorded
+separately for both product surfaces. Blocked checkout recovery binds the exact
+target-path and origin-operation-ID SHA-256 values captured when the entry was
+armed to the corresponding values used for explicit confirmation. The verifier
+compares both pairs and rejects cross-entry confirmation. This does not claim
+that the durable journal stores a repository URL or origin authority.
+
+The separate stress record runs exactly 100 checkout cycles in one installed
+VSIX Extension Host, reusing one target-path hash with a unique operation-ID
+hash per cycle, one constant Extension Host session hash, and an explicit
+no-fault mode. Every ordered cycle records the native `checkoutOpen` operation,
+the real checkout revision, zero fixture CLI use, zero credential activity,
+worker descendants,
+temporary roots, fixture-server children, and durable checkout-journal entries.
+The verifier recomputes all maxima from those 100 observations, rejects missing,
+duplicate, or reordered cycles, and requires an independent successful cycle
+101 observation against the same target hash in the same Extension Host session.
 
 ## Current execution blocker
 
@@ -145,7 +171,7 @@ installed Extension Host positive operation matrix. Both drivers execute the
 eleven direct-`svn://` operations and keep the evidence report absent when any
 candidate observation fails.
 
-This contract intentionally remains fail-closed until the sixteen cross-surface negative/recovery cells
+This contract intentionally remains fail-closed until the controlled negative/recovery cells
 and the installed 100-cycle residue stress contract are
 automated and executed against the same candidate artifacts. Missing controlled
 observations may not be represented as `verified` by synthetic evidence. The I6
