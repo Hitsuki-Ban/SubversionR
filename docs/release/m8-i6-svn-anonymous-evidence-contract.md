@@ -11,7 +11,7 @@ machine-readable shape, and the report binds its exact SHA-256.
 semantic contract. The verifier accepts one evidence JSON document and the exact VSIX,
 daemon, bridge, Subversion stage manifest and fixture tools, probe driver,
 reviewed ra_svn origin patch and contract, native source lock, fixture
-configuration, and fixture authz files. Every input is mandatory and absolute;
+configuration, fixture authz, and svnserve command-log files. Every input is mandatory and absolute;
 missing inputs, extra JSON fields, a hash mismatch, a partial matrix, or a
 provisional verdict fails the gate. There is no historical-schema alias,
 inferred version, skipped cell, or compatibility fallback.
@@ -34,10 +34,13 @@ The evidence binds the exact bytes of:
 - the reviewed Apache Subversion 1.14.5 ra_svn origin patch and its adjacent
   contract;
 - the source-controlled I6 probe driver;
-- the packaged-native and installed-VSIX negative probes, controlled ra_svn
+- the packaged-native and installed-VSIX negative probes, the dedicated
+  packaged-native and installed-VSIX authz-denied probes, controlled ra_svn
   fault fixture, and installed-VSIX 100+1 stress probe;
 - the exact source-built `svn.exe`, `svnadmin.exe`, and `svnserve.exe`; and
-- the positive fixture `svnserve.conf` and `authz` files.
+- the positive fixture `svnserve.conf` and restored `authz` files; and
+- the exact svnserve command log used to measure authz-denied command-stage
+  attempts and connections.
 
 The report contains no raw repository URL, working-copy path, username, realm,
 credential, log message, source content, or unbounded diagnostic. Repository and
@@ -56,7 +59,8 @@ repository, starts the source-built loopback `svnserve`, and then invokes one
 mandatory PowerShell probe driver. `ProbeDriverPath` must be exactly
 `scripts/release/probe-m8-i6-svn-anonymous.ps1`; an arbitrary external driver is
 rejected even if it emits schema-valid JSON. The driver receives the repository URL,
-fixture root, fixture config/authz files, exact source-built fixture-tool paths,
+fixture root, fixture config/authz/log files, two separately prepared denied
+working copies, exact source-built fixture-tool paths,
 candidate VSIX/daemon/bridge paths, Code CLI path, stage-manifest path, ra_svn
 patch/contract paths, native source-lock path, expected product version, and
 output path. It owns the packaged and
@@ -117,7 +121,13 @@ The report must contain all of the following controlled cells in exact order:
 - SASL-only server rejected as `SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED` /
   `remoteCapabilityUnsupported`, without credential prompting;
 - controlled remote-status authz denial classified as
-  `SVN_REMOTE_STATUS_AUTH_FAILED` / `authorizationDenied`;
+  `SVN_REMOTE_STATUS_AUTH_FAILED` / `authorizationDenied`; each surface uses a
+  distinct working copy prepared while root access is writable, then runs the
+  real remote-status path after an atomic authz switch. The source-built
+  svnserve log must append exactly one repository-open line and one authorization
+  denial line for that surface, proving one attempt, one connection, and
+  command-stage progress. The driver restores the exact root-write authz bytes
+  in `finally` and proves the restored fixture before positive or stress work;
 - a blackhole connect that reaches its owned absolute deadline and leaves zero
   worker/process/temp-root residue;
 - a server that accepts a connection and stalls mid-read, independently proving
@@ -187,13 +197,15 @@ duplicate, or reordered cycles, and requires an independent successful cycle
 ## Current execution blocker
 
 The source branch contains real candidate drivers for the packaged-native and
-installed Extension Host positive operation matrix. Both drivers execute the
-eleven direct-`svn://` operations and keep the evidence report absent when any
-candidate observation fails.
+installed Extension Host positive operation matrix, malicious-root, SASL-only,
+and authz-denied cells. The authz-denied cell additionally binds the exact
+svnserve command log and requires atomic deny/restore controls. All drivers keep
+the evidence report absent when any candidate observation fails.
 
 This contract intentionally remains fail-closed. The source branch now contains
-the installed 100+1 stress probe and real packaged/installed `maliciousRoot` and
-`saslOnly` product probes, but the remaining controlled negative/recovery cells
+the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
+`saslOnly`, and `authzDenied` product probes, but the remaining controlled
+negative/recovery cells
 are incomplete and no complete candidate report has passed the executable
 verifier. Missing controlled observations may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired

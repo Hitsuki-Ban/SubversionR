@@ -4,6 +4,9 @@ param(
   [Parameter(Mandatory = $true)] [string]$FixtureRoot,
   [Parameter(Mandatory = $true)] [string]$FixtureConfigPath,
   [Parameter(Mandatory = $true)] [string]$FixtureAuthzPath,
+  [Parameter(Mandatory = $true)] [string]$FixtureLogPath,
+  [Parameter(Mandatory = $true)] [string]$PackagedAuthzWorkingCopyPath,
+  [Parameter(Mandatory = $true)] [string]$InstalledAuthzWorkingCopyPath,
   [Parameter(Mandatory = $true)] [string]$SvnPath,
   [Parameter(Mandatory = $true)] [string]$SvnadminPath,
   [Parameter(Mandatory = $true)] [string]$SvnservePath,
@@ -34,6 +37,8 @@ $installedHarnessPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "
 $installedI6ProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-vsix.ps1"))
 $installedStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-stress.ps1"))
 $installedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-negative.ps1"))
+$packagedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-authz-denied.mjs"))
+$installedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-authz-denied.ps1"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $packagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-negative.mjs"))
 $installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host"))
@@ -261,7 +266,8 @@ function Get-PackagedNegativeProcessObservation(
   [long]$ProbePid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
-  [object[]]$SettlementSnapshot
+  [object[]]$SettlementSnapshot,
+  [string[]]$ForbiddenFixtureProcessNames = @("svn.exe", "svnadmin.exe", "svnserve.exe")
 ) {
   $probeStarts = @($AllEvents | Where-Object {
       [long]$_.processId -eq $ProbePid -and
@@ -300,6 +306,18 @@ function Get-PackagedNegativeProcessObservation(
     @($AllEvents | Where-Object { [long]$_.processId -eq [long]$workerStart.processId }).Count -eq 1
   ) "The packaged-negative worker PID was reused."
   $descendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$workerStart.processId))
+  $allProbeDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $forbiddenFixtureProcessNameSet = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+  )
+  foreach ($processName in $ForbiddenFixtureProcessNames) {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "A packaged-negative forbidden fixture process name was invalid."
+    $null = $forbiddenFixtureProcessNameSet.Add($processName)
+  }
+  Assert-True ($forbiddenFixtureProcessNameSet.Count -eq $ForbiddenFixtureProcessNames.Count) "Packaged-negative forbidden fixture process names must be unique."
+  $fixtureCliStarts = @($allProbeDescendants | Where-Object {
+      $forbiddenFixtureProcessNameSet.Contains([string]$_.processName)
+    })
   foreach ($settledStart in @($probeStarts[0], $daemonStart, $workerStart)) {
     $liveSettledIdentity = @(
       $SettlementSnapshot | Where-Object {
@@ -327,6 +345,58 @@ function Get-PackagedNegativeProcessObservation(
     daemonProcessId = [long]$daemonStart.processId
     workerProcessId = [long]$workerStart.processId
     workerDescendantsAfter = $liveDescendants.Count
+    fixtureCliInvocations = $fixtureCliStarts.Count
+  }
+}
+
+function Set-ExactAuthzAtomically([string]$Path, [string]$Content) {
+  $temporaryPath = Join-Path (Split-Path -Parent $Path) ".subversionr-authz-$([Guid]::NewGuid().ToString('N')).tmp"
+  try {
+    [System.IO.File]::WriteAllText($temporaryPath, $Content, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::Move($temporaryPath, $Path, $true)
+    $actual = (Get-Content -Raw -LiteralPath $Path).Replace("`r`n", "`n")
+    Assert-True ($actual -ceq $Content) "The controlled authz bytes did not settle exactly."
+  }
+  finally {
+    if (Test-Path -LiteralPath $temporaryPath) {
+      Remove-Item -LiteralPath $temporaryPath -Force
+    }
+  }
+  $residue = @(Get-ChildItem -LiteralPath (Split-Path -Parent $Path) -Filter ".subversionr-authz-*.tmp" -File)
+  Assert-True ($residue.Count -eq 0) "The controlled authz atomic replacement left temporary files."
+}
+
+function Get-SvnserveAuthzObservation([string]$LogPath, [long]$Offset, [string]$Context) {
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+  do {
+    $stream = [System.IO.FileStream]::new(
+      $LogPath,
+      [System.IO.FileMode]::Open,
+      [System.IO.FileAccess]::Read,
+      [System.IO.FileShare]::ReadWrite
+    )
+    try {
+      Assert-True ($Offset -ge 0 -and $Offset -le $stream.Length) "$Context svnserve log offset was invalid."
+      $null = $stream.Seek($Offset, [System.IO.SeekOrigin]::Begin)
+      $reader = [System.IO.StreamReader]::new($stream, [System.Text.UTF8Encoding]::new($false, $true), $true, 4096, $true)
+      try { $delta = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    }
+    finally { $stream.Dispose() }
+    $lines = @($delta -split '\r?\n' | Where-Object { $_.Length -gt 0 })
+    if ($lines.Count -eq 2) {
+      break
+    }
+    Start-Sleep -Milliseconds 50
+  } while ([DateTimeOffset]::UtcNow -lt $deadline)
+  Assert-True ($lines.Count -eq 2) "$Context must append exactly two svnserve command-log lines."
+  $openLines = @($lines | Where-Object { $_ -match '\brepo open\b' -and $_ -match '/denied\b' })
+  $deniedLines = @($lines | Where-Object { $_ -match '\brepo ERR - 0 170001 Authorization failed$' })
+  Assert-True ($openLines.Count -eq 1) "$Context must contain exactly one denied repository open."
+  Assert-True ($deniedLines.Count -eq 1) "$Context must contain exactly one SVN authz denial."
+  return [pscustomobject]@{
+    networkAttempts = $deniedLines.Count
+    networkConnections = $openLines.Count
+    networkProgress = "command"
   }
 }
 
@@ -587,6 +657,12 @@ if (Test-Path -LiteralPath $outputResolved) {
 
 $fixtureConfigResolved = Resolve-FixtureFile $FixtureConfigPath "FixtureConfigPath" $fixtureRootResolved
 $fixtureAuthzResolved = Resolve-FixtureFile $FixtureAuthzPath "FixtureAuthzPath" $fixtureRootResolved
+$fixtureLogResolved = Resolve-FixtureFile $FixtureLogPath "FixtureLogPath" $fixtureRootResolved
+$packagedAuthzWorkingCopyResolved = Resolve-RequiredDirectory $PackagedAuthzWorkingCopyPath "PackagedAuthzWorkingCopyPath"
+$installedAuthzWorkingCopyResolved = Resolve-RequiredDirectory $InstalledAuthzWorkingCopyPath "InstalledAuthzWorkingCopyPath"
+Assert-True (Test-PathWithin $packagedAuthzWorkingCopyResolved $fixtureRootResolved) "PackagedAuthzWorkingCopyPath must be below FixtureRoot."
+Assert-True (Test-PathWithin $installedAuthzWorkingCopyResolved $fixtureRootResolved) "InstalledAuthzWorkingCopyPath must be below FixtureRoot."
+Assert-True (-not $packagedAuthzWorkingCopyResolved.Equals($installedAuthzWorkingCopyResolved, [System.StringComparison]::OrdinalIgnoreCase)) "The authz-denied surfaces require distinct working copies."
 $svnResolved = Resolve-RequiredFile $SvnPath "SvnPath"
 $svnadminResolved = Resolve-RequiredFile $SvnadminPath "SvnadminPath"
 $svnserveResolved = Resolve-RequiredFile $SvnservePath "SvnservePath"
@@ -603,6 +679,8 @@ $installedHarnessResolved = Resolve-RequiredFile $installedHarnessPath "installe
 $installedI6ProbeResolved = Resolve-RequiredFile $installedI6ProbePath "installed I6 Extension Host probe"
 $installedStressProbeResolved = Resolve-RequiredFile $installedStressProbePath "installed I6 100+1 stress probe"
 $installedNegativeProbeResolved = Resolve-RequiredFile $installedNegativeProbePath "installed I6 negative Extension Host probe"
+$packagedAuthzDeniedProbeResolved = Resolve-RequiredFile $packagedAuthzDeniedProbePath "packaged-native I6 authz-denied probe"
+$installedAuthzDeniedProbeResolved = Resolve-RequiredFile $installedAuthzDeniedProbePath "installed VSIX I6 authz-denied probe"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
 $packagedNegativeProbeResolved = Resolve-RequiredFile $packagedNegativeProbePath "packaged-native I6 negative probe"
 
@@ -832,7 +910,13 @@ foreach ($contract in $packagedNegativeContracts) {
       ([long]$negativeResult.ProcessId) `
       ([System.IO.Path]::GetFileName($nodeHost)) `
       ([System.IO.Path]::GetFileName($daemonResolved)) `
-      $settlementSnapshot
+      $settlementSnapshot `
+      @(
+        [System.IO.Path]::GetFileName($svnResolved),
+        [System.IO.Path]::GetFileName($svnadminResolved),
+        [System.IO.Path]::GetFileName($svnserveResolved)
+      )
+    Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The packaged-native $($contract.Scenario) product surface invoked a fixture CLI."
     $networkConnections = [int]$faultState.connections
     $networkAttempts = $networkConnections
     Assert-True ($networkAttempts -gt 0) "The packaged-native $($contract.Scenario) fixture measured no network attempt."
@@ -1010,6 +1094,180 @@ foreach ($contract in $installedNegativeContracts) {
 }
 Assert-True ($installedNegativeObservations.Count -eq 2) "The installed VSIX malicious-root and SASL-only negative probe set was incomplete."
 
+$deniedAuthz = "[repo:/]`n* = rw`n`n[repo:/denied]`n* ="
+$rootWriteAuthz = "[repo:/]`n* = rw"
+$deniedRepositoryUri = [System.UriBuilder]::new($repositoryUri)
+Assert-True ($deniedRepositoryUri.Path.EndsWith("/trunk", [System.StringComparison]::Ordinal)) "RepositoryUrl must end in /trunk."
+$deniedRepositoryUri.Path = $deniedRepositoryUri.Path.Substring(0, $deniedRepositoryUri.Path.Length - 6) + "/denied"
+$deniedRepositoryUrl = $deniedRepositoryUri.Uri.AbsoluteUri
+$authzDeniedObservations = @()
+try {
+  Set-ExactAuthzAtomically $fixtureAuthzResolved $deniedAuthz
+  $denialControl = Invoke-BoundedProcess $svnResolved @(
+    "status", "-u", $packagedAuthzWorkingCopyResolved,
+    "--non-interactive", "--no-auth-cache", "--config-dir", $oracleConfigRoot
+  ) 30
+  Assert-True ($denialControl.ExitCode -ne 0) "The controlled fixture CLI authz-denial control unexpectedly succeeded."
+
+  $packagedAuthzRoot = Join-Path $probeRoot "packaged-authz-denied"
+  $packagedAuthzProfileRoot = Join-Path $packagedAuthzRoot "profile"
+  New-Item -ItemType Directory -Force -Path $packagedAuthzProfileRoot | Out-Null
+  Assert-CandidateProcessAbsent $daemonResolved "The packaged authz-denied preflight"
+  $packagedLogOffset = (Get-Item -LiteralPath $fixtureLogResolved).Length
+  $packagedSourceIdentifier = "subversionr-m8-i6-packaged-authz-$([Guid]::NewGuid().ToString('N'))"
+  $packagedSubscriber = $null
+  $packagedEvents = [System.Collections.Generic.List[object]]::new()
+  $packagedEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  try {
+    try {
+      Register-CimIndicationEvent -ClassName Win32_ProcessStartTrace -SourceIdentifier $packagedSourceIdentifier -ErrorAction Stop | Out-Null
+    }
+    catch {
+      throw "Win32_ProcessStartTrace is required for the packaged authz-denied process observation: $($_.Exception.Message)"
+    }
+    $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $packagedSourceIdentifier -ErrorAction Stop)
+    Assert-True ($matchingSubscribers.Count -eq 1) "The packaged authz-denied process-start subscription was not created exactly once."
+    $packagedSubscriber = $matchingSubscribers[0]
+    Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+    $packagedAuthzResult = Invoke-BoundedProcess $nodeHost @(
+      $packagedAuthzDeniedProbeResolved,
+      "--backend-module", $backendModulePath,
+      "--daemon", $daemonResolved,
+      "--bridge", $bridgeResolved,
+      "--profile-root", $packagedAuthzProfileRoot,
+      "--working-copy-path", $packagedAuthzWorkingCopyResolved,
+      "--repository-url", $deniedRepositoryUrl,
+      "--timeout-ms", "30000"
+    ) 60 @{ ELECTRON_RUN_AS_NODE = "1" }
+    $packagedAuthzReport = Convert-JsonObject $packagedAuthzResult.Stdout.Trim() "packaged-native authz-denied probe stdout"
+    Assert-True ($packagedAuthzResult.ExitCode -eq 0 -and $packagedAuthzResult.Stderr.Length -eq 0) "The packaged-native authz-denied probe failed."
+    Assert-True (
+      [string]$packagedAuthzReport.schema -ceq "subversionr.release.m8-i6-packaged-native-authz-denied.v1" -and
+      [string]$packagedAuthzReport.status -ceq "passed" -and
+      [string]$packagedAuthzReport.cell -ceq "authzDenied" -and
+      [string]$packagedAuthzReport.stableCode -ceq "SVN_REMOTE_STATUS_AUTH_FAILED" -and
+      [string]$packagedAuthzReport.reason -ceq "authorizationDenied" -and
+      [int]$packagedAuthzReport.protocol.major -eq 1 -and [int]$packagedAuthzReport.protocol.minor -eq 35 -and
+      [int]$packagedAuthzReport.temporaryRootsAfter -eq 0 -and
+      [int]$packagedAuthzReport.credentialRequests -eq 0 -and
+      [int]$packagedAuthzReport.credentialSettlements -eq 0 -and
+      $packagedAuthzReport.diagnosticsRedacted -eq $true
+    ) "The packaged-native authz-denied report was incomplete."
+    Complete-ProcessStartEventDrain $packagedSourceIdentifier $packagedEvents $packagedEventKeys $ProcessStartEventSettlementMilliseconds
+    $packagedProcess = Get-PackagedNegativeProcessObservation `
+      @($packagedEvents) `
+      ([long]$packagedAuthzResult.ProcessId) `
+      ([System.IO.Path]::GetFileName($nodeHost)) `
+      ([System.IO.Path]::GetFileName($daemonResolved)) `
+      (Get-CimProcessSnapshot) `
+      @(
+        [System.IO.Path]::GetFileName($svnResolved),
+        [System.IO.Path]::GetFileName($svnadminResolved),
+        [System.IO.Path]::GetFileName($svnserveResolved)
+      )
+    Assert-True ([int]$packagedProcess.fixtureCliInvocations -eq 0) "The packaged authz-denied product surface invoked a fixture CLI."
+    $packagedNetwork = Get-SvnserveAuthzObservation $fixtureLogResolved $packagedLogOffset "The packaged authz-denied surface"
+    $authzDeniedObservations += [pscustomobject]@{
+      surface = "packaged-native"; stableCode = [string]$packagedAuthzReport.stableCode; reason = [string]$packagedAuthzReport.reason
+      networkProgress = [string]$packagedNetwork.networkProgress; networkAttempts = [int]$packagedNetwork.networkAttempts
+      networkConnections = [int]$packagedNetwork.networkConnections; workerDescendantsAfter = [int]$packagedProcess.workerDescendantsAfter
+      temporaryRootsAfter = [int]$packagedAuthzReport.temporaryRootsAfter; fixtureCliInvocations = [int]$packagedProcess.fixtureCliInvocations
+      diagnosticsRedacted = [bool]$packagedAuthzReport.diagnosticsRedacted
+    }
+  }
+  finally {
+    if ($null -ne $packagedSubscriber) { Unregister-Event -SubscriptionId $packagedSubscriber.SubscriptionId -ErrorAction SilentlyContinue }
+    Get-Event -SourceIdentifier $packagedSourceIdentifier -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+  }
+
+  $installedAuthzRoot = Join-Path $probeRoot "installed-authz-denied"
+  Assert-CandidateProcessAbsent $daemonResolved "The installed authz-denied preflight"
+  $installedLogOffset = (Get-Item -LiteralPath $fixtureLogResolved).Length
+  $installedSourceIdentifier = "subversionr-m8-i6-installed-authz-$([Guid]::NewGuid().ToString('N'))"
+  $installedSubscriber = $null
+  $installedEvents = [System.Collections.Generic.List[object]]::new()
+  $installedEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  try {
+    try {
+      Register-CimIndicationEvent -ClassName Win32_ProcessStartTrace -SourceIdentifier $installedSourceIdentifier -ErrorAction Stop | Out-Null
+    }
+    catch {
+      throw "Win32_ProcessStartTrace is required for the installed authz-denied process observation: $($_.Exception.Message)"
+    }
+    $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $installedSourceIdentifier -ErrorAction Stop)
+    Assert-True ($matchingSubscribers.Count -eq 1) "The installed authz-denied process-start subscription was not created exactly once."
+    $installedSubscriber = $matchingSubscribers[0]
+    Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+    $installedAuthzResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", $installedAuthzDeniedProbeResolved,
+      "-VsixPath", $vsixResolved,
+      "-CodeCliPath", $codeCliResolved,
+      "-FixtureRoot", $installedAuthzRoot,
+      "-WorkingCopyPath", $installedAuthzWorkingCopyResolved,
+      "-RepositoryUrl", $deniedRepositoryUrl,
+      "-ExpectedProductVersion", $ExpectedProductVersion,
+      "-DaemonPath", $daemonResolved,
+      "-BridgePath", $bridgeResolved,
+      "-OperationTimeoutMilliseconds", "30000",
+      "-TimeoutSeconds", "180"
+    ) 240
+    $installedAuthzReport = Convert-JsonObject $installedAuthzResult.Stdout.Trim() "installed VSIX authz-denied probe stdout"
+    Assert-True ($installedAuthzResult.ExitCode -eq 0 -and $installedAuthzResult.Stderr.Length -eq 0) "The installed VSIX authz-denied probe failed."
+    Assert-True (
+      [string]$installedAuthzReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-authz-denied.v1" -and
+      [string]$installedAuthzReport.status -ceq "passed" -and
+      [string]$installedAuthzReport.surface -ceq "installed-vsix-extension-host" -and
+      [string]$installedAuthzReport.cell -ceq "authzDenied" -and
+      [string]$installedAuthzReport.stableCode -ceq "SVN_REMOTE_STATUS_AUTH_FAILED" -and
+      [string]$installedAuthzReport.reason -ceq "authorizationDenied" -and
+      [int]$installedAuthzReport.protocol.major -eq 1 -and [int]$installedAuthzReport.protocol.minor -eq 35 -and
+      [int]$installedAuthzReport.authActivity.credentialRequests -eq 0 -and
+      [int]$installedAuthzReport.authActivity.credentialSettlements -eq 0 -and
+      [int]$installedAuthzReport.authActivity.certificateRequests -eq 0 -and
+      [int]$installedAuthzReport.temporaryRootsAfter -eq 0 -and
+      $installedAuthzReport.diagnosticsRedacted -eq $true -and
+      $installedAuthzReport.candidateDaemonExitedAfter -eq $true
+    ) "The installed VSIX authz-denied report was incomplete."
+    Complete-ProcessStartEventDrain $installedSourceIdentifier $installedEvents $installedEventKeys $ProcessStartEventSettlementMilliseconds
+    $installedProcess = Get-InstalledNegativeProcessObservation `
+      -AllEvents @($installedEvents) `
+      -ProbePid ([long]$installedAuthzResult.ProcessId) `
+      -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+      -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+      -ForbiddenFixtureProcessNames @(
+        [System.IO.Path]::GetFileName($svnResolved),
+        [System.IO.Path]::GetFileName($svnadminResolved),
+        [System.IO.Path]::GetFileName($svnserveResolved)
+      ) `
+      -SettlementSnapshot (Get-CimProcessSnapshot)
+    Assert-True ([int]$installedProcess.fixtureCliInvocations -eq 0) "The installed authz-denied product surface invoked a fixture CLI."
+    $installedNetwork = Get-SvnserveAuthzObservation $fixtureLogResolved $installedLogOffset "The installed authz-denied surface"
+    $authzDeniedObservations += [pscustomobject]@{
+      surface = "installed-vsix-extension-host"; stableCode = [string]$installedAuthzReport.stableCode; reason = [string]$installedAuthzReport.reason
+      networkProgress = [string]$installedNetwork.networkProgress; networkAttempts = [int]$installedNetwork.networkAttempts
+      networkConnections = [int]$installedNetwork.networkConnections; workerDescendantsAfter = [int]$installedProcess.workerDescendantsAfter
+      temporaryRootsAfter = [int]$installedAuthzReport.temporaryRootsAfter; fixtureCliInvocations = [int]$installedProcess.fixtureCliInvocations
+      diagnosticsRedacted = [bool]$installedAuthzReport.diagnosticsRedacted
+    }
+  }
+  finally {
+    if ($null -ne $installedSubscriber) { Unregister-Event -SubscriptionId $installedSubscriber.SubscriptionId -ErrorAction SilentlyContinue }
+    Get-Event -SourceIdentifier $installedSourceIdentifier -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+  }
+  Assert-True ($authzDeniedObservations.Count -eq 2) "The packaged and installed authz-denied surface observations were incomplete."
+}
+finally {
+  Set-ExactAuthzAtomically $fixtureAuthzResolved $rootWriteAuthz
+  foreach ($restoredWorkingCopy in @($packagedAuthzWorkingCopyResolved, $installedAuthzWorkingCopyResolved)) {
+    $restoreControl = Invoke-BoundedProcess $svnResolved @(
+      "status", "-u", $restoredWorkingCopy,
+      "--non-interactive", "--no-auth-cache", "--config-dir", $oracleConfigRoot
+    ) 30
+    Assert-True ($restoreControl.ExitCode -eq 0) "The controlled fixture CLI authz restore control failed for a surface working copy."
+  }
+}
+
 $installedStressRoot = Join-Path $probeRoot "installed-stress"
 $installedStressResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
   "-NoProfile",
@@ -1167,4 +1425,4 @@ finally {
 }
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the installed malicious-root and SASL-only fault cells, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the installed malicious-root and SASL-only fault cells, the packaged/installed authz-denied remote-status cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."

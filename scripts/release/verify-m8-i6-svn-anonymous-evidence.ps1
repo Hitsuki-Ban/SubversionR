@@ -43,6 +43,9 @@ param(
   [string]$FixtureAuthzPath,
 
   [Parameter(Mandatory = $true)]
+  [string]$FixtureLogPath,
+
+  [Parameter(Mandatory = $true)]
   [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')]
   [string]$ExpectedProductVersion
 )
@@ -89,9 +92,11 @@ $contractPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $contractRela
 $expectedProbeDriverPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-svn-anonymous.ps1"))
 $expectedPackagedNativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-native.mjs"))
 $expectedPackagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"))
+$expectedPackagedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-authz-denied.mjs"))
 $expectedRaSvnFaultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $expectedInstalledStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"))
 $expectedInstalledNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"))
+$expectedInstalledAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-authz-denied.ps1"))
 $expectedInstalledVsixProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"))
 $expectedPackagedCompatibilityProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"))
 $expectedInstalledExtensionHostProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\test-vscode-installed-extension-host.ps1"))
@@ -363,9 +368,11 @@ $stageManifestResolved = Resolve-RequiredFile $StageManifestPath "StageManifestP
 $probeDriverSourcePath = Assert-ExactSourcePath $ProbeDriverPath $expectedProbeDriverPath "ProbeDriverPath"
 $packagedNativeProbeResolved = Resolve-RequiredFile $expectedPackagedNativeProbePath "packaged-native I6 probe"
 $packagedNegativeProbeResolved = Resolve-RequiredFile $expectedPackagedNegativeProbePath "packaged-native I6 negative probe"
+$packagedAuthzDeniedProbeResolved = Resolve-RequiredFile $expectedPackagedAuthzDeniedProbePath "packaged-native I6 authz-denied probe"
 $raSvnFaultFixtureResolved = Resolve-RequiredFile $expectedRaSvnFaultFixturePath "I6 ra_svn fault fixture"
 $installedStressProbeResolved = Resolve-RequiredFile $expectedInstalledStressProbePath "installed VSIX I6 stress probe"
 $installedNegativeProbeResolved = Resolve-RequiredFile $expectedInstalledNegativeProbePath "installed VSIX I6 negative probe"
+$installedAuthzDeniedProbeResolved = Resolve-RequiredFile $expectedInstalledAuthzDeniedProbePath "installed VSIX I6 authz-denied probe"
 $installedVsixProbeResolved = Resolve-RequiredFile $expectedInstalledVsixProbePath "installed VSIX I6 probe"
 $packagedCompatibilityProbeResolved = Resolve-RequiredFile $expectedPackagedCompatibilityProbePath "packaged-native compatibility probe"
 $installedExtensionHostProbeResolved = Resolve-RequiredFile $expectedInstalledExtensionHostProbePath "installed Extension Host probe"
@@ -380,6 +387,7 @@ $svnadminResolved = Resolve-RequiredFile $SvnadminPath "SvnadminPath"
 $svnserveResolved = Resolve-RequiredFile $SvnservePath "SvnservePath"
 $fixtureConfigResolved = Resolve-RequiredFile $FixtureConfigPath "FixtureConfigPath"
 $fixtureAuthzResolved = Resolve-RequiredFile $FixtureAuthzPath "FixtureAuthzPath"
+$fixtureLogResolved = Resolve-RequiredFile $FixtureLogPath "FixtureLogPath"
 
 $rawEvidence = Get-Content -Raw -LiteralPath $evidenceResolved
 try {
@@ -430,9 +438,11 @@ Assert-ExactProperties $report.artifactBindings @(
   "probeDriver",
   "packagedNativeProbe",
   "packagedNegativeProbe",
+  "packagedAuthzDeniedProbe",
   "raSvnFaultFixture",
   "installedStressProbe",
   "installedNegativeProbe",
+  "installedAuthzDeniedProbe",
   "installedVsixProbe",
   "packagedCompatibilityProbe",
   "installedExtensionHostProbe",
@@ -441,7 +451,8 @@ Assert-ExactProperties $report.artifactBindings @(
   "nativeSourceLock",
   "svn",
   "svnadmin",
-  "svnserve"
+  "svnserve",
+  "svnserveLog"
 ) "I6 evidence.artifactBindings"
 Assert-ArtifactBinding $report.artifactBindings.vsix "vsix" $vsixResolved "I6 evidence.artifactBindings.vsix"
 Assert-ArtifactBinding $report.artifactBindings.daemon "daemon" $daemonResolved "I6 evidence.artifactBindings.daemon"
@@ -457,12 +468,15 @@ $probeDriverResolved = Resolve-RequiredFile $probeDriverSourcePath "ProbeDriverP
 Assert-ArtifactBinding $report.artifactBindings.probeDriver "i6-probe-driver" $probeDriverResolved "I6 evidence.artifactBindings.probeDriver"
 Assert-ArtifactBinding $report.artifactBindings.packagedNativeProbe "i6-packaged-native-probe" $packagedNativeProbeResolved "I6 evidence.artifactBindings.packagedNativeProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedNegativeProbe "i6-packaged-negative-probe" $packagedNegativeProbeResolved "I6 evidence.artifactBindings.packagedNegativeProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedAuthzDeniedProbe "i6-packaged-authz-denied-probe" $packagedAuthzDeniedProbeResolved "I6 evidence.artifactBindings.packagedAuthzDeniedProbe"
 Assert-ArtifactBinding $report.artifactBindings.raSvnFaultFixture "i6-ra-svn-fault-fixture" $raSvnFaultFixtureResolved "I6 evidence.artifactBindings.raSvnFaultFixture"
 Assert-ArtifactBinding $report.artifactBindings.installedStressProbe "i6-installed-stress-probe" $installedStressProbeResolved "I6 evidence.artifactBindings.installedStressProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedNegativeProbe "i6-installed-negative-probe" $installedNegativeProbeResolved "I6 evidence.artifactBindings.installedNegativeProbe"
+Assert-ArtifactBinding $report.artifactBindings.installedAuthzDeniedProbe "i6-installed-authz-denied-probe" $installedAuthzDeniedProbeResolved "I6 evidence.artifactBindings.installedAuthzDeniedProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedVsixProbe "i6-installed-vsix-probe" $installedVsixProbeResolved "I6 evidence.artifactBindings.installedVsixProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedCompatibilityProbe "packaged-native-compatibility-probe" $packagedCompatibilityProbeResolved "I6 evidence.artifactBindings.packagedCompatibilityProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedExtensionHostProbe "installed-extension-host-probe" $installedExtensionHostProbeResolved "I6 evidence.artifactBindings.installedExtensionHostProbe"
+Assert-ArtifactBinding $report.artifactBindings.svnserveLog "fixture-svnserve-log" $fixtureLogResolved "I6 evidence.artifactBindings.svnserveLog"
 
 Assert-ExactProperties $report.fixture @(
   "transport",

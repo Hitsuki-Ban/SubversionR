@@ -64,6 +64,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.diagnostics.installedSvnAnonymousReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousStressCheckout",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousNegativeReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
       "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
       "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
       "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
@@ -176,8 +177,12 @@ describe("extension manifest", () => {
       (command: { command: string }) => command.command,
     );
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousNegativeReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport");
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousNegativeReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
     );
   });
 

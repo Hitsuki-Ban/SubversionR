@@ -180,6 +180,7 @@ Invoke-RequiredTool $svn @(
   "$repositoryFileUrl/trunk",
   "$repositoryFileUrl/branches",
   "$repositoryFileUrl/tags",
+  "$repositoryFileUrl/denied",
   "-m",
   "create I6 fixture layout",
   "--non-interactive",
@@ -218,6 +219,8 @@ Invoke-RequiredTool $svn @(
 
 $fixtureConfigPath = Join-Path $repositoryRoot "conf\svnserve.conf"
 $fixtureAuthzPath = Join-Path $repositoryRoot "conf\authz"
+$fixtureLogPath = Join-Path $fixtureRootResolved "logs\svnserve.log"
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fixtureLogPath) | Out-Null
 Set-Content -LiteralPath $fixtureConfigPath -Value @"
 [general]
 anon-access = write
@@ -244,16 +247,40 @@ try {
     "--listen-port",
     $port.ToString(),
     "--root",
-    (Join-Path $fixtureRootResolved "repositories")
+    (Join-Path $fixtureRootResolved "repositories"),
+    "--log-file",
+    $fixtureLogPath
   ) -PassThru -WindowStyle Hidden
   Wait-SvnserveReady $svn $repositoryUrl $oracleConfigRoot $server
   $svnserveStartTimeUtc = $server.StartTime.ToUniversalTime().ToString("O", [Globalization.CultureInfo]::InvariantCulture)
+  $packagedAuthzWorkingCopyPath = Join-Path $fixtureRootResolved "authz-denied-packaged-wc"
+  $installedAuthzWorkingCopyPath = Join-Path $fixtureRootResolved "authz-denied-installed-wc"
+  $deniedRepositoryUrl = "svn://127.0.0.1:$port/repo/denied"
+  foreach ($workingCopyPath in @($packagedAuthzWorkingCopyPath, $installedAuthzWorkingCopyPath)) {
+    Invoke-RequiredTool $svn @(
+      "checkout",
+      $deniedRepositoryUrl,
+      $workingCopyPath,
+      "--non-interactive",
+      "--no-auth-cache",
+      "--config-dir",
+      $oracleConfigRoot
+    ) "Prepare controlled I6 authz-denied working copy" | Out-Null
+    [System.IO.File]::WriteAllText(
+      (Join-Path $workingCopyPath ".subversionr-authz-readonly-sentinel"),
+      "SubversionR I6 authz read-only sentinel`n",
+      [System.Text.UTF8Encoding]::new($false)
+    )
+  }
 
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $probeDriverResolved `
     -RepositoryUrl $repositoryUrl `
     -FixtureRoot $fixtureRootResolved `
     -FixtureConfigPath $fixtureConfigPath `
     -FixtureAuthzPath $fixtureAuthzPath `
+    -FixtureLogPath $fixtureLogPath `
+    -PackagedAuthzWorkingCopyPath $packagedAuthzWorkingCopyPath `
+    -InstalledAuthzWorkingCopyPath $installedAuthzWorkingCopyPath `
     -SvnPath $svn `
     -SvnadminPath $svnadmin `
     -SvnservePath $svnserve `
@@ -288,6 +315,7 @@ try {
     -SvnservePath $svnserve `
     -FixtureConfigPath $fixtureConfigPath `
     -FixtureAuthzPath $fixtureAuthzPath `
+    -FixtureLogPath $fixtureLogPath `
     -ExpectedProductVersion $ExpectedProductVersion
   if ($LASTEXITCODE -ne 0) {
     throw "The generated I6 evidence failed its executable contract."

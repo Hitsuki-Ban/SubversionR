@@ -60,6 +60,7 @@ import {
   createInstalledSvnAnonymousStressSessionSha256,
 } from "./diagnostics/installedSvnAnonymousStressCheckout";
 import { collectInstalledSvnAnonymousNegativeReport } from "./diagnostics/installedSvnAnonymousNegativeReport";
+import { collectInstalledSvnAnonymousAuthzDeniedReport } from "./diagnostics/installedSvnAnonymousAuthzDeniedReport";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
@@ -310,6 +311,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const installedSvnAnonymousReportToken = consumeInstalledSvnAnonymousReportToken();
   const installedSvnAnonymousStressCheckoutToken = consumeInstalledSvnAnonymousStressCheckoutToken();
   const installedSvnAnonymousNegativeReportToken = consumeInstalledSvnAnonymousNegativeReportToken();
+  const installedSvnAnonymousAuthzDeniedReportToken = consumeInstalledSvnAnonymousAuthzDeniedReportToken();
   const installedSvnAnonymousStressCheckoutContext =
     installedSvnAnonymousStressCheckoutToken === undefined
       ? undefined
@@ -382,7 +384,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (
       installedSvnAnonymousReportToken !== undefined ||
       installedSvnAnonymousStressCheckoutToken !== undefined ||
-      installedSvnAnonymousNegativeReportToken !== undefined
+      installedSvnAnonymousNegativeReportToken !== undefined ||
+      installedSvnAnonymousAuthzDeniedReportToken !== undefined
     ) {
       if (method === "credentials/request") {
         installedSvnAnonymousAuthActivity.credentialRequests += 1;
@@ -1450,6 +1453,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
             }),
         );
+  const installedSvnAnonymousAuthzDeniedReportCommand =
+    installedSvnAnonymousAuthzDeniedReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousAuthzDeniedReport({
+              expectedToken: installedSvnAnonymousAuthzDeniedReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
   const installedCoreWorkflowReportCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedCoreWorkflowReport",
     (request: unknown) =>
@@ -2223,6 +2241,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   if (installedSvnAnonymousNegativeReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousNegativeReportCommand);
+  }
+  if (installedSvnAnonymousAuthzDeniedReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousAuthzDeniedReportCommand);
   }
   if (installedSourceControlUiE2eExecuteResourceCommand !== undefined) {
     context.subscriptions.push(installedSourceControlUiE2eExecuteResourceCommand);
@@ -4190,6 +4211,12 @@ function consumeInstalledSvnAnonymousStressCheckoutToken(): string | undefined {
 function consumeInstalledSvnAnonymousNegativeReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousAuthzDeniedReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_AUTHZ_DENIED_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_AUTHZ_DENIED_REPORT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 

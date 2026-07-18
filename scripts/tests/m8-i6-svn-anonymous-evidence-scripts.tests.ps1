@@ -9,9 +9,11 @@ $schemaPath = Join-Path $repoRoot "docs\release\m8-i6-svn-anonymous-evidence.v1.
 $probeDriverPath = Join-Path $repoRoot "scripts\release\probe-m8-i6-svn-anonymous.ps1"
 $packagedNativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-native.mjs"
 $packagedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"
+$packagedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-authz-denied.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
 $installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
 $installedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"
+$installedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-authz-denied.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
 $packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
 $installedExtensionHostProbePath = Join-Path $repoRoot "scripts\release\test-vscode-installed-extension-host.ps1"
@@ -302,7 +304,7 @@ function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [stri
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $raSvnFaultFixturePath, $installedStressProbePath, $installedNegativeProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $raSvnFaultFixturePath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
     Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
   }
 
@@ -318,6 +320,7 @@ try {
   $svnservePath = Join-Path $artifactsRoot "svnserve.exe"
   $fixtureConfigPath = Join-Path $artifactsRoot "svnserve.conf"
   $fixtureAuthzPath = Join-Path $artifactsRoot "authz"
+  $fixtureLogPath = Join-Path $artifactsRoot "svnserve.log"
   Set-Content -LiteralPath $vsixPath -Value "vsix-I6-fixture" -NoNewline
   Set-Content -LiteralPath $daemonPath -Value "daemon-I6-fixture" -NoNewline
   Set-Content -LiteralPath $bridgePath -Value "bridge-I6-fixture" -NoNewline
@@ -328,6 +331,7 @@ try {
   Set-Content -LiteralPath $svnservePath -Value "svnserve-I6-fixture" -NoNewline
   Set-Content -LiteralPath $fixtureConfigPath -Value "[general]`nanon-access = write`nauth-access = none`nauthz-db = authz`n[sasl]`nuse-sasl = false`n" -NoNewline
   Set-Content -LiteralPath $fixtureAuthzPath -Value "[repo:/]`n* = rw`n" -NoNewline
+  Set-Content -LiteralPath $fixtureLogPath -Value "fixture svnserve log`n" -NoNewline
 
   $artifactBindings = [ordered]@{
     vsix = New-ArtifactBinding "vsix" $vsixPath
@@ -337,9 +341,11 @@ try {
     probeDriver = New-ArtifactBinding "i6-probe-driver" $probeDriverPath
     packagedNativeProbe = New-ArtifactBinding "i6-packaged-native-probe" $packagedNativeProbePath
     packagedNegativeProbe = New-ArtifactBinding "i6-packaged-negative-probe" $packagedNegativeProbePath
+    packagedAuthzDeniedProbe = New-ArtifactBinding "i6-packaged-authz-denied-probe" $packagedAuthzDeniedProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
     installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
     installedNegativeProbe = New-ArtifactBinding "i6-installed-negative-probe" $installedNegativeProbePath
+    installedAuthzDeniedProbe = New-ArtifactBinding "i6-installed-authz-denied-probe" $installedAuthzDeniedProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
     packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
     installedExtensionHostProbe = New-ArtifactBinding "installed-extension-host-probe" $installedExtensionHostProbePath
@@ -349,6 +355,7 @@ try {
     svn = New-ArtifactBinding "fixture-svn" $svnPath
     svnadmin = New-ArtifactBinding "fixture-svnadmin" $svnadminPath
     svnserve = New-ArtifactBinding "fixture-svnserve" $svnservePath
+    svnserveLog = New-ArtifactBinding "fixture-svnserve-log" $fixtureLogPath
   }
   $report = [ordered]@{
     schema = "subversionr.release.m8-i6-svn-anonymous.win32-x64.v1"
@@ -450,6 +457,7 @@ try {
     "-SvnservePath", $svnservePath,
     "-FixtureConfigPath", $fixtureConfigPath,
     "-FixtureAuthzPath", $fixtureAuthzPath,
+    "-FixtureLogPath", $fixtureLogPath,
     "-ExpectedProductVersion", "0.3.0"
   )
   Assert-Equal ([string]$report.negativeCells[0].surfaceObservations[0].originCode) ([string]$report.negativeCells[0].surfaceObservations[0].settlementCode) "Ordinary negative-cell fixtures must default settlement code to the controlled origin code."
@@ -636,7 +644,8 @@ try {
   foreach ($toolBinding in @(
       @("svn", $svnPath, "svn-I6-fixture"),
       @("svnadmin", $svnadminPath, "svnadmin-I6-fixture"),
-      @("svnserve", $svnservePath, "svnserve-I6-fixture")
+      @("svnserve", $svnservePath, "svnserve-I6-fixture"),
+      @("svnserveLog", $fixtureLogPath, "fixture svnserve log`n")
     )) {
     Set-Content -LiteralPath $toolBinding[1] -Value "tampered-$($toolBinding[0])" -NoNewline
     Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "artifactBindings.$($toolBinding[0]) must bind the exact file bytes" "I6 verification must reject $($toolBinding[0]) hash drift."
@@ -646,9 +655,11 @@ try {
   foreach ($probeBinding in @(
       @("packagedNativeProbe", $packagedNativeProbePath),
       @("packagedNegativeProbe", $packagedNegativeProbePath),
+      @("packagedAuthzDeniedProbe", $packagedAuthzDeniedProbePath),
       @("raSvnFaultFixture", $raSvnFaultFixturePath),
       @("installedStressProbe", $installedStressProbePath),
       @("installedNegativeProbe", $installedNegativeProbePath),
+      @("installedAuthzDeniedProbe", $installedAuthzDeniedProbePath),
       @("installedVsixProbe", $installedVsixProbePath),
       @("packagedCompatibilityProbe", $packagedCompatibilityProbePath),
       @("installedExtensionHostProbe", $installedExtensionHostProbePath)
@@ -723,8 +734,13 @@ try {
   New-Item -ItemType Directory -Force -Path $driverFixtureRoot | Out-Null
   $driverConfigPath = Join-Path $driverFixtureRoot "svnserve.conf"
   $driverAuthzPath = Join-Path $driverFixtureRoot "authz"
+  $driverLogPath = Join-Path $driverFixtureRoot "svnserve.log"
+  $driverPackagedAuthzWorkingCopyPath = Join-Path $driverFixtureRoot "packaged-authz-wc"
+  $driverInstalledAuthzWorkingCopyPath = Join-Path $driverFixtureRoot "installed-authz-wc"
+  New-Item -ItemType Directory -Force -Path $driverPackagedAuthzWorkingCopyPath, $driverInstalledAuthzWorkingCopyPath | Out-Null
   Set-Content -LiteralPath $driverConfigPath -Value "[general]`nanon-access = write`nauth-access = none`nauthz-db = authz`nrealm = SubversionR I6 Controlled Anonymous`n[sasl]`nuse-sasl = false" -NoNewline
   Set-Content -LiteralPath $driverAuthzPath -Value "[repo:/]`n* = rw" -NoNewline
+  Set-Content -LiteralPath $driverLogPath -Value "fixture`n" -NoNewline
   $driverOutputPath = Join-Path $driverFixtureRoot "evidence.json"
   Set-Content -LiteralPath $driverOutputPath -Value '{"stale":true}' -NoNewline
   $driverArguments = @(
@@ -735,6 +751,9 @@ try {
     "-FixtureRoot", $driverFixtureRoot,
     "-FixtureConfigPath", $driverConfigPath,
     "-FixtureAuthzPath", $driverAuthzPath,
+    "-FixtureLogPath", $driverLogPath,
+    "-PackagedAuthzWorkingCopyPath", $driverPackagedAuthzWorkingCopyPath,
+    "-InstalledAuthzWorkingCopyPath", $driverInstalledAuthzWorkingCopyPath,
     "-SvnPath", $svnPath,
     "-SvnadminPath", $svnadminPath,
     "-SvnservePath", $svnservePath,
@@ -782,9 +801,11 @@ try {
       'probe-vscode-packaged-native.mjs',
       'probe-m8-i6-packaged-native.mjs',
       'probe-m8-i6-packaged-negative.mjs',
+      'probe-m8-i6-packaged-authz-denied.mjs',
       'serve-m8-i6-ra-svn-fault-fixture.mjs',
       'probe-m8-i6-installed-stress.ps1',
       'probe-m8-i6-installed-negative.ps1',
+      'probe-m8-i6-installed-authz-denied.ps1',
       'probe-m8-i6-installed-vsix.ps1',
       'test-vscode-installed-extension-host.ps1',
       'extension/resources/backend/win32-x64/subversionr-daemon.exe',
@@ -792,6 +813,7 @@ try {
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'installed malicious-root and SASL-only fault cells',
+      'packaged/installed authz-denied remote-status cell',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface negative/recovery cells',
       'issue #136',
@@ -866,7 +888,9 @@ try {
     "Get-ProcessSnapshotStartFileTime",
     "Get-RecordedProcessDescendantStarts",
     "Get-PackagedNegativeProcessObservation",
-    "Get-InstalledNegativeProcessObservation"
+    "Get-InstalledNegativeProcessObservation",
+    "Set-ExactAuthzAtomically",
+    "Get-SvnserveAuthzObservation"
   )
   $observationHelperSources = foreach ($functionName in $observationHelpers) {
     $matches = @($driverAst.FindAll({
@@ -878,6 +902,22 @@ try {
     $matches[0].Extent.Text
   }
   Invoke-Expression ($observationHelperSources -join "`n`n")
+
+  $authzAtomicPath = Join-Path $tempRoot "authz-atomic"
+  Set-Content -LiteralPath $authzAtomicPath -Value "old" -NoNewline
+  Set-ExactAuthzAtomically $authzAtomicPath "[repo:/]`n* = rw"
+  Assert-Equal "[repo:/]`n* = rw" (Get-Content -Raw -LiteralPath $authzAtomicPath) "Authz control must settle exact UTF-8 bytes."
+  Assert-Equal 0 @(Get-ChildItem -LiteralPath $tempRoot -Filter ".subversionr-authz-*.tmp" -File).Count "Authz control must leave no replacement residue."
+
+  $authzLogPath = Join-Path $tempRoot "svnserve-authz.log"
+  Set-Content -LiteralPath $authzLogPath -Value @(
+    "1 2026-07-18T00:00:00Z 127.0.0.1 - repo open 2 cap=(depth) /denied SVN/1.14.5 -",
+    "1 2026-07-18T00:00:00Z 127.0.0.1 - repo ERR - 0 170001 Authorization failed"
+  )
+  $authzNetwork = Get-SvnserveAuthzObservation $authzLogPath 0 "Controlled authz test"
+  Assert-Equal 1 $authzNetwork.networkAttempts "Authz log observation must derive one denial attempt from the actual line count."
+  Assert-Equal 1 $authzNetwork.networkConnections "Authz log observation must derive one connection from the actual open-line count."
+  Assert-Equal "command" $authzNetwork.networkProgress "Authz log observation must prove command-stage progress."
 
   $probeStart = [pscustomobject]@{
     processId = 100L; parentProcessId = 10L; processName = "Code.exe"; eventFileTime = 1000L
@@ -891,6 +931,18 @@ try {
   $measuredBaseline = Get-PackagedNegativeProcessObservation `
     @($probeStart, $daemonStart, $workerStart) 100L "Code.exe" "subversionr-daemon.exe" @()
   Assert-Equal 0 $measuredBaseline.workerDescendantsAfter "Packaged-negative baseline must derive zero descendants from an empty settlement snapshot."
+  Assert-Equal 0 $measuredBaseline.fixtureCliInvocations "Packaged-negative baseline must derive zero fixture CLI starts from subscribed process events."
+
+  foreach ($fixtureCliStart in @(
+      [pscustomobject]@{ processId = 350L; parentProcessId = 100L; processName = "svn.exe"; eventFileTime = 3500L },
+      [pscustomobject]@{ processId = 351L; parentProcessId = 200L; processName = "svnadmin.exe"; eventFileTime = 3501L },
+      [pscustomobject]@{ processId = 352L; parentProcessId = 300L; processName = "svnserve.exe"; eventFileTime = 3502L }
+    )) {
+    $measuredFixtureCli = Get-PackagedNegativeProcessObservation `
+      @($probeStart, $daemonStart, $workerStart, $fixtureCliStart) `
+      100L "Code.exe" "subversionr-daemon.exe" @()
+    Assert-Equal 1 $measuredFixtureCli.fixtureCliInvocations "Packaged-negative process evidence must count fixture CLI starts under every product ancestor."
+  }
 
   $unexpectedDescendant = [pscustomobject]@{
     processId = 400L; parentProcessId = 300L; processName = "unexpected.exe"; eventFileTime = 4000L
@@ -1052,7 +1104,9 @@ try {
   $packageJson = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "package.json") | ConvertFrom-Json
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-ra-svn-fault-fixture.tests.mjs")) "PR Fast I6 script tests must execute the controlled ra_svn fault fixture tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-negative.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native negative probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-authz-denied.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native authz-denied probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stress-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed 100+1 stress probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-authz-denied-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed authz-denied probe contract tests."
 
   Write-Host "M8 I6 svn anonymous evidence script tests passed."
 }

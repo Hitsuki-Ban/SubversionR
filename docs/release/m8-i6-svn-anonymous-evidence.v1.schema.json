@@ -61,9 +61,11 @@
         "probeDriver",
         "packagedNativeProbe",
         "packagedNegativeProbe",
+        "packagedAuthzDeniedProbe",
         "raSvnFaultFixture",
         "installedStressProbe",
         "installedNegativeProbe",
+        "installedAuthzDeniedProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
         "installedExtensionHostProbe",
@@ -72,7 +74,8 @@
         "nativeSourceLock",
         "svn",
         "svnadmin",
-        "svnserve"
+        "svnserve",
+        "svnserveLog"
       ],
       "properties": {
         "vsix": {
@@ -96,6 +99,9 @@
         "packagedNegativeProbe": {
           "$ref": "#/$defs/artifact"
         },
+        "packagedAuthzDeniedProbe": {
+          "$ref": "#/$defs/artifact"
+        },
         "raSvnFaultFixture": {
           "$ref": "#/$defs/artifact"
         },
@@ -103,6 +109,9 @@
           "$ref": "#/$defs/artifact"
         },
         "installedNegativeProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedAuthzDeniedProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedVsixProbe": {
@@ -130,6 +139,9 @@
           "$ref": "#/$defs/artifact"
         },
         "svnserve": {
+          "$ref": "#/$defs/artifact"
+        },
+        "svnserveLog": {
           "$ref": "#/$defs/artifact"
         }
       }
