@@ -4301,15 +4301,23 @@ fn stdio_mutation_failure_requires_fresh_recovery_and_safe_reconcile_before_rele
         ),
     ]
     .concat();
-    let reader = DelayedChunkReader::new(
+    let stage = Arc::new(AtomicUsize::new(0));
+    let reader = BrokerRoundTripReader::new(
         vec![
             first,
             recovery_requests,
             frame(r#"{"jsonrpc":"2.0","id":7,"method":"shutdown","params":{}}"#),
         ],
-        vec![Duration::from_millis(80), Duration::from_millis(40)],
+        vec![1, 2],
+        stage.clone(),
     );
-    let mut output = Vec::new();
+    let mut output = OutputMarkerWriter::new(
+        stage,
+        vec![
+            (b"\"id\":3".to_vec(), 1),
+            (b"\"outcome\":\"safe\"".to_vec(), 2),
+        ],
+    );
 
     run_json_rpc_stdio_with_remote_worker(
         reader,
@@ -4319,7 +4327,7 @@ fn stdio_mutation_failure_requires_fresh_recovery_and_safe_reconcile_before_rele
     )
     .expect("mutation recovery workflow must remain serviceable");
 
-    let frames = decode_frames(&output).expect("responses must be framed");
+    let frames = decode_frames(output.as_bytes()).expect("responses must be framed");
     let by_id = |id: u64| {
         frames
             .iter()
@@ -4612,7 +4620,7 @@ fn stdio_eof_cancels_and_settles_blocking_recovery_without_a_late_response() {
         ),
     ]
     .concat();
-    let reader = DelayedEofReader::new(input, Duration::from_millis(40));
+    let reader = EofAfterFlagReader::new(input, control.started.clone(), Duration::from_secs(5));
     let mut output = Vec::new();
 
     run_json_rpc_stdio_with_remote_worker(
@@ -4888,6 +4896,44 @@ struct DelayedEofReader {
     delayed: bool,
 }
 
+struct EofAfterFlagReader {
+    payload: io::Cursor<Vec<u8>>,
+    ready: Arc<AtomicBool>,
+    wait_timeout: Duration,
+    waited: bool,
+}
+
+impl EofAfterFlagReader {
+    fn new(payload: Vec<u8>, ready: Arc<AtomicBool>, wait_timeout: Duration) -> Self {
+        Self {
+            payload: io::Cursor::new(payload),
+            ready,
+            wait_timeout,
+            waited: false,
+        }
+    }
+}
+
+impl Read for EofAfterFlagReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let bytes_read = self.payload.read(buffer)?;
+        if bytes_read == 0 && !self.waited {
+            self.waited = true;
+            let deadline = Instant::now() + self.wait_timeout;
+            while !self.ready.load(Ordering::SeqCst) {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "recovery task did not start before the bounded EOF gate",
+                    ));
+                }
+                thread::yield_now();
+            }
+        }
+        Ok(bytes_read)
+    }
+}
+
 impl DelayedEofReader {
     fn new(payload: Vec<u8>, eof_delay: Duration) -> Self {
         Self {
@@ -4987,6 +5033,46 @@ struct BrokerRoundTripReader {
 struct BrokerRoundTripWriter {
     output: Vec<u8>,
     stage: Arc<AtomicUsize>,
+}
+
+struct OutputMarkerWriter {
+    output: Vec<u8>,
+    stage: Arc<AtomicUsize>,
+    markers: Vec<(Vec<u8>, usize)>,
+}
+
+impl OutputMarkerWriter {
+    fn new(stage: Arc<AtomicUsize>, markers: Vec<(Vec<u8>, usize)>) -> Self {
+        Self {
+            output: Vec::new(),
+            stage,
+            markers,
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.output
+    }
+}
+
+impl io::Write for OutputMarkerWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.output.extend_from_slice(buffer);
+        for (marker, stage) in &self.markers {
+            if self
+                .output
+                .windows(marker.len())
+                .any(|window| window == marker)
+            {
+                self.stage.fetch_max(*stage, Ordering::SeqCst);
+            }
+        }
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 impl BrokerRoundTripWriter {
