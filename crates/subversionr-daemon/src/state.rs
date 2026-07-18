@@ -277,6 +277,8 @@ impl DaemonState {
         let bridge_info = bridge.info();
         let mut capabilities = bridge_info.capabilities();
         capabilities.remote_worker_isolation = self.remote_worker.capability_available();
+        capabilities.credential_lease_settlement =
+            self.remote_worker.credential_lease_settlement_available();
         let result = InitializeResponse::new(
             env!("CARGO_PKG_VERSION").to_string(),
             bridge_info.bridge_version.clone(),
@@ -353,13 +355,15 @@ impl DaemonState {
         let bridge_info = bridge.info();
         let mut capabilities = bridge_info.capabilities();
         capabilities.remote_worker_isolation = self.remote_worker.capability_available();
+        capabilities.credential_lease_settlement =
+            self.remote_worker.credential_lease_settlement_available();
         let response = DiagnosticsGetResponse {
             backend_version: env!("CARGO_PKG_VERSION").to_string(),
             bridge_version: bridge_info.bridge_version,
             libsvn_version: bridge_info.libsvn_version,
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 32,
+                minor: 33,
             },
             platform: current_platform(),
             cache_schema: default_cache_schema(),
@@ -2367,12 +2371,14 @@ impl DaemonState {
 
         if !self.remote_worker.capability_available() {
             let endpoint = operation.endpoint.clone();
+            let mut unavailable_auth = UnavailableAuthRequestBroker;
             return Some(
                 match self.remote_worker.execute(
                     &operation.envelope,
                     operation.config,
                     lane_key,
                     cancellation,
+                    &mut unavailable_auth,
                     bridge,
                     operation.deadline,
                 ) {

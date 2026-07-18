@@ -95,6 +95,7 @@ pub struct Capabilities {
     pub remote_operation_envelope: bool,
     pub trusted_config_snapshot: bool,
     pub remote_worker_isolation: bool,
+    pub credential_lease_settlement: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -786,30 +787,62 @@ pub struct DiagnosticsGetResponse {
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CredentialRequest {
-    pub request_id: String,
-    pub realm: String,
-    pub kind: String,
-    pub username: Option<String>,
-    pub interactive: bool,
-    pub persistence_allowed: bool,
-    pub origin: String,
-    pub timeout_ms: u64,
-    pub repository_id: Option<String>,
-    pub working_copy_root: Option<String>,
+pub enum CredentialAuthKind {
+    Basic,
+    CramMd5,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum CredentialAttempt {
+    Initial,
+    RetryAfterRejected { previous_lease_id: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum CredentialPersistenceIntent {
+    SecretStorage,
+    Session,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialSettlementOutcome {
+    Accepted,
+    Rejected,
+    Unused,
+    Cancelled,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CredentialRequest {
+    pub request_id: String,
+    pub operation_id: String,
+    pub endpoint: CanonicalEndpoint,
+    pub auth_kind: CredentialAuthKind,
+    pub realm: String,
+    pub account: ServerAccountSelection,
+    pub attempt: CredentialAttempt,
+    pub interactive: bool,
+    pub persistence_allowed: bool,
+    pub origin: RemoteOperationIntent,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Credential {
-    pub username: Option<String>,
+    pub username: String,
     pub secret: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CredentialError {
     pub code: String,
     pub category: String,
@@ -819,19 +852,41 @@ pub struct CredentialError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase")]
+#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub enum CredentialResponse {
     #[serde(rename_all = "camelCase")]
     Provide {
         request_id: String,
+        operation_id: String,
+        lease_id: String,
         credential: Credential,
-        persistence: String,
+        persistence_intent: CredentialPersistenceIntent,
     },
     #[serde(rename_all = "camelCase")]
     Cancel {
         request_id: String,
+        operation_id: String,
         error: CredentialError,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CredentialSettlementRequest {
+    pub request_id: String,
+    pub operation_id: String,
+    pub lease_id: String,
+    pub outcome: CredentialSettlementOutcome,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CredentialSettlementAck {
+    pub request_id: String,
+    pub operation_id: String,
+    pub lease_id: String,
+    pub outcome: CredentialSettlementOutcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -894,7 +949,7 @@ impl InitializeResponse {
         Self {
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 32,
+                minor: 33,
             },
             backend_version,
             bridge_version,
@@ -961,6 +1016,7 @@ pub fn default_capabilities() -> Capabilities {
         remote_operation_envelope: true,
         trusted_config_snapshot: true,
         remote_worker_isolation: false,
+        credential_lease_settlement: false,
     }
 }
 

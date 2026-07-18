@@ -14,7 +14,8 @@ mod windows {
     use serde_json::json;
     use subversionr_daemon::{
         BridgeCancellationToken, ProcessRemoteWorkerSupervisor, RemoteConfigPlan,
-        RemoteConfigScheme, RemoteConfigServerAuth, RemoteWorkerSupervisor, UnavailableBridge,
+        RemoteConfigScheme, RemoteConfigServerAuth, RemoteWorkerSupervisor,
+        UnavailableAuthRequestBroker, UnavailableBridge,
     };
     use subversionr_protocol::RemoteOperationEnvelope;
 
@@ -179,11 +180,13 @@ mod windows {
             cancellation: &dyn BridgeCancellationToken,
             deadline: Instant,
         ) -> Result<(), subversionr_daemon::BridgeFailure> {
+            let mut auth = UnavailableAuthRequestBroker;
             self.supervisor.execute(
                 &envelope,
                 plan(envelope.timeout_ms),
                 "C:/checkout/worker-supervisor",
                 cancellation,
+                &mut auth,
                 &UnavailableBridge,
                 deadline,
             )

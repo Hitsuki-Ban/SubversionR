@@ -1312,9 +1312,43 @@ Assert-OrdinalEqual "subversionr-svn-bridge/$extensionVersion" (Get-RequiredStri
 $packagedLibsvnVersion = Get-RequiredString $nativeCompatibility "libsvnVersion" "vsixPackage.nativeCompatibility"
 $nativeProtocol = Get-RequiredProperty $nativeCompatibility "protocol" "vsixPackage.nativeCompatibility"
 Assert-Equal 1 ([int](Get-RequiredProperty $nativeProtocol "major" "vsixPackage.nativeCompatibility.protocol")) "vsixPackage native compatibility protocol major must match the release contract."
-Assert-Equal 32 ([int](Get-RequiredProperty $nativeProtocol "minor" "vsixPackage.nativeCompatibility.protocol")) "vsixPackage native compatibility protocol minor must be exactly 32."
+Assert-Equal 33 ([int](Get-RequiredProperty $nativeProtocol "minor" "vsixPackage.nativeCompatibility.protocol")) "vsixPackage native compatibility protocol minor must be exactly 33."
 $nativeCapabilities = Get-RequiredProperty $nativeCompatibility "capabilities" "vsixPackage.nativeCompatibility"
 Assert-RequiredBooleanTrue $nativeCapabilities "remoteWorkerIsolation" "vsixPackage.nativeCompatibility.capabilities"
+Assert-RequiredBooleanTrue $nativeCapabilities "credentialLeaseSettlement" "vsixPackage.nativeCompatibility.capabilities"
+$credentialProviderProbe = Get-RequiredProperty $nativeCompatibility "credentialProviderProbe" "vsixPackage.nativeCompatibility"
+if (@($credentialProviderProbe.PSObject.Properties).Count -ne 4) {
+  throw "vsixPackage.nativeCompatibility.credentialProviderProbe must define exactly schema, status, networkAccess, and scenarios."
+}
+Assert-OrdinalEqual "subversionr.private.credential-provider-probe.v1" (Get-RequiredString $credentialProviderProbe "schema" "vsixPackage.nativeCompatibility.credentialProviderProbe") "vsixPackage credential provider probe schema must match the private packaged probe contract."
+Assert-OrdinalEqual "passed" (Get-RequiredString $credentialProviderProbe "status" "vsixPackage.nativeCompatibility.credentialProviderProbe") "vsixPackage credential provider probe must pass."
+$credentialProbeNetworkAccess = Get-RequiredProperty $credentialProviderProbe "networkAccess" "vsixPackage.nativeCompatibility.credentialProviderProbe"
+if ($credentialProbeNetworkAccess -isnot [bool] -or $credentialProbeNetworkAccess) {
+  throw "vsixPackage.nativeCompatibility.credentialProviderProbe.networkAccess must be false."
+}
+$credentialProbeScenarios = Get-RequiredProperty $credentialProviderProbe "scenarios" "vsixPackage.nativeCompatibility.credentialProviderProbe"
+$expectedCredentialProbeScenarios = @(
+  [pscustomobject]@{ scenario = "firstSave"; events = @("request:initial", "settle:accepted") },
+  [pscustomobject]@{ scenario = "firstNextSave"; events = @("request:initial", "settle:rejected", "request:retryAfterRejected", "settle:accepted") },
+  [pscustomobject]@{ scenario = "unused"; events = @("request:initial", "settle:unused") },
+  [pscustomobject]@{ scenario = "cancelled"; events = @("request:initial", "settle:cancelled") },
+  [pscustomobject]@{ scenario = "timedOut"; events = @("request:initial", "settle:timedOut") }
+)
+if ($credentialProbeScenarios -isnot [System.Collections.IList] -or $credentialProbeScenarios.Count -ne $expectedCredentialProbeScenarios.Count) {
+  throw "vsixPackage.nativeCompatibility.credentialProviderProbe.scenarios must define the five required scenarios."
+}
+for ($index = 0; $index -lt $expectedCredentialProbeScenarios.Count; $index++) {
+  $actualScenario = $credentialProbeScenarios[$index]
+  $expectedScenario = $expectedCredentialProbeScenarios[$index]
+  if (@($actualScenario.PSObject.Properties).Count -ne 2) {
+    throw "vsixPackage.nativeCompatibility.credentialProviderProbe.scenarios[$index] must define exactly scenario and events."
+  }
+  Assert-OrdinalEqual $expectedScenario.scenario (Get-RequiredString $actualScenario "scenario" "vsixPackage.nativeCompatibility.credentialProviderProbe.scenarios[$index]") "vsixPackage credential provider probe scenario order must match the release contract."
+  $actualEvents = Get-RequiredProperty $actualScenario "events" "vsixPackage.nativeCompatibility.credentialProviderProbe.scenarios[$index]"
+  if ($actualEvents -isnot [System.Collections.IList] -or (($actualEvents | ForEach-Object { [string]$_ }) -join "|") -cne ($expectedScenario.events -join "|")) {
+    throw "vsixPackage credential provider probe scenario '$($expectedScenario.scenario)' events must match the release contract."
+  }
+}
 $localDiscovery = Get-RequiredProperty $nativeCompatibility "localDiscovery" "vsixPackage.nativeCompatibility"
 Assert-OrdinalEqual "passed" (Get-RequiredString $localDiscovery "status" "vsixPackage.nativeCompatibility.localDiscovery") "vsixPackage native compatibility must retain the packaged local discovery smoke."
 Assert-Equal 0 ([int](Get-RequiredProperty $localDiscovery "candidateCount" "vsixPackage.nativeCompatibility.localDiscovery")) "vsixPackage local discovery fixture candidate count must remain empty."
@@ -1334,7 +1368,7 @@ Assert-OrdinalEqual "passed" (Get-RequiredString $subsequentDiagnostics "status"
 Assert-OrdinalEqual "subversionr-daemon" (Get-RequiredString $subsequentDiagnostics "source" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics") "vsixPackage native compatibility subsequent diagnostics source must be the daemon."
 $subsequentProtocol = Get-RequiredProperty $subsequentDiagnostics "protocol" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics"
 Assert-Equal 1 ([int](Get-RequiredProperty $subsequentProtocol "major" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics.protocol")) "vsixPackage native compatibility subsequent diagnostics protocol major must match."
-Assert-Equal 32 ([int](Get-RequiredProperty $subsequentProtocol "minor" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics.protocol")) "vsixPackage native compatibility subsequent diagnostics protocol minor must match."
+Assert-Equal 33 ([int](Get-RequiredProperty $subsequentProtocol "minor" "vsixPackage.nativeCompatibility.workerIsolation.subsequentDiagnostics.protocol")) "vsixPackage native compatibility subsequent diagnostics protocol minor must match."
 $vsixPackageRootPath = Assert-Directory (Resolve-RepoPath (Get-RequiredString $vsixPackageJson.inputs "packageRoot" "vsixPackage.inputs")) "vsixPackage input packageRoot"
 $vsixPackageBackendManifestPath = Assert-File (Join-Path $vsixPackageRootPath "resources\backend\$Target\subversionr-backend-package-manifest.json") "vsixPackage input backend manifest"
 $vsixPackageBackendManifestSha256 = Get-Sha256 $vsixPackageBackendManifestPath
@@ -1353,7 +1387,7 @@ Assert-Equal $vsixEntrypointSha256 (Get-RequiredString $vsixCliInstall.json.hash
 Add-VerifiedEvidence $vsixCliInstall "cli-installed-vsix-sha256-and-entrypoint-match-current-vsix"
 
 $installedEvidenceSpecs = @(
-  @{ FileName = "subversionr-installed-extension-host-$Target.json"; Name = "installedExtensionHost"; Schema = "subversionr.release.installed-extension-host.$Target.v2" },
+  @{ FileName = "subversionr-installed-extension-host-$Target.json"; Name = "installedExtensionHost"; Schema = "subversionr.release.installed-extension-host.$Target.v3" },
   @{ FileName = "subversionr-installed-core-workflow-$Target.json"; Name = "installedCoreWorkflow"; Schema = "subversionr.release.installed-core-workflow.$Target.v2" },
   @{ FileName = "subversionr-installed-source-control-surface-$Target.json"; Name = "installedSourceControlSurface"; Schema = "subversionr.release.installed-source-control-surface.$Target.v1" },
   @{ FileName = "subversionr-installed-source-control-ui-e2e-$Target.json"; Name = "installedSourceControlUiE2e"; Schema = "subversionr.release.installed-source-control-ui-e2e.$Target.v1" }

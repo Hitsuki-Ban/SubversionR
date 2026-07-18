@@ -4,7 +4,7 @@ use std::str;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use subversionr_protocol::{
     CertificateTrustError, CertificateTrustRequest, CertificateTrustResponse, CredentialError,
-    CredentialRequest, CredentialResponse,
+    CredentialRequest, CredentialResponse, CredentialSettlementAck, CredentialSettlementRequest,
 };
 
 use crate::remote::{RemoteLaunchPlan, unsupported_transport};
@@ -58,30 +58,52 @@ where
     let mut frames = StdioFrameReceiver::spawn(reader, remote_worker.clone())?;
     let mut state = DaemonState::with_remote_worker(remote_worker.clone());
     let (worker_sender, worker_receiver) = mpsc::channel::<RemoteWorkerCompletion>();
+    let (broker_sender, broker_receiver) = mpsc::channel::<RemoteBrokerCall>();
     let mut pending = BTreeMap::<String, PendingRemoteRequest>::new();
+    let mut pending_broker = BTreeMap::<String, PendingRemoteBroker>::new();
     let mut terminal = false;
 
     loop {
         if !terminal && !pending.is_empty() && frames.connection_terminal() {
             terminal = true;
         }
-        while let Ok(completion) = worker_receiver.try_recv() {
-            settle_remote_completion(
-                &mut state,
-                &mut pending,
-                completion,
+        expire_remote_broker_calls(&mut frames, &mut pending_broker);
+        while let Ok(call) = broker_receiver.try_recv() {
+            accept_remote_broker_call(
+                call,
+                &pending,
+                &mut pending_broker,
                 terminal || frames.connection_terminal(),
                 &mut writer,
             )?;
         }
+        while let Ok(completion) = worker_receiver.try_recv() {
+            let connection_terminal = terminal || frames.connection_terminal();
+            settle_remote_completion(
+                &mut state,
+                &mut frames,
+                &mut pending,
+                &mut pending_broker,
+                completion,
+                connection_terminal,
+                &mut writer,
+            )?;
+        }
         if terminal {
+            fail_all_remote_broker_calls(&mut pending_broker, auth_response_unavailable);
+            while let Ok(call) = broker_receiver.try_recv() {
+                let method = call.method;
+                fail_remote_broker_call(call, auth_response_unavailable(method));
+            }
             if pending.is_empty() {
                 break;
             }
             match worker_receiver.recv_timeout(Duration::from_millis(10)) {
                 Ok(completion) => settle_remote_completion(
                     &mut state,
+                    &mut frames,
                     &mut pending,
+                    &mut pending_broker,
                     completion,
                     true,
                     &mut writer,
@@ -104,7 +126,18 @@ where
                 continue;
             }
         };
-        if cancel_notification_id(&payload).is_some() {
+        if let Some(cancel_id) = cancel_notification_id(&payload) {
+            if let Some(request_id) = cancel_id.as_str()
+                && let Some(pending_call) = pending_broker.remove(request_id)
+            {
+                frames.retire_auth_request_id(request_id);
+                let _ = pending_call
+                    .responder
+                    .send(Err(auth_cancelled(pending_call.method)));
+            }
+            continue;
+        }
+        if route_remote_broker_response(&payload, &mut pending_broker)? {
             continue;
         }
         let request = str::from_utf8(&payload)
@@ -118,6 +151,7 @@ where
             let mut auth = StdioAuthRequestBroker {
                 frames: &mut frames,
                 writer: &mut writer,
+                operation_cancellation: &cancellation,
             };
             state.dispatch_request_with_auth_and_cancellation(
                 request,
@@ -142,6 +176,7 @@ where
                 launch,
                 cancellation,
                 worker_sender.clone(),
+                broker_sender.clone(),
             ) {
                 Ok(()) => {
                     pending.insert(operation_id, pending_request);
@@ -181,6 +216,22 @@ struct PendingRemoteRequest {
     notifications: Vec<Value>,
 }
 
+struct RemoteBrokerCall {
+    operation_id: String,
+    request_id: String,
+    method: &'static str,
+    params: Value,
+    deadline: Instant,
+    responder: mpsc::Sender<Result<Value, BridgeFailure>>,
+}
+
+struct PendingRemoteBroker {
+    operation_id: String,
+    method: &'static str,
+    deadline: Instant,
+    responder: mpsc::Sender<Result<Value, BridgeFailure>>,
+}
+
 struct RemoteWorkerCompletion {
     request_id: Value,
     operation_id: String,
@@ -200,6 +251,7 @@ fn spawn_remote_worker(
     launch: RemoteLaunchPlan,
     cancellation: StdioCancellationToken,
     sender: mpsc::Sender<RemoteWorkerCompletion>,
+    broker_sender: mpsc::Sender<RemoteBrokerCall>,
 ) -> Result<(), RemoteWorkerSpawnError> {
     let request_id = launch.request_id.clone();
     let operation_id = launch.operation.envelope.operation_id.clone();
@@ -214,12 +266,20 @@ fn spawn_remote_worker(
         .name(format!("subversionr-remote-worker-{operation_id}"))
         .spawn(move || {
             let unavailable_bridge = UnavailableBridge;
+            let mut auth = RemoteWorkerAuthBroker::new(
+                operation_id.clone(),
+                broker_sender,
+                cancellation.clone(),
+                Arc::clone(&remote_worker),
+                launch.operation.deadline,
+            );
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 remote_worker.execute(
                     &launch.operation.envelope,
                     launch.operation.config,
                     &lane_key,
                     &cancellation,
+                    &mut auth,
                     &unavailable_bridge,
                     launch.operation.deadline,
                 )
@@ -245,9 +305,296 @@ fn spawn_remote_worker(
         .map_err(|_| spawn_error)
 }
 
+struct RemoteWorkerAuthBroker {
+    operation_id: String,
+    sender: mpsc::Sender<RemoteBrokerCall>,
+    cancellation: StdioCancellationToken,
+    remote_worker: Arc<dyn RemoteWorkerSupervisor>,
+    operation_deadline: Instant,
+}
+
+impl RemoteWorkerAuthBroker {
+    fn new(
+        operation_id: String,
+        sender: mpsc::Sender<RemoteBrokerCall>,
+        cancellation: StdioCancellationToken,
+        remote_worker: Arc<dyn RemoteWorkerSupervisor>,
+        operation_deadline: Instant,
+    ) -> Self {
+        Self {
+            operation_id,
+            sender,
+            cancellation,
+            remote_worker,
+            operation_deadline,
+        }
+    }
+
+    fn round_trip<TRequest, TResponse>(
+        &self,
+        method: &'static str,
+        request_id: &str,
+        timeout_ms: u64,
+        request: TRequest,
+    ) -> Result<TResponse, BridgeFailure>
+    where
+        TRequest: serde::Serialize,
+        TResponse: DeserializeOwned,
+    {
+        if request_id.is_empty() || request_id.len() > 128 || timeout_ms == 0 {
+            return Err(auth_response_invalid(method));
+        }
+        let deadline = auth_deadline(timeout_ms, method)?.min(self.operation_deadline);
+        let params = serde_json::to_value(request).map_err(|_| auth_response_invalid(method))?;
+        let (responder, receiver) = mpsc::channel();
+        self.sender
+            .send(RemoteBrokerCall {
+                operation_id: self.operation_id.clone(),
+                request_id: request_id.to_string(),
+                method,
+                params,
+                deadline,
+                responder,
+            })
+            .map_err(|_| auth_response_unavailable(method))?;
+        let result = loop {
+            if self.cancellation.is_cancelled() || self.remote_worker.auth_wait_cancelled() {
+                return Err(auth_cancelled(method));
+            }
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| auth_timeout(method))?;
+            match receiver.recv_timeout(remaining.min(Duration::from_millis(5))) {
+                Ok(result) => break result?,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(auth_response_unavailable(method));
+                }
+            }
+        };
+        serde_json::from_value(result).map_err(|_| auth_response_invalid(method))
+    }
+}
+
+impl AuthRequestBroker for RemoteWorkerAuthBroker {
+    fn request_credential(
+        &mut self,
+        request: CredentialRequest,
+    ) -> Result<CredentialResponse, BridgeFailure> {
+        if request.operation_id != self.operation_id
+            || request.realm.is_empty()
+            || request.realm.len() > 4096
+        {
+            return Err(auth_response_invalid("credentials/request"));
+        }
+        let request_id = request.request_id.clone();
+        let operation_id = request.operation_id.clone();
+        let safe_args = credential_safe_args(&request);
+        let response: CredentialResponse = self.round_trip(
+            "credentials/request",
+            &request_id,
+            request.timeout_ms,
+            request,
+        )?;
+        match &response {
+            CredentialResponse::Provide {
+                request_id: response_request_id,
+                operation_id: response_operation_id,
+                lease_id,
+                ..
+            } if response_request_id == &request_id
+                && response_operation_id == &operation_id
+                && !lease_id.is_empty()
+                && lease_id.len() <= 128 =>
+            {
+                Ok(response)
+            }
+            CredentialResponse::Cancel {
+                request_id: response_request_id,
+                operation_id: response_operation_id,
+                error,
+            } if response_request_id == &request_id && response_operation_id == &operation_id => {
+                match credential_error_to_bridge(error, safe_args) {
+                    Some(failure) => Err(failure),
+                    None => Err(auth_response_invalid("credentials/request")),
+                }
+            }
+            _ => Err(auth_response_invalid("credentials/request")),
+        }
+    }
+
+    fn settle_credential(
+        &mut self,
+        request: CredentialSettlementRequest,
+    ) -> Result<CredentialSettlementAck, BridgeFailure> {
+        if request.operation_id != self.operation_id
+            || request.lease_id.is_empty()
+            || request.lease_id.len() > 128
+        {
+            return Err(auth_response_invalid("credentials/settle"));
+        }
+        let request_id = request.request_id.clone();
+        let operation_id = request.operation_id.clone();
+        let lease_id = request.lease_id.clone();
+        let outcome = request.outcome;
+        let response: CredentialSettlementAck = self.round_trip(
+            "credentials/settle",
+            &request_id,
+            request.timeout_ms,
+            request,
+        )?;
+        if response.request_id == request_id
+            && response.operation_id == operation_id
+            && response.lease_id == lease_id
+            && response.outcome == outcome
+        {
+            Ok(response)
+        } else {
+            Err(auth_response_invalid("credentials/settle"))
+        }
+    }
+
+    fn request_certificate_trust(
+        &mut self,
+        _request: CertificateTrustRequest,
+    ) -> Result<CertificateTrustResponse, BridgeFailure> {
+        Err(auth_response_unavailable("certificate/request"))
+    }
+}
+
+fn accept_remote_broker_call<W: Write>(
+    call: RemoteBrokerCall,
+    operations: &BTreeMap<String, PendingRemoteRequest>,
+    pending: &mut BTreeMap<String, PendingRemoteBroker>,
+    terminal: bool,
+    writer: &mut W,
+) -> io::Result<()> {
+    if terminal
+        || !operations.contains_key(&call.operation_id)
+        || call.request_id.is_empty()
+        || call.request_id.len() > 128
+        || pending.contains_key(&call.request_id)
+        || Instant::now() >= call.deadline
+        || pending.len() >= MAX_AUTH_WAIT_INBOUND_MESSAGES
+    {
+        let method = call.method;
+        fail_remote_broker_call(call, auth_response_unavailable(method));
+        return Ok(());
+    }
+    let message = json!({
+        "jsonrpc": "2.0",
+        "id": call.request_id,
+        "method": call.method,
+        "params": call.params,
+    });
+    if write_content_length_frame(writer, &message)
+        .and_then(|()| writer.flush())
+        .is_err()
+    {
+        let failure = auth_request_failed(call.method);
+        fail_remote_broker_call(call, failure);
+        return Err(io::Error::other("failed to write remote broker request"));
+    }
+    pending.insert(
+        call.request_id,
+        PendingRemoteBroker {
+            operation_id: call.operation_id,
+            method: call.method,
+            deadline: call.deadline,
+            responder: call.responder,
+        },
+    );
+    Ok(())
+}
+
+fn route_remote_broker_response(
+    payload: &[u8],
+    pending: &mut BTreeMap<String, PendingRemoteBroker>,
+) -> io::Result<bool> {
+    let Ok(value) = serde_json::from_slice::<Value>(payload) else {
+        return Ok(false);
+    };
+    let Some(object) = value.as_object() else {
+        return Ok(false);
+    };
+    if object.get("jsonrpc") != Some(&Value::String("2.0".to_string()))
+        || object.contains_key("method")
+    {
+        return Ok(false);
+    }
+    let Some(request_id) = object.get("id").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some(call) = pending.remove(request_id) else {
+        return Ok(false);
+    };
+    let result = match (object.get("result"), object.get("error")) {
+        (Some(result), None) if Instant::now() < call.deadline => Ok(result.clone()),
+        (Some(_), None) => Err(auth_timeout(call.method)),
+        (None, Some(error)) => match parse_auth_json_rpc_error(error, call.method) {
+            Some(AuthJsonRpcErrorKind::Cancelled) => Err(auth_cancelled(call.method)),
+            Some(AuthJsonRpcErrorKind::Rejected) => Err(auth_response_rejected(call.method)),
+            Some(AuthJsonRpcErrorKind::Structured(failure)) => Err(failure),
+            None => Err(auth_response_invalid(call.method)),
+        },
+        _ => Err(auth_response_invalid(call.method)),
+    };
+    let _ = call.responder.send(result);
+    Ok(true)
+}
+
+fn expire_remote_broker_calls(
+    frames: &mut StdioFrameReceiver,
+    pending: &mut BTreeMap<String, PendingRemoteBroker>,
+) {
+    let expired = pending
+        .iter()
+        .filter_map(|(id, call)| (Instant::now() >= call.deadline).then_some(id.clone()))
+        .collect::<Vec<_>>();
+    for id in expired {
+        if let Some(call) = pending.remove(&id) {
+            frames.retire_auth_request_id(&id);
+            let _ = call.responder.send(Err(auth_timeout(call.method)));
+        }
+    }
+}
+
+fn fail_remote_broker_call(call: RemoteBrokerCall, failure: BridgeFailure) {
+    let _ = call.responder.send(Err(failure));
+}
+
+fn fail_operation_remote_broker_calls(
+    frames: &mut StdioFrameReceiver,
+    pending: &mut BTreeMap<String, PendingRemoteBroker>,
+    operation_id: &str,
+    failure: fn(&str) -> BridgeFailure,
+) {
+    let ids = pending
+        .iter()
+        .filter_map(|(id, call)| (call.operation_id == operation_id).then_some(id.clone()))
+        .collect::<Vec<_>>();
+    for id in ids {
+        if let Some(call) = pending.remove(&id) {
+            frames.retire_auth_request_id(&id);
+            let _ = call.responder.send(Err(failure(call.method)));
+        }
+    }
+}
+
+fn fail_all_remote_broker_calls(
+    pending: &mut BTreeMap<String, PendingRemoteBroker>,
+    failure: fn(&str) -> BridgeFailure,
+) {
+    for (_, call) in std::mem::take(pending) {
+        let _ = call.responder.send(Err(failure(call.method)));
+    }
+}
+
 fn settle_remote_completion<W: Write>(
     state: &mut DaemonState,
+    frames: &mut StdioFrameReceiver,
     pending: &mut BTreeMap<String, PendingRemoteRequest>,
+    pending_broker: &mut BTreeMap<String, PendingRemoteBroker>,
     completion: RemoteWorkerCompletion,
     terminal: bool,
     writer: &mut W,
@@ -260,6 +607,12 @@ fn settle_remote_completion<W: Write>(
         &completion.lane_key,
         &completion.operation_id,
         recovery_blocked,
+    );
+    fail_operation_remote_broker_calls(
+        frames,
+        pending_broker,
+        &completion.operation_id,
+        auth_response_unavailable,
     );
     let Some(pending_request) = pending.remove(&completion.operation_id) else {
         return Err(io::Error::other(
@@ -325,24 +678,34 @@ enum TimedStdioFrame {
 
 #[derive(Debug, Clone)]
 struct StdioCancellationToken {
-    cancelled: Arc<AtomicBool>,
+    state: Arc<AtomicU8>,
 }
 
 impl StdioCancellationToken {
     fn new() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            state: Arc::new(AtomicU8::new(0)),
         }
     }
 
     fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        self.state.store(1, Ordering::SeqCst);
+    }
+
+    fn disconnect(&self) {
+        let _ = self
+            .state
+            .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst);
+    }
+
+    fn was_explicitly_cancelled(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == 1
     }
 }
 
 impl BridgeCancellationToken for StdioCancellationToken {
     fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
+        self.state.load(Ordering::SeqCst) != 0
     }
 }
 
@@ -428,7 +791,7 @@ impl ActiveStdioRequestCancellation {
             .lock()
             .expect("stdio request cancellation state should not be poisoned");
         for active in &state.active {
-            active.token.cancel();
+            active.token.disconnect();
         }
     }
 }
@@ -667,6 +1030,7 @@ where
 {
     frames: &'a mut StdioFrameReceiver,
     writer: &'a mut W,
+    operation_cancellation: &'a StdioCancellationToken,
 }
 
 impl<W> AuthRequestBroker for StdioAuthRequestBroker<'_, W>
@@ -677,29 +1041,53 @@ where
         &mut self,
         request: CredentialRequest,
     ) -> Result<CredentialResponse, BridgeFailure> {
-        if !request.interactive || request.origin != "foreground" {
-            return Err(auth_credential_non_interactive());
-        }
         let safe_args = credential_safe_args(&request);
         let request_id = request.request_id.clone();
+        let operation_id = request.operation_id.clone();
         let timeout_ms = request.timeout_ms;
         let response: CredentialResponse =
             self.round_trip("credentials/request", &request_id, timeout_ms, request)?;
         match &response {
             CredentialResponse::Provide {
                 request_id: response_request_id,
+                operation_id: response_operation_id,
                 ..
-            } if response_request_id == &request_id => Ok(response),
+            } if response_request_id == &request_id && response_operation_id == &operation_id => {
+                Ok(response)
+            }
             CredentialResponse::Cancel {
                 request_id: response_request_id,
+                operation_id: response_operation_id,
                 error,
-            } if response_request_id == &request_id => {
+            } if response_request_id == &request_id && response_operation_id == &operation_id => {
                 match credential_error_to_bridge(error, safe_args) {
                     Some(failure) => Err(failure),
                     None => Err(auth_response_invalid("credentials/request")),
                 }
             }
             _ => Err(auth_response_invalid("credentials/request")),
+        }
+    }
+
+    fn settle_credential(
+        &mut self,
+        request: CredentialSettlementRequest,
+    ) -> Result<CredentialSettlementAck, BridgeFailure> {
+        let request_id = request.request_id.clone();
+        let operation_id = request.operation_id.clone();
+        let lease_id = request.lease_id.clone();
+        let outcome = request.outcome;
+        let timeout_ms = request.timeout_ms;
+        let response: CredentialSettlementAck =
+            self.round_trip("credentials/settle", &request_id, timeout_ms, request)?;
+        if response.request_id == request_id
+            && response.operation_id == operation_id
+            && response.lease_id == lease_id
+            && response.outcome == outcome
+        {
+            Ok(response)
+        } else {
+            Err(auth_response_invalid("credentials/settle"))
         }
     }
 
@@ -771,17 +1159,27 @@ where
         let deadline = auth_deadline(timeout_ms, auth_method)?;
         let mut inbound_messages = 0usize;
         loop {
+            if self.operation_cancellation.was_explicitly_cancelled() {
+                self.frames.retire_auth_request_id(request_id);
+                return Err(auth_cancelled(auth_method));
+            }
             if auth_deadline_expired(deadline) {
                 self.frames.retire_auth_request_id(request_id);
                 return Err(auth_timeout(auth_method));
             }
-            let payload = match self.frames.recv_until(deadline) {
+            let wait_deadline = deadline.min(Instant::now() + Duration::from_millis(5));
+            let payload = match self.frames.recv_until(wait_deadline) {
                 Ok(TimedStdioFrame::Payload(payload)) => payload,
                 Ok(TimedStdioFrame::Timeout) => {
-                    self.frames.retire_auth_request_id(request_id);
-                    return Err(auth_timeout(auth_method));
+                    continue;
                 }
-                Ok(TimedStdioFrame::Eof) => return Err(auth_response_unavailable(auth_method)),
+                Ok(TimedStdioFrame::Eof) => {
+                    return Err(if self.operation_cancellation.was_explicitly_cancelled() {
+                        auth_cancelled(auth_method)
+                    } else {
+                        auth_response_unavailable(auth_method)
+                    });
+                }
                 Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
                     return Err(auth_response_unavailable(auth_method));
                 }
@@ -833,12 +1231,15 @@ where
                     let error = object
                         .get("error")
                         .expect("contains_key verified error presence");
-                    match parse_auth_json_rpc_error(error) {
+                    match parse_auth_json_rpc_error(error, auth_method) {
                         Some(AuthJsonRpcErrorKind::Cancelled) => {
                             return Err(auth_cancelled(auth_method));
                         }
                         Some(AuthJsonRpcErrorKind::Rejected) => {
                             return Err(auth_response_rejected(auth_method));
+                        }
+                        Some(AuthJsonRpcErrorKind::Structured(failure)) => {
+                            return Err(failure);
                         }
                         None => return Err(auth_response_invalid(auth_method)),
                     }
@@ -882,16 +1283,6 @@ fn auth_request_failed(method: &str) -> BridgeFailure {
         "auth",
         "error.auth.requestFailed",
         json!({ "method": method }),
-        false,
-    )
-}
-
-fn auth_credential_non_interactive() -> BridgeFailure {
-    BridgeFailure::new(
-        "SUBVERSIONR_CREDENTIAL_NON_INTERACTIVE",
-        "auth",
-        "error.auth.credentialNonInteractive",
-        json!({ "method": "credentials/request" }),
         false,
     )
 }
@@ -1018,14 +1409,6 @@ fn credential_error_contract_is_allowed(error: &CredentialError) -> bool {
                 "lifecycle",
                 "error.auth.credentialUntrustedWorkspace"
             ) | (
-                "SUBVERSIONR_CREDENTIAL_REALM_REQUIRED",
-                "auth",
-                "error.auth.credentialRealmRequired"
-            ) | (
-                "SUBVERSIONR_CREDENTIAL_UNSUPPORTED_KIND",
-                "auth",
-                "error.auth.credentialUnsupportedKind"
-            ) | (
                 "SUBVERSIONR_CREDENTIAL_NON_INTERACTIVE",
                 "auth",
                 "error.auth.credentialNonInteractive"
@@ -1038,9 +1421,45 @@ fn credential_error_contract_is_allowed(error: &CredentialError) -> bool {
                 "auth",
                 "error.auth.credentialCancelled"
             ) | (
-                "SUBVERSIONR_CREDENTIAL_STORE_INVALID",
+                "SUBVERSIONR_CREDENTIAL_LEGACY_BLOCKED",
                 "auth",
-                "error.auth.credentialStoreInvalid"
+                "error.auth.credentialLegacyBlocked"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_LEGACY_CLEAR_DECLINED",
+                "auth",
+                "error.auth.credentialLegacyClearDeclined"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_ACCOUNT_UNAVAILABLE",
+                "auth",
+                "error.auth.credentialAccountUnavailable"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_RETRY_INVALID",
+                "auth",
+                "error.auth.credentialRetryInvalid"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_STORAGE_INTEGRITY",
+                "auth",
+                "error.auth.credentialStorageIntegrity"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_SECRET_INVALID",
+                "auth",
+                "error.auth.credentialSecretInvalid"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_LEASE_UNKNOWN",
+                "auth",
+                "error.auth.credentialLeaseUnknown"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_LEASE_FOREIGN",
+                "auth",
+                "error.auth.credentialLeaseForeign"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_LEASE_EXPIRED",
+                "auth",
+                "error.auth.credentialLeaseExpired"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_SETTLEMENT_CONFLICT",
+                "auth",
+                "error.auth.credentialSettlementConflict"
             )
         )
 }
@@ -1099,10 +1518,29 @@ fn certificate_error_contract_is_allowed(error: &CertificateTrustError) -> bool 
 
 fn credential_safe_args(request: &CredentialRequest) -> Value {
     json!({
-        "realmHash": auth_realm_hash(&request.kind, &request.realm),
-        "kind": request.kind,
+        "authorityHash": credential_authority_hash(request),
+        "authKind": request.auth_kind,
+        "attempt": request.attempt,
         "origin": request.origin,
     })
+}
+
+fn credential_authority_hash(request: &CredentialRequest) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_vec(&request.endpoint).expect("endpoint serialization"));
+    hasher.update([0]);
+    hasher.update(serde_json::to_vec(&request.auth_kind).expect("auth kind serialization"));
+    hasher.update([0]);
+    hasher.update(request.realm.as_bytes());
+    hex_digest(hasher.finalize())
+}
+
+fn hex_digest(digest: impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn certificate_safe_args(request: &CertificateTrustRequest) -> Value {
@@ -1120,11 +1558,7 @@ fn auth_realm_hash(kind: &str, realm: &str) -> String {
     hasher.update(kind.as_bytes());
     hasher.update([0]);
     hasher.update(realm.as_bytes());
-    let digest = hasher.finalize();
-    digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+    hex_digest(hasher.finalize())
 }
 
 fn cancel_notification_matches(params: Option<&Value>, request_id: &str) -> bool {
@@ -1134,16 +1568,112 @@ fn cancel_notification_matches(params: Option<&Value>, request_id: &str) -> bool
 enum AuthJsonRpcErrorKind {
     Cancelled,
     Rejected,
+    Structured(BridgeFailure),
 }
 
-fn parse_auth_json_rpc_error(error: &Value) -> Option<AuthJsonRpcErrorKind> {
+fn parse_auth_json_rpc_error(error: &Value, method: &str) -> Option<AuthJsonRpcErrorKind> {
     let object = error.as_object()?;
-    let code = object.get("code")?.as_i64()?;
-    object.get("message")?.as_str()?;
-    if code == -32800 {
-        return Some(AuthJsonRpcErrorKind::Cancelled);
+    if let Some(code) = object.get("code").and_then(Value::as_i64) {
+        object.get("message")?.as_str()?;
+        return Some(if code == -32800 {
+            AuthJsonRpcErrorKind::Cancelled
+        } else {
+            AuthJsonRpcErrorKind::Rejected
+        });
     }
-    Some(AuthJsonRpcErrorKind::Rejected)
+    if object.len() != 6
+        || object.get("retryable") != Some(&Value::Bool(false))
+        || object.get("diagnostics") != Some(&Value::Null)
+    {
+        return None;
+    }
+    let code = object.get("code")?.as_str()?;
+    let category = object.get("category")?.as_str()?;
+    let message_key = object.get("messageKey")?.as_str()?;
+    let args = object.get("args")?.as_object()?.clone();
+    let credential_error = CredentialError {
+        code: code.to_string(),
+        category: category.to_string(),
+        message_key: message_key.to_string(),
+        args: Value::Object(args.clone()),
+        retryable: false,
+    };
+    let safe_args = match method {
+        "credentials/request"
+            if !credential_settlement_error_code(code)
+                && credential_error_contract_is_allowed(&credential_error)
+                && args.is_empty() =>
+        {
+            json!({})
+        }
+        "credentials/settle"
+            if credential_settlement_error_code(code)
+                && credential_error_contract_is_allowed(&credential_error) =>
+        {
+            strict_credential_settlement_error_args(code, &args)?
+        }
+        _ => return None,
+    };
+    Some(AuthJsonRpcErrorKind::Structured(BridgeFailure::new(
+        code,
+        category,
+        message_key,
+        safe_args,
+        false,
+    )))
+}
+
+fn credential_settlement_error_code(code: &str) -> bool {
+    matches!(
+        code,
+        "SUBVERSIONR_CREDENTIAL_UNTRUSTED_WORKSPACE"
+            | "SUBVERSIONR_CREDENTIAL_TIMEOUT"
+            | "SUBVERSIONR_CREDENTIAL_LEASE_UNKNOWN"
+            | "SUBVERSIONR_CREDENTIAL_LEASE_FOREIGN"
+            | "SUBVERSIONR_CREDENTIAL_LEASE_EXPIRED"
+            | "SUBVERSIONR_CREDENTIAL_SETTLEMENT_CONFLICT"
+    )
+}
+
+fn strict_credential_settlement_error_args(
+    code: &str,
+    args: &serde_json::Map<String, Value>,
+) -> Option<Value> {
+    let operation_hash = args.get("operationHash")?.as_str()?;
+    let lease_hash = args.get("leaseHash")?.as_str()?;
+    if !is_lowercase_sha256(operation_hash) || !is_lowercase_sha256(lease_hash) {
+        return None;
+    }
+    if code == "SUBVERSIONR_CREDENTIAL_UNTRUSTED_WORKSPACE" {
+        return (args.len() == 2).then(|| {
+            json!({
+                "operationHash": operation_hash,
+                "leaseHash": lease_hash,
+            })
+        });
+    }
+    if args.len() != 3 {
+        return None;
+    }
+    let outcome = args.get("outcome")?.as_str()?;
+    matches!(
+        outcome,
+        "accepted" | "rejected" | "unused" | "cancelled" | "timedOut"
+    )
+    .then(|| {
+        json!({
+            "operationHash": operation_hash,
+            "leaseHash": lease_hash,
+            "outcome": outcome,
+        })
+    })
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn write_auth_request_pending_response<W>(

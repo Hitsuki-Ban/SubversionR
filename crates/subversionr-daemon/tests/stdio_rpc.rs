@@ -15,10 +15,88 @@ use subversionr_daemon::{
     run_json_rpc_stdio_with_remote_worker,
 };
 use subversionr_protocol::{
-    CertificateTrustRequest, CertificateTrustResponse, Credential, CredentialRequest,
-    CredentialResponse, RemoteOperationEnvelope, RepositoryIdentity, StatusEntry, StatusSnapshot,
-    StatusSummary,
+    CanonicalEndpoint, CertificateTrustRequest, CertificateTrustResponse, Credential,
+    CredentialAttempt, CredentialAuthKind, CredentialPersistenceIntent, CredentialRequest,
+    CredentialResponse, CredentialSettlementOutcome, CredentialSettlementRequest,
+    RemoteOperationEnvelope, RemoteOperationIntent, RemoteScheme, RepositoryIdentity,
+    ServerAccountSelection, StatusEntry, StatusSnapshot, StatusSummary,
 };
+
+fn credential_request(
+    request_id: &str,
+    realm: &str,
+    interactive: bool,
+    persistence_allowed: bool,
+    origin: RemoteOperationIntent,
+    timeout_ms: u64,
+) -> CredentialRequest {
+    CredentialRequest {
+        request_id: request_id.to_string(),
+        operation_id: format!("{request_id}-operation"),
+        endpoint: CanonicalEndpoint {
+            scheme: RemoteScheme::Https,
+            canonical_host: "svn.example.invalid".to_string(),
+            effective_port: 443,
+        },
+        auth_kind: CredentialAuthKind::Basic,
+        realm: realm.to_string(),
+        account: ServerAccountSelection::Fixed {
+            username: "alice".to_string(),
+        },
+        attempt: CredentialAttempt::Initial,
+        interactive,
+        persistence_allowed,
+        origin,
+        timeout_ms,
+    }
+}
+
+fn provided_credential(request_id: &str) -> CredentialResponse {
+    CredentialResponse::Provide {
+        request_id: request_id.to_string(),
+        operation_id: format!("{request_id}-operation"),
+        lease_id: format!("{request_id}-lease"),
+        credential: Credential {
+            username: "alice".to_string(),
+            secret: "secret".to_string(),
+        },
+        persistence_intent: CredentialPersistenceIntent::SecretStorage,
+    }
+}
+
+fn credential_settlement_request(
+    operation_id: &str,
+    timeout_ms: u64,
+) -> CredentialSettlementRequest {
+    CredentialSettlementRequest {
+        request_id: "settle-expected".to_string(),
+        operation_id: operation_id.to_string(),
+        lease_id: "01234567-89ab-4def-8123-456789abcdef".to_string(),
+        outcome: CredentialSettlementOutcome::Accepted,
+        timeout_ms,
+    }
+}
+
+fn assert_credential_request_frame(frame: &serde_json::Value, request_id: &str, realm: &str) {
+    assert_eq!(frame["id"], request_id);
+    assert_eq!(frame["method"], "credentials/request");
+    assert_eq!(frame["params"]["requestId"], request_id);
+    assert_eq!(
+        frame["params"]["operationId"],
+        format!("{request_id}-operation")
+    );
+    assert_eq!(frame["params"]["realm"], realm);
+    assert_eq!(frame["params"]["authKind"], "basic");
+    assert_eq!(frame["params"]["endpoint"]["scheme"], "https");
+    assert_eq!(
+        frame["params"]["endpoint"]["canonicalHost"],
+        "svn.example.invalid"
+    );
+    assert_eq!(frame["params"]["endpoint"]["effectivePort"], 443);
+    assert_eq!(frame["params"]["account"]["mode"], "fixed");
+    assert_eq!(frame["params"]["account"]["username"], "alice");
+    assert_eq!(frame["params"]["attempt"]["kind"], "initial");
+}
 
 #[derive(Debug)]
 struct FakeBridge;
@@ -1241,30 +1319,16 @@ impl BridgeApi for CredentialChallengeBridge {
         path: &str,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<RepositoryIdentity, BridgeFailure> {
-        let response = auth.request_credential(CredentialRequest {
-            request_id: "cred-1".to_string(),
-            realm: "svn://example".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 30000,
-            repository_id: None,
-            working_copy_root: Some(path.to_string()),
-        })?;
+        let response = auth.request_credential(credential_request(
+            "cred-1",
+            "svn://example",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            30_000,
+        ))?;
 
-        assert_eq!(
-            response,
-            CredentialResponse::Provide {
-                request_id: "cred-1".to_string(),
-                credential: Credential {
-                    username: Some("alice".to_string()),
-                    secret: "secret".to_string(),
-                },
-                persistence: "secretStorage".to_string(),
-            }
-        );
+        assert_eq!(response, provided_credential("cred-1"));
 
         FakeBridge.open_working_copy(path)
     }
@@ -1330,38 +1394,20 @@ impl BridgeApi for UpdateCredentialChallengeBridge {
 
     fn operation_update(
         &self,
-        identity: &RepositoryIdentity,
+        _identity: &RepositoryIdentity,
         request: &UpdateOperationRequest,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<UpdateOperationResult, BridgeFailure> {
-        let repository_id = format!(
-            "{}:{}",
-            identity.repository_uuid, identity.working_copy_root
-        );
-        let response = auth.request_credential(CredentialRequest {
-            request_id: "update-cred-1".to_string(),
-            realm: "svn://example/update".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 30000,
-            repository_id: Some(repository_id),
-            working_copy_root: Some(identity.working_copy_root.clone()),
-        })?;
+        let response = auth.request_credential(credential_request(
+            "update-cred-1",
+            "svn://example/update",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            30_000,
+        ))?;
 
-        assert_eq!(
-            response,
-            CredentialResponse::Provide {
-                request_id: "update-cred-1".to_string(),
-                credential: Credential {
-                    username: Some("alice".to_string()),
-                    secret: "secret".to_string(),
-                },
-                persistence: "secretStorage".to_string(),
-            }
-        );
+        assert_eq!(response, provided_credential("update-cred-1"));
 
         Ok(UpdateOperationResult {
             result: OperationResult {
@@ -1400,22 +1446,14 @@ impl BridgeApi for RemoteStatusCredentialChallengeBridge {
         auth: &mut dyn AuthRequestBroker,
         _cancellation: &dyn BridgeCancellationToken,
     ) -> Result<StatusSnapshot, BridgeFailure> {
-        let repository_id = format!(
-            "{}:{}",
-            identity.repository_uuid, identity.working_copy_root
-        );
-        let response = auth.request_credential(CredentialRequest {
-            request_id: "remote-status-cred-1".to_string(),
-            realm: "svn://example/status".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 30000,
-            repository_id: Some(repository_id.clone()),
-            working_copy_root: Some(identity.working_copy_root.clone()),
-        })?;
+        let response = auth.request_credential(credential_request(
+            "remote-status-cred-1",
+            "svn://example/status",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            30_000,
+        ))?;
         assert!(matches!(response, CredentialResponse::Provide { .. }));
 
         let mut snapshot = FakeBridge.status_snapshot(identity, generation)?;
@@ -1482,41 +1520,23 @@ impl BridgeApi for ContentCredentialChallengeBridge {
 
     fn content_get(
         &self,
-        identity: &RepositoryIdentity,
+        _identity: &RepositoryIdentity,
         path: &str,
         revision: &str,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<ContentBlob, BridgeFailure> {
         assert_eq!(path, "tracked.txt");
         assert_eq!(revision, "head");
-        let repository_id = format!(
-            "{}:{}",
-            identity.repository_uuid, identity.working_copy_root
-        );
-        let response = auth.request_credential(CredentialRequest {
-            request_id: "content-cred-1".to_string(),
-            realm: "svn://example/content".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 30000,
-            repository_id: Some(repository_id),
-            working_copy_root: Some(identity.working_copy_root.clone()),
-        })?;
+        let response = auth.request_credential(credential_request(
+            "content-cred-1",
+            "svn://example/content",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            30_000,
+        ))?;
 
-        assert_eq!(
-            response,
-            CredentialResponse::Provide {
-                request_id: "content-cred-1".to_string(),
-                credential: Credential {
-                    username: Some("alice".to_string()),
-                    secret: "secret".to_string(),
-                },
-                persistence: "secretStorage".to_string(),
-            }
-        );
+        assert_eq!(response, provided_credential("content-cred-1"));
 
         Ok(ContentBlob {
             data: b"head content\n".to_vec(),
@@ -1558,40 +1578,22 @@ impl BridgeApi for HistoryLogCredentialChallengeBridge {
 
     fn history_log(
         &self,
-        identity: &RepositoryIdentity,
+        _identity: &RepositoryIdentity,
         request: &HistoryLogRequest,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<HistoryLogResult, BridgeFailure> {
         assert_eq!(request.path, "tracked.txt");
         assert_eq!(request.start_revision, "head");
-        let repository_id = format!(
-            "{}:{}",
-            identity.repository_uuid, identity.working_copy_root
-        );
-        let response = auth.request_credential(CredentialRequest {
-            request_id: "history-log-cred-1".to_string(),
-            realm: "svn://example/history-log".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 30000,
-            repository_id: Some(repository_id),
-            working_copy_root: Some(identity.working_copy_root.clone()),
-        })?;
+        let response = auth.request_credential(credential_request(
+            "history-log-cred-1",
+            "svn://example/history-log",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            30_000,
+        ))?;
 
-        assert_eq!(
-            response,
-            CredentialResponse::Provide {
-                request_id: "history-log-cred-1".to_string(),
-                credential: Credential {
-                    username: Some("alice".to_string()),
-                    secret: "secret".to_string(),
-                },
-                persistence: "secretStorage".to_string(),
-            }
-        );
+        assert_eq!(response, provided_credential("history-log-cred-1"));
 
         Ok(HistoryLogResult {
             entries: Vec::new(),
@@ -1630,40 +1632,22 @@ impl BridgeApi for HistoryBlameCredentialChallengeBridge {
 
     fn history_blame(
         &self,
-        identity: &RepositoryIdentity,
+        _identity: &RepositoryIdentity,
         request: &HistoryBlameRequest,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<HistoryBlameResult, BridgeFailure> {
         assert_eq!(request.path, "tracked.txt");
         assert_eq!(request.end_revision, "head");
-        let repository_id = format!(
-            "{}:{}",
-            identity.repository_uuid, identity.working_copy_root
-        );
-        let response = auth.request_credential(CredentialRequest {
-            request_id: "history-blame-cred-1".to_string(),
-            realm: "svn://example/history-blame".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 30000,
-            repository_id: Some(repository_id),
-            working_copy_root: Some(identity.working_copy_root.clone()),
-        })?;
+        let response = auth.request_credential(credential_request(
+            "history-blame-cred-1",
+            "svn://example/history-blame",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            30_000,
+        ))?;
 
-        assert_eq!(
-            response,
-            CredentialResponse::Provide {
-                request_id: "history-blame-cred-1".to_string(),
-                credential: Credential {
-                    username: Some("alice".to_string()),
-                    secret: "secret".to_string(),
-                },
-                persistence: "secretStorage".to_string(),
-            }
-        );
+        assert_eq!(response, provided_credential("history-blame-cred-1"));
 
         Ok(HistoryBlameResult {
             resolved_start_revision: 0,
@@ -1693,40 +1677,22 @@ impl BridgeApi for CommitCredentialChallengeBridge {
 
     fn operation_commit(
         &self,
-        identity: &RepositoryIdentity,
+        _identity: &RepositoryIdentity,
         request: &CommitOperationRequest,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<CommitOperationResult, BridgeFailure> {
         assert_eq!(request.paths, vec!["tracked.txt".to_string()]);
         assert_eq!(request.message, "commit through broker");
-        let repository_id = format!(
-            "{}:{}",
-            identity.repository_uuid, identity.working_copy_root
-        );
-        let response = auth.request_credential(CredentialRequest {
-            request_id: "commit-cred-1".to_string(),
-            realm: "svn://example/commit".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 30000,
-            repository_id: Some(repository_id),
-            working_copy_root: Some(identity.working_copy_root.clone()),
-        })?;
+        let response = auth.request_credential(credential_request(
+            "commit-cred-1",
+            "svn://example/commit",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            30_000,
+        ))?;
 
-        assert_eq!(
-            response,
-            CredentialResponse::Provide {
-                request_id: "commit-cred-1".to_string(),
-                credential: Credential {
-                    username: Some("alice".to_string()),
-                    secret: "secret".to_string(),
-                },
-                persistence: "secretStorage".to_string(),
-            }
-        );
+        assert_eq!(response, provided_credential("commit-cred-1"));
 
         Ok(CommitOperationResult {
             result: OperationResult {
@@ -1763,21 +1729,22 @@ impl BridgeApi for NonInteractiveCredentialBridge {
         path: &str,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<RepositoryIdentity, BridgeFailure> {
-        match auth.request_credential(CredentialRequest {
-            request_id: "cred-background".to_string(),
-            realm: "svn://example".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: None,
-            interactive: false,
-            persistence_allowed: false,
-            origin: "background".to_string(),
-            timeout_ms: 30000,
-            repository_id: None,
-            working_copy_root: Some(path.to_string()),
-        }) {
-            Ok(_) => panic!("non-interactive credential request must not provide a credential"),
-            Err(failure) => Err(failure),
-        }
+        let response = auth.request_credential(credential_request(
+            "cred-background",
+            "svn://example",
+            false,
+            false,
+            RemoteOperationIntent::Background,
+            30_000,
+        ))?;
+        assert!(matches!(
+            response,
+            CredentialResponse::Provide {
+                persistence_intent: CredentialPersistenceIntent::Session,
+                ..
+            }
+        ));
+        FakeBridge.open_working_copy(path)
     }
 }
 
@@ -1835,20 +1802,39 @@ impl BridgeApi for CredentialBodyValidationBridge {
         path: &str,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<RepositoryIdentity, BridgeFailure> {
-        auth.request_credential(CredentialRequest {
-            request_id: "cred-expected".to_string(),
-            realm: "svn://example".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 30000,
-            repository_id: None,
-            working_copy_root: Some(path.to_string()),
-        })?;
+        auth.request_credential(credential_request(
+            "cred-expected",
+            "svn://example",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            30_000,
+        ))?;
 
         FakeBridge.open_working_copy(path)
+    }
+}
+
+#[derive(Debug)]
+struct CredentialSettlementValidationBridge;
+
+impl BridgeApi for CredentialSettlementValidationBridge {
+    fn info(&self) -> BridgeInfo {
+        FakeBridge.info()
+    }
+
+    delegate_fake_bridge!();
+
+    fn open_working_copy_with_auth(
+        &self,
+        _path: &str,
+        auth: &mut dyn AuthRequestBroker,
+    ) -> Result<RepositoryIdentity, BridgeFailure> {
+        auth.settle_credential(credential_settlement_request(
+            "settle-expected-operation",
+            30_000,
+        ))?;
+        panic!("settlement error fixture must not succeed")
     }
 }
 
@@ -1867,18 +1853,14 @@ impl BridgeApi for CredentialTimeoutBridge {
         path: &str,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<RepositoryIdentity, BridgeFailure> {
-        auth.request_credential(CredentialRequest {
-            request_id: "cred-timeout".to_string(),
-            realm: "svn://example".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 0,
-            repository_id: None,
-            working_copy_root: Some(path.to_string()),
-        })?;
+        auth.request_credential(credential_request(
+            "cred-timeout",
+            "svn://example",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            0,
+        ))?;
 
         FakeBridge.open_working_copy(path)
     }
@@ -1899,18 +1881,14 @@ impl BridgeApi for CredentialShortTimeoutBridge {
         path: &str,
         auth: &mut dyn AuthRequestBroker,
     ) -> Result<RepositoryIdentity, BridgeFailure> {
-        auth.request_credential(CredentialRequest {
-            request_id: "cred-short-timeout".to_string(),
-            realm: "svn://example".to_string(),
-            kind: "usernamePassword".to_string(),
-            username: Some("alice".to_string()),
-            interactive: true,
-            persistence_allowed: true,
-            origin: "foreground".to_string(),
-            timeout_ms: 1,
-            repository_id: None,
-            working_copy_root: Some(path.to_string()),
-        })?;
+        auth.request_credential(credential_request(
+            "cred-short-timeout",
+            "svn://example",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            1,
+        ))?;
 
         FakeBridge.open_working_copy(path)
     }
@@ -2091,7 +2069,7 @@ fn stdio_loop_cancels_active_update_operation_notification() {
 fn stdio_loop_sends_credential_request_and_waits_for_client_response() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-1","result":{"requestId":"cred-1","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-1","result":{"requestId":"cred-1","operationId":"cred-1-operation","action":"provide","leaseId":"cred-1-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2106,11 +2084,7 @@ fn stdio_loop_sends_credential_request_and_waits_for_client_response() {
 
     let frames = decode_frames(&output).expect("frames should be content-length encoded");
     assert_eq!(frames.len(), 3);
-    assert_eq!(frames[0]["id"], "cred-1");
-    assert_eq!(frames[0]["method"], "credentials/request");
-    assert_eq!(frames[0]["params"]["realm"], "svn://example");
-    assert_eq!(frames[0]["params"]["kind"], "usernamePassword");
-    assert_eq!(frames[0]["params"]["workingCopyRoot"], "C:/wc");
+    assert_credential_request_frame(&frames[0], "cred-1", "svn://example");
     assert_eq!(frames[1]["id"], 1);
     assert_eq!(frames[1]["result"]["repositoryId"], "repo-uuid:C:/wc");
     assert_eq!(frames[2]["id"], 2);
@@ -2122,7 +2096,7 @@ fn stdio_loop_routes_update_operation_through_credential_broker() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"update","options":{"version":1,"path":".","revision":"head","depth":"workingCopy","depthIsSticky":false,"ignoreExternals":true}}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"update-cred-1","result":{"requestId":"update-cred-1","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"update-cred-1","result":{"requestId":"update-cred-1","operationId":"update-cred-1-operation","action":"provide","leaseId":"update-cred-1-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2139,11 +2113,7 @@ fn stdio_loop_routes_update_operation_through_credential_broker() {
     assert_eq!(frames.len(), 5);
     assert_eq!(frames[0]["id"], 1);
     assert_eq!(frames[0]["result"]["repositoryId"], "repo-uuid:C:/wc");
-    assert_eq!(frames[1]["id"], "update-cred-1");
-    assert_eq!(frames[1]["method"], "credentials/request");
-    assert_eq!(frames[1]["params"]["realm"], "svn://example/update");
-    assert_eq!(frames[1]["params"]["repositoryId"], "repo-uuid:C:/wc");
-    assert_eq!(frames[1]["params"]["workingCopyRoot"], "C:/wc");
+    assert_credential_request_frame(&frames[1], "update-cred-1", "svn://example/update");
     assert_eq!(frames[2]["id"], 2);
     assert_eq!(frames[2]["result"]["kind"], "update");
     assert_eq!(frames[2]["result"]["revision"], 9);
@@ -2170,7 +2140,7 @@ fn stdio_loop_routes_remote_status_through_credential_broker() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"remote-status-cred-1","result":{"requestId":"remote-status-cred-1","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"remote-status-cred-1","result":{"requestId":"remote-status-cred-1","operationId":"remote-status-cred-1-operation","action":"provide","leaseId":"remote-status-cred-1-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2185,10 +2155,7 @@ fn stdio_loop_routes_remote_status_through_credential_broker() {
 
     let frames = decode_frames(&output).expect("frames should be content-length encoded");
     assert_eq!(frames.len(), 4);
-    assert_eq!(frames[1]["id"], "remote-status-cred-1");
-    assert_eq!(frames[1]["method"], "credentials/request");
-    assert_eq!(frames[1]["params"]["repositoryId"], "repo-uuid:C:/wc");
-    assert_eq!(frames[1]["params"]["workingCopyRoot"], "C:/wc");
+    assert_credential_request_frame(&frames[1], "remote-status-cred-1", "svn://example/status");
     assert_eq!(frames[2]["id"], 2);
     assert_eq!(frames[2]["result"]["source"], "libsvn-remote");
     assert_eq!(
@@ -2203,7 +2170,7 @@ fn stdio_loop_remote_status_auth_cancel_preserves_generation() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"status/checkRemote","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"remote-status-cred-1","result":{"requestId":"remote-status-cred-1","action":"cancel","error":{"code":"SUBVERSIONR_CREDENTIAL_CANCELLED","category":"auth","messageKey":"error.auth.credentialCancelled","args":{},"retryable":false}}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"remote-status-cred-1","result":{"requestId":"remote-status-cred-1","operationId":"remote-status-cred-1-operation","action":"cancel","error":{"code":"SUBVERSIONR_CREDENTIAL_CANCELLED","category":"auth","messageKey":"error.auth.credentialCancelled","args":{},"retryable":false}}}"#),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"status/refresh","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"targets":[{"path":"tracked.txt","depth":"empty","reason":"fileChanged"}]}}"#),
         frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
     ]
@@ -2269,7 +2236,7 @@ fn stdio_loop_routes_head_content_through_credential_broker() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"content/get","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"path":"tracked.txt","revision":"head"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"content-cred-1","result":{"requestId":"content-cred-1","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"content-cred-1","result":{"requestId":"content-cred-1","operationId":"content-cred-1-operation","action":"provide","leaseId":"content-cred-1-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2285,11 +2252,7 @@ fn stdio_loop_routes_head_content_through_credential_broker() {
     let frames = decode_frames(&output).expect("frames should be content-length encoded");
     assert_eq!(frames.len(), 4);
     assert_eq!(frames[0]["id"], 1);
-    assert_eq!(frames[1]["id"], "content-cred-1");
-    assert_eq!(frames[1]["method"], "credentials/request");
-    assert_eq!(frames[1]["params"]["realm"], "svn://example/content");
-    assert_eq!(frames[1]["params"]["repositoryId"], "repo-uuid:C:/wc");
-    assert_eq!(frames[1]["params"]["workingCopyRoot"], "C:/wc");
+    assert_credential_request_frame(&frames[1], "content-cred-1", "svn://example/content");
     assert_eq!(frames[2]["id"], 2);
     assert_eq!(frames[2]["result"]["revision"], "head");
     assert_eq!(frames[2]["result"]["contentBase64"], "aGVhZCBjb250ZW50Cg==");
@@ -2303,7 +2266,7 @@ fn stdio_loop_routes_history_log_through_credential_broker() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"history/log","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"path":"tracked.txt","startRevision":"head","endRevision":"r0","limit":10,"discoverChangedPaths":true,"strictNodeHistory":true,"includeMergedRevisions":false}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"history-log-cred-1","result":{"requestId":"history-log-cred-1","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"history-log-cred-1","result":{"requestId":"history-log-cred-1","operationId":"history-log-cred-1-operation","action":"provide","leaseId":"history-log-cred-1-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2319,11 +2282,11 @@ fn stdio_loop_routes_history_log_through_credential_broker() {
     let frames = decode_frames(&output).expect("frames should be content-length encoded");
     assert_eq!(frames.len(), 4);
     assert_eq!(frames[0]["id"], 1);
-    assert_eq!(frames[1]["id"], "history-log-cred-1");
-    assert_eq!(frames[1]["method"], "credentials/request");
-    assert_eq!(frames[1]["params"]["realm"], "svn://example/history-log");
-    assert_eq!(frames[1]["params"]["repositoryId"], "repo-uuid:C:/wc");
-    assert_eq!(frames[1]["params"]["workingCopyRoot"], "C:/wc");
+    assert_credential_request_frame(
+        &frames[1],
+        "history-log-cred-1",
+        "svn://example/history-log",
+    );
     assert_eq!(frames[2]["id"], 2);
     assert_eq!(frames[2]["result"]["path"], "tracked.txt");
     assert_eq!(frames[2]["result"]["source"], "libsvn-log");
@@ -2336,7 +2299,7 @@ fn stdio_loop_routes_history_blame_through_credential_broker() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"history/blame","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"path":"tracked.txt","pegRevision":"head","startRevision":"r0","endRevision":"head","lineStart":1,"lineLimit":10,"ignoreWhitespace":"none","ignoreEolStyle":false,"ignoreMimeType":false,"includeMergedRevisions":false}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"history-blame-cred-1","result":{"requestId":"history-blame-cred-1","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"history-blame-cred-1","result":{"requestId":"history-blame-cred-1","operationId":"history-blame-cred-1-operation","action":"provide","leaseId":"history-blame-cred-1-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2352,11 +2315,11 @@ fn stdio_loop_routes_history_blame_through_credential_broker() {
     let frames = decode_frames(&output).expect("frames should be content-length encoded");
     assert_eq!(frames.len(), 4);
     assert_eq!(frames[0]["id"], 1);
-    assert_eq!(frames[1]["id"], "history-blame-cred-1");
-    assert_eq!(frames[1]["method"], "credentials/request");
-    assert_eq!(frames[1]["params"]["realm"], "svn://example/history-blame");
-    assert_eq!(frames[1]["params"]["repositoryId"], "repo-uuid:C:/wc");
-    assert_eq!(frames[1]["params"]["workingCopyRoot"], "C:/wc");
+    assert_credential_request_frame(
+        &frames[1],
+        "history-blame-cred-1",
+        "svn://example/history-blame",
+    );
     assert_eq!(frames[2]["id"], 2);
     assert_eq!(frames[2]["result"]["path"], "tracked.txt");
     assert_eq!(frames[2]["result"]["source"], "libsvn-blame");
@@ -2370,7 +2333,7 @@ fn stdio_loop_routes_commit_operation_through_credential_broker() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"operation/run","params":{"repositoryId":"repo-uuid:C:/wc","epoch":1,"kind":"commit","options":{"version":1,"paths":["tracked.txt"],"message":"commit through broker","depth":"empty","changelists":[],"keepLocks":false,"keepChangelists":false,"commitAsOperations":false,"includeFileExternals":false,"includeDirExternals":false}}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"commit-cred-1","result":{"requestId":"commit-cred-1","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"commit-cred-1","result":{"requestId":"commit-cred-1","operationId":"commit-cred-1-operation","action":"provide","leaseId":"commit-cred-1-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2386,11 +2349,7 @@ fn stdio_loop_routes_commit_operation_through_credential_broker() {
     let frames = decode_frames(&output).expect("frames should be content-length encoded");
     assert_eq!(frames.len(), 4);
     assert_eq!(frames[0]["id"], 1);
-    assert_eq!(frames[1]["id"], "commit-cred-1");
-    assert_eq!(frames[1]["method"], "credentials/request");
-    assert_eq!(frames[1]["params"]["realm"], "svn://example/commit");
-    assert_eq!(frames[1]["params"]["repositoryId"], "repo-uuid:C:/wc");
-    assert_eq!(frames[1]["params"]["workingCopyRoot"], "C:/wc");
+    assert_credential_request_frame(&frames[1], "commit-cred-1", "svn://example/commit");
     assert_eq!(frames[2]["id"], 2);
     assert_eq!(frames[2]["result"]["kind"], "commit");
     assert_eq!(frames[2]["result"]["revision"], 10);
@@ -2402,7 +2361,7 @@ fn stdio_loop_routes_commit_operation_through_credential_broker() {
 fn stdio_loop_rejects_credential_response_with_mismatched_body_request_id() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-other","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"secretStorage"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-other","operationId":"cred-expected-operation","action":"provide","leaseId":"cred-other-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -2427,10 +2386,37 @@ fn stdio_loop_rejects_credential_response_with_mismatched_body_request_id() {
 }
 
 #[test]
+fn stdio_loop_rejects_credential_response_with_mismatched_operation_id() {
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"other-operation","action":"provide","leaseId":"cred-expected-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"secretStorage"}}"#),
+    ]
+    .concat();
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio(
+        io::Cursor::new(input),
+        &mut output,
+        &CredentialBodyValidationBridge,
+    )
+    .expect("stdio loop should reject cross-operation credential responses");
+
+    let frames = decode_frames(&output).expect("frames should be content-length encoded");
+    assert_eq!(frames.len(), 2);
+    assert_credential_request_frame(&frames[0], "cred-expected", "svn://example");
+    assert_eq!(frames[1]["id"], 1);
+    assert_eq!(
+        frames[1]["error"]["code"],
+        "SUBVERSIONR_AUTH_RESPONSE_INVALID"
+    );
+    assert_eq!(frames[1]["error"]["args"]["method"], "credentials/request");
+}
+
+#[test]
 fn stdio_loop_maps_credential_cancel_response_to_original_request_error() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","action":"cancel","error":{"code":"SUBVERSIONR_CREDENTIAL_CANCELLED","category":"auth","messageKey":"error.auth.credentialCancelled","args":{"realmHash":"abc123","secret":"leak","rawRealm":"svn://example"},"retryable":false}}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"cancel","error":{"code":"SUBVERSIONR_CREDENTIAL_CANCELLED","category":"auth","messageKey":"error.auth.credentialCancelled","args":{"realmHash":"abc123","secret":"leak","rawRealm":"svn://example"},"retryable":false}}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -2456,20 +2442,51 @@ fn stdio_loop_maps_credential_cancel_response_to_original_request_error() {
         "error.auth.credentialCancelled"
     );
     assert_eq!(
-        frames[1]["error"]["args"]["realmHash"],
-        "66405412e36fad5c5c8f589fcce7183e434f5bc68b99742e30b02e56cc090733"
+        frames[1]["error"]["args"]["authorityHash"],
+        "cd56ba62d5168a30ccdf4fff862338dbf8b7ba234023a8b54a023ed5cfa0331d"
     );
-    assert_eq!(frames[1]["error"]["args"]["kind"], "usernamePassword");
+    assert_eq!(frames[1]["error"]["args"]["authKind"], "basic");
+    assert_eq!(frames[1]["error"]["args"]["attempt"]["kind"], "initial");
     assert_eq!(frames[1]["error"]["args"]["origin"], "foreground");
     assert!(frames[1]["error"]["args"].get("secret").is_none());
     assert!(frames[1]["error"]["args"].get("rawRealm").is_none());
 }
 
 #[test]
+fn stdio_loop_preserves_secret_invalid_credential_cancel_contract() {
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"cancel","error":{"code":"SUBVERSIONR_CREDENTIAL_SECRET_INVALID","category":"auth","messageKey":"error.auth.credentialSecretInvalid","args":{"operationHash":"safe-hash","secret":"must-not-leak"},"retryable":false}}}"#),
+    ]
+    .concat();
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio(
+        io::Cursor::new(input),
+        &mut output,
+        &CredentialBodyValidationBridge,
+    )
+    .expect("secret-invalid credential cancellation must remain serviceable");
+
+    let frames = decode_frames(&output).expect("frames should be content-length encoded");
+    assert_eq!(frames.len(), 2);
+    assert_eq!(
+        frames[1]["error"]["code"],
+        "SUBVERSIONR_CREDENTIAL_SECRET_INVALID"
+    );
+    assert_eq!(
+        frames[1]["error"]["messageKey"],
+        "error.auth.credentialSecretInvalid"
+    );
+    assert!(frames[1]["error"]["args"].get("secret").is_none());
+    assert_eq!(frames[1]["error"]["args"]["authKind"], "basic");
+}
+
+#[test]
 fn stdio_loop_rejects_credential_cancel_response_with_unexpected_error_contract() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","action":"cancel","error":{"code":"RPC_METHOD_NOT_FOUND","category":"unsupported","messageKey":"error.rpc.methodNotFound","args":{"method":"credentials/request","secret":"leak"},"retryable":false}}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"cancel","error":{"code":"RPC_METHOD_NOT_FOUND","category":"unsupported","messageKey":"error.rpc.methodNotFound","args":{"method":"credentials/request","secret":"leak"},"retryable":false}}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -2495,9 +2512,13 @@ fn stdio_loop_rejects_credential_cancel_response_with_unexpected_error_contract(
 }
 
 #[test]
-fn stdio_loop_rejects_non_interactive_credential_without_prompting() {
-    let input =
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#);
+fn stdio_loop_routes_non_interactive_credential_for_stored_secret_lookup() {
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-background","result":{"requestId":"cred-background","operationId":"cred-background-operation","action":"provide","leaseId":"cred-background-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"session"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}"#),
+    ]
+    .concat();
     let mut output = Vec::new();
 
     run_json_rpc_stdio(
@@ -2505,21 +2526,17 @@ fn stdio_loop_rejects_non_interactive_credential_without_prompting() {
         &mut output,
         &NonInteractiveCredentialBridge,
     )
-    .expect("stdio loop should fail non-interactive credential requests without prompting");
+    .expect("stdio loop should route non-interactive stored-secret lookup");
 
     let frames = decode_frames(&output).expect("frames should be content-length encoded");
-    assert_eq!(frames.len(), 1);
-    assert_eq!(frames[0]["id"], 1);
-    assert_eq!(
-        frames[0]["error"]["code"],
-        "SUBVERSIONR_CREDENTIAL_NON_INTERACTIVE"
-    );
-    assert_eq!(
-        frames[0]["error"]["messageKey"],
-        "error.auth.credentialNonInteractive"
-    );
-    assert_eq!(frames[0]["error"]["args"]["method"], "credentials/request");
-    assert!(frames[0]["method"].is_null());
+    assert_eq!(frames.len(), 3);
+    assert_credential_request_frame(&frames[0], "cred-background", "svn://example");
+    assert_eq!(frames[0]["params"]["interactive"], false);
+    assert_eq!(frames[0]["params"]["persistenceAllowed"], false);
+    assert_eq!(frames[0]["params"]["origin"], "background");
+    assert_eq!(frames[1]["id"], 1);
+    assert_eq!(frames[1]["result"]["repositoryId"], "repo-uuid:C:/wc");
+    assert_eq!(frames[2]["result"]["accepted"], true);
 }
 
 #[test]
@@ -2602,11 +2619,268 @@ fn stdio_loop_rejects_malformed_auth_error_response() {
 }
 
 #[test]
+fn stdio_loop_preserves_empty_structured_secret_invalid_request_error() {
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","error":{"code":"SUBVERSIONR_CREDENTIAL_SECRET_INVALID","category":"auth","messageKey":"error.auth.credentialSecretInvalid","args":{},"retryable":false,"diagnostics":null}}"#),
+    ]
+    .concat();
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio(
+        io::Cursor::new(input),
+        &mut output,
+        &CredentialBodyValidationBridge,
+    )
+    .expect("empty structured secret-invalid errors must remain serviceable");
+
+    let frames = decode_frames(&output).expect("frames should be content-length encoded");
+    assert_eq!(
+        frames[1]["error"]["code"],
+        "SUBVERSIONR_CREDENTIAL_SECRET_INVALID"
+    );
+    assert_eq!(frames[1]["error"]["args"], serde_json::json!({}));
+}
+
+#[test]
+fn stdio_loop_rejects_structured_credential_request_error_args() {
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","error":{"code":"SUBVERSIONR_CREDENTIAL_SECRET_INVALID","category":"auth","messageKey":"error.auth.credentialSecretInvalid","args":{"realm":"must-not-leak"},"retryable":false,"diagnostics":null}}"#),
+    ]
+    .concat();
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio(
+        io::Cursor::new(input),
+        &mut output,
+        &CredentialBodyValidationBridge,
+    )
+    .expect("structured request error args must fail closed without terminating stdio");
+
+    let frames = decode_frames(&output).expect("frames should be content-length encoded");
+    assert_eq!(
+        frames[1]["error"]["code"],
+        "SUBVERSIONR_AUTH_RESPONSE_INVALID"
+    );
+    assert!(frames[1]["error"]["args"].get("realm").is_none());
+}
+
+#[test]
+fn stdio_loop_preserves_structured_credential_settlement_error_codes() {
+    for (code, category, message_key, args) in [
+        (
+            "SUBVERSIONR_CREDENTIAL_UNTRUSTED_WORKSPACE",
+            "lifecycle",
+            "error.auth.credentialUntrustedWorkspace",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_TIMEOUT",
+            "auth",
+            "error.auth.credentialTimeout",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_LEASE_UNKNOWN",
+            "auth",
+            "error.auth.credentialLeaseUnknown",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_LEASE_FOREIGN",
+            "auth",
+            "error.auth.credentialLeaseForeign",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_LEASE_EXPIRED",
+            "auth",
+            "error.auth.credentialLeaseExpired",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_SETTLEMENT_CONFLICT",
+            "auth",
+            "error.auth.credentialSettlementConflict",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+        ),
+    ] {
+        let input = [
+            frame(
+                r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#,
+            ),
+            frame(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "settle-expected",
+                    "error": {
+                        "code": code,
+                        "category": category,
+                        "messageKey": message_key,
+                        "args": args,
+                        "retryable": false,
+                        "diagnostics": null
+                    }
+                })
+                .to_string(),
+            ),
+        ]
+        .concat();
+        let mut output = Vec::new();
+
+        run_json_rpc_stdio(
+            io::Cursor::new(input),
+            &mut output,
+            &CredentialSettlementValidationBridge,
+        )
+        .expect("structured settlement errors must remain serviceable");
+
+        let frames = decode_frames(&output).expect("frames should be content-length encoded");
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0]["method"], "credentials/settle");
+        assert_eq!(frames[1]["error"]["code"], code);
+        assert_eq!(frames[1]["error"]["category"], category);
+        assert_eq!(frames[1]["error"]["messageKey"], message_key);
+        assert_eq!(
+            frames[1]["error"]["args"]["leaseHash"],
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        );
+    }
+}
+
+#[test]
+fn stdio_loop_rejects_unvalidated_structured_credential_settlement_args() {
+    for (code, category, message_key, args) in [
+        (
+            "SUBVERSIONR_CREDENTIAL_LEASE_UNKNOWN",
+            "auth",
+            "error.auth.credentialLeaseUnknown",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted",
+                "realm": "must-not-leak"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_TIMEOUT",
+            "auth",
+            "error.auth.credentialTimeout",
+            serde_json::json!({
+                "operationHash": "UPPERCASE_OR_SHORT",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_TIMEOUT",
+            "auth",
+            "error.auth.credentialTimeout",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "unknown"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_UNTRUSTED_WORKSPACE",
+            "lifecycle",
+            "error.auth.credentialUntrustedWorkspace",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+        ),
+    ] {
+        let input = [
+            frame(
+                r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#,
+            ),
+            frame(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "settle-expected",
+                    "error": {
+                        "code": code,
+                        "category": category,
+                        "messageKey": message_key,
+                        "args": args,
+                        "retryable": false,
+                        "diagnostics": null
+                    }
+                })
+                .to_string(),
+            ),
+        ]
+        .concat();
+        let mut output = Vec::new();
+
+        run_json_rpc_stdio(
+            io::Cursor::new(input),
+            &mut output,
+            &CredentialSettlementValidationBridge,
+        )
+        .expect("invalid settlement args must fail closed without terminating stdio");
+
+        let frames = decode_frames(&output).expect("frames should be content-length encoded");
+        assert_eq!(
+            frames[1]["error"]["code"],
+            "SUBVERSIONR_AUTH_RESPONSE_INVALID"
+        );
+        assert!(frames[1]["error"]["args"].get("realm").is_none());
+    }
+}
+
+#[test]
+fn stdio_loop_outer_cancellation_interrupts_synchronous_auth_wait() {
+    let first =
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#);
+    let cancellation = frame(r#"{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":1}}"#);
+    let reader = DelayedSecondChunkReader::new(first, cancellation, Duration::from_millis(20));
+    let mut output = Vec::new();
+    let started = Instant::now();
+
+    run_json_rpc_stdio(reader, &mut output, &CredentialBodyValidationBridge)
+        .expect("outer cancellation must interrupt the synchronous auth wait");
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let frames = decode_frames(&output).expect("frames should be content-length encoded");
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["method"], "credentials/request");
+    assert_eq!(frames[1]["error"]["code"], "SUBVERSIONR_AUTH_CANCELLED");
+}
+
+#[test]
 fn stdio_loop_rejects_cancel_request_with_envelope_id_while_auth_continues() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":77,"method":"$/cancelRequest","params":{"id":"cred-expected"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"session"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"provide","leaseId":"cred-expected-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"session"}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -2636,7 +2910,7 @@ fn stdio_loop_ignores_nonmatching_cancel_notification_while_waiting_for_auth() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"other-request"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"session"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"provide","leaseId":"cred-expected-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"session"}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -2661,7 +2935,7 @@ fn stdio_loop_rejects_unrelated_request_while_waiting_for_auth_and_continues() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":99,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"session"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"provide","leaseId":"cred-expected-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"session"}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -2736,7 +3010,7 @@ fn stdio_loop_ignores_unrelated_notification_while_waiting_for_auth() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
         frame(r#"{"jsonrpc":"2.0","method":"backend/log","params":{"level":"debug"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"session"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"provide","leaseId":"cred-expected-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"session"}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -2824,7 +3098,7 @@ fn stdio_loop_drops_late_auth_response_after_timeout_and_continues() {
     let first =
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#);
     let late_and_next = [
-        frame(r#"{"jsonrpc":"2.0","id":"cred-short-timeout","result":{"requestId":"cred-short-timeout","action":"provide","credential":{"username":"alice","secret":"late-secret"},"persistence":"session"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-short-timeout","result":{"requestId":"cred-short-timeout","operationId":"cred-short-timeout-operation","action":"provide","leaseId":"cred-short-timeout-lease","credential":{"username":"alice","secret":"late-secret"},"persistenceIntent":"session"}}"#),
         frame(r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}"#),
     ]
     .concat();
@@ -2909,7 +3183,7 @@ fn stdio_loop_rejects_oversized_auth_response_frame_before_reading_payload() {
 fn stdio_loop_rejects_auth_response_with_invalid_jsonrpc_envelope() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
-        frame(r#"{"id":"cred-expected","result":{"requestId":"cred-expected","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"session"}}"#),
+        frame(r#"{"id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"provide","leaseId":"cred-expected-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"session"}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -2936,7 +3210,7 @@ fn stdio_loop_rejects_auth_response_with_invalid_jsonrpc_envelope() {
 fn stdio_loop_rejects_auth_response_with_result_and_error() {
     let input = [
         frame(r#"{"jsonrpc":"2.0","id":1,"method":"repository/open","params":{"path":"C:/wc"}}"#),
-        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","action":"provide","credential":{"username":"alice","secret":"secret"},"persistence":"session"},"error":{"code":"BAD","message":"bad"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":"cred-expected","result":{"requestId":"cred-expected","operationId":"cred-expected-operation","action":"provide","leaseId":"cred-expected-lease","credential":{"username":"alice","secret":"secret"},"persistenceIntent":"session"},"error":{"code":"BAD","message":"bad"}}"#),
     ]
     .concat();
     let mut output = Vec::new();
@@ -3214,6 +3488,99 @@ struct DelayedRemoteWorker {
     disconnects: AtomicUsize,
 }
 
+#[derive(Debug, Default)]
+struct AuthWaitingRemoteWorker {
+    started: AtomicBool,
+    auth_wait_cancelled: AtomicBool,
+}
+
+impl RemoteWorkerSupervisor for AuthWaitingRemoteWorker {
+    fn execute(
+        &self,
+        envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        _cancellation: &dyn BridgeCancellationToken,
+        auth: &mut dyn AuthRequestBroker,
+        _bridge: &dyn BridgeApi,
+        _deadline: Instant,
+    ) -> Result<(), BridgeFailure> {
+        self.started.store(true, Ordering::SeqCst);
+        let mut request = credential_request(
+            "worker-auth-wait",
+            "private worker auth wait",
+            true,
+            true,
+            RemoteOperationIntent::Foreground,
+            300_000,
+        );
+        request.operation_id = envelope.operation_id.clone();
+        auth.request_credential(request)?;
+        Ok(())
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        self.auth_wait_cancelled.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn update_workspace_trust(&self, trusted: bool) -> Result<(), BridgeFailure> {
+        if !trusted {
+            self.auth_wait_cancelled.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        self.auth_wait_cancelled.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+
+    fn auth_wait_cancelled(&self) -> bool {
+        self.auth_wait_cancelled.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Debug, Default)]
+struct SettlementErrorRemoteWorker;
+
+impl RemoteWorkerSupervisor for SettlementErrorRemoteWorker {
+    fn execute(
+        &self,
+        envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        _cancellation: &dyn BridgeCancellationToken,
+        auth: &mut dyn AuthRequestBroker,
+        _bridge: &dyn BridgeApi,
+        _deadline: Instant,
+    ) -> Result<(), BridgeFailure> {
+        let failure = auth
+            .settle_credential(credential_settlement_request(
+                &envelope.operation_id,
+                30_000,
+            ))
+            .expect_err("settlement error worker fixture must not succeed");
+        Err(failure)
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+}
+
 impl RemoteWorkerSupervisor for DelayedRemoteWorker {
     fn execute(
         &self,
@@ -3221,6 +3588,7 @@ impl RemoteWorkerSupervisor for DelayedRemoteWorker {
         _plan: RemoteConfigPlan,
         _lane_key: &str,
         cancellation: &dyn BridgeCancellationToken,
+        _auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         deadline: Instant,
     ) -> Result<(), BridgeFailure> {
@@ -3267,6 +3635,7 @@ impl RemoteWorkerSupervisor for RecoveryBlockedRemoteWorker {
         _plan: RemoteConfigPlan,
         _lane_key: &str,
         _cancellation: &dyn BridgeCancellationToken,
+        _auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
     ) -> Result<(), BridgeFailure> {
@@ -3295,6 +3664,7 @@ impl RemoteWorkerSupervisor for DisconnectBlockingRemoteWorker {
         _plan: RemoteConfigPlan,
         _lane_key: &str,
         _cancellation: &dyn BridgeCancellationToken,
+        _auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
     ) -> Result<(), BridgeFailure> {
@@ -3368,7 +3738,7 @@ fn stdio_remote_worker_keeps_diagnostics_and_other_working_copies_responsive() {
         responses[0]["result"]["capabilities"]["remoteWorkerIsolation"],
         true
     );
-    assert_eq!(responses[1]["result"]["protocol"]["minor"], 32);
+    assert_eq!(responses[1]["result"]["protocol"]["minor"], 33);
     assert_eq!(
         responses[2]["error"]["code"],
         "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY"
@@ -3412,6 +3782,293 @@ fn stdio_eof_disconnects_an_active_remote_worker_before_returning() {
 }
 
 #[test]
+fn stdio_remote_worker_auth_wait_is_interrupted_by_outer_cancellation() {
+    let worker = Arc::new(AuthWaitingRemoteWorker::default());
+    let operation_id = "41234567-89ab-4def-8123-456789abcdef";
+    let reader = DelayedChunksReader::new(
+        vec![
+            [
+                frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+                remote_checkout_frame(2, operation_id, "C:/checkout/cancel-auth"),
+            ]
+            .concat(),
+            frame(r#"{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":2}}"#),
+            frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
+        ],
+        Duration::from_millis(25),
+        Duration::from_millis(50),
+    );
+    let mut output = Vec::new();
+    let started = Instant::now();
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
+        .expect("outer cancellation must interrupt a worker broker wait");
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(worker.started.load(Ordering::SeqCst));
+    let responses = decode_frames(&output).expect("responses should remain framed");
+    let checkout = responses
+        .iter()
+        .find(|response| response["id"] == 2)
+        .expect("cancelled checkout response must be emitted");
+    assert_eq!(checkout["error"]["code"], "SUBVERSIONR_AUTH_CANCELLED");
+}
+
+#[test]
+fn stdio_remote_worker_auth_wait_is_interrupted_by_trust_revoke() {
+    let worker = Arc::new(AuthWaitingRemoteWorker::default());
+    let operation_id = "51234567-89ab-4def-8123-456789abcdef";
+    let reader = DelayedChunksReader::new(
+        vec![
+            [
+                frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+                remote_checkout_frame(2, operation_id, "C:/checkout/revoke-auth"),
+            ]
+            .concat(),
+            frame(r#"{"jsonrpc":"2.0","id":3,"method":"workspaceTrust/update","params":{"trusted":false,"trustEpoch":2}}"#),
+            frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
+        ],
+        Duration::from_millis(25),
+        Duration::from_millis(50),
+    );
+    let mut output = Vec::new();
+    let started = Instant::now();
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
+        .expect("trust revoke must interrupt a worker broker wait");
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(worker.auth_wait_cancelled.load(Ordering::SeqCst));
+    let responses = decode_frames(&output).expect("responses should remain framed");
+    assert!(responses.iter().any(|response| {
+        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_CANCELLED"
+    }));
+    assert!(responses.iter().any(|response| {
+        response["id"] == 3 && response["result"]["acknowledgedTrustEpoch"] == 2
+    }));
+}
+
+#[test]
+fn stdio_remote_worker_auth_wait_obeys_the_operation_deadline() {
+    let worker = Arc::new(AuthWaitingRemoteWorker::default());
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        remote_checkout_frame_with_timeout(
+            2,
+            "61234567-89ab-4def-8123-456789abcdef",
+            "C:/checkout/deadline-auth",
+            20,
+        ),
+    ]
+    .concat();
+    let reader = DelayedEofReader::new(input, Duration::from_millis(150));
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker)
+        .expect("operation deadline must interrupt a longer credential request timeout");
+
+    let responses = decode_frames(&output).expect("responses should remain framed");
+    assert!(responses.iter().any(|response| {
+        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_TIMEOUT"
+    }));
+}
+
+#[test]
+fn stdio_eof_interrupts_a_remote_worker_auth_wait() {
+    let worker = Arc::new(AuthWaitingRemoteWorker::default());
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        remote_checkout_frame(
+            2,
+            "81234567-89ab-4def-8123-456789abcdef",
+            "C:/checkout/eof-auth",
+        ),
+    ]
+    .concat();
+    let reader = DelayedEofReader::new(input, Duration::from_millis(40));
+    let mut output = Vec::new();
+    let started = Instant::now();
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
+        .expect("EOF must interrupt the pending remote worker broker call");
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(worker.started.load(Ordering::SeqCst));
+    assert!(worker.auth_wait_cancelled.load(Ordering::SeqCst));
+}
+
+#[test]
+fn stdio_remote_worker_preserves_structured_settlement_error_over_private_broker() {
+    for (code, category, message_key, args) in [
+        (
+            "SUBVERSIONR_CREDENTIAL_UNTRUSTED_WORKSPACE",
+            "lifecycle",
+            "error.auth.credentialUntrustedWorkspace",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            }),
+        ),
+        (
+            "SUBVERSIONR_CREDENTIAL_TIMEOUT",
+            "auth",
+            "error.auth.credentialTimeout",
+            serde_json::json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+        ),
+    ] {
+        let operation_id = "71234567-89ab-4def-8123-456789abcdef";
+        let stage = Arc::new(AtomicUsize::new(0));
+        let reader = BrokerRoundTripReader::new(
+            vec![
+                [
+                    frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+                    remote_checkout_frame(2, operation_id, "C:/checkout/settlement-error"),
+                ]
+                .concat(),
+                frame(
+                    &serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "settle-expected",
+                        "error": {
+                            "code": code,
+                            "category": category,
+                            "messageKey": message_key,
+                            "args": args,
+                            "retryable": false,
+                            "diagnostics": null
+                        }
+                    })
+                    .to_string(),
+                ),
+                frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
+            ],
+            vec![1, 3],
+            Arc::clone(&stage),
+        );
+        let mut output = BrokerRoundTripWriter::new(Arc::clone(&stage));
+
+        run_json_rpc_stdio_with_remote_worker(
+            reader,
+            &mut output,
+            &FakeBridge,
+            Arc::new(SettlementErrorRemoteWorker),
+        )
+        .expect("private worker settlement failure must remain serviceable");
+
+        let responses = decode_frames(output.as_bytes()).expect("responses should remain framed");
+        assert!(
+            responses.iter().any(|response| {
+                response["id"] == 2
+                    && response["error"]["code"] == code
+                    && response["error"]["category"] == category
+                    && response["error"]["messageKey"] == message_key
+                    && response["error"]["args"]["leaseHash"]
+                        == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            }),
+            "private settlement response did not preserve {code}: {responses:#?}"
+        );
+    }
+}
+
+#[test]
+fn stdio_remote_worker_cancel_retires_late_auth_response_and_keeps_serviceable() {
+    let operation_id = "91234567-89ab-4def-8123-456789abcdef";
+    let stage = Arc::new(AtomicUsize::new(0));
+    let worker = Arc::new(AuthWaitingRemoteWorker::default());
+    let reader = BrokerRoundTripReader::new(
+        vec![
+            [
+                frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+                remote_checkout_frame(2, operation_id, "C:/checkout/late-auth-cancel"),
+            ]
+            .concat(),
+            frame(r#"{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":2}}"#),
+            [
+                frame(r#"{"jsonrpc":"2.0","id":"worker-auth-wait","result":{}}"#),
+                frame(r#"{"jsonrpc":"2.0","id":3,"method":"diagnostics/get","params":{}}"#),
+                frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
+            ]
+            .concat(),
+        ],
+        vec![1, 3],
+        Arc::clone(&stage),
+    );
+    let mut output = BrokerRoundTripWriter::new(stage);
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker)
+        .expect("late auth response after remote cancellation must be retired");
+
+    assert_late_remote_auth_response_kept_serviceable(output.as_bytes());
+}
+
+#[test]
+fn stdio_remote_worker_failure_retires_late_auth_response_and_keeps_serviceable() {
+    let operation_id = "a1234567-89ab-4def-8123-456789abcdef";
+    let stage = Arc::new(AtomicUsize::new(0));
+    let worker = Arc::new(AuthWaitingRemoteWorker::default());
+    let trigger_stage = Arc::clone(&stage);
+    let trigger_worker = Arc::clone(&worker);
+    let trigger = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while trigger_stage.load(Ordering::SeqCst) < 1 {
+            assert!(
+                Instant::now() < deadline,
+                "remote auth request was not emitted before worker failure"
+            );
+            thread::yield_now();
+        }
+        trigger_worker
+            .auth_wait_cancelled
+            .store(true, Ordering::SeqCst);
+    });
+    let reader = BrokerRoundTripReader::new(
+        vec![
+            [
+                frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+                remote_checkout_frame(2, operation_id, "C:/checkout/late-auth-failure"),
+            ]
+            .concat(),
+            [
+                frame(r#"{"jsonrpc":"2.0","id":"worker-auth-wait","result":{}}"#),
+                frame(r#"{"jsonrpc":"2.0","id":3,"method":"diagnostics/get","params":{}}"#),
+                frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
+            ]
+            .concat(),
+        ],
+        vec![3],
+        Arc::clone(&stage),
+    );
+    let mut output = BrokerRoundTripWriter::new(stage);
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker)
+        .expect("late auth response after remote worker failure must be retired");
+    trigger
+        .join()
+        .expect("worker failure trigger must complete");
+
+    assert_late_remote_auth_response_kept_serviceable(output.as_bytes());
+}
+
+fn assert_late_remote_auth_response_kept_serviceable(output: &[u8]) {
+    let responses = decode_frames(output).expect("responses should remain framed");
+    assert!(responses.iter().any(|response| {
+        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_CANCELLED"
+    }));
+    assert!(responses.iter().any(|response| {
+        response["id"] == 3 && response["result"]["source"] == "subversionr-daemon"
+    }));
+    assert!(
+        responses
+            .iter()
+            .any(|response| response["id"] == 4 && response["result"]["accepted"] == true)
+    );
+}
+
+#[test]
 fn stdio_recovery_blocked_lane_rejects_child_and_discovery_paths_but_keeps_diagnostics_live() {
     let worker = Arc::new(RecoveryBlockedRemoteWorker);
     let first = [
@@ -3450,7 +4107,7 @@ fn stdio_recovery_blocked_lane_rejects_child_and_discovery_paths_but_keeps_diagn
         responses[3]["error"]["code"],
         "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
     );
-    assert_eq!(responses[4]["result"]["protocol"]["minor"], 32);
+    assert_eq!(responses[4]["result"]["protocol"]["minor"], 33);
     assert_eq!(responses[5]["result"]["accepted"], true);
 }
 
@@ -3465,6 +4122,15 @@ fn remote_worker_test_failure(code: &str) -> BridgeFailure {
 }
 
 fn remote_checkout_frame(id: u64, operation_id: &str, target_path: &str) -> Vec<u8> {
+    remote_checkout_frame_with_timeout(id, operation_id, target_path, 30_000)
+}
+
+fn remote_checkout_frame_with_timeout(
+    id: u64,
+    operation_id: &str,
+    target_path: &str,
+    timeout_ms: u64,
+) -> Vec<u8> {
     frame(
         &serde_json::json!({
             "jsonrpc": "2.0",
@@ -3481,7 +4147,7 @@ fn remote_checkout_frame(id: u64, operation_id: &str, target_path: &str) -> Vec<
                     "operationId": operation_id,
                     "intent": "foreground",
                     "interaction": "allowed",
-                    "timeoutMs": 30000,
+                    "timeoutMs": timeout_ms,
                     "workspaceTrust": "trusted",
                     "trustEpoch": 1,
                     "profile": {
@@ -3564,6 +4230,148 @@ impl Read for DelayedSecondChunkReader {
             thread::sleep(self.second_delay);
         }
         self.second.read(buffer)
+    }
+}
+
+struct DelayedChunksReader {
+    chunks: Vec<io::Cursor<Vec<u8>>>,
+    next_chunk: usize,
+    chunk_delay: Duration,
+    eof_delay: Duration,
+    eof_delayed: bool,
+}
+
+struct BrokerRoundTripReader {
+    chunks: Vec<io::Cursor<Vec<u8>>>,
+    gates: Vec<usize>,
+    next_chunk: usize,
+    stage: Arc<AtomicUsize>,
+}
+
+struct BrokerRoundTripWriter {
+    output: Vec<u8>,
+    stage: Arc<AtomicUsize>,
+}
+
+impl BrokerRoundTripWriter {
+    fn new(stage: Arc<AtomicUsize>) -> Self {
+        Self {
+            output: Vec::new(),
+            stage,
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.output
+    }
+}
+
+impl io::Write for BrokerRoundTripWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.output.extend_from_slice(buffer);
+        if [
+            b"\"method\":\"credentials/request\"".as_slice(),
+            b"\"method\":\"credentials/settle\"".as_slice(),
+        ]
+        .iter()
+        .any(|method| {
+            self.output
+                .windows(method.len())
+                .any(|window| window == *method)
+        }) {
+            self.stage.fetch_max(1, Ordering::SeqCst);
+        }
+        if self
+            .output
+            .windows(b"\"id\":2".len())
+            .any(|window| window == b"\"id\":2")
+        {
+            self.stage.fetch_max(3, Ordering::SeqCst);
+        }
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl BrokerRoundTripReader {
+    fn new(chunks: Vec<Vec<u8>>, gates: Vec<usize>, stage: Arc<AtomicUsize>) -> Self {
+        assert_eq!(chunks.len(), gates.len() + 1);
+        Self {
+            chunks: chunks.into_iter().map(io::Cursor::new).collect(),
+            gates,
+            next_chunk: 0,
+            stage,
+        }
+    }
+
+    fn wait_for_stage(&self, required: usize) -> io::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while self.stage.load(Ordering::SeqCst) < required {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "settlement round trip did not reach the required stage",
+                ));
+            }
+            thread::yield_now();
+        }
+        Ok(())
+    }
+}
+
+impl Read for BrokerRoundTripReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if self.next_chunk >= self.chunks.len() {
+                return Ok(0);
+            }
+            let bytes_read = self.chunks[self.next_chunk].read(buffer)?;
+            if bytes_read > 0 {
+                return Ok(bytes_read);
+            }
+            self.next_chunk += 1;
+            if let Some(required) = self.gates.get(self.next_chunk - 1) {
+                self.wait_for_stage(*required)?;
+            }
+        }
+    }
+}
+
+impl DelayedChunksReader {
+    fn new(chunks: Vec<Vec<u8>>, chunk_delay: Duration, eof_delay: Duration) -> Self {
+        assert!(!chunks.is_empty());
+        Self {
+            chunks: chunks.into_iter().map(io::Cursor::new).collect(),
+            next_chunk: 0,
+            chunk_delay,
+            eof_delay,
+            eof_delayed: false,
+        }
+    }
+}
+
+impl Read for DelayedChunksReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if self.next_chunk >= self.chunks.len() {
+                if !self.eof_delayed {
+                    self.eof_delayed = true;
+                    thread::sleep(self.eof_delay);
+                }
+                return Ok(0);
+            }
+            let bytes_read = self.chunks[self.next_chunk].read(buffer)?;
+            if bytes_read > 0 {
+                return Ok(bytes_read);
+            }
+            self.next_chunk += 1;
+            if self.next_chunk < self.chunks.len() {
+                thread::sleep(self.chunk_delay);
+            }
+        }
     }
 }
 

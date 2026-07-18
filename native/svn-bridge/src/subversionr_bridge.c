@@ -44,6 +44,12 @@
 #define BRIDGE_OPERATION_PARTIAL_FAILURE 14
 #define BRIDGE_OPERATION_PARTIAL_CANCEL_CALLBACK_FAILED 15
 #define BRIDGE_OPERATION_PARTIAL_CANCELLED 16
+#define BRIDGE_CREDENTIAL_REALM_BYTE_LIMIT 4096
+#define BRIDGE_CREDENTIAL_USERNAME_BYTE_LIMIT 256
+#define BRIDGE_CREDENTIAL_LEASE_ID_BYTE_LIMIT 128
+#define BRIDGE_CREDENTIAL_SECRET_BYTE_LIMIT 32768
+
+typedef struct bridge_remote_credential_baton bridge_remote_credential_baton;
 
 struct subversionr_bridge_runtime {
   apr_pool_t *pool;
@@ -57,6 +63,7 @@ struct subversionr_bridge_runtime {
 struct subversionr_bridge_remote_context {
   apr_pool_t *pool;
   svn_client_ctx_t *ctx;
+  bridge_remote_credential_baton *credential_baton;
   subversionr_bridge_remote_config_inspection inspection;
 };
 
@@ -150,6 +157,36 @@ typedef struct bridge_auth_prompt_baton {
   int default_username_required;
   int callback_failed;
 } bridge_auth_prompt_baton;
+
+typedef struct bridge_credential_lease bridge_credential_lease;
+
+struct bridge_remote_credential_baton {
+  subversionr_bridge_remote_credential_callbacks_v2 callbacks;
+  apr_pool_t *pool;
+  const char *working_copy_root;
+  const char *default_username;
+  int callback_failed;
+  unsigned int terminal_outcome;
+  apr_array_header_t *credential_leases;
+  subversionr_bridge_private_credential_probe_inspection *probe_inspection;
+};
+
+struct bridge_credential_lease {
+  bridge_remote_credential_baton *owner;
+  const char *lease_id;
+  const char *realm;
+  svn_auth_cred_simple_t *credential;
+  unsigned int attempt;
+  unsigned int settlement_outcome;
+  int settlement_attempted;
+  int settled;
+};
+
+typedef struct bridge_simple_iter_baton {
+  bridge_remote_credential_baton *owner;
+  bridge_credential_lease *current;
+  unsigned int next_attempt;
+} bridge_simple_iter_baton;
 
 struct bridge_cancel_baton {
   const subversionr_bridge_cancel_callbacks *callbacks;
@@ -1163,6 +1200,17 @@ static int bridge_auth_callbacks_valid(const subversionr_bridge_auth_callbacks *
     callbacks->certificate_callback != NULL;
 }
 
+static int bridge_remote_credential_callbacks_valid(
+  const subversionr_bridge_remote_credential_callbacks_v2 *callbacks
+) {
+  return callbacks != NULL &&
+    callbacks->abi_version == SUBVERSIONR_BRIDGE_REMOTE_CREDENTIAL_ABI_VERSION &&
+    callbacks->baton != NULL &&
+    callbacks->credential_callback != NULL &&
+    callbacks->credential_response_dispose != NULL &&
+    callbacks->credential_settlement_callback != NULL;
+}
+
 static int bridge_cancel_callbacks_valid(const subversionr_bridge_cancel_callbacks *callbacks) {
   return callbacks != NULL &&
     callbacks->abi_version == SUBVERSIONR_BRIDGE_CANCEL_ABI_VERSION &&
@@ -1262,6 +1310,493 @@ static svn_error_t *bridge_auth_simple_prompt(
   *cred = created;
   prompt_baton->default_username = apr_pstrdup(prompt_baton->pool, response.username);
   bridge_dispose_credential_response(&prompt_baton->callbacks, &response);
+  return SVN_NO_ERROR;
+}
+
+static void bridge_dispose_remote_credential_response(
+  const subversionr_bridge_remote_credential_callbacks_v2 *callbacks,
+  subversionr_bridge_remote_credential_response_v2 *response
+) {
+  if (
+    callbacks != NULL &&
+    callbacks->credential_response_dispose != NULL &&
+    response != NULL
+  ) {
+    callbacks->credential_response_dispose(callbacks->baton, response);
+  }
+}
+
+static int bridge_utf8_bounded_text_valid(
+  const char *value,
+  size_t byte_limit,
+  int allow_empty,
+  int reject_ascii_space_edges
+) {
+  if (value == NULL) {
+    return 0;
+  }
+  size_t length = strlen(value);
+  if ((!allow_empty && length == 0) || length > byte_limit) {
+    return 0;
+  }
+  if (
+    reject_ascii_space_edges &&
+    length > 0 &&
+    (
+      value[0] == ' ' || value[0] == '\t' ||
+      value[length - 1] == ' ' || value[length - 1] == '\t'
+    )
+  ) {
+    return 0;
+  }
+
+  const unsigned char *bytes = (const unsigned char *)value;
+  size_t index = 0;
+  while (index < length) {
+    unsigned char first = bytes[index];
+    if (first < 0x80) {
+      if (first < 0x20 || first == 0x7f) {
+        return 0;
+      }
+      ++index;
+      continue;
+    }
+
+    size_t continuation_count = 0;
+    unsigned int code_point = 0;
+    unsigned int minimum = 0;
+    if ((first & 0xe0) == 0xc0) {
+      continuation_count = 1;
+      code_point = first & 0x1f;
+      minimum = 0x80;
+    } else if ((first & 0xf0) == 0xe0) {
+      continuation_count = 2;
+      code_point = first & 0x0f;
+      minimum = 0x800;
+    } else if ((first & 0xf8) == 0xf0) {
+      continuation_count = 3;
+      code_point = first & 0x07;
+      minimum = 0x10000;
+    } else {
+      return 0;
+    }
+    if (index + continuation_count >= length) {
+      return 0;
+    }
+    for (size_t offset = 1; offset <= continuation_count; ++offset) {
+      unsigned char next = bytes[index + offset];
+      if ((next & 0xc0) != 0x80) {
+        return 0;
+      }
+      code_point = (code_point << 6) | (next & 0x3f);
+    }
+    if (
+      code_point < minimum ||
+      code_point > 0x10ffff ||
+      (code_point >= 0xd800 && code_point <= 0xdfff)
+    ) {
+      return 0;
+    }
+    index += continuation_count + 1;
+  }
+  return 1;
+}
+
+static int bridge_lease_id_valid(const char *lease_id) {
+  if (lease_id == NULL) {
+    return 0;
+  }
+  size_t length = strlen(lease_id);
+  if (length == 0 || length > BRIDGE_CREDENTIAL_LEASE_ID_BYTE_LIMIT) {
+    return 0;
+  }
+  for (size_t index = 0; index < length; ++index) {
+    unsigned char value = (unsigned char)lease_id[index];
+    if (
+      !(
+        (value >= 'a' && value <= 'z') ||
+        (value >= 'A' && value <= 'Z') ||
+        (value >= '0' && value <= '9') ||
+        value == '-' || value == '_' || value == '.' || value == ':'
+      )
+    ) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int bridge_credential_terminal_outcome_valid(unsigned int outcome) {
+  return outcome == SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED ||
+    outcome == SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_CANCELLED ||
+    outcome == SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_TIMED_OUT;
+}
+
+static void bridge_probe_record(
+  bridge_remote_credential_baton *owner,
+  unsigned int event
+) {
+  if (owner == NULL || owner->probe_inspection == NULL) {
+    return;
+  }
+  subversionr_bridge_private_credential_probe_inspection *inspection =
+    owner->probe_inspection;
+  if (inspection->event_count < SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_LIMIT) {
+    inspection->events[inspection->event_count++] = event;
+  } else {
+    owner->callback_failed = 1;
+  }
+}
+
+static unsigned int bridge_probe_event_for_settlement(unsigned int outcome) {
+  switch (outcome) {
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_ACCEPTED:
+      return SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_ACCEPTED;
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_REJECTED:
+      return SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_REJECTED;
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED:
+      return SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_UNUSED;
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_CANCELLED:
+      return SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_CANCELLED;
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_TIMED_OUT:
+      return SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_TIMED_OUT;
+    default:
+      return 0;
+  }
+}
+
+static svn_error_t *bridge_settle_credential_lease(
+  bridge_credential_lease *lease,
+  unsigned int outcome
+) {
+  if (
+    lease == NULL || lease->owner == NULL ||
+    !bridge_lease_id_valid(lease->lease_id) ||
+    (
+      outcome != SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_ACCEPTED &&
+      outcome != SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_REJECTED &&
+      !bridge_credential_terminal_outcome_valid(outcome)
+    )
+  ) {
+    return bridge_auth_callback_error();
+  }
+  if (lease->settled) {
+    return lease->settlement_outcome == outcome
+      ? SVN_NO_ERROR
+      : bridge_auth_callback_error();
+  }
+  if (lease->settlement_attempted) {
+    return bridge_auth_callback_error();
+  }
+  lease->settlement_attempted = 1;
+  lease->settlement_outcome = outcome;
+  int status = lease->owner->callbacks.credential_settlement_callback(
+    lease->owner->callbacks.baton,
+    lease->lease_id,
+    outcome
+  );
+  if (status != BRIDGE_AUTH_CALLBACK_OK) {
+    lease->owner->callback_failed = 1;
+    return bridge_auth_callback_error();
+  }
+  lease->settled = 1;
+  unsigned int event = bridge_probe_event_for_settlement(outcome);
+  if (event != 0) {
+    bridge_probe_record(lease->owner, event);
+  }
+  return SVN_NO_ERROR;
+}
+
+static apr_status_t bridge_credential_lease_cleanup(void *baton) {
+  bridge_credential_lease *lease = (bridge_credential_lease *)baton;
+  if (lease == NULL || lease->settled) {
+    return APR_SUCCESS;
+  }
+  if (lease->settlement_attempted) {
+    return APR_EGENERAL;
+  }
+  unsigned int outcome = lease->owner != NULL
+    ? lease->owner->terminal_outcome
+    : SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED;
+  if (!bridge_credential_terminal_outcome_valid(outcome)) {
+    outcome = SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED;
+  }
+  svn_error_t *error = bridge_settle_credential_lease(lease, outcome);
+  if (error != NULL) {
+    svn_error_clear(error);
+    return APR_EGENERAL;
+  }
+  return APR_SUCCESS;
+}
+
+static svn_error_t *bridge_acquire_simple_credential(
+  bridge_remote_credential_baton *owner,
+  bridge_simple_iter_baton *iter,
+  const char *realm,
+  const char *suggested_username,
+  unsigned int attempt,
+  const char *previous_lease_id,
+  void **credentials,
+  apr_pool_t *pool
+) {
+  (void)pool;
+  if (
+    owner == NULL || iter == NULL || credentials == NULL ||
+    !bridge_utf8_bounded_text_valid(
+      realm,
+      BRIDGE_CREDENTIAL_REALM_BYTE_LIMIT,
+      0,
+      0
+    ) ||
+    (
+      suggested_username != NULL &&
+      !bridge_utf8_bounded_text_valid(
+        suggested_username,
+        BRIDGE_CREDENTIAL_USERNAME_BYTE_LIMIT,
+        0,
+        1
+      )
+    ) ||
+    attempt > 1 ||
+    (attempt == 0 && previous_lease_id != NULL) ||
+    (attempt == 1 && !bridge_lease_id_valid(previous_lease_id))
+  ) {
+    return bridge_auth_callback_error();
+  }
+  *credentials = NULL;
+
+  subversionr_bridge_remote_credential_request_v2 request = {
+    realm,
+    suggested_username,
+    owner->working_copy_root,
+    attempt,
+    previous_lease_id
+  };
+  subversionr_bridge_remote_credential_response_v2 response = { 0 };
+  int status = owner->callbacks.credential_callback(
+    owner->callbacks.baton,
+    &request,
+    &response
+  );
+  if (
+    status != BRIDGE_AUTH_CALLBACK_OK ||
+    !bridge_utf8_bounded_text_valid(
+      response.username,
+      BRIDGE_CREDENTIAL_USERNAME_BYTE_LIMIT,
+      0,
+      1
+    ) ||
+    response.secret == NULL || response.secret[0] == '\0' ||
+    strlen(response.secret) > BRIDGE_CREDENTIAL_SECRET_BYTE_LIMIT ||
+    !bridge_lease_id_valid(response.lease_id) ||
+    (response.persistence_requested != 0 && response.persistence_requested != 1)
+  ) {
+    owner->callback_failed = 1;
+    bridge_dispose_remote_credential_response(&owner->callbacks, &response);
+    return bridge_auth_callback_error();
+  }
+
+  for (int index = 0; index < owner->credential_leases->nelts; ++index) {
+    bridge_credential_lease *existing =
+      APR_ARRAY_IDX(owner->credential_leases, index, bridge_credential_lease *);
+    if (existing != NULL && strcmp(existing->lease_id, response.lease_id) == 0) {
+      owner->callback_failed = 1;
+      bridge_dispose_remote_credential_response(&owner->callbacks, &response);
+      return bridge_auth_callback_error();
+    }
+  }
+
+  svn_auth_cred_simple_t *created = apr_pcalloc(owner->pool, sizeof(*created));
+  created->username = apr_pstrdup(owner->pool, response.username);
+  created->password = bridge_copy_secret(owner->pool, response.secret);
+  created->may_save = TRUE;
+
+  bridge_credential_lease *lease = apr_pcalloc(owner->pool, sizeof(*lease));
+  lease->owner = owner;
+  lease->lease_id = apr_pstrdup(owner->pool, response.lease_id);
+  lease->realm = apr_pstrdup(owner->pool, realm);
+  lease->credential = created;
+  lease->attempt = attempt;
+  APR_ARRAY_PUSH(owner->credential_leases, bridge_credential_lease *) = lease;
+  apr_pool_cleanup_register(
+    owner->pool,
+    lease,
+    bridge_credential_lease_cleanup,
+    apr_pool_cleanup_null
+  );
+  iter->current = lease;
+  *credentials = created;
+  owner->default_username = apr_pstrdup(owner->pool, response.username);
+  bridge_probe_record(
+    owner,
+    attempt == 0
+      ? SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_FIRST_ACQUIRE
+      : SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_NEXT_ACQUIRE
+  );
+  bridge_dispose_remote_credential_response(&owner->callbacks, &response);
+  return SVN_NO_ERROR;
+}
+
+static svn_error_t *bridge_simple_first_credentials(
+  void **credentials,
+  void **iter_baton,
+  void *provider_baton,
+  apr_hash_t *parameters,
+  const char *realm,
+  apr_pool_t *pool
+) {
+  if (credentials == NULL || iter_baton == NULL || provider_baton == NULL) {
+    return bridge_auth_callback_error();
+  }
+  *credentials = NULL;
+  *iter_baton = NULL;
+  bridge_remote_credential_baton *owner = (bridge_remote_credential_baton *)provider_baton;
+  bridge_simple_iter_baton *iter = apr_pcalloc(owner->pool, sizeof(*iter));
+  iter->owner = owner;
+  iter->next_attempt = 1;
+  const char *suggested_username = parameters != NULL
+    ? apr_hash_get(parameters, SVN_AUTH_PARAM_DEFAULT_USERNAME, APR_HASH_KEY_STRING)
+    : NULL;
+  svn_error_t *error = bridge_acquire_simple_credential(
+    owner,
+    iter,
+    realm,
+    suggested_username,
+    0,
+    NULL,
+    credentials,
+    pool
+  );
+  if (error == NULL) {
+    *iter_baton = iter;
+  }
+  return error;
+}
+
+static svn_error_t *bridge_simple_next_credentials(
+  void **credentials,
+  void *iter_baton,
+  void *provider_baton,
+  apr_hash_t *parameters,
+  const char *realm,
+  apr_pool_t *pool
+) {
+  (void)parameters;
+  if (credentials == NULL || iter_baton == NULL || provider_baton == NULL) {
+    return bridge_auth_callback_error();
+  }
+  *credentials = NULL;
+  bridge_simple_iter_baton *iter = (bridge_simple_iter_baton *)iter_baton;
+  bridge_remote_credential_baton *owner = (bridge_remote_credential_baton *)provider_baton;
+  if (
+    iter->owner != owner || iter->current == NULL ||
+    iter->next_attempt < 1 || iter->next_attempt > 2 ||
+    realm == NULL || strcmp(iter->current->realm, realm) != 0
+  ) {
+    return bridge_auth_callback_error();
+  }
+  const char *previous_lease_id = iter->current->lease_id;
+  svn_error_t *error = bridge_settle_credential_lease(
+    iter->current,
+    SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_REJECTED
+  );
+  if (error != NULL) {
+    return error;
+  }
+  if (iter->next_attempt == 2) {
+    iter->next_attempt = 3;
+    return SVN_NO_ERROR;
+  }
+  iter->next_attempt = 2;
+  return bridge_acquire_simple_credential(
+    owner,
+    iter,
+    realm,
+    owner->default_username,
+    1,
+    previous_lease_id,
+    credentials,
+    pool
+  );
+}
+
+static svn_error_t *bridge_simple_save_credentials(
+  svn_boolean_t *saved,
+  void *credentials,
+  void *provider_baton,
+  apr_hash_t *parameters,
+  const char *realm,
+  apr_pool_t *pool
+) {
+  (void)parameters;
+  (void)pool;
+  if (saved == NULL || credentials == NULL || provider_baton == NULL) {
+    return bridge_auth_callback_error();
+  }
+  *saved = FALSE;
+  bridge_remote_credential_baton *owner = (bridge_remote_credential_baton *)provider_baton;
+  bridge_credential_lease *matched = NULL;
+  for (int index = 0; index < owner->credential_leases->nelts; ++index) {
+    bridge_credential_lease *candidate =
+      APR_ARRAY_IDX(owner->credential_leases, index, bridge_credential_lease *);
+    if (candidate != NULL && candidate->credential == credentials) {
+      matched = candidate;
+      break;
+    }
+  }
+  if (
+    matched == NULL || realm == NULL ||
+    strcmp(matched->realm, realm) != 0
+  ) {
+    return bridge_auth_callback_error();
+  }
+  svn_error_t *error = bridge_settle_credential_lease(
+    matched,
+    SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_ACCEPTED
+  );
+  if (error != NULL) {
+    return error;
+  }
+  *saved = TRUE;
+  return SVN_NO_ERROR;
+}
+
+static const svn_auth_provider_t bridge_simple_provider_vtable = {
+  SVN_AUTH_CRED_SIMPLE,
+  bridge_simple_first_credentials,
+  bridge_simple_next_credentials,
+  bridge_simple_save_credentials
+};
+
+static void bridge_get_simple_lease_provider(
+  svn_auth_provider_object_t **provider,
+  bridge_remote_credential_baton *owner,
+  apr_pool_t *pool
+) {
+  svn_auth_provider_object_t *created = apr_pcalloc(pool, sizeof(*created));
+  created->vtable = &bridge_simple_provider_vtable;
+  created->provider_baton = owner;
+  *provider = created;
+}
+
+static svn_error_t *bridge_finish_credential_leases(
+  bridge_remote_credential_baton *owner,
+  unsigned int terminal_outcome
+) {
+  if (owner == NULL || !bridge_credential_terminal_outcome_valid(terminal_outcome)) {
+    return bridge_auth_callback_error();
+  }
+  owner->terminal_outcome = terminal_outcome;
+  for (int index = 0; index < owner->credential_leases->nelts; ++index) {
+    bridge_credential_lease *lease =
+      APR_ARRAY_IDX(owner->credential_leases, index, bridge_credential_lease *);
+    if (lease != NULL && !lease->settled) {
+      svn_error_t *error = bridge_settle_credential_lease(lease, terminal_outcome);
+      if (error != NULL) {
+        return error;
+      }
+    }
+  }
   return SVN_NO_ERROR;
 }
 
@@ -1437,9 +1972,20 @@ static int bridge_remote_config_is_valid(
 
 int subversionr_bridge_remote_context_create(
   const subversionr_bridge_remote_config_v1 *config,
+  const subversionr_bridge_remote_credential_callbacks_v2 *credential_callbacks,
   subversionr_bridge_remote_context **context
 ) {
-  if (context == NULL || !bridge_remote_config_is_valid(config)) {
+  if (
+    context == NULL || !bridge_remote_config_is_valid(config) ||
+    (
+      config->server_auth == SUBVERSIONR_BRIDGE_REMOTE_AUTH_ANONYMOUS &&
+      credential_callbacks != NULL
+    ) ||
+    (
+      config->server_auth != SUBVERSIONR_BRIDGE_REMOTE_AUTH_ANONYMOUS &&
+      !bridge_remote_credential_callbacks_valid(credential_callbacks)
+    )
+  ) {
     return 1;
   }
   *context = NULL;
@@ -1529,11 +2075,22 @@ int subversionr_bridge_remote_context_create(
     return 4;
   }
 
-  apr_array_header_t *providers = apr_array_make(
-    pool,
-    0,
-    sizeof(svn_auth_provider_object_t *)
-  );
+  apr_array_header_t *providers = apr_array_make(pool, 1, sizeof(svn_auth_provider_object_t *));
+  bridge_remote_credential_baton *credential_baton = NULL;
+  if (config->server_auth != SUBVERSIONR_BRIDGE_REMOTE_AUTH_ANONYMOUS) {
+    credential_baton = apr_pcalloc(pool, sizeof(*credential_baton));
+    credential_baton->callbacks = *credential_callbacks;
+    credential_baton->pool = pool;
+    credential_baton->terminal_outcome = SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED;
+    credential_baton->credential_leases = apr_array_make(
+      pool,
+      2,
+      sizeof(bridge_credential_lease *)
+    );
+    svn_auth_provider_object_t *provider = NULL;
+    bridge_get_simple_lease_provider(&provider, credential_baton, pool);
+    APR_ARRAY_PUSH(providers, svn_auth_provider_object_t *) = provider;
+  }
   svn_auth_baton_t *auth_baton = NULL;
   svn_auth_open(&auth_baton, providers, pool);
   ctx->auth_baton = auth_baton;
@@ -1544,6 +2101,7 @@ int subversionr_bridge_remote_context_create(
   );
   created->pool = pool;
   created->ctx = ctx;
+  created->credential_baton = credential_baton;
   created->inspection.abi_version = SUBVERSIONR_BRIDGE_REMOTE_CONFIG_ABI_VERSION;
   created->inspection.category_mask =
     SUBVERSIONR_BRIDGE_REMOTE_CATEGORY_CONFIG |
@@ -1555,7 +2113,9 @@ int subversionr_bridge_remote_context_create(
     SUBVERSIONR_BRIDGE_REMOTE_OPTION_HTTP_AUTH_TYPES |
     SUBVERSIONR_BRIDGE_REMOTE_OPTION_HTTP_TIMEOUT |
     SUBVERSIONR_BRIDGE_REMOTE_OPTION_SSL_TRUST_DEFAULT_CA;
-  created->inspection.provider_mask = 0;
+  created->inspection.provider_mask = credential_baton == NULL
+    ? 0
+    : SUBVERSIONR_BRIDGE_REMOTE_PROVIDER_CUSTOM_SIMPLE;
   created->inspection.forbidden_input_mask = 0;
   *context = created;
   return 0;
@@ -1578,8 +2138,207 @@ void subversionr_bridge_remote_context_destroy(
   if (context == NULL) {
     return;
   }
+  if (context->credential_baton != NULL) {
+    svn_error_t *error = bridge_finish_credential_leases(
+      context->credential_baton,
+      SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED
+    );
+    if (error != NULL) {
+      svn_error_clear(error);
+    }
+  }
   apr_pool_t *pool = context->pool;
   apr_pool_destroy(pool);
+}
+
+int subversionr_bridge_remote_context_finish_credentials(
+  subversionr_bridge_remote_context *context,
+  unsigned int terminal_outcome
+) {
+  if (
+    context == NULL || context->credential_baton == NULL ||
+    !bridge_credential_terminal_outcome_valid(terminal_outcome)
+  ) {
+    return 1;
+  }
+  svn_error_t *error = bridge_finish_credential_leases(
+    context->credential_baton,
+    terminal_outcome
+  );
+  if (error != NULL) {
+    svn_error_clear(error);
+    return 10;
+  }
+  return 0;
+}
+
+static int bridge_credential_probe_request_valid(
+  const subversionr_bridge_private_credential_probe_request *request
+) {
+  if (
+    request == NULL ||
+    request->abi_version != SUBVERSIONR_BRIDGE_REMOTE_CREDENTIAL_ABI_VERSION ||
+    !bridge_utf8_bounded_text_valid(
+      request->realm,
+      BRIDGE_CREDENTIAL_REALM_BYTE_LIMIT,
+      0,
+      0
+    ) ||
+    !bridge_utf8_bounded_text_valid(
+      request->suggested_username,
+      BRIDGE_CREDENTIAL_USERNAME_BYTE_LIMIT,
+      0,
+      1
+    )
+  ) {
+    return 0;
+  }
+  switch (request->scenario) {
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_SAVE:
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_NEXT_SAVE:
+      return request->terminal_outcome == SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_NONE;
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_UNUSED:
+      return request->terminal_outcome == SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED;
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_CANCELLED:
+      return request->terminal_outcome == SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_CANCELLED;
+    case SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_TIMED_OUT:
+      return request->terminal_outcome == SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_TIMED_OUT;
+    default:
+      return 0;
+  }
+}
+
+static int bridge_credential_probe_trace_valid(
+  const subversionr_bridge_private_credential_probe_request *request,
+  const subversionr_bridge_private_credential_probe_inspection *inspection
+) {
+  if (request == NULL || inspection == NULL) {
+    return 0;
+  }
+  if (request->scenario == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_SAVE) {
+    return inspection->event_count == 2 &&
+      inspection->events[0] == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_FIRST_ACQUIRE &&
+      inspection->events[1] == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_ACCEPTED;
+  }
+  if (request->scenario == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_NEXT_SAVE) {
+    return inspection->event_count == 4 &&
+      inspection->events[0] == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_FIRST_ACQUIRE &&
+      inspection->events[1] == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_REJECTED &&
+      inspection->events[2] == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_NEXT_ACQUIRE &&
+      inspection->events[3] == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_ACCEPTED;
+  }
+  unsigned int expected_terminal_event = bridge_probe_event_for_settlement(
+    request->terminal_outcome
+  );
+  return inspection->event_count == 2 &&
+    inspection->events[0] == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_FIRST_ACQUIRE &&
+    inspection->events[1] == expected_terminal_event;
+}
+
+int subversionr_bridge_private_remote_credential_provider_probe(
+  const subversionr_bridge_remote_credential_callbacks_v2 *callbacks,
+  const subversionr_bridge_private_credential_probe_request *request,
+  subversionr_bridge_private_credential_probe_inspection *inspection
+) {
+  if (
+    !bridge_remote_credential_callbacks_valid(callbacks) ||
+    !bridge_credential_probe_request_valid(request) ||
+    inspection == NULL
+  ) {
+    return 1;
+  }
+  memset(inspection, 0, sizeof(*inspection));
+  inspection->abi_version = SUBVERSIONR_BRIDGE_REMOTE_CREDENTIAL_ABI_VERSION;
+  inspection->scenario = request->scenario;
+  inspection->terminal_outcome = request->terminal_outcome;
+
+  int process_status = bridge_initialize_process();
+  if (process_status != 0) {
+    return process_status;
+  }
+  apr_pool_t *pool = NULL;
+  if (apr_pool_create(&pool, NULL) != APR_SUCCESS) {
+    return 3;
+  }
+
+  bridge_remote_credential_baton *owner = apr_pcalloc(pool, sizeof(*owner));
+  owner->callbacks = *callbacks;
+  owner->pool = pool;
+  owner->terminal_outcome = SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED;
+  owner->credential_leases = apr_array_make(
+    pool,
+    2,
+    sizeof(bridge_credential_lease *)
+  );
+  owner->probe_inspection = inspection;
+
+  svn_auth_provider_object_t *provider = NULL;
+  bridge_get_simple_lease_provider(&provider, owner, pool);
+  apr_array_header_t *providers = apr_array_make(
+    pool,
+    1,
+    sizeof(svn_auth_provider_object_t *)
+  );
+  APR_ARRAY_PUSH(providers, svn_auth_provider_object_t *) = provider;
+  svn_auth_baton_t *auth_baton = NULL;
+  svn_auth_open(&auth_baton, providers, pool);
+  svn_auth_set_parameter(
+    auth_baton,
+    SVN_AUTH_PARAM_DEFAULT_USERNAME,
+    request->suggested_username
+  );
+
+  svn_auth_iterstate_t *state = NULL;
+  svn_auth_cred_simple_t *credential = NULL;
+  svn_error_t *error = svn_auth_first_credentials(
+    (void **)&credential,
+    &state,
+    SVN_AUTH_CRED_SIMPLE,
+    request->realm,
+    auth_baton,
+    pool
+  );
+  if (error == NULL && (credential == NULL || state == NULL)) {
+    error = bridge_auth_callback_error();
+  }
+  if (
+    error == NULL &&
+    request->scenario == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_NEXT_SAVE
+  ) {
+    error = svn_auth_next_credentials((void **)&credential, state, pool);
+    if (error == NULL && credential == NULL) {
+      error = bridge_auth_callback_error();
+    }
+  }
+  if (
+    error == NULL &&
+    (
+      request->scenario == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_SAVE ||
+      request->scenario == SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_NEXT_SAVE
+    )
+  ) {
+    error = svn_auth_save_credentials(state, pool);
+  }
+  if (
+    error == NULL &&
+    bridge_credential_terminal_outcome_valid(request->terminal_outcome)
+  ) {
+    error = bridge_finish_credential_leases(owner, request->terminal_outcome);
+  }
+  if (error == NULL && owner->callback_failed) {
+    error = bridge_auth_callback_error();
+  }
+  if (error == NULL && !bridge_credential_probe_trace_valid(request, inspection)) {
+    error = bridge_auth_callback_error();
+  }
+
+  int status = 0;
+  if (error != NULL) {
+    svn_error_clear(error);
+    status = 10;
+  }
+  apr_pool_destroy(pool);
+  return status;
 }
 
 int subversionr_bridge_runtime_create(subversionr_bridge_runtime **runtime) {

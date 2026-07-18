@@ -297,7 +297,7 @@ function fakeSession(): RepositorySession {
 
 function initializeResult(): InitializeResult {
   return {
-    protocol: { major: 1, minor: 32 },
+    protocol: { major: 1, minor: 33 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -351,6 +351,7 @@ function initializeResult(): InitializeResult {
       remoteOperationEnvelope: true,
       trustedConfigSnapshot: true,
       remoteWorkerIsolation: true,
+      credentialLeaseSettlement: true,
     },
     acknowledgedTrustEpoch: 1,
   };

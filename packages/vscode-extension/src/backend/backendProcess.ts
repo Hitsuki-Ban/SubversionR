@@ -11,7 +11,7 @@ import {
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const MINIMUM_PROTOCOL_MINOR = 32;
+const MINIMUM_PROTOCOL_MINOR = 33;
 const EXPECTED_CACHE_SCHEMA_ID = "subversionr.cache.v1";
 const EXPECTED_CACHE_SCHEMA_VERSION = 1;
 const EXPECTED_CACHE_SCHEMA_ROLLBACK = "delete-and-reconcile";
@@ -61,6 +61,7 @@ const REQUIRED_CAPABILITIES: Array<keyof InitializeResult["capabilities"]> = [
   "remoteOperationEnvelope",
   "trustedConfigSnapshot",
   "remoteWorkerIsolation",
+  "credentialLeaseSettlement",
 ];
 
 export type WorkspaceTrustState = "trusted" | "untrusted";
@@ -170,6 +171,7 @@ export interface InitializeResult {
     remoteOperationEnvelope: boolean;
     trustedConfigSnapshot: boolean;
     remoteWorkerIsolation: boolean;
+    credentialLeaseSettlement: boolean;
   };
   acknowledgedTrustEpoch: number;
 }
@@ -228,6 +230,7 @@ export async function startBackendProcess(
     requestHandler?: JsonRpcRequestHandler;
     notificationHandler?: JsonRpcNotificationHandler;
     onRequestError?: (method: string, error: JsonRpcStreamError) => void;
+    onRequestSettled?: (method: string, params: unknown) => void;
   } = {},
 ): Promise<BackendConnection> {
   validateLaunchConfig(config);
@@ -372,6 +375,7 @@ export async function startBackendProcess(
           collectStderr,
           initializeResult,
           config.workspaceTrust === "trusted",
+          deps.onRequestSettled,
         );
         activeConnection = connection;
         resolve(connection);
@@ -631,6 +635,10 @@ function parseInitializeResult(rawResult: unknown): InitializeResult {
         capabilities.remoteWorkerIsolation,
         "capabilities.remoteWorkerIsolation",
       ),
+      credentialLeaseSettlement: requireBoolean(
+        capabilities.credentialLeaseSettlement,
+        "capabilities.credentialLeaseSettlement",
+      ),
     },
   };
 }
@@ -762,6 +770,7 @@ class BackendConnectionImpl implements BackendConnection {
     private readonly collectStderr: (chunk: Buffer | string) => void,
     public readonly initializeResult: InitializeResult,
     initiallyTrusted: boolean,
+    private readonly onRequestSettled?: (method: string, params: unknown) => void,
   ) {
     this.currentTrustEpoch = initializeResult.acknowledgedTrustEpoch;
     this.remoteSubmissionEnabled = initiallyTrusted;
@@ -855,7 +864,17 @@ class BackendConnectionImpl implements BackendConnection {
   }
 
   public sendRequest<T>(method: string, params: unknown, options?: JsonRpcRequestOptions): Promise<T> {
-    return this.rpc.sendRequest<T>(method, params, options);
+    const request = this.rpc.sendRequest<T>(method, params, options);
+    if (!this.onRequestSettled) {
+      return request;
+    }
+    return request.finally(() => {
+      try {
+        this.onRequestSettled?.(method, params);
+      } catch {
+        // Operation-finalization cleanup must not replace the daemon result.
+      }
+    });
   }
 
   public dispose(): void {

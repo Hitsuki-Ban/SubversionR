@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 4.3)
 project(subversionr_svn_bridge LANGUAGES C)
 
+option(SUBVERSIONR_BRIDGE_BUILD_TESTS "Build the private native bridge contract tests." OFF)
+
 if(NOT DEFINED SVN_ROOT)
   message(FATAL_ERROR "SVN_ROOT is required and must point to the verified Apache Subversion install prefix.")
 endif()
@@ -31,4 +33,41 @@ target_link_libraries(
 target_compile_definitions(subversionr_svn_bridge PRIVATE SUBVERSIONR_SVN_BRIDGE_EXPORTS)
 if(MSVC)
   target_link_options(subversionr_svn_bridge PRIVATE "$<$<CONFIG:Release>:/Brepro>")
+endif()
+
+if(SUBVERSIONR_BRIDGE_BUILD_TESTS)
+  enable_testing()
+  add_executable(
+    subversionr_credential_provider_probe_test
+    tests/credential_provider_probe.c
+  )
+  target_include_directories(
+    subversionr_credential_provider_probe_test
+    PRIVATE
+      include
+  )
+  target_link_libraries(
+    subversionr_credential_provider_probe_test
+    PRIVATE
+      subversionr_svn_bridge
+  )
+  file(GLOB SUBVERSIONR_BRIDGE_TEST_RUNTIME_DLLS "${SVN_ROOT}/bin/*.dll")
+  add_custom_command(
+    TARGET subversionr_credential_provider_probe_test
+    POST_BUILD
+    COMMAND
+      "${CMAKE_COMMAND}" -E copy_if_different
+      ${SUBVERSIONR_BRIDGE_TEST_RUNTIME_DLLS}
+      "$<TARGET_FILE_DIR:subversionr_credential_provider_probe_test>"
+  )
+  add_test(
+    NAME subversionr_credential_provider_probe_test
+    COMMAND subversionr_credential_provider_probe_test
+  )
+  set_tests_properties(
+    subversionr_credential_provider_probe_test
+    PROPERTIES
+      ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:subversionr_svn_bridge>;PATH=path_list_prepend:${SVN_ROOT}/bin"
+  )
 endif()

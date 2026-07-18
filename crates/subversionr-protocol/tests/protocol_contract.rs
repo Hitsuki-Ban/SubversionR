@@ -1,16 +1,18 @@
 use subversionr_protocol::{
-    CertificateTrustError, CertificateTrustRequest, CertificateTrustResponse, ContentGetResponse,
-    Credential, CredentialError, CredentialRequest, CredentialResponse, DiagnosticsBackendStderr,
+    CanonicalEndpoint, CertificateTrustError, CertificateTrustRequest, CertificateTrustResponse,
+    ContentGetResponse, Credential, CredentialAttempt, CredentialAuthKind, CredentialError,
+    CredentialPersistenceIntent, CredentialRequest, CredentialResponse, CredentialSettlementAck,
+    CredentialSettlementOutcome, CredentialSettlementRequest, DiagnosticsBackendStderr,
     DiagnosticsGetResponse, DiagnosticsRepositorySummary, HistoryBlameLine, HistoryBlameResponse,
     HistoryLogChangedPath, HistoryLogEntry, HistoryLogResponse, InitializeResponse, LockInfo,
     OperationFailureCause, OperationFailureDiagnostics, OperationReconcileHint,
     OperationRunResponse, OperationSummary, OperationWarning, PropertiesListResponse,
-    PropertyEntry, ProtocolVersion, RemoteOperationEnvelope, RepositoryCheckoutParams,
-    RepositoryCheckoutRevision, RepositoryCloseResponse, RepositoryDiscoverResponse,
-    RepositoryDiscoveryCandidate, RepositoryIdentity, StatusCoverageScope, StatusDelta,
-    StatusEntry, StatusRefreshTarget, StatusSnapshot, StatusSummary, StatusSummaryDelta,
-    SvnErrorDiagnosticEntry, SvnErrorDiagnostics, current_platform, default_cache_schema,
-    default_capabilities,
+    PropertyEntry, ProtocolVersion, RemoteOperationEnvelope, RemoteOperationIntent, RemoteScheme,
+    RepositoryCheckoutParams, RepositoryCheckoutRevision, RepositoryCloseResponse,
+    RepositoryDiscoverResponse, RepositoryDiscoveryCandidate, RepositoryIdentity,
+    ServerAccountSelection, StatusCoverageScope, StatusDelta, StatusEntry, StatusRefreshTarget,
+    StatusSnapshot, StatusSummary, StatusSummaryDelta, SvnErrorDiagnosticEntry,
+    SvnErrorDiagnostics, current_platform, default_cache_schema, default_capabilities,
 };
 
 #[test]
@@ -99,7 +101,7 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
         response.protocol,
         ProtocolVersion {
             major: 1,
-            minor: 32
+            minor: 33
         }
     );
     assert_eq!(response.cache_schema, default_cache_schema());
@@ -163,7 +165,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     let json = serde_json::to_value(response).expect("initialize response must serialize");
 
     assert_eq!(json["protocol"]["major"], 1);
-    assert_eq!(json["protocol"]["minor"], 32);
+    assert_eq!(json["protocol"]["minor"], 33);
     assert_eq!(json["cacheSchema"]["schemaId"], "subversionr.cache.v1");
     assert_eq!(json["cacheSchema"]["version"], 1);
     assert_eq!(json["cacheSchema"]["rollback"], "delete-and-reconcile");
@@ -214,6 +216,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     assert_eq!(json["capabilities"]["remoteOperationEnvelope"], true);
     assert_eq!(json["capabilities"]["trustedConfigSnapshot"], true);
     assert_eq!(json["capabilities"]["remoteWorkerIsolation"], false);
+    assert_eq!(json["capabilities"]["credentialLeaseSettlement"], false);
     assert_eq!(json["acknowledgedTrustEpoch"], 1);
     assert!(json["capabilities"].get("authCallbacks").is_none());
 }
@@ -334,43 +337,61 @@ fn repository_discover_response_serializes_file_external_boundaries() {
 fn credential_request_serializes_auth_challenge_contract() {
     let request = CredentialRequest {
         request_id: "cred-1".to_string(),
-        realm: "svn://example".to_string(),
-        kind: "usernamePassword".to_string(),
-        username: Some("alice".to_string()),
+        operation_id: "op-1".to_string(),
+        endpoint: CanonicalEndpoint {
+            scheme: RemoteScheme::Https,
+            canonical_host: "svn.example.invalid".to_string(),
+            effective_port: 443,
+        },
+        auth_kind: CredentialAuthKind::Basic,
+        realm: "<https://svn.example.invalid> SubversionR".to_string(),
+        account: ServerAccountSelection::Fixed {
+            username: "alice".to_string(),
+        },
+        attempt: CredentialAttempt::Initial,
         interactive: true,
         persistence_allowed: true,
-        origin: "foreground".to_string(),
+        origin: RemoteOperationIntent::Foreground,
         timeout_ms: 30000,
-        repository_id: Some("repo-uuid:C:/wc".to_string()),
-        working_copy_root: Some("C:/wc".to_string()),
     };
 
     let json = serde_json::to_value(request).expect("credential request must serialize");
 
     assert_eq!(json["requestId"], "cred-1");
-    assert_eq!(json["realm"], "svn://example");
-    assert_eq!(json["kind"], "usernamePassword");
-    assert_eq!(json["username"], "alice");
+    assert_eq!(json["operationId"], "op-1");
+    assert_eq!(json["endpoint"]["scheme"], "https");
+    assert_eq!(json["endpoint"]["canonicalHost"], "svn.example.invalid");
+    assert_eq!(json["endpoint"]["effectivePort"], 443);
+    assert_eq!(json["authKind"], "basic");
+    assert_eq!(json["realm"], "<https://svn.example.invalid> SubversionR");
+    assert_eq!(json["account"]["mode"], "fixed");
+    assert_eq!(json["account"]["username"], "alice");
+    assert_eq!(json["attempt"]["kind"], "initial");
     assert_eq!(json["interactive"], true);
     assert_eq!(json["persistenceAllowed"], true);
     assert_eq!(json["origin"], "foreground");
     assert_eq!(json["timeoutMs"], 30000);
-    assert_eq!(json["repositoryId"], "repo-uuid:C:/wc");
-    assert_eq!(json["workingCopyRoot"], "C:/wc");
+
+    let mut unknown = json.clone();
+    unknown["legacyUsername"] = serde_json::json!("alice");
+    assert!(serde_json::from_value::<CredentialRequest>(unknown).is_err());
 }
 
 #[test]
 fn credential_response_serializes_provide_and_cancel_variants() {
     let provide = CredentialResponse::Provide {
         request_id: "cred-1".to_string(),
+        operation_id: "op-1".to_string(),
+        lease_id: "lease-1".to_string(),
         credential: Credential {
-            username: Some("alice".to_string()),
+            username: "alice".to_string(),
             secret: "secret".to_string(),
         },
-        persistence: "secretStorage".to_string(),
+        persistence_intent: CredentialPersistenceIntent::SecretStorage,
     };
     let cancel = CredentialResponse::Cancel {
         request_id: "cred-2".to_string(),
+        operation_id: "op-2".to_string(),
         error: CredentialError {
             code: "SUBVERSIONR_CREDENTIAL_NON_INTERACTIVE".to_string(),
             category: "auth".to_string(),
@@ -389,7 +410,9 @@ fn credential_response_serializes_provide_and_cancel_variants() {
     assert_eq!(provide_json["action"], "provide");
     assert_eq!(provide_json["credential"]["username"], "alice");
     assert_eq!(provide_json["credential"]["secret"], "secret");
-    assert_eq!(provide_json["persistence"], "secretStorage");
+    assert_eq!(provide_json["operationId"], "op-1");
+    assert_eq!(provide_json["leaseId"], "lease-1");
+    assert_eq!(provide_json["persistenceIntent"], "secretStorage");
     assert_eq!(cancel_json["requestId"], "cred-2");
     assert_eq!(cancel_json["action"], "cancel");
     assert_eq!(
@@ -403,6 +426,34 @@ fn credential_response_serializes_provide_and_cancel_variants() {
     );
     assert_eq!(cancel_json["error"]["args"]["realmHash"], "abc123");
     assert_eq!(cancel_json["error"]["retryable"], false);
+}
+
+#[test]
+fn credential_settlement_serializes_exact_ack_contract() {
+    let request = CredentialSettlementRequest {
+        request_id: "settle-1".to_string(),
+        operation_id: "op-1".to_string(),
+        lease_id: "lease-1".to_string(),
+        outcome: CredentialSettlementOutcome::Rejected,
+        timeout_ms: 4_000,
+    };
+    let ack = CredentialSettlementAck {
+        request_id: "settle-1".to_string(),
+        operation_id: "op-1".to_string(),
+        lease_id: "lease-1".to_string(),
+        outcome: CredentialSettlementOutcome::Rejected,
+    };
+
+    let request_json = serde_json::to_value(request).expect("settlement request must serialize");
+    let ack_json = serde_json::to_value(ack).expect("settlement ack must serialize");
+    assert_eq!(request_json["timeoutMs"], 4_000);
+    assert_eq!(request_json["outcome"], "rejected");
+    assert_eq!(ack_json.as_object().expect("ack object").len(), 4);
+    assert_eq!(ack_json["leaseId"], "lease-1");
+
+    let mut unknown = request_json;
+    unknown["accepted"] = serde_json::json!(false);
+    assert!(serde_json::from_value::<CredentialSettlementRequest>(unknown).is_err());
 }
 
 #[test]

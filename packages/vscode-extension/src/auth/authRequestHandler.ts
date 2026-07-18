@@ -30,7 +30,7 @@ export function createAuthRequestHandler(options: AuthRequestHandlerOptions): (m
   const certificateTrustRequestHandler = createCertificateTrustRequestHandler(options.certificateTrustController);
 
   return async (method, params) => {
-    if (method === "credentials/request") {
+    if (method === "credentials/request" || method === "credentials/settle") {
       return await credentialRequestHandler(method, params);
     }
     if (method === "certificate/request") {

@@ -1,10 +1,11 @@
 import { createRequire } from "node:module";
+import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 
 const PROBE_SCHEMA = "subversionr.release.packaged-native-compatibility.v2";
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const EXPECTED_PROTOCOL_MINOR = 32;
+const EXPECTED_PROTOCOL_MINOR = 33;
 const EXPECTED_REMOTE_RESULT_CODE = "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED";
 
 class ProbeError extends Error {
@@ -68,7 +69,10 @@ try {
       "error.release.packagedNativeProtocolInvalid",
     );
   }
-  if (initializeResult.capabilities?.remoteWorkerIsolation !== true) {
+  if (
+    initializeResult.capabilities?.remoteWorkerIsolation !== true ||
+    initializeResult.capabilities?.credentialLeaseSettlement !== true
+  ) {
     throw new ProbeError(
       "SUBVERSIONR_PACKAGED_NATIVE_REMOTE_WORKER_CAPABILITY_MISSING",
       "error.release.packagedNativeRemoteWorkerCapabilityMissing",
@@ -100,6 +104,7 @@ try {
     connection,
     remoteCheckoutRequest(options.workspaceRoot, "12700000-0000-4000-8000-000000000003"),
   );
+  const credentialProviderProbe = await runCredentialProviderProbe(options);
   const workerTempRoot = path.join(options.profileRoot, "SubversionR", "remote-workers");
   const residualWorkerTempEntries = await readDirectoryIfPresent(workerTempRoot);
   if (residualWorkerTempEntries.length !== 0) {
@@ -121,6 +126,7 @@ try {
     diagnostics.protocol.minor !== EXPECTED_PROTOCOL_MINOR ||
     !isRecord(diagnostics.capabilities) ||
     diagnostics.capabilities.remoteWorkerIsolation !== true ||
+    diagnostics.capabilities.credentialLeaseSettlement !== true ||
     diagnostics.source !== "subversionr-daemon"
   ) {
     throw new ProbeError(
@@ -141,6 +147,7 @@ try {
       libsvnVersion: initializeResult.libsvnVersion,
       capabilities: {
         remoteWorkerIsolation: true,
+        credentialLeaseSettlement: true,
       },
       localDiscovery: {
         status: "passed",
@@ -165,6 +172,7 @@ try {
           protocol: diagnostics.protocol,
         },
       },
+      credentialProviderProbe,
     })}\n`,
   );
 } catch (error) {
@@ -177,6 +185,105 @@ try {
     })}\n`,
   );
   process.exitCode = 1;
+}
+
+async function runCredentialProviderProbe(options) {
+  const expectedOutcomes = {
+    firstSave: ["request:initial", "settle:accepted"],
+    firstNextSave: ["request:initial", "settle:rejected", "request:retryAfterRejected", "settle:accepted"],
+    unused: ["request:initial", "settle:unused"],
+    cancelled: ["request:initial", "settle:cancelled"],
+    timedOut: ["request:initial", "settle:timedOut"],
+  };
+  const result = await runBoundedPrivateProbe(options);
+  if (
+    result.status !== "passed" ||
+    result.schema !== "subversionr.private.credential-provider-probe.v1" ||
+    result.networkAccess !== false ||
+    !Array.isArray(result.scenarios) ||
+    result.scenarios.length !== Object.keys(expectedOutcomes).length
+  ) {
+    throw new ProbeError(
+      "SUBVERSIONR_PACKAGED_NATIVE_CREDENTIAL_PROVIDER_PROBE_INVALID",
+      "error.release.packagedNativeCredentialProviderProbeInvalid",
+    );
+  }
+  const expectedEntries = Object.entries(expectedOutcomes);
+  for (let index = 0; index < expectedEntries.length; index += 1) {
+    const entry = result.scenarios[index];
+    const [expectedScenario, expectedEvents] = expectedEntries[index];
+    if (
+      !isRecord(entry) ||
+      entry.scenario !== expectedScenario ||
+      JSON.stringify(entry.events) !== JSON.stringify(expectedEvents)
+    ) {
+      throw new ProbeError(
+        "SUBVERSIONR_PACKAGED_NATIVE_CREDENTIAL_PROVIDER_PROBE_INVALID",
+        "error.release.packagedNativeCredentialProviderProbeInvalid",
+      );
+    }
+  }
+  return result;
+}
+
+async function runBoundedPrivateProbe(options) {
+  const output = await new Promise((resolve, reject) => {
+    const child = spawn(options.daemon, ["--subversionr-private-credential-provider-probe-v1"], {
+      env: {
+        ...process.env,
+        SUBVERSIONR_BRIDGE_DLL: options.bridge,
+        APPDATA: options.profileRoot,
+        LOCALAPPDATA: options.profileRoot,
+        USERPROFILE: options.profileRoot,
+        HOME: options.profileRoot,
+        TEMP: options.profileRoot,
+        TMP: options.profileRoot,
+      },
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("private credential provider probe timed out"));
+    }, 30_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.length > 64 * 1024) child.kill();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      if (stderr.length > 4 * 1024) child.kill();
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0 || stderr.length !== 0 || stdout.length === 0 || stdout.length > 64 * 1024) {
+        reject(new Error("private credential provider probe failed"));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+  const lines = output.trimEnd().split(/\r?\n/u);
+  if (lines.length !== 1) {
+    throw new ProbeError(
+      "SUBVERSIONR_PACKAGED_NATIVE_CREDENTIAL_PROVIDER_PROBE_INVALID",
+      "error.release.packagedNativeCredentialProviderProbeInvalid",
+    );
+  }
+  try {
+    const result = JSON.parse(lines[0]);
+    if (isRecord(result)) return result;
+  } catch {}
+  throw new ProbeError(
+    "SUBVERSIONR_PACKAGED_NATIVE_CREDENTIAL_PROVIDER_PROBE_INVALID",
+    "error.release.packagedNativeCredentialProviderProbeInvalid",
+  );
 }
 
 async function requireRemoteUnsupported(activeConnection, request) {

@@ -4546,6 +4546,29 @@ function repositoryFailureMessage(
       return localize(
         "SubversionR blocked this working copy because isolated worker cleanup could not be verified. Restart VS Code before retrying SVN operations.",
       );
+    case "SUBVERSIONR_CREDENTIAL_CANCELLED":
+      return localize("SVN {0} credential entry was cancelled.", operation);
+    case "SUBVERSIONR_CREDENTIAL_TIMEOUT":
+    case "SUBVERSIONR_CREDENTIAL_LEASE_EXPIRED":
+      return localize("SVN {0} authentication timed out. Retry the operation.", operation);
+    case "SUBVERSIONR_CREDENTIAL_STORAGE_INTEGRITY":
+      return localize(
+        "SubversionR blocked SVN {0} because saved credential storage failed an integrity check. Clear saved credentials before retrying.",
+        operation,
+      );
+    case "SUBVERSIONR_CREDENTIAL_LEGACY_BLOCKED":
+    case "SUBVERSIONR_CREDENTIAL_LEGACY_CLEAR_DECLINED":
+      return localize(
+        "SubversionR blocked SVN {0} because legacy saved credentials must be cleared first. Run Clear Saved Credentials and retry.",
+        operation,
+      );
+    case "SUBVERSIONR_CREDENTIAL_SECRET_INVALID":
+      return localize("Enter a non-empty SVN password no larger than 32768 UTF-8 bytes and retry {0}.", operation);
+    case "SUBVERSIONR_CREDENTIAL_RETRY_INVALID":
+    case "SUBVERSIONR_CREDENTIAL_LEASE_UNKNOWN":
+    case "SUBVERSIONR_CREDENTIAL_LEASE_FOREIGN":
+    case "SUBVERSIONR_CREDENTIAL_SETTLEMENT_CONFLICT":
+      return localize("SubversionR rejected an invalid SVN credential exchange for {0}. Retry the operation.", operation);
   }
   const cause = operationFailureCause(error);
   switch (cause) {
