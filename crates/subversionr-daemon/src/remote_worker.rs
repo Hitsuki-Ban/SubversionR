@@ -137,6 +137,17 @@ impl RemoteWorkerSettlement {
     pub fn may_have_mutated(&self) -> bool {
         self.effect == RemoteOperationEffect::Mutation
             && (self.worker_was_resumed || !self.execution_origin_known)
+            && !self.failure_proves_no_mutation()
+    }
+
+    fn failure_proves_no_mutation(&self) -> bool {
+        self.execution_origin_known
+            && self.result.as_ref().err().is_some_and(|failure| {
+                matches!(
+                    failure.code(),
+                    "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH" | "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+                )
+            })
     }
 }
 
@@ -814,6 +825,10 @@ struct PrivateCredentialProbeBroker {
 }
 
 impl AuthRequestBroker for PrivateCredentialProbeBroker {
+    fn native_credential_callback_policy(&self) -> crate::NativeCredentialCallbackPolicy {
+        crate::NativeCredentialCallbackPolicy::RemoteWorkerRequired
+    }
+
     fn request_credential(
         &mut self,
         request: CredentialRequest,
@@ -1046,6 +1061,10 @@ impl<R: Read, W: Write> WorkerControlAuthBroker<'_, R, W> {
 }
 
 impl<R: Read, W: Write> AuthRequestBroker for WorkerControlAuthBroker<'_, R, W> {
+    fn native_credential_callback_policy(&self) -> crate::NativeCredentialCallbackPolicy {
+        crate::NativeCredentialCallbackPolicy::RemoteWorkerRequired
+    }
+
     fn request_credential(
         &mut self,
         request: CredentialRequest,
@@ -1340,6 +1359,44 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn failed_mutation_settlement(
+        code: &str,
+        execution_origin_known: bool,
+    ) -> RemoteWorkerSettlement {
+        RemoteWorkerSettlement {
+            result: Err(BridgeFailure::new(
+                code,
+                "test",
+                "error.remote.test",
+                serde_json::json!({}),
+                false,
+            )),
+            remote_failure: None,
+            effect: RemoteOperationEffect::Mutation,
+            worker_was_resumed: true,
+            execution_origin_known,
+            termination: WorkerTerminationDisposition::NotRequired,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+            operation_output: None,
+        }
+    }
+
+    #[test]
+    fn only_origin_known_pre_operation_failures_prove_no_mutation() {
+        for code in [
+            "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+            "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
+        ] {
+            assert!(!failed_mutation_settlement(code, true).may_have_mutated());
+            assert!(failed_mutation_settlement(code, false).may_have_mutated());
+        }
+        assert!(
+            failed_mutation_settlement("SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", true)
+                .may_have_mutated()
+        );
+    }
 
     #[test]
     fn frame_rejects_zero_oversized_and_truncated_payloads() {

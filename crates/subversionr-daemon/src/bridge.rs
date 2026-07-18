@@ -928,7 +928,15 @@ pub trait BridgeApi {
     ) -> Result<CommitOperationResult, BridgeFailure>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeCredentialCallbackPolicy {
+    RemoteWorkerRequired,
+    AnonymousUnsupported,
+}
+
 pub trait AuthRequestBroker {
+    fn native_credential_callback_policy(&self) -> NativeCredentialCallbackPolicy;
+
     fn request_credential(
         &mut self,
         request: CredentialRequest,
@@ -949,6 +957,10 @@ pub trait AuthRequestBroker {
 pub struct UnavailableAuthRequestBroker;
 
 impl AuthRequestBroker for UnavailableAuthRequestBroker {
+    fn native_credential_callback_policy(&self) -> NativeCredentialCallbackPolicy {
+        NativeCredentialCallbackPolicy::RemoteWorkerRequired
+    }
+
     fn request_credential(
         &mut self,
         _request: CredentialRequest,

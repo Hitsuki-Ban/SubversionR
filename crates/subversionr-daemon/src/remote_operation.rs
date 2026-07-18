@@ -172,6 +172,10 @@ impl RemoteSvnAnonymousRequest {
 struct AnonymousOnlyAuthBroker;
 
 impl AuthRequestBroker for AnonymousOnlyAuthBroker {
+    fn native_credential_callback_policy(&self) -> crate::NativeCredentialCallbackPolicy {
+        crate::NativeCredentialCallbackPolicy::AnonymousUnsupported
+    }
+
     fn request_credential(
         &mut self,
         _request: CredentialRequest,

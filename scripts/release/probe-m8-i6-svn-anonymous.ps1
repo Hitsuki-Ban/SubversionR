@@ -7,6 +7,8 @@ param(
   [Parameter(Mandatory = $true)] [string]$SvnPath,
   [Parameter(Mandatory = $true)] [string]$SvnadminPath,
   [Parameter(Mandatory = $true)] [string]$SvnservePath,
+  [Parameter(Mandatory = $true)] [ValidateRange(1, 4294967295)] [long]$SvnservePid,
+  [Parameter(Mandatory = $true)] [string]$SvnserveStartTimeUtc,
   [Parameter(Mandatory = $true)] [string]$VsixPath,
   [Parameter(Mandatory = $true)] [string]$DaemonPath,
   [Parameter(Mandatory = $true)] [string]$BridgePath,
@@ -30,7 +32,11 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $packagedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-vscode-packaged-native.mjs"))
 $installedHarnessPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "test-vscode-installed-extension-host.ps1"))
 $installedI6ProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-vsix.ps1"))
+$installedStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-stress.ps1"))
+$faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
+$packagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-negative.mjs"))
 $installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host"))
+$ProcessStartEventSettlementMilliseconds = 2000
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
@@ -130,6 +136,7 @@ function Invoke-BoundedProcess(
   $process.StartInfo = $startInfo
   try {
     Assert-True $process.Start() "Failed to start the controlled probe process."
+    $processId = $process.Id
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
@@ -142,10 +149,317 @@ function Invoke-BoundedProcess(
     Assert-True ($stdout.Length -le 65536) "Controlled probe stdout exceeded 65536 bytes."
     Assert-True ($stderr.Length -le 32768) "Controlled probe stderr exceeded 32768 bytes."
     return [pscustomobject]@{
+      ProcessId = $processId
       ExitCode = $process.ExitCode
       Stdout = $stdout
       Stderr = $stderr
     }
+  }
+  finally {
+    $process.Dispose()
+  }
+}
+
+function Get-CimProcessSnapshot {
+  try {
+    return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+  }
+  catch {
+    throw "Process settlement observation through Win32_Process failed."
+  }
+}
+
+function Get-ProcessSnapshotStartFileTime([object]$Process) {
+  Assert-True ($null -ne $Process.CreationDate) "CIM did not expose a process creation time."
+  return ([DateTime]$Process.CreationDate).ToUniversalTime().ToFileTimeUtc()
+}
+
+function Get-DescendantProcessIds([object[]]$Snapshot, [long]$RootPid) {
+  $pending = [System.Collections.Generic.Queue[long]]::new()
+  $pending.Enqueue($RootPid)
+  $descendants = [System.Collections.Generic.List[long]]::new()
+  while ($pending.Count -gt 0) {
+    $parentPid = $pending.Dequeue()
+    foreach ($child in @($Snapshot | Where-Object { [long]$_.ParentProcessId -eq $parentPid })) {
+      $childPid = [long]$child.ProcessId
+      if (-not $descendants.Contains($childPid)) {
+        $descendants.Add($childPid)
+        $pending.Enqueue($childPid)
+      }
+    }
+  }
+  return @($descendants)
+}
+
+function Receive-ProcessStartEvents(
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys
+) {
+  foreach ($queuedEvent in @(Get-Event -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue)) {
+    try {
+      $newEvent = $queuedEvent.SourceEventArgs.NewEvent
+      Assert-True ($null -ne $newEvent) "The packaged-negative process-start subscription delivered an empty event."
+      $processId = [long]$newEvent.ProcessID
+      $parentProcessId = [long]$newEvent.ParentProcessID
+      $processName = [string]$newEvent.ProcessName
+      $eventFileTime = [long]$newEvent.TIME_CREATED
+      Assert-True ($processId -gt 0 -and $parentProcessId -ge 0) "A packaged-negative process-start event contained invalid process identity."
+      Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "A packaged-negative process-start event omitted its process name."
+      Assert-True ($eventFileTime -gt 0) "A packaged-negative process-start event omitted its event time."
+      $eventKey = "$processId`:$eventFileTime"
+      Assert-True ($EventKeys.Add($eventKey)) "The packaged-negative process-start subscription delivered a duplicate event identity."
+      $AllEvents.Add([pscustomobject]@{
+          processId = $processId
+          parentProcessId = $parentProcessId
+          processName = $processName
+          eventFileTime = $eventFileTime
+        })
+    }
+    finally {
+      Remove-Event -EventIdentifier $queuedEvent.EventIdentifier -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+function Complete-ProcessStartEventDrain(
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys,
+  [int]$SettlementMilliseconds
+) {
+  $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds($SettlementMilliseconds)
+  do {
+    Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys
+    Start-Sleep -Milliseconds 25
+  } while ([DateTimeOffset]::UtcNow -lt $deadline)
+  Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys
+}
+
+function Get-RecordedProcessDescendantStarts([object[]]$AllEvents, [long]$RootPid) {
+  $pending = [System.Collections.Generic.Queue[long]]::new()
+  $pending.Enqueue($RootPid)
+  $descendants = [System.Collections.Generic.List[object]]::new()
+  $descendantPids = [System.Collections.Generic.HashSet[long]]::new()
+  while ($pending.Count -gt 0) {
+    $parentPid = $pending.Dequeue()
+    foreach ($child in @($AllEvents | Where-Object { [long]$_.parentProcessId -eq $parentPid })) {
+      $childPid = [long]$child.processId
+      Assert-True ($childPid -ne $RootPid) "A packaged-negative worker PID was reused in its recorded ancestry."
+      if ($descendantPids.Add($childPid)) {
+        $descendants.Add($child)
+        $pending.Enqueue($childPid)
+      }
+    }
+  }
+  return @($descendants)
+}
+
+function Get-PackagedNegativeProcessObservation(
+  [object[]]$AllEvents,
+  [long]$ProbePid,
+  [string]$ExpectedProbeProcessName,
+  [string]$ExpectedDaemonProcessName,
+  [object[]]$SettlementSnapshot
+) {
+  $probeStarts = @($AllEvents | Where-Object {
+      [long]$_.processId -eq $ProbePid -and
+      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  Assert-True ($probeStarts.Count -eq 1) "The packaged-negative probe PID must have exactly one subscribed start identity."
+  Assert-True (
+    @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
+  ) "The packaged-negative probe PID was reused during its subscribed observation."
+
+  $daemonStarts = @($AllEvents | Where-Object {
+      [long]$_.parentProcessId -eq $ProbePid -and
+      ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  $probeChildSummary = @($AllEvents | Where-Object { [long]$_.parentProcessId -eq $ProbePid } |
+      Select-Object -First 8 | ForEach-Object { "$([string]$_.processName):$([long]$_.processId)" }) -join ","
+  Assert-True ($daemonStarts.Count -eq 1) "The exact packaged-negative probe must start exactly one candidate daemon; observed $($daemonStarts.Count) candidate starts and children $probeChildSummary."
+  $daemonStart = $daemonStarts[0]
+  Assert-True (
+    @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1
+  ) "The packaged-negative candidate daemon PID was reused."
+
+  $workerStarts = @($AllEvents | Where-Object {
+      [long]$_.parentProcessId -eq [long]$daemonStart.processId -and
+      ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  $daemonChildSummary = @($AllEvents | Where-Object { [long]$_.parentProcessId -eq [long]$daemonStart.processId } |
+      Select-Object -First 8 | ForEach-Object { "$([string]$_.processName):$([long]$_.processId)" }) -join ","
+  Assert-True ($workerStarts.Count -eq 1) "The packaged-negative candidate daemon must start exactly one worker; observed $($workerStarts.Count) candidate starts and children $daemonChildSummary."
+  $workerStart = $workerStarts[0]
+  Assert-True (
+    [long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime -and
+    [long]$daemonStart.eventFileTime -lt [long]$workerStart.eventFileTime
+  ) "The packaged-negative probe, daemon, and worker start identities are not strictly ordered."
+  Assert-True (
+    @($AllEvents | Where-Object { [long]$_.processId -eq [long]$workerStart.processId }).Count -eq 1
+  ) "The packaged-negative worker PID was reused."
+  $descendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$workerStart.processId))
+  foreach ($settledStart in @($probeStarts[0], $daemonStart, $workerStart)) {
+    $liveSettledIdentity = @(
+      $SettlementSnapshot | Where-Object {
+        [long]$_.ProcessId -eq [long]$settledStart.processId -and
+        (Get-ProcessSnapshotStartFileTime $_) -le [long]$settledStart.eventFileTime
+      }
+    )
+    Assert-True ($liveSettledIdentity.Count -eq 0) "A packaged-negative probe/daemon/worker identity remained alive at settlement."
+  }
+  $liveDescendantIds = [System.Collections.Generic.HashSet[long]]::new()
+  foreach ($descendantStart in $descendantStarts) {
+    $liveDescendantIdentity = @(
+      $SettlementSnapshot | Where-Object {
+        [long]$_.ProcessId -eq [long]$descendantStart.processId -and
+        (Get-ProcessSnapshotStartFileTime $_) -le [long]$descendantStart.eventFileTime
+      }
+    )
+    if ($liveDescendantIdentity.Count -gt 0) {
+      $null = $liveDescendantIds.Add([long]$descendantStart.processId)
+    }
+  }
+  $liveDescendants = @($liveDescendantIds)
+  Assert-True ($liveDescendants.Count -eq 0) "The exited packaged-negative worker retained live orphan descendants."
+  return [pscustomobject]@{
+    daemonProcessId = [long]$daemonStart.processId
+    workerProcessId = [long]$workerStart.processId
+    workerDescendantsAfter = $liveDescendants.Count
+  }
+}
+
+function Get-CandidateProcessIds([string]$ExecutablePath) {
+  try {
+    return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        -not [string]::IsNullOrEmpty([string]$_.ExecutablePath) -and
+        ([System.IO.Path]::GetFullPath([string]$_.ExecutablePath)).Equals(
+          $ExecutablePath,
+          [System.StringComparison]::OrdinalIgnoreCase
+        )
+      } |
+      ForEach-Object { [int]$_.ProcessId })
+  }
+  catch {
+    throw "Candidate process observation through Win32_Process failed."
+  }
+}
+
+function Assert-CandidateProcessAbsent([string]$ExecutablePath, [string]$Context, [int]$DeadlineMilliseconds = 0) {
+  $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds($DeadlineMilliseconds)
+  do {
+    $processIds = @(Get-CandidateProcessIds $ExecutablePath)
+    if ($processIds.Count -eq 0) {
+      return
+    }
+    if ([DateTimeOffset]::UtcNow -ge $deadline) {
+      throw "$Context left candidate daemon/worker processes: $($processIds -join ',')."
+    }
+    Start-Sleep -Milliseconds 50
+  } while ($true)
+}
+
+function Read-FaultFixtureState([string]$StatePath, [string]$Scenario, [System.Diagnostics.Process]$Process) {
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+  while ([DateTimeOffset]::UtcNow -lt $deadline) {
+    if ($Process.HasExited) {
+      throw "The $Scenario ra_svn fault fixture exited before readiness."
+    }
+    if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+      try {
+        $state = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json -Depth 16
+        if ([string]$state.status -ceq "ready") {
+          $expectedProperties = @(
+            "schema", "pid", "port", "suppliedAuthorityPort", "scenario", "connections",
+            "suppliedAuthorityConnections", "greetingSent", "clientResponseReceived",
+            "authRequestSent", "reposInfoSent", "commandsReceived", "followupContacts", "status"
+          ) | Sort-Object
+          $actualProperties = @($state.PSObject.Properties.Name | Sort-Object)
+          Assert-True (($actualProperties -join ",") -ceq ($expectedProperties -join ",")) "The $Scenario ra_svn fault fixture state shape was invalid."
+          Assert-True ([string]$state.schema -ceq "subversionr.release.m8-i6-ra-svn-fault-fixture.v1") "The $Scenario ra_svn fault fixture schema was invalid."
+          Assert-True ([int]$state.pid -eq $Process.Id -and [string]$state.scenario -ceq $Scenario) "The $Scenario ra_svn fault fixture identity was invalid."
+          Assert-True ([int]$state.port -ge 1 -and [int]$state.port -le 65535) "The $Scenario ra_svn fault fixture port was invalid."
+          return $state
+        }
+      }
+      catch {
+        if ([DateTimeOffset]::UtcNow -ge $deadline) {
+          throw
+        }
+      }
+    }
+    Start-Sleep -Milliseconds 25
+  }
+  throw "The $Scenario ra_svn fault fixture did not become ready before its deadline."
+}
+
+function Start-FaultFixture(
+  [string]$NodeHost,
+  [string]$FixtureScript,
+  [string]$Scenario,
+  [string]$StatePath
+) {
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $NodeHost
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardInput = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.Environment["ELECTRON_RUN_AS_NODE"] = "1"
+  foreach ($argument in @(
+      $FixtureScript,
+      "--scenario", $Scenario,
+      "--listen-host", "127.0.0.1",
+      "--port", "0",
+      "--state-path", $StatePath
+    )) {
+    $startInfo.ArgumentList.Add($argument)
+  }
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  Assert-True $process.Start() "Failed to start the $Scenario ra_svn fault fixture."
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+  $stderrTask = $process.StandardError.ReadToEndAsync()
+  try {
+    $state = Read-FaultFixtureState $StatePath $Scenario $process
+    return [pscustomobject]@{
+      Process = $process
+      State = $state
+      StatePath = $StatePath
+      StdoutTask = $stdoutTask
+      StderrTask = $stderrTask
+    }
+  }
+  catch {
+    if (-not $process.HasExited) {
+      $process.Kill($true)
+      $process.WaitForExit()
+    }
+    $process.Dispose()
+    throw
+  }
+}
+
+function Stop-FaultFixture([object]$Fixture, [string]$Scenario) {
+  $process = [System.Diagnostics.Process]$Fixture.Process
+  try {
+    if (-not $process.HasExited) {
+      $process.StandardInput.Write("stop`n")
+      $process.StandardInput.Flush()
+      $process.StandardInput.Close()
+      if (-not $process.WaitForExit(10000)) {
+        $process.Kill($true)
+        $process.WaitForExit()
+        throw "The $Scenario ra_svn fault fixture exceeded its shutdown deadline."
+      }
+    }
+    $stdout = $Fixture.StdoutTask.GetAwaiter().GetResult()
+    $stderr = $Fixture.StderrTask.GetAwaiter().GetResult()
+    Assert-True ($process.ExitCode -eq 0 -and $stdout.Length -eq 0 -and $stderr.Length -eq 0) "The $Scenario ra_svn fault fixture did not stop cleanly."
+    $finalState = Get-Content -Raw -LiteralPath $Fixture.StatePath | ConvertFrom-Json -Depth 16
+    Assert-True ([string]$finalState.status -ceq "stopped") "The $Scenario ra_svn fault fixture final state was invalid."
   }
   finally {
     $process.Dispose()
@@ -207,6 +521,9 @@ $sourceLockResolved = Resolve-RequiredFile $NativeSourceLockPath "NativeSourceLo
 $packagedProbeResolved = Resolve-RequiredFile $packagedProbePath "packaged native probe"
 $installedHarnessResolved = Resolve-RequiredFile $installedHarnessPath "installed Extension Host harness"
 $installedI6ProbeResolved = Resolve-RequiredFile $installedI6ProbePath "installed I6 Extension Host probe"
+$installedStressProbeResolved = Resolve-RequiredFile $installedStressProbePath "installed I6 100+1 stress probe"
+$faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
+$packagedNegativeProbeResolved = Resolve-RequiredFile $packagedNegativeProbePath "packaged-native I6 negative probe"
 
 try {
   $repositoryUri = [System.Uri]::new($RepositoryUrl, [System.UriKind]::Absolute)
@@ -287,6 +604,8 @@ foreach ($path in @(
 [System.IO.Compression.ZipFile]::ExtractToDirectory($vsixResolved, $extractedVsixRoot)
 $backendModulePath = Resolve-RequiredFile (Join-Path $extractedVsixRoot "extension\dist\backend\backendProcess.js") "packaged VSIX backend module"
 $nodeHost = Resolve-CodeNodeHost $codeCliResolved
+Assert-True ($null -ne (Get-Command Get-CimInstance -CommandType Cmdlet -ErrorAction Stop)) "Get-CimInstance is required."
+Assert-True ($null -ne (Get-Command Register-CimIndicationEvent -CommandType Cmdlet -ErrorAction Stop)) "Register-CimIndicationEvent is required."
 
 $packagedI6ProbeResolved = Resolve-RequiredFile (Join-Path $PSScriptRoot "probe-m8-i6-packaged-native.mjs") "packaged-native I6 positive probe"
 $seedWorkingCopy = Resolve-RequiredDirectory (Join-Path $fixtureRootResolved "seed-wc") "I6 seed working copy"
@@ -298,6 +617,204 @@ $seedCommitResult = Invoke-BoundedProcess $svnResolved @(
   "--non-interactive", "--no-auth-cache", "--config-dir", $oracleConfigRoot
 ) 30
 Assert-True ($seedCommitResult.ExitCode -eq 0) "The controlled fixture could not advance to r3 for the packaged update observation."
+
+$packagedNegativeContracts = @(
+  [pscustomobject]@{
+    Scenario = "malicious-root"
+    Code = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
+    Reason = "crossAuthorityRejected"
+    SettlementCode = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
+    SettlementReason = "crossAuthorityRejected"
+    TimeoutMs = 30000
+    GreetingSent = 1
+    ClientResponseReceived = 1
+    AuthRequestSent = 1
+    ReposInfoSent = 1
+  },
+  [pscustomobject]@{
+    Scenario = "sasl-only"
+    Code = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+    Reason = "remoteCapabilityUnsupported"
+    SettlementCode = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+    SettlementReason = "remoteCapabilityUnsupported"
+    TimeoutMs = 30000
+    GreetingSent = 1
+    ClientResponseReceived = 1
+    AuthRequestSent = 1
+    ReposInfoSent = 0
+  },
+  [pscustomobject]@{
+    Scenario = "greeting-stall"
+    Code = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
+    Reason = "operationDeadlineExceeded"
+    SettlementCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    SettlementReason = "remoteRecoveryBlocked"
+    TimeoutMs = 2000
+    GreetingSent = 1
+    ClientResponseReceived = 1
+    AuthRequestSent = 0
+    ReposInfoSent = 0
+  },
+  [pscustomobject]@{
+    Scenario = "connected-stall"
+    Code = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
+    Reason = "operationDeadlineExceeded"
+    SettlementCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    SettlementReason = "remoteRecoveryBlocked"
+    TimeoutMs = 2000
+    GreetingSent = 0
+    ClientResponseReceived = 0
+    AuthRequestSent = 0
+    ReposInfoSent = 0
+  }
+)
+$packagedNegativeObservations = @()
+foreach ($contract in $packagedNegativeContracts) {
+  $scenarioRoot = Join-Path $probeRoot "packaged-negative-$($contract.Scenario)"
+  $scenarioProfileRoot = Join-Path $scenarioRoot "profile"
+  $scenarioWorkspaceRoot = Join-Path $scenarioRoot "workspace"
+  $scenarioStatePath = Join-Path $scenarioRoot "fixture-state.json"
+  New-Item -ItemType Directory -Force -Path $scenarioProfileRoot, $scenarioWorkspaceRoot | Out-Null
+  Assert-CandidateProcessAbsent $daemonResolved "The $($contract.Scenario) packaged-negative preflight"
+  $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved $contract.Scenario $scenarioStatePath
+  $processStartSourceIdentifier = "subversionr-m8-i6-packaged-negative-$([Guid]::NewGuid().ToString('N'))"
+  $processStartSubscriber = $null
+  $processStartEvents = [System.Collections.Generic.List[object]]::new()
+  $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  try {
+    try {
+      Register-CimIndicationEvent `
+        -ClassName Win32_ProcessStartTrace `
+        -SourceIdentifier $processStartSourceIdentifier `
+        -ErrorAction Stop | Out-Null
+    }
+    catch {
+      throw "Win32_ProcessStartTrace is required for the $($contract.Scenario) packaged-negative process observation: $($_.Exception.Message)"
+    }
+    $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
+    Assert-True ($matchingSubscribers.Count -eq 1) "The $($contract.Scenario) packaged-negative process-start subscription was not created exactly once."
+    $processStartSubscriber = $matchingSubscribers[0]
+    Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+    $negativeRepositoryUrl = "svn://127.0.0.1:$([int]$faultFixture.State.port)/repo/trunk"
+    $negativeResult = Invoke-BoundedProcess $nodeHost @(
+      $packagedNegativeProbeResolved,
+      "--backend-module", $backendModulePath,
+      "--daemon", $daemonResolved,
+      "--bridge", $bridgeResolved,
+      "--profile-root", $scenarioProfileRoot,
+      "--checkout-target", (Join-Path $scenarioWorkspaceRoot "checkout"),
+      "--repository-url", $negativeRepositoryUrl,
+      "--scenario", $contract.Scenario,
+      "--timeout-ms", ([string]$contract.TimeoutMs)
+    ) 45 @{ ELECTRON_RUN_AS_NODE = "1" }
+    $negativeReport = Convert-JsonObject $negativeResult.Stdout.Trim() "packaged-native $($contract.Scenario) negative probe stdout"
+    $negativeFailure = if ($null -ne $negativeReport.PSObject.Properties["error"]) { [string]$negativeReport.error.code }
+    else { "unknown" }
+    Assert-True ($negativeResult.ExitCode -eq 0 -and $negativeResult.Stderr.Length -eq 0) "The packaged-native $($contract.Scenario) negative probe failed: $negativeFailure."
+    Assert-True (
+      [string]$negativeReport.schema -ceq "subversionr.release.m8-i6-packaged-native-negative.v1" -and
+      [string]$negativeReport.status -ceq "passed" -and
+      [string]$negativeReport.scenario -ceq [string]$contract.Scenario -and
+      [string]$negativeReport.code -ceq [string]$contract.Code -and
+      [string]$negativeReport.reason -ceq [string]$contract.Reason -and
+      [string]$negativeReport.settlementCode -ceq [string]$contract.SettlementCode -and
+      [string]$negativeReport.settlementReason -ceq [string]$contract.SettlementReason -and
+      [int]$negativeReport.protocol.major -eq 1 -and
+      [int]$negativeReport.protocol.minor -eq 35 -and
+      $negativeReport.remoteSvnAnonymous -eq $true -and
+      [int]$negativeReport.temporaryRootsAfter -eq 0 -and
+      [int]$negativeReport.credentialRequests -eq 0 -and
+      [int]$negativeReport.credentialSettlements -eq 0 -and
+      [int]$negativeReport.fixtureCliInvocations -eq 0 -and
+      $negativeReport.diagnosticsRedacted -eq $true
+    ) "The packaged-native $($contract.Scenario) negative observation was incomplete."
+    $faultState = Get-Content -Raw -LiteralPath $scenarioStatePath | ConvertFrom-Json -Depth 16
+    Assert-True (
+      [int]$faultState.connections -eq 1 -and
+      [int]$faultState.greetingSent -eq [int]$contract.GreetingSent -and
+      [int]$faultState.clientResponseReceived -eq [int]$contract.ClientResponseReceived -and
+      [int]$faultState.authRequestSent -eq [int]$contract.AuthRequestSent -and
+      [int]$faultState.reposInfoSent -eq [int]$contract.ReposInfoSent -and
+      [int]$faultState.commandsReceived -eq 0 -and
+      [int]$faultState.followupContacts -eq 0 -and
+      [int]$faultState.suppliedAuthorityConnections -eq 0
+    ) "The packaged-native $($contract.Scenario) network-stage observation was invalid."
+    Assert-CandidateProcessAbsent $daemonResolved "The $($contract.Scenario) packaged-negative probe" 5000
+    Complete-ProcessStartEventDrain `
+      $processStartSourceIdentifier `
+      $processStartEvents `
+      $processStartEventKeys `
+      $ProcessStartEventSettlementMilliseconds
+    $settlementSnapshot = Get-CimProcessSnapshot
+    $processObservation = Get-PackagedNegativeProcessObservation `
+      @($processStartEvents) `
+      ([long]$negativeResult.ProcessId) `
+      ([System.IO.Path]::GetFileName($nodeHost)) `
+      ([System.IO.Path]::GetFileName($daemonResolved)) `
+      $settlementSnapshot
+    $networkConnections = [int]$faultState.connections
+    $networkAttempts = $networkConnections
+    Assert-True ($networkAttempts -gt 0) "The packaged-native $($contract.Scenario) fixture measured no network attempt."
+    $packagedNegativeObservations += [pscustomobject]@{
+      scenario = [string]$contract.Scenario
+      code = [string]$negativeReport.code
+      reason = [string]$negativeReport.reason
+      settlementCode = [string]$negativeReport.settlementCode
+      settlementReason = [string]$negativeReport.settlementReason
+      networkAttempts = $networkAttempts
+      networkConnections = $networkConnections
+      followupNetworkContacts = [int]$faultState.followupContacts
+      workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+      temporaryRootsAfter = [int]$negativeReport.temporaryRootsAfter
+      diagnosticsRedacted = [bool]$negativeReport.diagnosticsRedacted
+    }
+  }
+  finally {
+    if ($null -ne $processStartSubscriber) {
+      Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+    }
+    Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue |
+      Remove-Event -ErrorAction SilentlyContinue
+    Stop-FaultFixture $faultFixture $contract.Scenario
+  }
+}
+Assert-True ($packagedNegativeObservations.Count -eq 4) "The packaged-native controlled negative probe set was incomplete."
+
+$installedStressRoot = Join-Path $probeRoot "installed-stress"
+$installedStressResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+  "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy", "Bypass",
+  "-File", $installedStressProbeResolved,
+  "-VsixPath", $vsixResolved,
+  "-CodeCliPath", $codeCliResolved,
+  "-FixtureRoot", $installedStressRoot,
+  "-RepositoryUrl", $RepositoryUrl,
+  "-CheckoutPath", (Join-Path $installedStressRoot "checkout"),
+  "-CheckoutRevision", "2",
+  "-ExpectedProductVersion", $ExpectedProductVersion,
+  "-DaemonPath", $daemonResolved,
+  "-BridgePath", $bridgeResolved,
+  "-SvnservePath", $svnserveResolved,
+  "-SvnservePid", ([string]$SvnservePid),
+  "-SvnserveStartTimeUtc", $SvnserveStartTimeUtc,
+  "-TimeoutSeconds", "7200"
+) 7260
+$installedStressFailure = $installedStressResult.Stderr.Trim()
+Assert-True ($installedStressResult.ExitCode -eq 0 -and $installedStressResult.Stderr.Length -eq 0) "The installed VSIX 100+1 stress probe failed: $installedStressFailure"
+$installedStressReport = Convert-JsonObject $installedStressResult.Stdout.Trim() "installed VSIX 100+1 stress probe stdout"
+Assert-True (
+  [string]$installedStressReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-stress.v1" -and
+  [string]$installedStressReport.surface -ceq "installed-vsix-extension-host" -and
+  [string]$installedStressReport.status -ceq "passed" -and
+  [int]$installedStressReport.cycles -eq 100 -and
+  @($installedStressReport.observations).Count -eq 100 -and
+  [int]$installedStressReport.subsequentRequest.cycle -eq 101 -and
+  $installedStressReport.operationIdHashesUnique -eq $true -and
+  $installedStressReport.singleExtensionHostSession -eq $true -and
+  $installedStressReport.subsequentRequestPassed -eq $true -and
+  $installedStressReport.candidateDaemonExitedAfter -eq $true
+) "The installed VSIX 100+1 stress observation was incomplete."
 
 $positiveTargetPath = Join-Path $packagedWorkspaceRoot "packaged-i6-wc"
 $positiveResult = Invoke-BoundedProcess $nodeHost @(
@@ -420,4 +937,4 @@ finally {
 }
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices plus the existing packaged/installed recovery-cleanup probes. The sixteen cross-surface negative/recovery cells and installed 100-cycle residue stress contract are not yet automated; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."

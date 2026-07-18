@@ -88,6 +88,9 @@ $contractRelativePath = "docs/release/m8-i6-svn-anonymous-evidence.v1.schema.jso
 $contractPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $contractRelativePath))
 $expectedProbeDriverPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-svn-anonymous.ps1"))
 $expectedPackagedNativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-native.mjs"))
+$expectedPackagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"))
+$expectedRaSvnFaultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"))
+$expectedInstalledStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"))
 $expectedInstalledVsixProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"))
 $expectedPackagedCompatibilityProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"))
 $expectedInstalledExtensionHostProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\test-vscode-installed-extension-host.ps1"))
@@ -202,8 +205,10 @@ function Assert-Surface([object]$Surface, [string]$ExpectedKind, [string]$Expect
 function Assert-NegativeSurfaceObservation(
   [object]$Observation,
   [string]$ExpectedSurface,
-  [string]$ExpectedCode,
-  [string]$ExpectedReason,
+  [string]$ExpectedOriginCode,
+  [string]$ExpectedOriginReason,
+  [string]$ExpectedSettlementCode,
+  [string]$ExpectedSettlementReason,
   [string]$ExpectedNetworkProgress,
   [int]$ExpectedNetworkAttempts,
   [int]$ExpectedNetworkConnections,
@@ -211,8 +216,10 @@ function Assert-NegativeSurfaceObservation(
 ) {
   Assert-ExactProperties $Observation @(
     "surface",
-    "stableCode",
-    "reason",
+    "originCode",
+    "originReason",
+    "settlementCode",
+    "settlementReason",
     "networkProgress",
     "networkAttempts",
     "networkConnections",
@@ -225,8 +232,12 @@ function Assert-NegativeSurfaceObservation(
     "diagnosticsRedacted"
   ) $Context
   Assert-Equal $ExpectedSurface ([string]$Observation.surface) "$Context surface must match."
-  Assert-Equal $ExpectedCode ([string]$Observation.stableCode) "$Context stable code must match the controlled result."
-  Assert-Equal $ExpectedReason ([string]$Observation.reason) "$Context stable reason must match the controlled result."
+  Assert-Equal $ExpectedOriginCode ([string]$Observation.originCode) "$Context origin code must match the controlled cell origin."
+  Assert-Equal $ExpectedOriginReason ([string]$Observation.originReason) "$Context origin reason must match the controlled cell origin."
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$Observation.settlementCode)) "$Context settlement code must be non-empty."
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$Observation.settlementReason)) "$Context settlement reason must be non-empty."
+  Assert-Equal $ExpectedSettlementCode ([string]$Observation.settlementCode) "$Context settlement code must match the controlled product settlement."
+  Assert-Equal $ExpectedSettlementReason ([string]$Observation.settlementReason) "$Context settlement reason must match the controlled product settlement."
   Assert-Equal $ExpectedNetworkProgress ([string]$Observation.networkProgress) "$Context network progress must match the controlled fixture stage."
   Assert-Equal $ExpectedNetworkAttempts ([int]$Observation.networkAttempts) "$Context network attempt count must match the controlled fixture."
   Assert-Equal $ExpectedNetworkConnections ([int]$Observation.networkConnections) "$Context successful connection count must match the controlled fixture."
@@ -246,8 +257,10 @@ function Assert-NegativeSurfaceObservation(
 function Assert-NegativeCell(
   [object]$Cell,
   [string]$ExpectedCell,
-  [string]$ExpectedCode,
-  [string]$ExpectedReason,
+  [string]$ExpectedOriginCode,
+  [string]$ExpectedOriginReason,
+  [string]$ExpectedSettlementCode,
+  [string]$ExpectedSettlementReason,
   [string]$ExpectedNetworkProgress,
   [int]$ExpectedNetworkAttempts,
   [int]$ExpectedNetworkConnections,
@@ -263,17 +276,17 @@ function Assert-NegativeCell(
   ) $Context
   Assert-Equal $ExpectedCell ([string]$Cell.cell) "$Context cell must match its matrix slot."
   Assert-Equal "passed" ([string]$Cell.status) "$Context must pass."
-  Assert-Equal $ExpectedCode ([string]$Cell.stableCode) "$Context stable code must match the controlled failure."
-  Assert-Equal $ExpectedReason ([string]$Cell.reason) "$Context stable failure reason must match."
+  Assert-Equal $ExpectedOriginCode ([string]$Cell.stableCode) "$Context stable code must define the controlled origin."
+  Assert-Equal $ExpectedOriginReason ([string]$Cell.reason) "$Context reason must define the controlled origin."
   $observations = @($Cell.surfaceObservations)
   if ($InstalledOnly) {
     Assert-Equal 1 $observations.Count "$Context must contain the installed product observation exactly once."
-    Assert-NegativeSurfaceObservation $observations[0] "installed-vsix-extension-host" $ExpectedCode $ExpectedReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[0]"
+    Assert-NegativeSurfaceObservation $observations[0] "installed-vsix-extension-host" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[0]"
   }
   else {
     Assert-Equal 2 $observations.Count "$Context must contain packaged and installed product observations exactly once."
-    Assert-NegativeSurfaceObservation $observations[0] "packaged-native" $ExpectedCode $ExpectedReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[0]"
-    Assert-NegativeSurfaceObservation $observations[1] "installed-vsix-extension-host" $ExpectedCode $ExpectedReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[1]"
+    Assert-NegativeSurfaceObservation $observations[0] "packaged-native" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[0]"
+    Assert-NegativeSurfaceObservation $observations[1] "installed-vsix-extension-host" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[1]"
   }
 }
 
@@ -348,6 +361,9 @@ $bridgeResolved = Resolve-RequiredFile $BridgePath "BridgePath"
 $stageManifestResolved = Resolve-RequiredFile $StageManifestPath "StageManifestPath"
 $probeDriverSourcePath = Assert-ExactSourcePath $ProbeDriverPath $expectedProbeDriverPath "ProbeDriverPath"
 $packagedNativeProbeResolved = Resolve-RequiredFile $expectedPackagedNativeProbePath "packaged-native I6 probe"
+$packagedNegativeProbeResolved = Resolve-RequiredFile $expectedPackagedNegativeProbePath "packaged-native I6 negative probe"
+$raSvnFaultFixtureResolved = Resolve-RequiredFile $expectedRaSvnFaultFixturePath "I6 ra_svn fault fixture"
+$installedStressProbeResolved = Resolve-RequiredFile $expectedInstalledStressProbePath "installed VSIX I6 stress probe"
 $installedVsixProbeResolved = Resolve-RequiredFile $expectedInstalledVsixProbePath "installed VSIX I6 probe"
 $packagedCompatibilityProbeResolved = Resolve-RequiredFile $expectedPackagedCompatibilityProbePath "packaged-native compatibility probe"
 $installedExtensionHostProbeResolved = Resolve-RequiredFile $expectedInstalledExtensionHostProbePath "installed Extension Host probe"
@@ -411,6 +427,9 @@ Assert-ExactProperties $report.artifactBindings @(
   "stageManifest",
   "probeDriver",
   "packagedNativeProbe",
+  "packagedNegativeProbe",
+  "raSvnFaultFixture",
+  "installedStressProbe",
   "installedVsixProbe",
   "packagedCompatibilityProbe",
   "installedExtensionHostProbe",
@@ -434,6 +453,9 @@ Assert-ArtifactBinding $report.artifactBindings.svnserve "fixture-svnserve" $svn
 $probeDriverResolved = Resolve-RequiredFile $probeDriverSourcePath "ProbeDriverPath"
 Assert-ArtifactBinding $report.artifactBindings.probeDriver "i6-probe-driver" $probeDriverResolved "I6 evidence.artifactBindings.probeDriver"
 Assert-ArtifactBinding $report.artifactBindings.packagedNativeProbe "i6-packaged-native-probe" $packagedNativeProbeResolved "I6 evidence.artifactBindings.packagedNativeProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedNegativeProbe "i6-packaged-negative-probe" $packagedNegativeProbeResolved "I6 evidence.artifactBindings.packagedNegativeProbe"
+Assert-ArtifactBinding $report.artifactBindings.raSvnFaultFixture "i6-ra-svn-fault-fixture" $raSvnFaultFixtureResolved "I6 evidence.artifactBindings.raSvnFaultFixture"
+Assert-ArtifactBinding $report.artifactBindings.installedStressProbe "i6-installed-stress-probe" $installedStressProbeResolved "I6 evidence.artifactBindings.installedStressProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedVsixProbe "i6-installed-vsix-probe" $installedVsixProbeResolved "I6 evidence.artifactBindings.installedVsixProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedCompatibilityProbe "packaged-native-compatibility-probe" $packagedCompatibilityProbeResolved "I6 evidence.artifactBindings.packagedCompatibilityProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedExtensionHostProbe "installed-extension-host-probe" $installedExtensionHostProbeResolved "I6 evidence.artifactBindings.installedExtensionHostProbe"
@@ -469,26 +491,26 @@ Assert-Surface $surfaces[1] "installed-vsix-extension-host" ([string]$report.art
 $negativeCells = @($report.negativeCells)
 Assert-Equal $ExpectedNegativeCells.Count $negativeCells.Count "I6 evidence must contain every negative cell exactly once."
 $negativeContracts = @(
-  @("maliciousRoot", "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH", "crossAuthorityRejected", "authenticated", 1, 1, $false),
-  @("saslOnly", "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED", "remoteCapabilityUnsupported", "greeting", 1, 1, $false),
-  @("authzDenied", "SVN_REMOTE_STATUS_AUTH_FAILED", "authorizationDenied", "command", 1, 1, $false),
-  @("blackholeConnect", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "none", 1, 0, $false),
-  @("stalledMidRead", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "greeting", 1, 1, $false),
-  @("deadline", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "greeting", 1, 1, $false),
-  @("cancellation", "SUBVERSIONR_REMOTE_WORKER_CANCELLED", "operationCancelled", "greeting", 1, 1, $false),
-  @("workerCrash", "SUBVERSIONR_REMOTE_WORKER_CRASHED", "workerContainmentFailed", "greeting", 1, 1, $false),
-  @("daemonDisconnect", "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED", "workerContainmentFailed", "greeting", 1, 1, $false),
-  @("trustRevoked", "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH", "remoteConfigurationInvalid", "none", 0, 0, $false),
-  @("recoverySafe", "none", "none", "command", 1, 1, $false),
-  @("recoveryIndeterminate", "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE", "remoteOperationIndeterminate", "command", 1, 1, $false),
-  @("recoveryBlocked", "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED", "remoteRecoveryBlocked", "command", 1, 1, $false),
-  @("unrelatedRepository", "none", "none", "command", 1, 1, $false),
-  @("localEventZeroNetwork", "none", "none", "none", 0, 0, $true),
-  @("redaction", "none", "none", "command", 1, 1, $false)
+  @("maliciousRoot", "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH", "crossAuthorityRejected", "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH", "crossAuthorityRejected", "authenticated", 1, 1, $false),
+  @("saslOnly", "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED", "remoteCapabilityUnsupported", "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED", "remoteCapabilityUnsupported", "greeting", 1, 1, $false),
+  @("authzDenied", "SVN_REMOTE_STATUS_AUTH_FAILED", "authorizationDenied", "SVN_REMOTE_STATUS_AUTH_FAILED", "authorizationDenied", "command", 1, 1, $false),
+  @("blackholeConnect", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "none", 1, 0, $false),
+  @("stalledMidRead", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "greeting", 1, 1, $false),
+  @("deadline", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "greeting", 1, 1, $false),
+  @("cancellation", "SUBVERSIONR_REMOTE_WORKER_CANCELLED", "operationCancelled", "SUBVERSIONR_REMOTE_WORKER_CANCELLED", "operationCancelled", "greeting", 1, 1, $false),
+  @("workerCrash", "SUBVERSIONR_REMOTE_WORKER_CRASHED", "workerContainmentFailed", "SUBVERSIONR_REMOTE_WORKER_CRASHED", "workerContainmentFailed", "greeting", 1, 1, $false),
+  @("daemonDisconnect", "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED", "workerContainmentFailed", "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED", "workerContainmentFailed", "greeting", 1, 1, $false),
+  @("trustRevoked", "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH", "remoteConfigurationInvalid", "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH", "remoteConfigurationInvalid", "none", 0, 0, $false),
+  @("recoverySafe", "none", "none", "none", "none", "command", 1, 1, $false),
+  @("recoveryIndeterminate", "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE", "remoteOperationIndeterminate", "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE", "remoteOperationIndeterminate", "command", 1, 1, $false),
+  @("recoveryBlocked", "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", "operationDeadlineExceeded", "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED", "remoteRecoveryBlocked", "command", 1, 1, $false),
+  @("unrelatedRepository", "none", "none", "none", "none", "command", 1, 1, $false),
+  @("localEventZeroNetwork", "none", "none", "none", "none", "none", 0, 0, $true),
+  @("redaction", "none", "none", "none", "none", "command", 1, 1, $false)
 )
 for ($index = 0; $index -lt $negativeContracts.Count; $index += 1) {
   $contract = $negativeContracts[$index]
-  Assert-NegativeCell $negativeCells[$index] $contract[0] $contract[1] $contract[2] $contract[3] $contract[4] $contract[5] $contract[6] "I6 evidence.negativeCells[$index]"
+  Assert-NegativeCell $negativeCells[$index] $contract[0] $contract[1] $contract[2] $contract[3] $contract[4] $contract[5] $contract[6] $contract[7] $contract[8] "I6 evidence.negativeCells[$index]"
 }
 
 Assert-ExactProperties $report.recoverySettlements @("surfaceObservations") "I6 evidence.recoverySettlements"

@@ -234,6 +234,13 @@ pub(crate) fn unsupported_transport(endpoint: &CanonicalEndpoint) -> BridgeFailu
 }
 
 pub(crate) fn classify_remote_failure(failure: &BridgeFailure) -> RemoteFailure {
+    if failure.code() == "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED" {
+        return RemoteFailure {
+            category: RemoteFailureCategory::Capability,
+            reason: RemoteFailureClass::RemoteCapabilityUnsupported,
+            cleanup_appropriate: false,
+        };
+    }
     if failure.diagnostics.as_ref().is_some_and(|diagnostics| {
         diagnostics.cause == OperationFailureCause::AuthorizationConfigurationInvalid
     }) {
@@ -747,6 +754,31 @@ mod tests {
         assert_eq!(
             classify_remote_failure(&auth).reason,
             RemoteFailureClass::AuthenticationRequired
+        );
+        let anonymous_unsupported = BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
+            "unsupported",
+            "error.remote.authUnsupported",
+            json!({ "scheme": "svn", "auth": "anonymous" }),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause: OperationFailureCause::AuthenticationFailed,
+            svn: SvnErrorDiagnostics {
+                entries: vec![SvnErrorDiagnosticEntry {
+                    code: 170001,
+                    name: "SVN_ERR_RA_NOT_AUTHORIZED".to_string(),
+                }],
+                truncated: false,
+            },
+        });
+        assert_eq!(
+            classify_remote_failure(&anonymous_unsupported),
+            RemoteFailure {
+                category: RemoteFailureCategory::Capability,
+                reason: RemoteFailureClass::RemoteCapabilityUnsupported,
+                cleanup_appropriate: false,
+            }
         );
         let authz = BridgeFailure::new(
             "SVN_AUTHZ_DENIED",

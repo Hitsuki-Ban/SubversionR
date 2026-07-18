@@ -42,7 +42,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
-$allowedFixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\m8-i6-svn-anonymous"))
+$allowedFixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\i6-evidence"))
 $verifyScript = Join-Path $PSScriptRoot "verify-m8-i6-svn-anonymous-evidence.ps1"
 $nativeModulePath = Join-Path $repoRoot "scripts\native\SubversionR.Native.psm1"
 $expectedProbeDriverPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-svn-anonymous.ps1"))
@@ -138,6 +138,7 @@ $raSvnOriginContractResolved = Resolve-RequiredFile $raSvnOriginContractSourcePa
 $nativeSourceLockResolved = Resolve-RequiredFile $nativeSourceLockSourcePath "NativeSourceLockPath"
 $fixtureRootResolved = Assert-GeneratedPath $FixtureRoot "FixtureRoot"
 $evidenceResolved = Assert-GeneratedPath $EvidencePath "EvidencePath"
+Assert-True ($fixtureRootResolved.Length -le 110) "FixtureRoot exceeds the reviewed 110-character Windows path budget."
 
 Import-Module $nativeModulePath -Force
 $stageRootResolved = Assert-SubversionStageForBridge `
@@ -246,6 +247,7 @@ try {
     (Join-Path $fixtureRootResolved "repositories")
   ) -PassThru -WindowStyle Hidden
   Wait-SvnserveReady $svn $repositoryUrl $oracleConfigRoot $server
+  $svnserveStartTimeUtc = $server.StartTime.ToUniversalTime().ToString("O", [Globalization.CultureInfo]::InvariantCulture)
 
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $probeDriverResolved `
     -RepositoryUrl $repositoryUrl `
@@ -255,6 +257,8 @@ try {
     -SvnPath $svn `
     -SvnadminPath $svnadmin `
     -SvnservePath $svnserve `
+    -SvnservePid $server.Id `
+    -SvnserveStartTimeUtc $svnserveStartTimeUtc `
     -VsixPath $vsixResolved `
     -DaemonPath $daemonResolved `
     -BridgePath $bridgeResolved `

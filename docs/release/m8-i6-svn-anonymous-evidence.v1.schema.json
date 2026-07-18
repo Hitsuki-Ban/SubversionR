@@ -60,6 +60,9 @@
         "stageManifest",
         "probeDriver",
         "packagedNativeProbe",
+        "packagedNegativeProbe",
+        "raSvnFaultFixture",
+        "installedStressProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
         "installedExtensionHostProbe",
@@ -87,6 +90,15 @@
           "$ref": "#/$defs/artifact"
         },
         "packagedNativeProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "packagedNegativeProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "raSvnFaultFixture": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedStressProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedVsixProbe": {
@@ -368,6 +380,35 @@
         }
       }
     },
+    "negativeResultCode": {
+      "enum": [
+        "none",
+        "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+        "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
+        "SVN_REMOTE_STATUS_AUTH_FAILED",
+        "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT",
+        "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+        "SUBVERSIONR_REMOTE_WORKER_CRASHED",
+        "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
+        "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH",
+        "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE",
+        "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+      ]
+    },
+    "negativeResultReason": {
+      "enum": [
+        "none",
+        "crossAuthorityRejected",
+        "remoteCapabilityUnsupported",
+        "authorizationDenied",
+        "operationDeadlineExceeded",
+        "operationCancelled",
+        "workerContainmentFailed",
+        "remoteConfigurationInvalid",
+        "remoteOperationIndeterminate",
+        "remoteRecoveryBlocked"
+      ]
+    },
     "operation": {
       "type": "object",
       "additionalProperties": false,
@@ -561,8 +602,10 @@
       "additionalProperties": false,
       "required": [
         "surface",
-        "stableCode",
-        "reason",
+        "originCode",
+        "originReason",
+        "settlementCode",
+        "settlementReason",
         "networkProgress",
         "networkAttempts",
         "networkConnections",
@@ -578,11 +621,17 @@
         "surface": {
           "enum": ["packaged-native", "installed-vsix-extension-host"]
         },
-        "stableCode": {
-          "type": "string"
+        "originCode": {
+          "$ref": "#/$defs/negativeResultCode"
         },
-        "reason": {
-          "type": "string"
+        "originReason": {
+          "$ref": "#/$defs/negativeResultReason"
+        },
+        "settlementCode": {
+          "$ref": "#/$defs/negativeResultCode"
+        },
+        "settlementReason": {
+          "$ref": "#/$defs/negativeResultReason"
         },
         "networkProgress": {
           "enum": ["none", "connected", "greeting", "authenticated", "command"]
@@ -770,7 +819,7 @@
     },
     "negativeRecoveryBlocked": {
       "$ref": "#/$defs/negativeCell",
-      "properties": { "cell": { "const": "recoveryBlocked" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" }, "reason": { "const": "remoteRecoveryBlocked" } }
+      "properties": { "cell": { "const": "recoveryBlocked" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" }, "reason": { "const": "operationDeadlineExceeded" } }
     },
     "negativeUnrelatedRepository": {
       "$ref": "#/$defs/negativeCell",

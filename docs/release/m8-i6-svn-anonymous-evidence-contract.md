@@ -34,6 +34,8 @@ The evidence binds the exact bytes of:
 - the reviewed Apache Subversion 1.14.5 ra_svn origin patch and its adjacent
   contract;
 - the source-controlled I6 probe driver;
+- the packaged-native negative probe, controlled ra_svn fault fixture, and
+  installed-VSIX 100+1 stress probe;
 - the exact source-built `svn.exe`, `svnadmin.exe`, and `svnserve.exe`; and
 - the positive fixture `svnserve.conf` and `authz` files.
 
@@ -63,8 +65,14 @@ blackhole-connect, stalled-mid-read, deadline, cancellation, worker-crash,
 daemon-disconnect, trust-revoke, recovery, unrelated-repository, local-event,
 redaction, and stress fixture controls.
 
+The generated fixture root must remain under `target/i6-evidence` and may be at
+most 110 characters after absolute-path resolution. This reviewed Windows path
+budget is enforced before fixture creation so nested VS Code profiles and
+Extension Host IPC paths cannot silently cross the legacy path limit.
+
 The report binds the exact bytes of the main driver and every source-controlled
-helper it executes: the I6 packaged-native probe, the I6 installed-VSIX probe,
+helper it executes: the I6 packaged-native positive/negative probes, the
+controlled ra_svn fault fixture, the I6 installed-VSIX probe,
 the packaged-native compatibility probe, and the installed Extension Host
 harness. The verifier resolves those helpers only from their reviewed repository
 paths and rejects any hash drift, so changing any executable probe invalidates
@@ -125,18 +133,25 @@ The report must contain all of the following controlled cells in exact order:
 - recovery Indeterminate settlement that records
   `SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE` / `remoteOperationIndeterminate`;
 - recovery Blocked settlement, including restart after an armed checkout target,
-  that records `SUBVERSIONR_REMOTE_RECOVERY_BLOCKED` /
-  `remoteRecoveryBlocked` and clears only through the exact explicit disposition
-  confirmation contract;
+  whose controlled origin is `SUBVERSIONR_REMOTE_WORKER_TIMED_OUT` /
+  `operationDeadlineExceeded`, whose product settlement is
+  `SUBVERSIONR_REMOTE_RECOVERY_BLOCKED` / `remoteRecoveryBlocked`, and which
+  clears only through the exact explicit disposition confirmation contract;
 - unrelated repository state unchanged;
 - local filesystem events causing zero remote network attempts; and
 - bounded redaction with no forbidden token disclosure.
 
 Every controlled failure and recovery cell carries separate, ordered
-`packaged-native` and `installed-vsix-extension-host` observations. Each
-observation records the exact stable result, the furthest controlled network
-progress, the measured network-attempt and successful-connection counts, zero
-product-side fixture CLI use, zero credential activity, zero
+`packaged-native` and `installed-vsix-extension-host` observations. The cell's
+top-level `stableCode` and `reason` define the controlled origin. Each surface
+observation separately records that exact origin as `originCode` /
+`originReason` and the product's exact post-cleanup result as `settlementCode` /
+`settlementReason`. All four fields are mandatory and use controlled pairs; the
+verifier never infers one pair from the other. Ordinary cells record equal
+origin and settlement pairs, while the Blocked recovery cell proves the real
+timeout-origin/recovery-blocked-settlement transition. Each observation also
+records the furthest controlled network progress, the measured network-attempt
+and successful-connection counts, zero product-side fixture CLI use, zero credential activity, zero
 forbidden follow-up contacts, zero worker descendants and operation temporary
 roots, and redacted diagnostics. These values must be measured on the real
 surface; a shared aggregate constant is not evidence. The
@@ -160,6 +175,11 @@ no-fault mode. Every ordered cycle records the native `checkoutOpen` operation,
 the real checkout revision, zero fixture CLI use, zero credential activity,
 worker descendants,
 temporary roots, fixture-server children, and durable checkout-journal entries.
+On Windows, a source-built `svnserve` started in a console may own one baseline
+`conhost.exe`; the probe binds that baseline by PID plus creation time before
+VS Code starts and reports only additional descendants as fixture-server
+children. Worker and descendant settlement likewise binds process identity by
+PID plus start time, so a later Windows PID reuse is not reported as residue.
 The verifier recomputes all maxima from those 100 observations, rejects missing,
 duplicate, or reordered cycles, and requires an independent successful cycle
 101 observation against the same target hash in the same Extension Host session.

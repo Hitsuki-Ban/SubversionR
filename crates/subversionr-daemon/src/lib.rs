@@ -17,13 +17,14 @@ pub use bridge::{
     BridgeRecoveryTask, ChangelistClearOperationRequest, ChangelistSetOperationRequest,
     CleanupOperationRequest, CommitOperationRequest, CommitOperationResult, ContentBlob,
     HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
-    LockOperationRequest, MergeOperationRequest, MoveOperationRequest, NeverCancelled,
-    OperationResult, PropertiesListResult, PropertyDeleteOperationRequest, PropertyEntry,
-    PropertySetOperationRequest, RelocateOperationRequest, RemoteConfigPlan, RemoteConfigScheme,
-    RemoteConfigServerAuth, RemoveOperationRequest, RepositoryCheckoutRequest,
-    RepositoryCheckoutResult, ResolveOperationRequest, RevertOperationRequest,
-    SwitchOperationRequest, SwitchOperationResult, UnavailableAuthRequestBroker, UnavailableBridge,
-    UnlockOperationRequest, UpdateOperationRequest, UpdateOperationResult, UpgradeOperationRequest,
+    LockOperationRequest, MergeOperationRequest, MoveOperationRequest,
+    NativeCredentialCallbackPolicy, NeverCancelled, OperationResult, PropertiesListResult,
+    PropertyDeleteOperationRequest, PropertyEntry, PropertySetOperationRequest,
+    RelocateOperationRequest, RemoteConfigPlan, RemoteConfigScheme, RemoteConfigServerAuth,
+    RemoveOperationRequest, RepositoryCheckoutRequest, RepositoryCheckoutResult,
+    ResolveOperationRequest, RevertOperationRequest, SwitchOperationRequest, SwitchOperationResult,
+    UnavailableAuthRequestBroker, UnavailableBridge, UnlockOperationRequest,
+    UpdateOperationRequest, UpdateOperationResult, UpgradeOperationRequest,
 };
 pub use native::{NativeBridge, NativeBridgeLoadError, RemoteNativeBridge};
 pub use remote_operation::{RemoteSvnAnonymousOutput, RemoteSvnAnonymousRequest};

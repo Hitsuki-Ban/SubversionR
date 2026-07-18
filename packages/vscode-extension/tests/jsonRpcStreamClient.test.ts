@@ -362,6 +362,61 @@ describe("JsonRpcStreamClient", () => {
     await expect(client.sendRequest("shutdown", {})).rejects.toThrow("JSON-RPC stream client is disposed");
   });
 
+  it("accepts the reviewed remote-origin diagnostic and rejects other custom diagnostic names", async () => {
+    const accepted = createClient();
+    const acceptedRequest = accepted.client.sendRequest("repository/checkout", {});
+    accepted.stdout.write(
+      framePayload({
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+          category: "configuration",
+          messageKey: "error.remote.originMismatch",
+          args: {},
+          retryable: false,
+          diagnostics: {
+            cause: "unknownNative",
+            svn: {
+              entries: [{ code: 170000, name: "SUBVERSIONR_ERR_REMOTE_ORIGIN_MISMATCH" }],
+              truncated: false,
+            },
+          },
+        },
+      }),
+    );
+    await expect(acceptedRequest).rejects.toMatchObject({
+      code: "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+      diagnostics: {
+        svn: { entries: [{ code: 170000, name: "SUBVERSIONR_ERR_REMOTE_ORIGIN_MISMATCH" }] },
+      },
+    });
+
+    const rejected = createClient();
+    const rejectedRequest = rejected.client.sendRequest("repository/checkout", {});
+    rejected.stdout.write(
+      framePayload({
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+          category: "configuration",
+          messageKey: "error.remote.originMismatch",
+          args: {},
+          retryable: false,
+          diagnostics: {
+            cause: "unknownNative",
+            svn: {
+              entries: [{ code: 170000, name: "SUBVERSIONR_ERR_UNREVIEWED" }],
+              truncated: false,
+            },
+          },
+        },
+      }),
+    );
+    await expect(rejectedRequest).rejects.toThrow("SVN diagnostic entry is invalid");
+  });
+
   it("settles an error response even when the request-error observer throws", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { client, stdout } = createClient({

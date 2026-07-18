@@ -5920,6 +5920,12 @@ impl RecordingAuthBroker {
 }
 
 impl AuthRequestBroker for RecordingAuthBroker {
+    fn native_credential_callback_policy(
+        &self,
+    ) -> subversionr_daemon::NativeCredentialCallbackPolicy {
+        subversionr_daemon::NativeCredentialCallbackPolicy::RemoteWorkerRequired
+    }
+
     fn request_credential(
         &mut self,
         request: CredentialRequest,

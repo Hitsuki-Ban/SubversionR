@@ -3350,11 +3350,17 @@ impl DaemonState {
                         cleanup_appropriate: false,
                     },
                 );
+                let origin_failure = settlement
+                    .result
+                    .as_ref()
+                    .err()
+                    .expect("failed mutating settlement must retain its origin failure");
+                let origin_args = json!({ "originFailureCode": origin_failure.code() });
                 return Some(attach_remote_failure(BridgeFailure::new(
                     "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
                     "state",
                     "error.remote.recoveryBlocked",
-                    json!({}),
+                    origin_args,
                     false,
                 )));
             }
@@ -6566,6 +6572,14 @@ mod i5_remote_lane_tests {
             override_failure.code(),
             "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
         );
+        assert_eq!(
+            override_failure.safe_args()["originFailureCode"],
+            "SUBVERSIONR_REMOTE_WORKER_CANCELLED"
+        );
+        assert_eq!(
+            override_failure.safe_args()["remoteFailure"]["reason"],
+            "remoteRecoveryBlocked"
+        );
         assert!(matches!(
             state.remote_native_lanes.get(lane),
             Some(RemoteNativeLaneState::Blocked {
@@ -6906,6 +6920,7 @@ mod i5_remote_lane_tests {
         let target_text = target.to_string_lossy().into_owned();
         let lane = absolute_path_key(&normalize_absolute_path_text(&target_text));
         let first = "f1234567-89ab-4def-8123-456789abcdef";
+        let pre_mutation = "e1234567-89ab-4def-8123-456789abcdef";
         let second = "01234567-89ab-4def-8123-456789abcdef";
         let mut state = DaemonState::new();
         state.remote_checkout_journal =
@@ -6935,6 +6950,56 @@ mod i5_remote_lane_tests {
         assert!(
             state
                 .settle_remote_launch(&lane, first, &prelaunch)
+                .is_none()
+        );
+        assert!(!state.remote_native_lanes.contains_key(&lane));
+        assert!(
+            state
+                .remote_checkout_journal
+                .as_ref()
+                .expect("journal")
+                .entries()
+                .is_empty()
+        );
+
+        state
+            .remote_checkout_journal
+            .as_mut()
+            .expect("journal")
+            .arm(&target, pre_mutation)
+            .expect("arm pre-mutation checkout");
+        assert!(
+            state
+                .reserve_remote_lane(
+                    &lane,
+                    pre_mutation,
+                    RemoteOperationEffect::Mutation,
+                    None,
+                    None,
+                )
+                .is_none()
+        );
+        let origin_mismatch = BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+            "policy",
+            "error.remote.originMismatch",
+            json!({}),
+            false,
+        );
+        let pre_mutation_settlement = RemoteWorkerSettlement {
+            result: Err(origin_mismatch.clone()),
+            operation_output: None,
+            remote_failure: Some(crate::remote::classify_remote_failure(&origin_mismatch)),
+            effect: RemoteOperationEffect::Mutation,
+            worker_was_resumed: true,
+            execution_origin_known: true,
+            termination: crate::WorkerTerminationDisposition::NotRequired,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+        };
+        assert!(
+            state
+                .settle_remote_launch(&lane, pre_mutation, &pre_mutation_settlement)
                 .is_none()
         );
         assert!(!state.remote_native_lanes.contains_key(&lane));

@@ -3922,13 +3922,23 @@ unsafe fn native_credential_callback_inner(
     let auth_baton = unsafe { &mut *(baton.cast::<NativeAuthBaton<'_>>()) };
     let _request = unsafe { &*request };
     unsafe { write_empty_credential_response(response) };
-    auth_baton.record_failure(BridgeFailure::new(
-        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED",
-        "auth",
-        "error.auth.credentialRemoteWorkerRequired",
-        json!({ "method": "credentials/request" }),
-        false,
-    ));
+    let failure = match auth_baton.auth.native_credential_callback_policy() {
+        crate::NativeCredentialCallbackPolicy::RemoteWorkerRequired => BridgeFailure::new(
+            "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED",
+            "auth",
+            "error.auth.credentialRemoteWorkerRequired",
+            json!({ "method": "credentials/request" }),
+            false,
+        ),
+        crate::NativeCredentialCallbackPolicy::AnonymousUnsupported => BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
+            "unsupported",
+            "error.remote.authUnsupported",
+            json!({ "scheme": "svn", "auth": "anonymous" }),
+            false,
+        ),
+    };
+    auth_baton.record_failure(failure);
     RAW_AUTH_CALLBACK_DENIED
 }
 
@@ -7578,6 +7588,10 @@ mod tests {
     }
 
     impl AuthRequestBroker for RecordingAuthBroker {
+        fn native_credential_callback_policy(&self) -> crate::NativeCredentialCallbackPolicy {
+            crate::NativeCredentialCallbackPolicy::RemoteWorkerRequired
+        }
+
         fn request_credential(
             &mut self,
             _request: CredentialRequest,

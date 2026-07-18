@@ -362,7 +362,8 @@ function requireRpcErrorDiagnostics(value: unknown): RpcErrorDiagnostics | null 
       (item.code as number) > 2_147_483_647 ||
       typeof item.name !== "string" ||
       item.name.length > 128 ||
-      !/^SVN_ERR_[A-Z0-9_]+$/u.test(item.name)
+      (!/^SVN_ERR_[A-Z0-9_]+$/u.test(item.name) &&
+        item.name !== "SUBVERSIONR_ERR_REMOTE_ORIGIN_MISMATCH")
     ) {
       throw new Error("JSON-RPC SVN diagnostic entry is invalid");
     }

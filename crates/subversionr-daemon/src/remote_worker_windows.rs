@@ -1321,7 +1321,7 @@ fn svn_anonymous_failure_contract(
             "unsupported",
             "error.remote.authUnsupported",
             AnonymousAuth,
-            false,
+            true,
         ),
         "SVN_BRIDGE_INVALID_ARGUMENT" => (
             "native",
@@ -1994,6 +1994,30 @@ mod tests {
 
     #[test]
     fn worker_failure_wire_is_allowlisted_and_redacted() {
+        let anonymous_auth = WireFailure {
+            code: "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED".to_string(),
+            category: "unsupported".to_string(),
+            message_key: "error.remote.authUnsupported".to_string(),
+            args: json!({ "scheme": "svn", "auth": "anonymous" }),
+            retryable: false,
+            diagnostics: Some(
+                serde_json::from_value(json!({
+                    "cause": "authenticationFailed",
+                    "svn": {
+                        "entries": [{ "code": 170001, "name": "SVN_ERR_RA_NOT_AUTHORIZED" }],
+                        "truncated": false
+                    }
+                }))
+                .expect("authentication diagnostics must deserialize"),
+            ),
+        };
+        assert_eq!(
+            validate_wire_failure(anonymous_auth)
+                .expect("reviewed anonymous-auth diagnostics must survive")
+                .code(),
+            "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+        );
+
         let accepted = WireFailure {
             code: "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED".to_string(),
             category: "native".to_string(),

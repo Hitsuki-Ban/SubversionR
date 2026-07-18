@@ -54,6 +54,7 @@
     "onCommand:subversionr.diagnostics.collect",
     "onCommand:subversionr.diagnostics.versionReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousStressCheckout",
     "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
     "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
     "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",

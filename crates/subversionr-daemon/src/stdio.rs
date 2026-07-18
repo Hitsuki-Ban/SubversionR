@@ -541,6 +541,10 @@ impl RemoteWorkerAuthBroker {
 }
 
 impl AuthRequestBroker for RemoteWorkerAuthBroker {
+    fn native_credential_callback_policy(&self) -> crate::NativeCredentialCallbackPolicy {
+        crate::NativeCredentialCallbackPolicy::RemoteWorkerRequired
+    }
+
     fn request_credential(
         &mut self,
         request: CredentialRequest,
@@ -1352,6 +1356,10 @@ impl<W> AuthRequestBroker for StdioAuthRequestBroker<'_, W>
 where
     W: Write,
 {
+    fn native_credential_callback_policy(&self) -> crate::NativeCredentialCallbackPolicy {
+        crate::NativeCredentialCallbackPolicy::RemoteWorkerRequired
+    }
+
     fn request_credential(
         &mut self,
         request: CredentialRequest,

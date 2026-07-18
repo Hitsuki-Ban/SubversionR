@@ -55,6 +55,10 @@ import {
   collectInstalledSvnAnonymousReport,
   type InstalledSvnAnonymousAuthActivity,
 } from "./diagnostics/installedSvnAnonymousReport";
+import {
+  collectInstalledSvnAnonymousStressCheckout,
+  createInstalledSvnAnonymousStressSessionSha256,
+} from "./diagnostics/installedSvnAnonymousStressCheckout";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
@@ -303,6 +307,16 @@ function parseMatchingCompletedRefreshCoverageRequest(rawRequest: unknown): Matc
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const installedSvnAnonymousReportToken = consumeInstalledSvnAnonymousReportToken();
+  const installedSvnAnonymousStressCheckoutToken = consumeInstalledSvnAnonymousStressCheckoutToken();
+  const installedSvnAnonymousStressCheckoutContext =
+    installedSvnAnonymousStressCheckoutToken === undefined
+      ? undefined
+      : {
+          token: installedSvnAnonymousStressCheckoutToken,
+          sessionSha256: createInstalledSvnAnonymousStressSessionSha256(
+            installedSvnAnonymousStressCheckoutToken,
+          ),
+        };
   const installedSvnAnonymousAuthActivity: InstalledSvnAnonymousAuthActivity = {
     credentialRequests: 0,
     credentialSettlements: 0,
@@ -363,7 +377,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     certificateTrustController,
   });
   const authRequestHandler = async (method: string, params: unknown): Promise<unknown> => {
-    if (installedSvnAnonymousReportToken !== undefined) {
+    if (
+      installedSvnAnonymousReportToken !== undefined ||
+      installedSvnAnonymousStressCheckoutToken !== undefined
+    ) {
       if (method === "credentials/request") {
         installedSvnAnonymousAuthActivity.credentialRequests += 1;
       } else if (method === "credentials/settle") {
@@ -1403,6 +1420,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
           }),
         );
+  const installedSvnAnonymousStressCheckoutCommand =
+    installedSvnAnonymousStressCheckoutContext === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousStressCheckout",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousStressCheckout({
+              expectedToken: installedSvnAnonymousStressCheckoutContext.token,
+              request,
+              extensionHostSessionSha256: installedSvnAnonymousStressCheckoutContext.sessionSha256,
+              initialize: () => service.initialize(),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
   const installedCoreWorkflowReportCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedCoreWorkflowReport",
     (request: unknown) =>
@@ -2170,6 +2201,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   if (installedSvnAnonymousReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousReportCommand);
+  }
+  if (installedSvnAnonymousStressCheckoutCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousStressCheckoutCommand);
   }
   if (installedSourceControlUiE2eExecuteResourceCommand !== undefined) {
     context.subscriptions.push(installedSourceControlUiE2eExecuteResourceCommand);
@@ -4125,6 +4159,12 @@ function consumeInstalledRemoteWorkerReportToken(): string | undefined {
 function consumeInstalledSvnAnonymousReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousStressCheckoutToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_STRESS_CHECKOUT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_STRESS_CHECKOUT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 
