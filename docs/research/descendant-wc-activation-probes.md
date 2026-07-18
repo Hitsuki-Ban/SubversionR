@@ -81,17 +81,17 @@ Recommended disposition:
 3. Reuse the parent-with-`child/.svn/wc.db` fixture as an installed negative
    regression case: descendant working copies do not auto-activate; explicit
    entrypoints must work after manual open.
-4. File the appended upstream issue after owner review; revisit glob
-   candidates (file-shaped only) if upstream changes the exclude behavior.
+4. Upstream issue filed as microsoft/vscode#326423 (owner-approved); revisit
+   glob candidates (file-shaped only) if upstream changes the exclude
+   behavior.
 
-## Appendix: prepared upstream issue (not filed)
+## Appendix: upstream issue (filed with owner approval)
 
-# DRAFT — not filed. Prepared for SubversionR#36 review.
-
-Target repo: microsoft/vscode
-Suggested labels: bug, extension-host, search
-
----
+Filed 2026-07-18 as [microsoft/vscode#326423](https://github.com/microsoft/vscode/issues/326423).
+Triage-bot version check answered same day: reproduced on stable 1.129.1
+(commit `8a7abeba`), and the four cited source files are byte-identical
+between the tested commit and the `1.129.1` tag.
+Original prepared text follows.
 
 ## Title
 
