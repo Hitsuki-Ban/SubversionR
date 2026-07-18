@@ -150,6 +150,9 @@ import { BackendStatusSnapshotClient } from "./status/backendStatusSnapshotClien
 import { DirtyPathPipeline } from "./status/dirtyPathPipeline";
 import { RepositoryRefreshService } from "./status/repositoryRefreshService";
 import { RemoteStatusCheckService } from "./status/remoteStatusCheckService";
+import { BackendRemoteRecoveryClient } from "./status/backendRemoteRecoveryClient";
+import { RemoteRecoveryService } from "./status/remoteRecoveryService";
+import { redriveRequiredRemoteRecoveries } from "./status/remoteRecoveryReconnect";
 import { RepositoryWatcherService } from "./status/repositoryWatcherService";
 import { StatusRefreshCoverageStore } from "./status/statusRefreshCoverageStore";
 import { createStatusNotificationHandler } from "./status/statusStaleNotificationHandler";
@@ -158,6 +161,14 @@ import { StatusSnapshotStore } from "./status/statusSnapshotStore";
 import type { PathCasePolicy, StatusRefreshDepth, StatusRefreshTarget } from "./status/types";
 import { createVscodeRepositoryWatcherFactory } from "./status/vscodeWatcherFactory";
 import { WatcherOverflowDiagnostics } from "./status/watcherOverflowDiagnostics";
+import { RemoteConnectionStateStore } from "./status/remoteConnectionStateStore";
+import { createRemoteConnectionNotificationHandler } from "./status/remoteConnectionNotificationHandler";
+import {
+  buildRemoteOperationEnvelope,
+  canonicalEndpointFromRepositoryUrl,
+  readRemoteAccessProfiles,
+  selectRemoteAccessProfile,
+} from "./security/remoteAccessProfile";
 import { TortoiseCommandController } from "./tortoise/tortoiseCommandController";
 import {
   createNodeTortoiseDetectionHost,
@@ -186,6 +197,7 @@ const BACKEND_RESTART_INITIAL_BACKOFF_MS = 1000;
 const BACKEND_RESTART_MAX_BACKOFF_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_INTERVAL_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_TIMEOUT_MS = 5 * 1000;
+const REMOTE_STATUS_CHECK_TIMEOUT_MS = 30 * 1000;
 
 interface MatchingCompletedRefreshCoverageRequest {
   repositoryId: string;
@@ -332,6 +344,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     certificateTrustController,
   });
   const statusSnapshotStore = new StatusSnapshotStore();
+  const remoteConnectionStateStore = new RemoteConnectionStateStore();
   const watcherOverflowDiagnostics = new WatcherOverflowDiagnostics();
   const sourceControlRepositoryIds = new WeakMap<object, string>();
   const sourceControlRepositoryHistoryTargets = new WeakMap<object, RepositoryHistoryCommandTarget>();
@@ -380,6 +393,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     sourceControlProjection,
     watcherOverflowDiagnostics,
   });
+  let remoteRecoveryService: RemoteRecoveryService | undefined;
+  const remoteConnectionNotificationHandler = createRemoteConnectionNotificationHandler({
+    store: remoteConnectionStateStore,
+    projection: sourceControlProjection,
+    now: () => new Date().toISOString(),
+    scheduleRecovery: async (target) => {
+      if (!remoteRecoveryService) {
+        throw new Error("SUBVERSIONR_REMOTE_RECOVERY_SERVICE_UNAVAILABLE");
+      }
+      await remoteRecoveryService.recover(target);
+    },
+    recordBackgroundRecoveryFailure: (error) => diagnostics.recordFailure("Remote Recovery", error),
+  });
+  const backendNotificationHandler = (method: string, params: unknown): void => {
+    if (!remoteConnectionNotificationHandler(method, params)) {
+      statusNotificationHandler(method, params);
+    }
+  };
   const service = new BackendService({
     readConfig: () =>
       backendLaunchConfigFromPackageResources(resolveBackendPackageResources(context), {
@@ -393,7 +424,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     start: (config) =>
       startBackendProcess(config, {
         requestHandler: authRequestHandler,
-        notificationHandler: statusNotificationHandler,
+        notificationHandler: backendNotificationHandler,
         onRequestError: (method, error) => diagnostics.recordRpcFailure(method, error),
         onRequestSettled: (_method, params) => {
           discardCredentialOperationAfterBackendRequest(credentialController, params);
@@ -606,7 +637,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     fileHeaderCodeLensProvider.refresh();
     symbolHistoryCodeLensProvider.refresh();
   });
-  const sessionCodeLensRefresh = sessionService.onDidChangeSessions(() => {
+  const sessionCodeLensRefresh = sessionService.onDidChangeSessions((event) => {
+    if (event.kind === "closed") {
+      remoteConnectionStateStore.unregisterRepository(event.repositoryId);
+    } else if (event.kind === "reopened") {
+      const state = remoteConnectionStateStore.rebindRepository({
+        repositoryId: event.repositoryId,
+        epoch: event.epoch,
+      });
+      sourceControlProjection.updateRemoteConnectionState(state);
+    } else {
+      const session = sessionService.listOpenSessions().find((candidate) => candidate.repositoryId === event.repositoryId);
+      if (!session) {
+        throw new Error("SUBVERSIONR_REMOTE_STATE_SESSION_UNAVAILABLE");
+      }
+      const state = remoteConnectionStateStore.registerRepository({
+        repositoryId: session.repositoryId,
+        epoch: session.epoch,
+      });
+      sourceControlProjection.updateRemoteConnectionState(state);
+    }
     fileHeaderCodeLensProvider.refresh();
     symbolHistoryCodeLensProvider.refresh();
   });
@@ -754,11 +804,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const repositoryRefreshService = new RepositoryRefreshService({
     dirtyPathPipeline,
   });
+  remoteRecoveryService = new RemoteRecoveryService({
+    client: new BackendRemoteRecoveryClient(service),
+    store: remoteConnectionStateStore,
+    projection: sourceControlProjection,
+    createOperationId: randomUUID,
+    now: () => new Date().toISOString(),
+    timeoutMs: REMOTE_STATUS_CHECK_TIMEOUT_MS,
+  });
   const remoteStatusCheckService = new RemoteStatusCheckService({
     client: new BackendStatusRemoteCheckClient(service),
     statusSnapshotStore,
     sourceControlProjection,
+    remoteStateProjection: sourceControlProjection,
     refreshPipeline: dirtyPathPipeline,
+    remoteConnectionStateStore,
+    now: () => new Date().toISOString(),
+    createOperationId: randomUUID,
+    createRemoteEnvelope: async ({ operationId, repositoryRootUrl }) => {
+      const expectedOrigin = canonicalEndpointFromRepositoryUrl(repositoryRootUrl);
+      const configuration = vscode.workspace.getConfiguration("subversionr");
+      const profiles = readRemoteAccessProfiles({
+        inspect: <T>(section: string) => configuration.inspect(section) as T | undefined,
+      });
+      const profile = selectRemoteAccessProfile(profiles, expectedOrigin);
+      const connection = await service.initialize();
+      return buildRemoteOperationEnvelope({
+        operationId,
+        intent: "foreground",
+        interaction: "allowed",
+        timeoutMs: REMOTE_STATUS_CHECK_TIMEOUT_MS,
+        trustEpoch: connection.currentRemoteTrustEpoch(),
+        profile,
+        expectedOrigin,
+        remoteSubmissionEnabled: connection.isRemoteSubmissionEnabled(),
+      });
+    },
   });
   let reconcileRequestCount = 0;
   let remoteStatusRequestCount = 0;
@@ -789,6 +870,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return await remoteStatusCheckService.checkRemoteChanges(request, options);
       },
     },
+    remoteRecoveryService,
     operationClient: new BackendOperationClient(service),
     checkoutClient: new BackendRepositoryCheckoutClient(service),
     propertiesClient: new BackendPropertiesClient(service),
@@ -817,6 +899,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
       showErrorMessage: async (message, ...actions) =>
         await vscode.window.showErrorMessage(message, ...actions),
+      openRemoteAccessSettings: async () => {
+        await vscode.commands.executeCommand("workbench.action.openSettings", "subversionr.remote.profiles");
+      },
       showTextDocument: async (document) => {
         const textDocument = await vscode.workspace.openTextDocument({
           content: document.content,
@@ -1013,7 +1098,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
   const backendTerminationRecovery = service.onDidTerminate(() => {
-    void repositoryLifecycleCoordinator.recoverBackendRestartedRepositories();
+    void repositoryLifecycleCoordinator.recoverBackendRestartedRepositories()
+      .then(async () => {
+        const recovery = remoteRecoveryService;
+        if (!recovery) {
+          throw new Error("SUBVERSIONR_REMOTE_RECOVERY_SERVICE_UNAVAILABLE");
+        }
+        await redriveRequiredRemoteRecoveries({
+          sessions: sessionService,
+          store: remoteConnectionStateStore,
+          recovery,
+          recordFailure: (error) => diagnostics.recordFailure("Remote Recovery", error),
+        });
+      })
+      .catch((error: unknown) => diagnostics.recordFailure("Remote Recovery", error));
   });
   const workspaceTrustGrant = vscode.workspace.onDidGrantWorkspaceTrust(() => {
     void service
@@ -1411,6 +1509,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       commitAllRepositoryIdArgument(commandArgument, sourceControlRepositoryIds),
     ),
   );
+  const retryRemoteRecoveryCommand = vscode.commands.registerCommand("subversionr.retryRemoteRecovery", (commandArgument?: unknown) =>
+    repositoryCommandController.retryRemoteRecovery(
+      commitAllRepositoryIdArgument(commandArgument, sourceControlRepositoryIds),
+    ),
+  );
   const refreshResourceCommand = vscode.commands.registerCommand("subversionr.refreshResource", (...resourceStates: unknown[]) =>
     repositoryCommandController.refreshResource(...resourceStates),
   );
@@ -1796,6 +1899,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     closeRepositoryCommand,
     refreshRepositoryCommand,
     checkRemoteChangesCommand,
+    retryRemoteRecoveryCommand,
     refreshResourceCommand,
     openConflictArtifactCommand,
     addResourceCommand,

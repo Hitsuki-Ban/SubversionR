@@ -211,6 +211,133 @@ describe("VscodeSourceControlPresenter", () => {
     });
   });
 
+  it("marks only Incoming stale and merges remote state with local freshness commands", () => {
+    const api = fakeVscodeScmApi();
+    const presenter = new VscodeSourceControlPresenter(api);
+    presenter.registerRepository({ repositoryId: "repo-uuid:C:/wc", epoch: 7, workingCopyRoot: "C:/wc" });
+    presenter.updateRepository({
+      ...projection({
+        freshness: {
+          repositoryCompleteness: "partial",
+          lastRefreshCompleteness: "partial",
+          lastRefreshKind: "delta",
+        },
+      }),
+      groups: [
+        { id: "conflicts", labelKey: "scm.group.conflicts", changelist: null, resources: [] },
+        { id: "conflictArtifacts", labelKey: "scm.group.conflictArtifacts", changelist: null, resources: [] },
+        { id: "changes", labelKey: "scm.group.changes", changelist: null, resources: [
+          projectedResource("local", "changes", "subversionr.changedFile", statusEntry("local.txt", "modified")),
+        ] },
+        { id: "unversioned", labelKey: "scm.group.unversioned", changelist: null, resources: [] },
+        { id: "metadata", labelKey: "scm.group.metadata", changelist: null, resources: [] },
+        { id: "incoming", labelKey: "scm.group.incoming", changelist: null, resources: [
+          projectedResource("remote", "incoming", "subversionr.incoming", statusEntry("incoming.txt", "normal"), {
+            tooltipKey: "scm.resource.incoming",
+          }),
+        ] },
+        { id: "externals", labelKey: "scm.group.externals", changelist: null, resources: [] },
+        { id: "ignored", labelKey: "scm.group.ignored", changelist: null, resources: [] },
+      ],
+    });
+    const count = api.sourceControl.count;
+    const localTooltip = api.group("changes").resourceStates[0]?.decorations?.tooltip;
+    const incomingResourceStates = api.group("incoming").resourceStates;
+
+    presenter.updateRemoteConnectionState({
+      kind: "unreachable",
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      reason: "timeout",
+      incoming: { kind: "stale", lastSuccessfulCheckAt: "2026-07-18T01:00:00.000Z" },
+      recovery: { kind: "notRequired" },
+      lastFailure: { reason: "networkTimeout", cleanupAppropriate: false, occurredAt: "2026-07-18T01:01:00.000Z" },
+    });
+
+    expect(api.sourceControl.count).toBe(count);
+    expect(api.group("incoming").resourceStates).not.toBe(incomingResourceStates);
+    expect(api.group("changes").resourceStates[0]?.decorations?.tooltip).toBe(localTooltip);
+    expect(api.group("incoming").label).toBe("l10n:Incoming (stale)");
+    expect(api.group("incoming").resourceStates[0]?.decorations?.tooltip).toContain("l10n:Incoming SVN result is stale");
+    expect(api.sourceControl.statusBarCommands).toEqual([
+      { command: "subversionr.fullReconcile", title: "l10n:SVN status partial", arguments: ["repo-uuid:C:/wc"] },
+      { command: "subversionr.checkRemoteChanges", title: "l10n:SVN remote unreachable", arguments: ["repo-uuid:C:/wc"] },
+    ]);
+
+    presenter.updateRemoteConnectionState({
+      kind: "online",
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      transport: "https",
+      checkedAt: "2026-07-18T01:02:00.000Z",
+      incoming: { kind: "fresh", lastSuccessfulCheckAt: "2026-07-18T01:02:00.000Z" },
+      recovery: { kind: "notRequired" },
+    });
+    expect(api.group("incoming").label).toBe("l10n:Incoming");
+    expect(api.group("incoming").resourceStates[0]?.decorations?.tooltip).not.toContain("stale");
+
+    presenter.updateRemoteConnectionState({
+      kind: "unreachable",
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      reason: "timeout",
+      incoming: { kind: "stale", lastSuccessfulCheckAt: "2026-07-18T01:02:00.000Z" },
+      recovery: { kind: "notRequired" },
+      lastFailure: { reason: "networkTimeout", cleanupAppropriate: false, occurredAt: "2026-07-18T01:03:00.000Z" },
+    });
+    expect(api.group("incoming").resourceStates[0]?.decorations?.tooltip?.match(/stale/g)).toHaveLength(1);
+  });
+
+  it("routes indeterminate status by explicit recovery state", () => {
+    const api = fakeVscodeScmApi();
+    const presenter = new VscodeSourceControlPresenter(api);
+    presenter.registerRepository({ repositoryId: "repo-uuid:C:/wc", epoch: 7, workingCopyRoot: "C:/wc" });
+    presenter.updateRepository(projection());
+    const base = {
+      kind: "indeterminate" as const,
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      reason: "workerTerminated" as const,
+      incoming: { kind: "stale" as const },
+    };
+
+    presenter.updateRemoteConnectionState({ ...base, recovery: { kind: "notRequired" } });
+    expect(api.sourceControl.statusBarCommands).toEqual([{
+      command: "subversionr.checkRemoteChanges",
+      title: "l10n:SVN remote check failed",
+      arguments: ["repo-uuid:C:/wc"],
+    }]);
+
+    presenter.updateRemoteConnectionState({
+      ...base,
+      recovery: {
+        kind: "checking",
+        operationId: "00000000-0000-4000-8000-000000000002",
+        originOperationId: "00000000-0000-4000-8000-000000000001",
+        startedAt: "2026-07-18T01:00:00.000Z",
+        deadlineAt: "2026-07-18T01:00:30.000Z",
+      },
+    });
+    expect(api.sourceControl.statusBarCommands).toEqual([{
+      command: "subversionr.diagnostics.collect",
+      title: "l10n:SVN remote recovery checking",
+    }]);
+
+    presenter.updateRemoteConnectionState({
+      ...base,
+      recovery: {
+        kind: "required",
+        operationId: "00000000-0000-4000-8000-000000000001",
+        requiredAt: "2026-07-18T01:00:00.000Z",
+      },
+    });
+    expect(api.sourceControl.statusBarCommands).toEqual([{
+      command: "subversionr.retryRemoteRecovery",
+      title: "l10n:SVN remote recovery required",
+      arguments: ["repo-uuid:C:/wc"],
+    }]);
+  });
+
   it("omits incoming changed metadata tooltip lines when SVN changed revision is unknown", () => {
     const api = fakeVscodeScmApi();
     const presenter = new VscodeSourceControlPresenter(api);

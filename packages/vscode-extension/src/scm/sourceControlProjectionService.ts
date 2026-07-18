@@ -11,10 +11,12 @@ import {
   type SourceControlProjectionRepository,
 } from "./sourceControlResourceStore";
 import type { PathCasePolicy } from "../status/types";
+import type { RemoteConnectionState } from "../status/remoteConnectionStateStore";
 
 export interface SourceControlProjectionPresenter {
   registerRepository(repository: SourceControlProjectionRepository): void;
   updateRepository(projection: ScmRepositoryProjection): void;
+  updateRemoteConnectionState(state: RemoteConnectionState): void;
   unregisterRepository(repositoryId: string): void;
   isCurrentResourceState(resourceState: unknown): boolean;
 }
@@ -35,10 +37,29 @@ export type SourceControlProjectionChange =
   | {
       kind: "unregistered";
       repositoryId: string;
+    }
+  | {
+      kind: "remoteStateUpdated";
+      repositoryId: string;
+      epoch: number;
+      state: RemoteConnectionState["kind"];
     };
 
 export interface SourceControlProjectionSubscription {
   dispose(): void;
+}
+
+export class SourceControlProjectionServiceError extends Error {
+  public readonly code = "SUBVERSIONR_SCM_REMOTE_STATE_PROJECTION_UNAVAILABLE";
+  public readonly category = "lifecycle";
+  public readonly messageKey = "error.scm.remoteStateProjectionUnavailable";
+  public readonly safeArgs: Readonly<Record<string, unknown>>;
+
+  public constructor(repositoryId: string) {
+    super("SUBVERSIONR_SCM_REMOTE_STATE_PROJECTION_UNAVAILABLE");
+    this.name = "SourceControlProjectionServiceError";
+    this.safeArgs = { repositoryId };
+  }
 }
 
 export class SourceControlProjectionService {
@@ -138,6 +159,20 @@ export class SourceControlProjectionService {
 
   public getProjection(repositoryId: string): ScmRepositoryProjection | undefined {
     return this.store.getProjection(repositoryId);
+  }
+
+  public updateRemoteConnectionState(state: RemoteConnectionState): void {
+    const projection = this.store.getProjection(state.repositoryId);
+    if (!projection || projection.epoch !== state.epoch) {
+      throw new SourceControlProjectionServiceError(state.repositoryId);
+    }
+    this.presenter.updateRemoteConnectionState(state);
+    this.fireProjectionChange({
+      kind: "remoteStateUpdated",
+      repositoryId: state.repositoryId,
+      epoch: state.epoch,
+      state: state.kind,
+    });
   }
 
   public updateCountPolicy(countPolicy: SourceControlCountPolicy): ScmRepositoryProjection[] {

@@ -275,6 +275,7 @@ fn initialize_result(protocol_minor: u64, backend_version: &str, bridge_version:
             "remoteOperationEnvelope": true,
             "trustedConfigSnapshot": true,
             "remoteWorkerIsolation": true,
+            "remoteConnectionState": true,
             "credentialLeaseSettlement": true,
         },
         "acknowledgedTrustEpoch": 1,

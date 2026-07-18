@@ -114,6 +114,37 @@ export function selectRemoteAccessProfile(
   return matches[0]!;
 }
 
+export function canonicalEndpointFromRepositoryUrl(repositoryRootUrl: string): CanonicalEndpoint {
+  if (typeof repositoryRootUrl !== "string" || repositoryRootUrl.length === 0 || repositoryRootUrl.length > 4_096) {
+    throw configurationError("SUBVERSIONR_REMOTE_REPOSITORY_URL_INVALID", "repositoryRootUrl");
+  }
+  let url: URL;
+  try {
+    url = new URL(repositoryRootUrl);
+  } catch {
+    throw configurationError("SUBVERSIONR_REMOTE_REPOSITORY_URL_INVALID", "repositoryRootUrl");
+  }
+  if (url.username.length > 0 || url.password.length > 0 || url.search.length > 0 || url.hash.length > 0) {
+    throw configurationError("SUBVERSIONR_REMOTE_REPOSITORY_URL_INVALID", "repositoryRootUrl");
+  }
+  const scheme = url.protocol.slice(0, -1);
+  if (scheme !== "http" && scheme !== "https" && scheme !== "svn" && scheme !== "svn+ssh") {
+    throw new RemoteProfileConfigurationError(
+      "SUBVERSIONR_REMOTE_SCHEME_UNSUPPORTED",
+      "error.remote.schemeUnsupported",
+      { scheme: scheme.slice(0, 32) },
+    );
+  }
+  const defaultPort = scheme === "http" ? 80 : scheme === "https" ? 443 : scheme === "svn" ? 3690 : 22;
+  const endpoint: CanonicalEndpoint = {
+    scheme,
+    canonicalHost: url.hostname.replace(/^\[|\]$/g, "").toLowerCase(),
+    effectivePort: url.port.length > 0 ? Number(url.port) : defaultPort,
+  };
+  validateEndpoint(endpoint, "repositoryRootUrl");
+  return endpoint;
+}
+
 export function buildRemoteOperationEnvelope(input: {
   operationId: string;
   intent: RemoteOperationIntent;

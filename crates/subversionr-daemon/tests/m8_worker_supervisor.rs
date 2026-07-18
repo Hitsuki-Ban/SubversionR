@@ -14,8 +14,8 @@ mod windows {
     use serde_json::json;
     use subversionr_daemon::{
         BridgeCancellationToken, ProcessRemoteWorkerSupervisor, RemoteConfigPlan,
-        RemoteConfigScheme, RemoteConfigServerAuth, RemoteWorkerSupervisor,
-        UnavailableAuthRequestBroker, UnavailableBridge,
+        RemoteConfigScheme, RemoteConfigServerAuth, RemoteOperationEffect, RemoteWorkerSettlement,
+        RemoteWorkerSupervisor, UnavailableAuthRequestBroker, UnavailableBridge,
     };
     use subversionr_protocol::RemoteOperationEnvelope;
 
@@ -61,10 +61,14 @@ mod windows {
         );
         assert_eq!(
             cancelled
+                .result
+                .as_ref()
                 .expect_err("pre-resume cancellation must hard-stop")
                 .code(),
             "SUBVERSIONR_REMOTE_WORKER_CANCELLED"
         );
+        assert!(!cancelled.worker_was_resumed);
+        assert_owned_cleanup(&cancelled);
         fixture.assert_settled();
 
         let crashed = fixture.execute(
@@ -74,10 +78,14 @@ mod windows {
         );
         assert_eq!(
             crashed
+                .result
+                .as_ref()
                 .expect_err("fixture child must emit an invalid worker response")
                 .code(),
             "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
         );
+        assert!(crashed.worker_was_resumed);
+        assert_owned_cleanup(&crashed);
         fixture.assert_settled();
     }
 
@@ -100,10 +108,14 @@ mod windows {
         );
         assert_eq!(
             revoked
+                .result
+                .as_ref()
                 .expect_err("revoked launch must never resume")
                 .code(),
             "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED"
         );
+        assert!(!revoked.worker_was_resumed);
+        assert_owned_cleanup(&revoked);
         fixture.assert_settled();
 
         fixture
@@ -117,10 +129,14 @@ mod windows {
         );
         assert_eq!(
             cancelled
+                .result
+                .as_ref()
                 .expect_err("reopened launch must reach cancellation checkpoint")
                 .code(),
             "SUBVERSIONR_REMOTE_WORKER_CANCELLED"
         );
+        assert!(!cancelled.worker_was_resumed);
+        assert_owned_cleanup(&cancelled);
         fixture.assert_settled();
     }
 
@@ -139,10 +155,14 @@ mod windows {
         );
         assert_eq!(
             timed_out
+                .result
+                .as_ref()
                 .expect_err("expired suspended setup must hard-stop before resume")
                 .code(),
             "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
         );
+        assert!(!timed_out.worker_was_resumed);
+        assert_owned_cleanup(&timed_out);
         fixture.assert_settled();
     }
 
@@ -179,12 +199,13 @@ mod windows {
             envelope: RemoteOperationEnvelope,
             cancellation: &dyn BridgeCancellationToken,
             deadline: Instant,
-        ) -> Result<(), subversionr_daemon::BridgeFailure> {
+        ) -> RemoteWorkerSettlement {
             let mut auth = UnavailableAuthRequestBroker;
             self.supervisor.execute(
                 &envelope,
                 plan(envelope.timeout_ms),
                 "C:/checkout/worker-supervisor",
+                RemoteOperationEffect::ReadOnly,
                 cancellation,
                 &mut auth,
                 &UnavailableBridge,
@@ -194,7 +215,6 @@ mod windows {
 
         fn assert_settled(&self) {
             assert_eq!(self.supervisor.active_worker_count(), 0);
-            assert_eq!(self.supervisor.blocked_lane_count(), 0);
             assert!(
                 fs::read_dir(&self.temp_base)
                     .expect("supervisor temp root must remain readable")
@@ -203,6 +223,12 @@ mod windows {
                 "operation temp roots must be removed before the lane is released"
             );
         }
+    }
+
+    fn assert_owned_cleanup(settlement: &RemoteWorkerSettlement) {
+        assert!(settlement.job_descendants_zero);
+        assert!(settlement.temp_root_removed);
+        assert!(settlement.cleanup_safe());
     }
 
     impl Drop for SupervisorFixture {

@@ -7,7 +7,9 @@ use subversionr_protocol::{
     HistoryLogChangedPath, HistoryLogEntry, HistoryLogResponse, InitializeResponse, LockInfo,
     OperationFailureCause, OperationFailureDiagnostics, OperationReconcileHint,
     OperationRunResponse, OperationSummary, OperationWarning, PropertiesListResponse,
-    PropertyEntry, ProtocolVersion, RemoteOperationEnvelope, RemoteOperationIntent, RemoteScheme,
+    PropertyEntry, ProtocolVersion, RemoteAttentionReason, RemoteConnectionState, RemoteFailure,
+    RemoteFailureCategory, RemoteFailureClass, RemoteIndeterminateReason, RemoteOperationEnvelope,
+    RemoteOperationIntent, RemoteRecoveryOutcome, RemoteRecoveryState, RemoteScheme,
     RepositoryCheckoutParams, RepositoryCheckoutRevision, RepositoryCloseResponse,
     RepositoryDiscoverResponse, RepositoryDiscoveryCandidate, RepositoryIdentity,
     ServerAccountSelection, StatusCoverageScope, StatusDelta, StatusEntry, StatusRefreshTarget,
@@ -64,6 +66,68 @@ fn remote_operation_envelope_rejects_unknown_fields_versions_and_enums() {
 }
 
 #[test]
+fn remote_connection_state_serializes_only_the_six_reviewed_kinds() {
+    let states = [
+        RemoteConnectionState::Unchecked,
+        RemoteConnectionState::Checking {
+            operation_id: "01234567-89ab-4def-8123-456789abcdef".to_string(),
+            started_at: "2026-07-18T00:00:00Z".to_string(),
+        },
+        RemoteConnectionState::Online {
+            transport: RemoteScheme::Https,
+            checked_at: "2026-07-18T00:00:01Z".to_string(),
+        },
+        RemoteConnectionState::Attention {
+            reason: RemoteAttentionReason::AuthRequired,
+        },
+        RemoteConnectionState::Unreachable {
+            reason: subversionr_protocol::RemoteUnreachableReason::Timeout,
+        },
+        RemoteConnectionState::Indeterminate {
+            reason: RemoteIndeterminateReason::WorkerTerminated,
+            origin_operation_id: "01234567-89ab-4def-8123-456789abcdef".to_string(),
+            recovery: RemoteRecoveryState::Pending,
+            cleanup_appropriate: false,
+        },
+    ];
+    let kinds = states
+        .into_iter()
+        .map(|state| serde_json::to_value(state).expect("state must serialize")["kind"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            "unchecked",
+            "checking",
+            "online",
+            "attention",
+            "unreachable",
+            "indeterminate"
+        ]
+    );
+}
+
+#[test]
+fn remote_failure_and_recovery_outcome_are_strict_bounded_unions() {
+    let failure = RemoteFailure {
+        category: RemoteFailureCategory::Recovery,
+        reason: RemoteFailureClass::RemoteRecoveryBlocked,
+        cleanup_appropriate: false,
+    };
+    let outcome = RemoteRecoveryOutcome::Blocked {
+        operation_id: "11234567-89ab-4def-8123-456789abcdef".to_string(),
+        failure,
+    };
+    let json = serde_json::to_value(&outcome).expect("recovery outcome must serialize");
+    assert_eq!(json["outcome"], "blocked");
+    assert_eq!(json["failure"]["category"], "recovery");
+    assert_eq!(json["failure"]["reason"], "remoteRecoveryBlocked");
+    let mut invalid = json;
+    invalid["failure"]["detail"] = serde_json::json!("raw native text");
+    assert!(serde_json::from_value::<RemoteRecoveryOutcome>(invalid).is_err());
+}
+
+#[test]
 fn operation_failure_diagnostics_serialize_strict_safe_shape() {
     let diagnostics = OperationFailureDiagnostics {
         cause: OperationFailureCause::OutOfDate,
@@ -101,7 +165,7 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
         response.protocol,
         ProtocolVersion {
             major: 1,
-            minor: 33
+            minor: 34
         }
     );
     assert_eq!(response.cache_schema, default_cache_schema());
@@ -165,7 +229,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     let json = serde_json::to_value(response).expect("initialize response must serialize");
 
     assert_eq!(json["protocol"]["major"], 1);
-    assert_eq!(json["protocol"]["minor"], 33);
+    assert_eq!(json["protocol"]["minor"], 34);
     assert_eq!(json["cacheSchema"]["schemaId"], "subversionr.cache.v1");
     assert_eq!(json["cacheSchema"]["version"], 1);
     assert_eq!(json["cacheSchema"]["rollback"], "delete-and-reconcile");
@@ -216,6 +280,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     assert_eq!(json["capabilities"]["remoteOperationEnvelope"], true);
     assert_eq!(json["capabilities"]["trustedConfigSnapshot"], true);
     assert_eq!(json["capabilities"]["remoteWorkerIsolation"], false);
+    assert_eq!(json["capabilities"]["remoteConnectionState"], false);
     assert_eq!(json["capabilities"]["credentialLeaseSettlement"], false);
     assert_eq!(json["acknowledgedTrustEpoch"], 1);
     assert!(json["capabilities"].get("authCallbacks").is_none());

@@ -498,11 +498,12 @@ function New-BetaCandidateFixture([string]$Root) {
       libsvnVersion = "1.14.5"
       protocol = [pscustomobject]@{
         major = 1
-        minor = 33
+        minor = 34
       }
       capabilities = [pscustomobject]@{
         remoteWorkerIsolation = $true
         credentialLeaseSettlement = $true
+        remoteConnectionState = $true
       }
       credentialProviderProbe = [pscustomobject]@{
         schema = "subversionr.private.credential-provider-probe.v1"
@@ -538,7 +539,7 @@ function New-BetaCandidateFixture([string]$Root) {
           source = "subversionr-daemon"
           protocol = [pscustomobject]@{
             major = 1
-            minor = 33
+            minor = 34
           }
         }
       }

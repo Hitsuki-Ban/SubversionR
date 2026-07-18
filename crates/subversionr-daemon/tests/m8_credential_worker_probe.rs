@@ -93,7 +93,6 @@ mod windows {
                 .expect("real provider probe must complete through the packaged worker broker");
             assert_eq!(broker.events, expected);
             assert_eq!(supervisor.active_worker_count(), 0);
-            assert_eq!(supervisor.blocked_lane_count(), 0);
             assert!(
                 fs::read_dir(&temp_base)
                     .expect("worker temp root must remain readable")
@@ -127,7 +126,6 @@ mod windows {
             })
         );
         assert_eq!(supervisor.active_worker_count(), 0);
-        assert_eq!(supervisor.blocked_lane_count(), 0);
         assert!(
             fs::read_dir(&temp_base)
                 .expect("worker temp root must remain readable after broker failure")

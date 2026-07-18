@@ -581,17 +581,25 @@ $installedSourceControlSurfaceReportTests = Read-RequiredDocument "packages/vsco
 $operationDiagnosticsSource = Read-RequiredDocument "packages/vscode-extension/src/diagnostics/operationDiagnostics.ts"
 $operationDiagnosticsTests = Read-RequiredDocument "packages/vscode-extension/tests/operationDiagnostics.test.ts"
 $installedRedactionReportTests = Read-RequiredDocument "packages/vscode-extension/tests/installedRedactionReport.test.ts"
+$installedRemoteWorkerReportSource = Read-RequiredDocument "packages/vscode-extension/src/diagnostics/installedRemoteWorkerReport.ts"
+$installedRemoteWorkerReportTests = Read-RequiredDocument "packages/vscode-extension/tests/installedRemoteWorkerReport.test.ts"
 $nativeBridgeTests = Read-RequiredDocument "crates/subversionr-daemon/tests/native_bridge.rs"
 $nativeBridgeSource = Read-RequiredDocument "native/svn-bridge/src/subversionr_bridge.c"
 $nativeBridgeRustSource = Read-RequiredDocument "crates/subversionr-daemon/src/native.rs"
 $bridgeSource = Read-RequiredDocument "crates/subversionr-daemon/src/bridge.rs"
 $daemonStateSource = Read-RequiredDocument "crates/subversionr-daemon/src/state.rs"
+$daemonStdioSource = Read-RequiredDocument "crates/subversionr-daemon/src/stdio.rs"
 $daemonRemoteSource = Read-RequiredDocument "crates/subversionr-daemon/src/remote.rs"
+$daemonRemoteWorkerSource = Read-RequiredDocument "crates/subversionr-daemon/src/remote_worker.rs"
 $protocolSource = Read-RequiredDocument "crates/subversionr-protocol/src/lib.rs"
 $nativeBridgeHeader = Read-RequiredDocument "native/svn-bridge/include/subversionr_bridge.h"
 $statusSnapshotRpcClientSource = Read-RequiredDocument "packages/vscode-extension/src/status/statusSnapshotRpcClient.ts"
 $statusRefreshRpcClientSource = Read-RequiredDocument "packages/vscode-extension/src/status/statusRefreshRpcClient.ts"
 $statusSnapshotStoreSource = Read-RequiredDocument "packages/vscode-extension/src/status/statusSnapshotStore.ts"
+$remoteConnectionStateStoreSource = Read-RequiredDocument "packages/vscode-extension/src/status/remoteConnectionStateStore.ts"
+$remoteConnectionNotificationHandlerSource = Read-RequiredDocument "packages/vscode-extension/src/status/remoteConnectionNotificationHandler.ts"
+$remoteRecoveryRpcClientSource = Read-RequiredDocument "packages/vscode-extension/src/status/remoteRecoveryRpcClient.ts"
+$remoteRecoveryServiceSource = Read-RequiredDocument "packages/vscode-extension/src/status/remoteRecoveryService.ts"
 $watcherEventsSource = Read-RequiredDocument "packages/vscode-extension/src/status/watcherEvents.ts"
 $dirtyPathSetSource = Read-RequiredDocument "packages/vscode-extension/src/status/dirtyPathSet.ts"
 $statusRefreshSchedulerSource = Read-RequiredDocument "packages/vscode-extension/src/status/statusRefreshScheduler.ts"
@@ -629,6 +637,11 @@ $protocolContractTests = Read-RequiredDocument "crates/subversionr-protocol/test
 $statusSnapshotRpcClientTests = Read-RequiredDocument "packages/vscode-extension/tests/statusSnapshotRpcClient.test.ts"
 $statusRefreshRpcClientTests = Read-RequiredDocument "packages/vscode-extension/tests/statusRefreshRpcClient.test.ts"
 $statusSnapshotStoreTests = Read-RequiredDocument "packages/vscode-extension/tests/statusSnapshotStore.test.ts"
+$remoteConnectionStateStoreTests = Read-RequiredDocument "packages/vscode-extension/tests/remoteConnectionStateStore.test.ts"
+$remoteConnectionNotificationHandlerTests = Read-RequiredDocument "packages/vscode-extension/tests/remoteConnectionNotificationHandler.test.ts"
+$remoteStatusCheckServiceTests = Read-RequiredDocument "packages/vscode-extension/tests/remoteStatusCheckService.test.ts"
+$remoteRecoveryRpcClientTests = Read-RequiredDocument "packages/vscode-extension/tests/remoteRecoveryRpcClient.test.ts"
+$remoteRecoveryServiceTests = Read-RequiredDocument "packages/vscode-extension/tests/remoteRecoveryService.test.ts"
 $watcherEventsTests = Read-RequiredDocument "packages/vscode-extension/tests/watcherEvents.test.ts"
 $dirtyPathSetTests = Read-RequiredDocument "packages/vscode-extension/tests/dirtyPathSet.test.ts"
 $dirtyPathPipelineTests = Read-RequiredDocument "packages/vscode-extension/tests/dirtyPathPipeline.test.ts"
@@ -1545,6 +1558,7 @@ Assert-Terms $packagedNativeProbe @(
   "tempRootCleanup",
   "sameLaneSubsequent",
   "remoteWorkerIsolation",
+  "remoteConnectionState",
   "credentialLeaseSettlement",
   "--subversionr-private-credential-provider-probe-v1",
   "subversionr.private.credential-provider-probe.v1",
@@ -1565,6 +1579,7 @@ Assert-Terms $packagedNativeProbeVerifier @(
   "SUBVERSIONR_PACKAGED_NATIVE_PROBE_TIMEOUT",
   "subversionr.release.packaged-native-version-evidence.v2",
   "remoteWorkerIsolation",
+  "remoteConnectionState",
   "credentialLeaseSettlement",
   "credentialProviderProbe",
   "networkAccess",
@@ -2669,8 +2684,92 @@ Assert-Terms $protocolContractTests @(
 Assert-Terms $backendProcessTests @(
   "rejects initialize and terminates the sidecar when protocol minor is too old",
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
-  "expectedMinimum: 33"
-) "REP-004 protocol v1.33 startup gate"
+  "expectedMinimum: 34"
+) "REP-004 protocol v1.34 startup gate"
+Assert-Terms $protocolSource @(
+  "pub enum RemoteConnectionState",
+  "pub enum RemoteFailureClass",
+  "pub enum RemoteRecoveryOutcome",
+  "RemoteConnectionState"
+) "REP-004 protocol v1.34 remote connection and recovery contract"
+Assert-Terms $daemonRemoteWorkerSource @(
+  "pub struct RemoteWorkerSettlement",
+  "job_descendants_zero",
+  "temp_root_removed",
+  "worker_was_resumed"
+) "REP-004 owned remote worker settlement facts"
+Assert-Terms $daemonStateSource @(
+  "all_used_recovery_ids_are_rejected_for_the_lane_lifetime",
+  "bounded_recovery_id_history_transitions_atomically_to_blocked",
+  "unmatched_settlement_does_not_leak_or_steal_active_operation_ids",
+  "repository_close_is_gated_for_every_non_free_lane_state"
+) "REP-004 daemon recovery lane ownership regressions"
+Assert-Terms $daemonStdioSource @(
+  "spawn_failure_frame_cycle_flushes_response_and_terminal_notification_in_order",
+  "write_remote_worker_spawn_failure_frames"
+) "REP-004 stdio spawn-failure notification settlement"
+Assert-Terms $stdioRpcTests @(
+  "stdio_mutation_failure_requires_fresh_recovery_and_safe_reconcile_before_release",
+  "stdio_backend_reconnect_rebuilds_recovery_lane_before_full_reconcile",
+  "stdio_recovery_keeps_unrelated_requests_live_and_blocks_close_until_safe",
+  "stdio_matching_cancel_settles_blocking_recovery_as_indeterminate",
+  "stdio_eof_cancels_and_settles_blocking_recovery_without_a_late_response",
+  "checking_index < mutation_response_index",
+  "mutation_response_index < indeterminate_index",
+  "originOperationId",
+  "remoteConnection/state"
+) "REP-004 daemon recovery, lane release, and reconnect evidence"
+Assert-Terms $remoteConnectionStateStoreTests @(
+  "keeps a read-only indeterminate failure retryable without requiring working-copy recovery",
+  "prioritizes explicit mutation effect over cancellation classification",
+  "rebinds required and in-flight recovery to a new epoch without losing the origin operation",
+  "settles stale check completions as unapplied after unregister or epoch rebind",
+  "settles stale recovery completion as unapplied after epoch rebind"
+) "REP-004 TypeScript per-repository remote state transitions"
+Assert-Terms $remoteConnectionNotificationHandlerTests @(
+  "schedules pending recovery once and does not recurse while recovery is checking",
+  "accepts read-only indeterminate/notRequired without scheduling recovery",
+  "marks Incoming stale on unchecked while preserving the last successful timestamp",
+  "quietly consumes valid notifications for unregistered or rebound repository epochs"
+) "REP-004 typed daemon notification and background recovery routing"
+Assert-Terms $remoteStatusCheckServiceTests @(
+  "does not hold the local refresh lane while the remote RPC is pending",
+  "preserves the remote RPC outcome when the repository unregisters during the request"
+) "REP-004 remote/local refresh lane isolation"
+Assert-Terms $remoteRecoveryRpcClientTests @(
+  "sends strict distinct origin and recovery operation ids",
+  "rejects a reused origin operation id before submission",
+  "parses bounded blocked failures and rejects response extensions"
+) "REP-004 strict recovery RPC client contract"
+Assert-Terms $remoteRecoveryServiceTests @(
+  "uses a fresh recovery id while sending the stored origin operation id",
+  "keeps the original operation pending after an indeterminate recovery result",
+  "does not submit blocked recovery again"
+) "REP-004 separately bounded recovery orchestration"
+Assert-Terms $installedRemoteWorkerReportSource @(
+  "schemaVersion: 3",
+  "localProjectionUnchanged",
+  "separateRecoveryDeadline",
+  "localEventZeroNetwork"
+) "REP-004 installed remote connection-state evidence"
+Assert-Terms $installedRemoteWorkerReportTests @(
+  "stateUnion",
+  "staleIncomingPreserved",
+  "terminalBlockedStateProjected",
+  "unrelatedRepositoryUnchanged"
+) "REP-004 installed remote connection-state evidence tests"
+Assert-Terms $extensionBundleL10n @(
+  '"SVN remote recovery required"',
+  '"Incoming SVN result is stale"'
+) "REP-004 English remote connection localization"
+Assert-Terms $extensionBundleL10nJa @(
+  '"SVN remote recovery required"',
+  '"Incoming SVN result is stale"'
+) "REP-004 Japanese remote connection localization"
+Assert-Terms $extensionBundleL10nZhCn @(
+  '"SVN remote recovery required"',
+  '"Incoming SVN result is stale"'
+) "REP-004 Chinese remote connection localization"
 Assert-Terms $protocolSource @(
   "OperationFailureDiagnostics",
   "OperationFailureCause",

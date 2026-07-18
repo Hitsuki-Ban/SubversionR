@@ -304,6 +304,7 @@ function fakeConnection(
     initializeResult: initializeResult(),
     sendRequest: vi.fn().mockResolvedValue(diagnostics),
     isRemoteSubmissionEnabled: vi.fn(() => true),
+    currentRemoteTrustEpoch: vi.fn(() => 1),
     updateWorkspaceTrust: vi.fn(async () => 2),
     onDidTerminate: vi.fn(() => ({ dispose: vi.fn() })),
     shutdown: vi.fn().mockResolvedValue(undefined),
@@ -313,7 +314,7 @@ function fakeConnection(
 
 function initializeResult(): InitializeResult {
   return {
-    protocol: { major: 1, minor: 33 },
+    protocol: { major: 1, minor: 34 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -368,6 +369,7 @@ function initializeResult(): InitializeResult {
       trustedConfigSnapshot: true,
       remoteWorkerIsolation: true,
       credentialLeaseSettlement: true,
+      remoteConnectionState: true,
     },
     acknowledgedTrustEpoch: 1,
   };

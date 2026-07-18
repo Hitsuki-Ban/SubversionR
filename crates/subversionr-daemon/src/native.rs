@@ -25,11 +25,11 @@ use subversionr_protocol::{
 use crate::{
     AddOperationRequest, AuthRequestBroker, BranchCreateOperationRequest,
     BranchCreateOperationResult, BridgeApi, BridgeCancellationToken, BridgeFailure, BridgeInfo,
-    ChangelistClearOperationRequest, ChangelistSetOperationRequest, CleanupOperationRequest,
-    CommitOperationRequest, CommitOperationResult, ContentBlob, HistoryBlameRequest,
-    HistoryBlameResult, HistoryLogRequest, HistoryLogResult, LockOperationRequest,
-    MergeOperationRequest, MoveOperationRequest, NeverCancelled, OperationResult,
-    PropertiesListResult, PropertyDeleteOperationRequest, PropertyEntry,
+    BridgeRecoveryTask, ChangelistClearOperationRequest, ChangelistSetOperationRequest,
+    CleanupOperationRequest, CommitOperationRequest, CommitOperationResult, ContentBlob,
+    HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
+    LockOperationRequest, MergeOperationRequest, MoveOperationRequest, NeverCancelled,
+    OperationResult, PropertiesListResult, PropertyDeleteOperationRequest, PropertyEntry,
     PropertySetOperationRequest, RelocateOperationRequest, RemoteConfigPlan, RemoteConfigScheme,
     RemoteConfigServerAuth, RemoveOperationRequest, RepositoryCheckoutRequest,
     RepositoryCheckoutResult, ResolveOperationRequest, RevertOperationRequest,
@@ -939,6 +939,7 @@ impl NativeBridgeLoadError {
 
 pub struct NativeBridge {
     info: BridgeInfo,
+    library_path: PathBuf,
     runtime: NonNull<c_void>,
     symbols: NativeSymbols,
     _library: Library,
@@ -1099,6 +1100,7 @@ impl NativeBridge {
 
         Ok(Self {
             info: BridgeInfo::available(BRIDGE_RUNTIME_VERSION, libsvn_version),
+            library_path: path.to_path_buf(),
             runtime,
             symbols,
             _library: library,
@@ -1208,6 +1210,26 @@ fn native_failure_cause(entries: &[SvnErrorDiagnosticEntry]) -> OperationFailure
 impl BridgeApi for NativeBridge {
     fn info(&self) -> BridgeInfo {
         self.info.clone()
+    }
+
+    fn create_recovery_status_task(
+        &self,
+        identity: RepositoryIdentity,
+        generation: u64,
+    ) -> Result<BridgeRecoveryTask, BridgeFailure> {
+        let library_path = self.library_path.clone();
+        Ok(Box::new(move |cancellation| {
+            let recovery_bridge = NativeBridge::load(&library_path).map_err(|_| {
+                BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_RECOVERY_RUNTIME_CREATE_FAILED",
+                    "process",
+                    "error.remote.recoveryRuntimeCreateFailed",
+                    json!({}),
+                    false,
+                )
+            })?;
+            recovery_bridge.status_snapshot_with_cancellation(&identity, generation, cancellation)
+        }))
     }
 
     fn create_remote_context_foundation(

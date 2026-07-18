@@ -19,7 +19,8 @@ import { historyCompareRevisionUriComponents } from "../history/historyCompareRe
 import type { HistoryClient } from "../history/historyLogRpcClient";
 import type { HistoryViewTarget } from "../history/historyViewTarget";
 import type { RepositoryRefreshService, RepositoryResourceRefreshTarget } from "../status/repositoryRefreshService";
-import type { RemoteStatusCheckService } from "../status/remoteStatusCheckService";
+import { remoteFailureFromError, type RemoteStatusCheckService } from "../status/remoteStatusCheckService";
+import type { RemoteRecoveryService } from "../status/remoteRecoveryService";
 import type {
   OperationClient,
   OperationRunClientOptions,
@@ -72,6 +73,7 @@ export interface RepositoryCommandUi {
   showInformationMessage(message: string): Promise<void>;
   showWarningMessage(message: string): Promise<void>;
   showErrorMessage(message: string, ...actions: string[]): Promise<unknown>;
+  openRemoteAccessSettings(): Promise<void>;
   showTextDocument(document: { title: string; content: string; language: string }): Promise<void>;
   showReadonlyRepositoryReport(document: {
     kind: "repository-properties" | "resource-properties" | "repository-mergeinfo" | "resource-mergeinfo";
@@ -236,6 +238,7 @@ export interface RepositoryCommandControllerOptions {
     "refreshRepository" | "fullReconcileRepository" | "refreshResource" | "refreshTargets"
   >;
   remoteStatusCheckService: Pick<RemoteStatusCheckService, "checkRemoteChanges">;
+  remoteRecoveryService: Pick<RemoteRecoveryService, "recover">;
   operationClient: Pick<
     OperationClient,
     | "add"
@@ -605,6 +608,7 @@ export class RepositoryCommandController {
   }
 
   public async checkRemoteChanges(repositoryId?: unknown): Promise<void> {
+    let selectedRepositoryId: string | undefined;
     try {
       this.requireTrustedWorkspace();
       const session = await this.selectOpenSessionForRepository(
@@ -615,12 +619,14 @@ export class RepositoryCommandController {
       if (!session) {
         return;
       }
+      selectedRepositoryId = session.repositoryId;
       const incomingChanges = await this.options.ui.runOperationWithProgress(
         this.options.localize("Checking SVN remote changes"),
         async (signal) => {
           const request = {
             repositoryId: session.repositoryId,
             epoch: session.epoch,
+            repositoryRootUrl: session.identity.repositoryRootUrl,
           };
           const options = statusRefreshRunOptions(signal);
           if (options === undefined) {
@@ -643,7 +649,45 @@ export class RepositoryCommandController {
         );
       }
     } catch (error) {
-      await this.showCommandError(error);
+      await this.showRemoteCheckError(error, selectedRepositoryId, "remoteCheck");
+    }
+  }
+
+  public async retryRemoteRecovery(repositoryId?: unknown): Promise<void> {
+    let selectedRepositoryId: string | undefined;
+    try {
+      this.requireTrustedWorkspace();
+      const session = await this.selectOpenSessionForRepository(
+        repositoryId,
+        checkRemoteChangesRepositoryIdInvalid,
+        checkRemoteChangesRepositoryNotOpen,
+      );
+      if (!session) return;
+      selectedRepositoryId = session.repositoryId;
+      const result = await this.options.ui.runOperationWithProgress(
+        this.options.localize("Recovering SVN remote operation state"),
+        async (signal) => await this.options.remoteRecoveryService.recover(
+          { repositoryId: session.repositoryId, epoch: session.epoch },
+          statusRefreshRunOptions(signal),
+        ),
+      );
+      if (result === "safe") {
+        this.showCommandInformation(this.options.localize("SubversionR remote recovery completed: {0}", session.identity.workingCopyRoot));
+      } else if (result === "blocked") {
+        await this.showRemoteCheckError({
+          code: "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+          safeArgs: { remoteFailure: { category: "recovery", reason: "remoteRecoveryBlocked", cleanupAppropriate: false } },
+        }, session.repositoryId, "recovery");
+      } else {
+        await this.options.ui.showWarningMessage(
+          this.options.localize(
+            "SubversionR remote recovery remains indeterminate: {0}",
+            session.identity.workingCopyRoot,
+          ),
+        );
+      }
+    } catch (error) {
+      await this.showRemoteCheckError(error, selectedRepositoryId, "recovery");
     }
   }
 
@@ -4396,6 +4440,36 @@ export class RepositoryCommandController {
       .catch((notificationError: unknown) => {
         console.error("SubversionR repository command notification failed.", notificationError);
       });
+  }
+
+  private async showRemoteCheckError(
+    error: unknown,
+    repositoryId: string | undefined,
+    context: "remoteCheck" | "recovery",
+  ): Promise<void> {
+    const failure = remoteFailureFromError(error);
+    if (failure.reason === "operationCancelled") return;
+    const operation = this.options.localize("Remote Access");
+    this.options.diagnostics.recordFailure(operation, error);
+    const showLog = this.options.localize("Show Log");
+    const retry = this.options.localize("Retry");
+    const configure = this.options.localize("Configure Remote Access");
+    const retryRecovery = this.options.localize("Retry Recovery");
+    const actions = failure.reason === "remoteConfigurationInvalid"
+      ? [configure, showLog]
+      : failure.category === "unreachable" || failure.reason === "authenticationRequired" || failure.reason === "credentialRejected"
+        ? [retry, showLog]
+        : failure.category === "indeterminate" && failure.reason !== "remoteRecoveryBlocked"
+          ? [context === "recovery" ? retryRecovery : retry, showLog]
+          : [showLog];
+    const selected = await this.options.ui.showErrorMessage(
+      this.options.localize("SubversionR remote access failed ({0}).", failure.reason),
+      ...actions,
+    );
+    if (selected === showLog) this.options.diagnostics.show();
+    if (selected === configure) await this.options.ui.openRemoteAccessSettings();
+    if (selected === retry && repositoryId) void this.checkRemoteChanges(repositoryId);
+    if (selected === retryRecovery && repositoryId) void this.retryRemoteRecovery(repositoryId);
   }
 
   private showCommandInformation(message: string): void {

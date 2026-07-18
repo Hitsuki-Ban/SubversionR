@@ -67,6 +67,9 @@ pub trait BridgeCancellationToken {
     fn is_cancelled(&self) -> bool;
 }
 
+pub type BridgeRecoveryTask =
+    Box<dyn FnOnce(&dyn BridgeCancellationToken) -> Result<StatusSnapshot, BridgeFailure> + Send>;
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NeverCancelled;
 
@@ -418,6 +421,20 @@ impl BridgeFailure {
 
 pub trait BridgeApi {
     fn info(&self) -> BridgeInfo;
+
+    fn create_recovery_status_task(
+        &self,
+        _identity: RepositoryIdentity,
+        _generation: u64,
+    ) -> Result<BridgeRecoveryTask, BridgeFailure> {
+        Err(BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_RECOVERY_TASK_UNAVAILABLE",
+            "native",
+            "error.remote.recoveryTaskUnavailable",
+            json!({}),
+            false,
+        ))
+    }
 
     fn create_remote_context_foundation(
         &self,

@@ -89,6 +89,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.closeRepository",
       "onCommand:subversionr.refreshRepository",
       "onCommand:subversionr.checkRemoteChanges",
+      "onCommand:subversionr.retryRemoteRecovery",
       "onCommand:subversionr.refreshResource",
       "onCommand:subversionr.openConflictArtifact",
       "onCommand:subversionr.addResource",
@@ -255,6 +256,10 @@ describe("extension manifest", () => {
       {
         command: "subversionr.checkRemoteChanges",
         title: "%command.checkRemoteChanges.title%",
+      },
+      {
+        command: "subversionr.retryRemoteRecovery",
+        title: "%command.retryRemoteRecovery.title%",
       },
       {
         command: "subversionr.refreshResource",
@@ -927,6 +932,10 @@ describe("extension manifest", () => {
         },
         {
           command: "subversionr.checkRemoteChanges",
+          when: "false",
+        },
+        {
+          command: "subversionr.retryRemoteRecovery",
           when: "false",
         },
         {
@@ -2816,5 +2825,23 @@ function runtimeLocalizationKeys(): string[] {
     "SVN needs lock",
     "SVN sparse depth",
     "Binary SVN BASE content is not displayed in the text editor.",
+    "Incoming (stale)",
+    "Incoming SVN result is stale",
+    "SVN remote checking",
+    "SVN remote check succeeded ({0})",
+    "SVN remote recovery blocked",
+    "SVN remote recovery required",
+    "SVN remote recovery checking",
+    "Configure SVN remote access",
+    "SVN remote attention required",
+    "SVN remote unreachable",
+    "SVN remote check cancelled",
+    "SVN remote check failed",
+    "Recovering SVN remote operation state",
+    "SubversionR remote recovery completed: {0}",
+    "SubversionR remote recovery remains indeterminate: {0}",
+    "Remote Access",
+    "Configure Remote Access",
+    "SubversionR remote access failed ({0}).",
   ];
 }
