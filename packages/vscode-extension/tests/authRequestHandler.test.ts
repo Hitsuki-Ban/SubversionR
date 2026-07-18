@@ -1,12 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CertificateTrustResponse } from "../src/auth/certificateTrustController";
-import type { CredentialResponse } from "../src/auth/credentialController";
+import type {
+  CredentialController,
+  CredentialResponse,
+  CredentialSettlementAck,
+} from "../src/auth/credentialController";
 import { createAuthRequestHandler } from "../src/auth/authRequestHandler";
+
+function credentialController(overrides: Partial<CredentialController> = {}): CredentialController {
+  return {
+    handleCredentialRequest: vi.fn(),
+    handleCredentialSettlement: vi.fn(),
+    clearSavedCredentials: vi.fn(),
+    discardOperation: vi.fn(),
+    invalidateBackendConnection: vi.fn(),
+    dispose: vi.fn(),
+    ...overrides,
+  };
+}
 
 describe("createAuthRequestHandler", () => {
   it("routes credentials/request to the credential controller", async () => {
-    const credentialResponse: CredentialResponse = {
+    const response: CredentialResponse = {
       requestId: "cred-1",
+      operationId: "00000000-0000-4000-8000-000000000001",
       action: "cancel",
       error: {
         code: "SUBVERSIONR_CREDENTIAL_CANCELLED",
@@ -16,31 +33,55 @@ describe("createAuthRequestHandler", () => {
         retryable: false,
       },
     };
+    const controller = credentialController({ handleCredentialRequest: vi.fn(async () => response) });
     const handler = createAuthRequestHandler({
-      credentialController: {
-        handleCredentialRequest: vi.fn(async () => credentialResponse),
-        clearSavedCredentials: vi.fn(),
-      },
-      certificateTrustController: {
-        handleCertificateTrustRequest: vi.fn(),
-      },
+      credentialController: controller,
+      certificateTrustController: { handleCertificateTrustRequest: vi.fn() },
     });
 
-    const response = await handler("credentials/request", {
+    const params = {
       requestId: "cred-1",
-      realm: "svn://example",
-      kind: "usernamePassword",
+      operationId: "00000000-0000-4000-8000-000000000001",
+      endpoint: { scheme: "https", canonicalHost: "svn.example.com", effectivePort: 443 },
+      authKind: "basic",
+      realm: "Example Realm",
+      account: { mode: "fixed", username: "alice" },
+      attempt: { kind: "initial" },
       interactive: false,
       persistenceAllowed: true,
       origin: "background",
-      timeoutMs: 30000,
+      timeoutMs: 30_000,
+    };
+    expect(await handler("credentials/request", params)).toBe(response);
+    expect(controller.handleCredentialRequest).toHaveBeenCalledWith(params);
+  });
+
+  it("routes credentials/settle to the credential controller", async () => {
+    const response: CredentialSettlementAck = {
+      requestId: "settle-1",
+      operationId: "00000000-0000-4000-8000-000000000001",
+      leaseId: "00000000-0000-4000-8000-000000000002",
+      outcome: "accepted",
+    };
+    const controller = credentialController({ handleCredentialSettlement: vi.fn(async () => response) });
+    const handler = createAuthRequestHandler({
+      credentialController: controller,
+      certificateTrustController: { handleCertificateTrustRequest: vi.fn() },
     });
 
-    expect(response).toBe(credentialResponse);
+    const params = {
+      requestId: "settle-1",
+      operationId: "00000000-0000-4000-8000-000000000001",
+      leaseId: "00000000-0000-4000-8000-000000000002",
+      outcome: "accepted",
+      timeoutMs: 30_000,
+    };
+    expect(await handler("credentials/settle", params)).toBe(response);
+    expect(controller.handleCredentialSettlement).toHaveBeenCalledWith(params);
   });
 
   it("routes certificate/request to the certificate trust controller", async () => {
-    const certificateResponse: CertificateTrustResponse = {
+    const response: CertificateTrustResponse = {
       requestId: "cert-1",
       action: "trust",
       trust: "once",
@@ -48,16 +89,11 @@ describe("createAuthRequestHandler", () => {
       fingerprintAlgorithm: "sha256-der",
     };
     const handler = createAuthRequestHandler({
-      credentialController: {
-        handleCredentialRequest: vi.fn(),
-        clearSavedCredentials: vi.fn(),
-      },
-      certificateTrustController: {
-        handleCertificateTrustRequest: vi.fn(async () => certificateResponse),
-      },
+      credentialController: credentialController(),
+      certificateTrustController: { handleCertificateTrustRequest: vi.fn(async () => response) },
     });
 
-    const response = await handler("certificate/request", {
+    expect(await handler("certificate/request", {
       requestId: "cert-1",
       realm: "https://svn.example.com:443",
       host: "svn.example.com",
@@ -69,21 +105,14 @@ describe("createAuthRequestHandler", () => {
       interactive: true,
       persistenceAllowed: true,
       origin: "foreground",
-      timeoutMs: 30000,
-    });
-
-    expect(response).toBe(certificateResponse);
+      timeoutMs: 30_000,
+    })).toBe(response);
   });
 
   it("rejects unknown inbound auth methods with stable JSON-RPC errors", async () => {
     const handler = createAuthRequestHandler({
-      credentialController: {
-        handleCredentialRequest: vi.fn(),
-        clearSavedCredentials: vi.fn(),
-      },
-      certificateTrustController: {
-        handleCertificateTrustRequest: vi.fn(),
-      },
+      credentialController: credentialController(),
+      certificateTrustController: { handleCertificateTrustRequest: vi.fn() },
     });
 
     await expect(handler("auth/legacyCertificateRequest", {})).rejects.toMatchObject({

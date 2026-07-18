@@ -49,6 +49,10 @@ enum {
   SUBVERSIONR_BRIDGE_REMOTE_OPTION_SSL_TRUST_DEFAULT_CA = 1u << 5
 };
 
+enum {
+  SUBVERSIONR_BRIDGE_REMOTE_PROVIDER_CUSTOM_SIMPLE = 1u << 0
+};
+
 typedef struct subversionr_bridge_remote_config_v1 {
   unsigned int abi_version;
   unsigned int scheme;
@@ -80,6 +84,41 @@ typedef struct subversionr_bridge_error_diagnostics {
 
 enum {
   SUBVERSIONR_BRIDGE_AUTH_ABI_VERSION = 1
+};
+
+enum {
+  SUBVERSIONR_BRIDGE_REMOTE_CREDENTIAL_ABI_VERSION = 2
+};
+
+enum {
+  SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_NONE = 0,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_ACCEPTED = 1,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_REJECTED = 2,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_UNUSED = 3,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_CANCELLED = 4,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_SETTLEMENT_TIMED_OUT = 5
+};
+
+enum {
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_SAVE = 1,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_FIRST_NEXT_SAVE = 2,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_UNUSED = 3,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_CANCELLED = 4,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_TIMED_OUT = 5
+};
+
+enum {
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_FIRST_ACQUIRE = 1,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_REJECTED = 2,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_NEXT_ACQUIRE = 3,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_ACCEPTED = 4,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_UNUSED = 5,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_CANCELLED = 6,
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_TIMED_OUT = 7
+};
+
+enum {
+  SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_LIMIT = 8
 };
 
 enum {
@@ -119,6 +158,37 @@ typedef struct subversionr_bridge_credential_response {
   int may_save;
 } subversionr_bridge_credential_response;
 
+typedef struct subversionr_bridge_remote_credential_request_v2 {
+  const char *realm;
+  const char *suggested_username;
+  const char *working_copy_root;
+  unsigned int attempt;
+  const char *previous_lease_id;
+} subversionr_bridge_remote_credential_request_v2;
+
+typedef struct subversionr_bridge_remote_credential_response_v2 {
+  const char *username;
+  const char *secret;
+  const char *lease_id;
+  int persistence_requested;
+} subversionr_bridge_remote_credential_response_v2;
+
+typedef struct subversionr_bridge_private_credential_probe_request {
+  unsigned int abi_version;
+  unsigned int scenario;
+  const char *realm;
+  const char *suggested_username;
+  unsigned int terminal_outcome;
+} subversionr_bridge_private_credential_probe_request;
+
+typedef struct subversionr_bridge_private_credential_probe_inspection {
+  unsigned int abi_version;
+  unsigned int scenario;
+  unsigned int terminal_outcome;
+  unsigned int event_count;
+  unsigned int events[SUBVERSIONR_BRIDGE_CREDENTIAL_PROBE_EVENT_LIMIT];
+} subversionr_bridge_private_credential_probe_inspection;
+
 typedef struct subversionr_bridge_certificate_request {
   const char *realm;
   const char *host;
@@ -149,6 +219,23 @@ typedef void (*subversionr_bridge_credential_response_dispose)(
   subversionr_bridge_credential_response *response
 );
 
+typedef int (*subversionr_bridge_remote_credential_callback_v2)(
+  void *baton,
+  const subversionr_bridge_remote_credential_request_v2 *request,
+  subversionr_bridge_remote_credential_response_v2 *response
+);
+
+typedef void (*subversionr_bridge_remote_credential_response_dispose_v2)(
+  void *baton,
+  subversionr_bridge_remote_credential_response_v2 *response
+);
+
+typedef int (*subversionr_bridge_remote_credential_settlement_callback_v2)(
+  void *baton,
+  const char *lease_id,
+  unsigned int outcome
+);
+
 typedef int (*subversionr_bridge_certificate_callback)(
   void *baton,
   const subversionr_bridge_certificate_request *request,
@@ -162,6 +249,14 @@ typedef struct subversionr_bridge_auth_callbacks {
   subversionr_bridge_credential_response_dispose credential_response_dispose;
   subversionr_bridge_certificate_callback certificate_callback;
 } subversionr_bridge_auth_callbacks;
+
+typedef struct subversionr_bridge_remote_credential_callbacks_v2 {
+  unsigned int abi_version;
+  void *baton;
+  subversionr_bridge_remote_credential_callback_v2 credential_callback;
+  subversionr_bridge_remote_credential_response_dispose_v2 credential_response_dispose;
+  subversionr_bridge_remote_credential_settlement_callback_v2 credential_settlement_callback;
+} subversionr_bridge_remote_credential_callbacks_v2;
 
 typedef int (*subversionr_bridge_cancel_callback)(void *baton);
 
@@ -308,6 +403,7 @@ SUBVERSIONR_BRIDGE_API int subversionr_bridge_runtime_create(subversionr_bridge_
 SUBVERSIONR_BRIDGE_API void subversionr_bridge_runtime_destroy(subversionr_bridge_runtime *runtime);
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_remote_context_create(
   const subversionr_bridge_remote_config_v1 *config,
+  const subversionr_bridge_remote_credential_callbacks_v2 *credential_callbacks,
   subversionr_bridge_remote_context **context
 );
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_remote_context_inspect(
@@ -316,6 +412,15 @@ SUBVERSIONR_BRIDGE_API int subversionr_bridge_remote_context_inspect(
 );
 SUBVERSIONR_BRIDGE_API void subversionr_bridge_remote_context_destroy(
   subversionr_bridge_remote_context *context
+);
+SUBVERSIONR_BRIDGE_API int subversionr_bridge_remote_context_finish_credentials(
+  subversionr_bridge_remote_context *context,
+  unsigned int terminal_outcome
+);
+SUBVERSIONR_BRIDGE_API int subversionr_bridge_private_remote_credential_provider_probe(
+  const subversionr_bridge_remote_credential_callbacks_v2 *callbacks,
+  const subversionr_bridge_private_credential_probe_request *request,
+  subversionr_bridge_private_credential_probe_inspection *inspection
 );
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_last_error_diagnostics(
   subversionr_bridge_runtime *runtime,

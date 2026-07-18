@@ -498,10 +498,23 @@ function New-BetaCandidateFixture([string]$Root) {
       libsvnVersion = "1.14.5"
       protocol = [pscustomobject]@{
         major = 1
-        minor = 32
+        minor = 33
       }
       capabilities = [pscustomobject]@{
         remoteWorkerIsolation = $true
+        credentialLeaseSettlement = $true
+      }
+      credentialProviderProbe = [pscustomobject]@{
+        schema = "subversionr.private.credential-provider-probe.v1"
+        status = "passed"
+        networkAccess = $false
+        scenarios = @(
+          [pscustomobject]@{ scenario = "firstSave"; events = @("request:initial", "settle:accepted") },
+          [pscustomobject]@{ scenario = "firstNextSave"; events = @("request:initial", "settle:rejected", "request:retryAfterRejected", "settle:accepted") },
+          [pscustomobject]@{ scenario = "unused"; events = @("request:initial", "settle:unused") },
+          [pscustomobject]@{ scenario = "cancelled"; events = @("request:initial", "settle:cancelled") },
+          [pscustomobject]@{ scenario = "timedOut"; events = @("request:initial", "settle:timedOut") }
+        )
       }
       localDiscovery = [pscustomobject]@{
         status = "passed"
@@ -525,7 +538,7 @@ function New-BetaCandidateFixture([string]$Root) {
           source = "subversionr-daemon"
           protocol = [pscustomobject]@{
             major = 1
-            minor = 32
+            minor = 33
           }
         }
       }
@@ -566,7 +579,7 @@ function New-BetaCandidateFixture([string]$Root) {
     }
   })
 
-  Write-InstalledEvidence $evidenceRoot "installed-extension-host" "installed-extension-host" $vsix 2
+  Write-InstalledEvidence $evidenceRoot "installed-extension-host" "installed-extension-host" $vsix 3
   Write-InstalledEvidence $evidenceRoot "installed-core-workflow" "installed-core-workflow" $vsix 2
   Write-InstalledEvidence $evidenceRoot "installed-source-control-surface" "installed-source-control-surface" $vsix
   Write-InstalledSourceControlUiE2eEvidence $evidenceRoot $vsix
@@ -1104,6 +1117,33 @@ try {
   Assert-NativeCommandFailsContaining {
     Invoke-BetaCandidateVerifier $missingWorkerCapabilityFixture
   } "vsixPackage.nativeCompatibility must define capabilities" "Beta candidate consistency should require packaged worker capability evidence."
+
+  $missingCredentialProbeFixture = New-BetaCandidateFixture (Join-Path $tempRoot "missing-packaged-credential-provider-probe")
+  $missingCredentialProbePath = New-EvidencePath $missingCredentialProbeFixture.evidenceRoot "vsix-package"
+  $missingCredentialProbeEvidence = Get-Content -Raw -LiteralPath $missingCredentialProbePath | ConvertFrom-Json
+  $missingCredentialProbeEvidence.nativeCompatibility.PSObject.Properties.Remove("credentialProviderProbe")
+  Write-Json $missingCredentialProbePath $missingCredentialProbeEvidence
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $missingCredentialProbeFixture
+  } "vsixPackage.nativeCompatibility must define credentialProviderProbe" "Beta candidate consistency should require the packaged credential provider probe."
+
+  $networkedCredentialProbeFixture = New-BetaCandidateFixture (Join-Path $tempRoot "networked-packaged-credential-provider-probe")
+  $networkedCredentialProbePath = New-EvidencePath $networkedCredentialProbeFixture.evidenceRoot "vsix-package"
+  $networkedCredentialProbeEvidence = Get-Content -Raw -LiteralPath $networkedCredentialProbePath | ConvertFrom-Json
+  $networkedCredentialProbeEvidence.nativeCompatibility.credentialProviderProbe.networkAccess = $true
+  Write-Json $networkedCredentialProbePath $networkedCredentialProbeEvidence
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $networkedCredentialProbeFixture
+  } "credentialProviderProbe.networkAccess must be false" "Beta candidate consistency should require a no-network provider probe."
+
+  $wrongCredentialProbeTraceFixture = New-BetaCandidateFixture (Join-Path $tempRoot "wrong-packaged-credential-provider-probe-trace")
+  $wrongCredentialProbeTracePath = New-EvidencePath $wrongCredentialProbeTraceFixture.evidenceRoot "vsix-package"
+  $wrongCredentialProbeTraceEvidence = Get-Content -Raw -LiteralPath $wrongCredentialProbeTracePath | ConvertFrom-Json
+  $wrongCredentialProbeTraceEvidence.nativeCompatibility.credentialProviderProbe.scenarios[1].events = @("request:initial", "settle:accepted")
+  Write-Json $wrongCredentialProbeTracePath $wrongCredentialProbeTraceEvidence
+  Assert-NativeCommandFailsContaining {
+    Invoke-BetaCandidateVerifier $wrongCredentialProbeTraceFixture
+  } "scenario 'firstNextSave' events must match the release contract" "Beta candidate consistency should require the retry-after-rejection provider trace."
 
   $missingLocalDiscoveryFixture = New-BetaCandidateFixture (Join-Path $tempRoot "missing-packaged-local-discovery")
   $missingLocalDiscoveryPath = New-EvidencePath $missingLocalDiscoveryFixture.evidenceRoot "vsix-package"

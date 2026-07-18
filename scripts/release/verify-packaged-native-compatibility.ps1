@@ -108,6 +108,7 @@ try {
   $capabilities = $probeResult["capabilities"]
   $localDiscovery = $probeResult["localDiscovery"]
   $workerIsolation = $probeResult["workerIsolation"]
+  $credentialProviderProbe = $probeResult["credentialProviderProbe"]
   $tempRootCleanup = if ($workerIsolation -is [System.Collections.IDictionary]) { $workerIsolation["tempRootCleanup"] } else { $null }
   $sameLaneSubsequent = if ($workerIsolation -is [System.Collections.IDictionary]) { $workerIsolation["sameLaneSubsequent"] } else { $null }
   $subsequentDiagnostics = if ($workerIsolation -is [System.Collections.IDictionary]) { $workerIsolation["subsequentDiagnostics"] } else { $null }
@@ -116,10 +117,20 @@ try {
     $probeResult["status"] -ne "passed" `
     -or $protocol -isnot [System.Collections.IDictionary] `
     -or [int]$protocol["major"] -ne 1 `
-    -or [int]$protocol["minor"] -ne 32 `
+    -or [int]$protocol["minor"] -ne 33 `
     -or $capabilities -isnot [System.Collections.IDictionary] `
     -or $capabilities["remoteWorkerIsolation"] -isnot [bool] `
     -or $capabilities["remoteWorkerIsolation"] -ne $true `
+    -or $capabilities["credentialLeaseSettlement"] -isnot [bool] `
+    -or $capabilities["credentialLeaseSettlement"] -ne $true `
+    -or $credentialProviderProbe -isnot [System.Collections.IDictionary] `
+    -or $credentialProviderProbe.Count -ne 4 `
+    -or [string]$credentialProviderProbe["schema"] -cne "subversionr.private.credential-provider-probe.v1" `
+    -or [string]$credentialProviderProbe["status"] -cne "passed" `
+    -or $credentialProviderProbe["networkAccess"] -isnot [bool] `
+    -or $credentialProviderProbe["networkAccess"] -ne $false `
+    -or $credentialProviderProbe["scenarios"] -isnot [System.Collections.IList] `
+    -or $credentialProviderProbe["scenarios"].Count -ne 5 `
     -or $localDiscovery -isnot [System.Collections.IDictionary] `
     -or [string]$localDiscovery["status"] -cne "passed" `
     -or [int]$localDiscovery["candidateCount"] -ne 0 `
@@ -139,12 +150,33 @@ try {
     -or [string]$subsequentDiagnostics["source"] -cne "subversionr-daemon" `
     -or $subsequentProtocol -isnot [System.Collections.IDictionary] `
     -or [int]$subsequentProtocol["major"] -ne 1 `
-    -or [int]$subsequentProtocol["minor"] -ne 32 `
+    -or [int]$subsequentProtocol["minor"] -ne 33 `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["backendVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["bridgeVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["libsvnVersion"])
   ) {
     throw "SUBVERSIONR_PACKAGED_NATIVE_PROBE_RESULT_INVALID"
+  }
+
+  $expectedCredentialScenarios = @(
+    [pscustomobject]@{ scenario = "firstSave"; events = @("request:initial", "settle:accepted") },
+    [pscustomobject]@{ scenario = "firstNextSave"; events = @("request:initial", "settle:rejected", "request:retryAfterRejected", "settle:accepted") },
+    [pscustomobject]@{ scenario = "unused"; events = @("request:initial", "settle:unused") },
+    [pscustomobject]@{ scenario = "cancelled"; events = @("request:initial", "settle:cancelled") },
+    [pscustomobject]@{ scenario = "timedOut"; events = @("request:initial", "settle:timedOut") }
+  )
+  for ($index = 0; $index -lt $expectedCredentialScenarios.Count; $index++) {
+    $actual = $credentialProviderProbe["scenarios"][$index]
+    $expected = $expectedCredentialScenarios[$index]
+    if (
+      $actual -isnot [System.Collections.IDictionary] `
+      -or $actual.Count -ne 2 `
+      -or [string]$actual["scenario"] -cne $expected.scenario `
+      -or $actual["events"] -isnot [System.Collections.IList] `
+      -or (($actual["events"] | ForEach-Object { [string]$_ }) -join "|") -cne ($expected.events -join "|")
+    ) {
+      throw "SUBVERSIONR_PACKAGED_NATIVE_CREDENTIAL_PROVIDER_PROBE_INVALID"
+    }
   }
 
   $compatibility = [pscustomobject]@{
@@ -159,7 +191,9 @@ try {
     }
     capabilities = [pscustomobject]@{
       remoteWorkerIsolation = [bool]$capabilities["remoteWorkerIsolation"]
+      credentialLeaseSettlement = [bool]$capabilities["credentialLeaseSettlement"]
     }
+    credentialProviderProbe = $credentialProviderProbe
     localDiscovery = [pscustomobject]@{
       status = [string]$localDiscovery["status"]
       candidateCount = [int]$localDiscovery["candidateCount"]

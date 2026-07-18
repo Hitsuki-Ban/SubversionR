@@ -1923,14 +1923,12 @@ describe("extension manifest", () => {
       expect(bundle).toHaveProperty("SubversionR has no saved SVN credentials to clear.");
       expect(bundle).toHaveProperty("SubversionR could not clear saved SVN credentials: {0}");
       expect(bundle).toHaveProperty("SVN Credentials");
-      expect(bundle).toHaveProperty("Username for SVN realm {0}");
-      expect(bundle).toHaveProperty("Password for SVN user {0} in realm {1}");
-      expect(bundle).toHaveProperty("Proxy username for SVN realm {0}");
-      expect(bundle).toHaveProperty("Proxy password for SVN user {0} in realm {1}");
-      expect(bundle).toHaveProperty("Proxy password for SVN realm {0}");
-      expect(bundle).toHaveProperty("Client certificate password for SVN realm {0}");
-      expect(bundle).toHaveProperty("SSH passphrase for SVN user {0} in realm {1}");
-      expect(bundle).toHaveProperty("SSH passphrase for SVN realm {0}");
+      expect(bundle).toHaveProperty("Use another SVN account");
+      expect(bundle).toHaveProperty("Choose an SVN account for {0}");
+      expect(bundle).toHaveProperty("SVN Account");
+      expect(bundle).toHaveProperty("Username for SVN server {0}");
+      expect(bundle).toHaveProperty("Password for SVN user {0} at {1}");
+      expect(bundle).toHaveProperty("Clear Legacy Credentials");
       expect(bundle).toHaveProperty("Save in VS Code Secret Storage");
       expect(bundle).toHaveProperty("Use for this session only");
       expect(bundle).toHaveProperty("Choose how SubversionR should store this SVN credential");
@@ -2268,6 +2266,12 @@ function runtimeLocalizationKeys(): string[] {
     "SVN {0} failed because the working copy is out of date. Update the working copy and retry.",
     "SVN {0} failed because unresolved conflicts are present. Resolve them and retry.",
     "SVN {0} failed because authentication was rejected. Check the credentials and retry.",
+    "SVN {0} credential entry was cancelled.",
+    "SVN {0} authentication timed out. Retry the operation.",
+    "SubversionR blocked SVN {0} because saved credential storage failed an integrity check. Clear saved credentials before retrying.",
+    "SubversionR blocked SVN {0} because legacy saved credentials must be cleared first. Run Clear Saved Credentials and retry.",
+    "Enter a non-empty SVN password no larger than 32768 UTF-8 bytes and retry {0}.",
+    "SubversionR rejected an invalid SVN credential exchange for {0}. Retry the operation.",
     "SVN {0} failed because the selected target is not a working copy.",
     "SVN {0} failed because the SubversionR backend is unavailable. Retry the operation.",
     "SVN {0} failed. Open the SubversionR log for details.",
@@ -2375,14 +2379,13 @@ function runtimeLocalizationKeys(): string[] {
     "SubversionR has no saved SVN credentials to clear.",
     "SubversionR could not clear saved SVN credentials: {0}",
     "SVN Credentials",
-    "Username for SVN realm {0}",
-    "Password for SVN user {0} in realm {1}",
-    "Proxy username for SVN realm {0}",
-    "Proxy password for SVN user {0} in realm {1}",
-    "Proxy password for SVN realm {0}",
-    "Client certificate password for SVN realm {0}",
-    "SSH passphrase for SVN user {0} in realm {1}",
-    "SSH passphrase for SVN realm {0}",
+    "Use another SVN account",
+    "Choose an SVN account for {0}",
+    "SVN Account",
+    "Username for SVN server {0}",
+    "Password for SVN user {0} at {1}",
+    "SubversionR found {0} legacy saved SVN credential(s). They must be cleared before remote password authentication can continue.",
+    "Clear Legacy Credentials",
     "Save in VS Code Secret Storage",
     "Use for this session only",
     "Choose how SubversionR should store this SVN credential",

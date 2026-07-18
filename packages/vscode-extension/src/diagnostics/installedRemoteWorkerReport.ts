@@ -4,13 +4,14 @@ import type { BackendConnection } from "../backend/backendProcess";
 import { JsonRpcStreamError } from "../transport/jsonRpcStreamClient";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const EXPECTED_PROTOCOL_MINOR = 32;
+const EXPECTED_PROTOCOL_MINOR = 33;
 
 export interface InstalledRemoteWorkerReportOptions {
   expectedToken: string | undefined;
   request: unknown;
   targetPath: string;
   initialize(): Promise<Pick<BackendConnection, "initializeResult" | "isRemoteSubmissionEnabled" | "sendRequest">>;
+  collectCredentialLeaseReport(): Promise<Record<string, unknown>>;
   createOperationId?(): string;
 }
 
@@ -34,6 +35,7 @@ export async function collectInstalledRemoteWorkerReport(
     initialize.protocol.major !== EXPECTED_PROTOCOL_MAJOR ||
     initialize.protocol.minor !== EXPECTED_PROTOCOL_MINOR ||
     initialize.capabilities.remoteWorkerIsolation !== true ||
+    initialize.capabilities.credentialLeaseSettlement !== true ||
     !connection.isRemoteSubmissionEnabled()
   ) {
     throw reportError("SUBVERSIONR_INSTALLED_REMOTE_WORKER_CAPABILITY_UNAVAILABLE");
@@ -62,15 +64,18 @@ export async function collectInstalledRemoteWorkerReport(
   if (!isCurrentWorkerDiagnostics(diagnostics)) {
     throw reportError("SUBVERSIONR_INSTALLED_REMOTE_WORKER_FOLLOW_UP_INVALID");
   }
+  const credentialLeaseReport = await options.collectCredentialLeaseReport();
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "subversionr.installedRemoteWorkerReport",
     protocol: { major: EXPECTED_PROTOCOL_MAJOR, minor: EXPECTED_PROTOCOL_MINOR },
     remoteWorkerIsolation: true,
+    credentialLeaseSettlement: true,
     transportResult,
     sameLaneSubsequent: true,
     subsequentDiagnostics: true,
+    credentialLeaseReport,
   };
 }
 
@@ -140,7 +145,8 @@ function isCurrentWorkerDiagnostics(value: unknown): boolean {
     (protocol as Record<string, unknown>).minor === EXPECTED_PROTOCOL_MINOR &&
     typeof capabilities === "object" &&
     capabilities !== null &&
-    (capabilities as Record<string, unknown>).remoteWorkerIsolation === true
+    (capabilities as Record<string, unknown>).remoteWorkerIsolation === true &&
+    (capabilities as Record<string, unknown>).credentialLeaseSettlement === true
   );
 }
 

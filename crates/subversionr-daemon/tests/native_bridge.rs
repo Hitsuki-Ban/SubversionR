@@ -23,7 +23,8 @@ use subversionr_daemon::{
 };
 use subversionr_protocol::{
     CertificateTrustError, CertificateTrustRequest, CertificateTrustResponse, Credential,
-    CredentialRequest, CredentialResponse, OperationFailureCause,
+    CredentialPersistenceIntent, CredentialRequest, CredentialResponse, CredentialSettlementAck,
+    CredentialSettlementRequest, OperationFailureCause,
 };
 
 static NATIVE_TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -73,8 +74,14 @@ fn native_remote_context_source_uses_only_explicit_in_memory_configuration() {
         6,
         "the inspection mask must report every allowlisted option and no others"
     );
-    assert!(create.contains("apr_array_make(\n    pool,\n    0,"));
-    assert!(create.contains("created->inspection.provider_mask = 0;"));
+    assert!(create.contains("apr_array_make(pool, 1, sizeof(svn_auth_provider_object_t *))"));
+    assert_eq!(
+        create.matches("bridge_get_simple_lease_provider(").count(),
+        1,
+        "authenticated remote contexts must install exactly one custom lease provider"
+    );
+    assert!(create.contains("created->inspection.provider_mask = credential_baton == NULL"));
+    assert!(create.contains("SUBVERSIONR_BRIDGE_REMOTE_PROVIDER_CUSTOM_SIMPLE"));
     assert!(create.contains("created->inspection.forbidden_input_mask = 0;"));
 
     for forbidden in [
@@ -87,7 +94,6 @@ fn native_remote_context_source_uses_only_explicit_in_memory_configuration() {
         "RegOpenKey",
         "RegGetValue",
         "SHGetFolderPath",
-        "APR_ARRAY_PUSH",
         "svn_auth_get_",
         "svn_config_read_auth_data",
         "svn_config_write_auth_data",
@@ -135,7 +141,7 @@ fn native_bridge_configures_file_commit_author_before_commit_mutation() {
         "only libsvn's explicit non-file URL result may classify the target as remote"
     );
     assert_eq!(
-        source.matches("SVN_AUTH_PARAM_DEFAULT_USERNAME").count(),
+        commit.matches("SVN_AUTH_PARAM_DEFAULT_USERNAME").count(),
         1,
         "default username injection must remain scoped to local commit setup"
     );
@@ -428,7 +434,7 @@ fn native_bridge_repository_checkout_file_url_creates_working_copy_and_reports_r
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_repository_checkout_against_svnserve_routes_credentials_through_broker() {
+fn native_bridge_repository_checkout_against_svnserve_requires_remote_worker_credentials() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -443,14 +449,10 @@ fn native_bridge_repository_checkout_against_svnserve_routes_credentials_through
     let fixture = SvnserveFixture::create(&svnadmin, &svn, &svnserve);
     let checkout = fixture.temp.path.join("broker-checkout-wc");
     let checkout_path = checkout.to_string_lossy().to_string();
-    let expected_working_copy_root = checkout_path
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_string();
     let bridge = NativeBridge::load(&bridge_path).expect("native bridge should load");
     let mut auth = RecordingAuthBroker::new("alice", "secret");
 
-    let result = bridge
+    let failure = bridge
         .repository_checkout(
             &subversionr_daemon::RepositoryCheckoutRequest {
                 url: fixture.trunk_url(),
@@ -461,27 +463,13 @@ fn native_bridge_repository_checkout_against_svnserve_routes_credentials_through
             },
             &mut auth,
         )
-        .expect("native bridge should checkout svnserve URL through the auth broker");
+        .expect_err("parent-runtime credential prompts must fail closed");
 
-    assert!(result.revision >= 2);
-    assert_eq!(result.working_copy_path, expected_working_copy_root);
-    assert!(
-        !auth.credential_requests.is_empty(),
-        "svnserve checkout must prompt through the SubversionR auth broker"
-    );
-    assert_eq!(auth.credential_requests[0].repository_id, None);
     assert_eq!(
-        auth.credential_requests[0].working_copy_root.as_deref(),
-        Some(result.working_copy_path.as_str())
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert_eq!(
-        fs::read_to_string(checkout.join("tracked.txt"))
-            .expect("authenticated svnserve checkout content should be readable"),
-        "served over svnserve\n"
-    );
-    bridge
-        .open_working_copy(&checkout_path)
-        .expect("native bridge should open the svnserve checkout working copy");
+    assert!(auth.credential_requests.is_empty());
 }
 
 #[test]
@@ -1211,7 +1199,7 @@ fn native_svnserve_fixture_requires_credentials_and_accepts_explicit_credentials
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_update_against_svnserve_routes_credentials_through_broker() {
+fn native_bridge_update_against_svnserve_requires_remote_worker_credentials() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -1265,13 +1253,9 @@ fn native_bridge_update_against_svnserve_routes_credentials_through_broker() {
                 .expect("svnserve checkout path should be valid UTF-8"),
         )
         .expect("native bridge should open the svnserve working copy");
-    let expected_repository_id = format!(
-        "{}:{}",
-        identity.repository_uuid, identity.working_copy_root
-    );
     let mut auth = RecordingAuthBroker::new("alice", "secret");
 
-    let result = bridge
+    let failure = bridge
         .operation_update(
             &identity,
             &subversionr_daemon::UpdateOperationRequest {
@@ -1283,32 +1267,23 @@ fn native_bridge_update_against_svnserve_routes_credentials_through_broker() {
             },
             &mut auth,
         )
-        .expect("native bridge should update through the auth broker");
+        .expect_err("parent-runtime credential prompts must fail closed");
 
-    assert!(
-        !auth.credential_requests.is_empty(),
-        "svnserve update must prompt through the SubversionR auth broker"
-    );
     assert_eq!(
-        auth.credential_requests[0].repository_id.as_deref(),
-        Some(expected_repository_id.as_str())
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert_eq!(
-        auth.credential_requests[0].working_copy_root.as_deref(),
-        Some(identity.working_copy_root.as_str())
-    );
-    assert!(result.revision >= 3);
-    assert_eq!(result.result.touched_paths, vec!["."]);
+    assert!(auth.credential_requests.is_empty());
     assert_eq!(
         fs::read_to_string(checkout.join("tracked.txt"))
-            .expect("updated svnserve checkout content should be readable"),
-        "updated through svnserve broker\n"
+            .expect("unchanged svnserve checkout content should be readable"),
+        "served over svnserve\n"
     );
 }
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_remote_status_against_svnserve_routes_credentials_through_broker() {
+fn native_bridge_remote_status_against_svnserve_requires_remote_worker_credentials() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -1350,54 +1325,27 @@ fn native_bridge_remote_status_against_svnserve_routes_credentials_through_broke
                 .expect("svnserve checkout path should be valid UTF-8"),
         )
         .expect("native bridge should open the svnserve working copy");
-    let expected_repository_id = format!(
-        "{}:{}",
-        identity.repository_uuid, identity.working_copy_root
-    );
     let mut auth = RecordingAuthBroker::new("alice", "secret");
 
-    let snapshot = bridge
+    let failure = bridge
         .status_remote_check_with_cancellation(
             &identity,
             73,
             &mut auth,
             &subversionr_daemon::NeverCancelled,
         )
-        .expect("native bridge should check remote status through the auth broker");
+        .expect_err("parent-runtime credential prompts must fail closed");
 
-    assert!(!auth.credential_requests.is_empty());
     assert_eq!(
-        auth.credential_requests[0].repository_id.as_deref(),
-        Some(expected_repository_id.as_str())
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert_eq!(
-        auth.credential_requests[0].working_copy_root.as_deref(),
-        Some(identity.working_copy_root.as_str())
-    );
-    assert!(
-        snapshot
-            .remote_entries
-            .iter()
-            .any(|entry| { entry.path == "tracked.txt" && entry.remote_status == "modified" })
-    );
-    assert_eq!(snapshot.source, "libsvn-remote");
-
-    let mut wrong_auth = RecordingAuthBroker::new("alice", "wrong-secret");
-    let failure = bridge
-        .status_remote_check_with_cancellation(
-            &identity,
-            74,
-            &mut wrong_auth,
-            &subversionr_daemon::NeverCancelled,
-        )
-        .expect_err("svnserve must reject incorrect remote-status credentials");
-    assert_eq!(failure.code(), "SVN_REMOTE_STATUS_AUTH_FAILED");
-    assert!(!wrong_auth.credential_requests.is_empty());
+    assert!(auth.credential_requests.is_empty());
 }
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_head_content_against_svnserve_routes_credentials_through_broker() {
+fn native_bridge_head_content_against_svnserve_requires_remote_worker_credentials() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -1448,35 +1396,22 @@ fn native_bridge_head_content_against_svnserve_routes_credentials_through_broker
                 .expect("svnserve checkout path should be valid UTF-8"),
         )
         .expect("native bridge should open the svnserve working copy");
-    let expected_repository_id = format!(
-        "{}:{}",
-        identity.repository_uuid, identity.working_copy_root
-    );
     let mut auth = RecordingAuthBroker::new("alice", "secret");
 
-    let content = bridge
+    let failure = bridge
         .content_get(&identity, "tracked.txt", "head", &mut auth)
-        .expect("native bridge should retrieve HEAD content through the auth broker");
+        .expect_err("parent-runtime credential prompts must fail closed");
 
-    assert!(
-        !auth.credential_requests.is_empty(),
-        "svnserve HEAD content must prompt through the SubversionR auth broker"
-    );
     assert_eq!(
-        auth.credential_requests[0].repository_id.as_deref(),
-        Some(expected_repository_id.as_str())
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert_eq!(
-        auth.credential_requests[0].working_copy_root.as_deref(),
-        Some(identity.working_copy_root.as_str())
-    );
-    assert_eq!(content.data, b"head content through broker\n");
-    assert_eq!(content.source, "libsvn-head");
+    assert!(auth.credential_requests.is_empty());
 }
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_history_log_against_svnserve_routes_credentials_through_broker() {
+fn native_bridge_history_log_against_svnserve_requires_remote_worker_credentials() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -1524,13 +1459,9 @@ fn native_bridge_history_log_against_svnserve_routes_credentials_through_broker(
                 .expect("svnserve checkout path should be valid UTF-8"),
         )
         .expect("native bridge should open the svnserve working copy");
-    let expected_repository_id = format!(
-        "{}:{}",
-        identity.repository_uuid, identity.working_copy_root
-    );
     let mut auth = RecordingAuthBroker::new("alice", "secret");
 
-    let log = bridge
+    let failure = bridge
         .history_log(
             &identity,
             &HistoryLogRequest {
@@ -1544,32 +1475,18 @@ fn native_bridge_history_log_against_svnserve_routes_credentials_through_broker(
             },
             &mut auth,
         )
-        .expect("native bridge should retrieve history log through the auth broker");
+        .expect_err("parent-runtime credential prompts must fail closed");
 
-    assert!(
-        !auth.credential_requests.is_empty(),
-        "svnserve history log must prompt through the SubversionR auth broker"
-    );
     assert_eq!(
-        auth.credential_requests[0].repository_id.as_deref(),
-        Some(expected_repository_id.as_str())
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert_eq!(
-        auth.credential_requests[0].working_copy_root.as_deref(),
-        Some(identity.working_copy_root.as_str())
-    );
-    assert!(
-        log.entries
-            .iter()
-            .any(|entry| entry.message.as_deref() == Some("remote edit for brokered history log")),
-        "history log should include the remote svnserve edit"
-    );
-    assert_eq!(log.source, "libsvn-log");
+    assert!(auth.credential_requests.is_empty());
 }
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_history_blame_against_svnserve_routes_credentials_through_broker() {
+fn native_bridge_history_blame_against_svnserve_requires_remote_worker_credentials() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -1617,13 +1534,9 @@ fn native_bridge_history_blame_against_svnserve_routes_credentials_through_broke
                 .expect("svnserve checkout path should be valid UTF-8"),
         )
         .expect("native bridge should open the svnserve working copy");
-    let expected_repository_id = format!(
-        "{}:{}",
-        identity.repository_uuid, identity.working_copy_root
-    );
     let mut auth = RecordingAuthBroker::new("alice", "secret");
 
-    let blame = bridge
+    let failure = bridge
         .history_blame(
             &identity,
             &HistoryBlameRequest {
@@ -1640,30 +1553,18 @@ fn native_bridge_history_blame_against_svnserve_routes_credentials_through_broke
             },
             &mut auth,
         )
-        .expect("native bridge should retrieve history blame through the auth broker");
+        .expect_err("parent-runtime credential prompts must fail closed");
 
-    assert!(
-        !auth.credential_requests.is_empty(),
-        "svnserve history blame must prompt through the SubversionR auth broker"
-    );
     assert_eq!(
-        auth.credential_requests[0].repository_id.as_deref(),
-        Some(expected_repository_id.as_str())
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert_eq!(
-        auth.credential_requests[0].working_copy_root.as_deref(),
-        Some(identity.working_copy_root.as_str())
-    );
-    assert!(
-        blame.lines.len() >= 2,
-        "history blame should include lines from the remote svnserve file"
-    );
-    assert_eq!(blame.source, "libsvn-blame");
+    assert!(auth.credential_requests.is_empty());
 }
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_commit_against_svnserve_routes_credentials_through_broker() {
+fn native_bridge_commit_against_svnserve_requires_remote_worker_credentials() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -1710,13 +1611,9 @@ fn native_bridge_commit_against_svnserve_routes_credentials_through_broker() {
                 .expect("svnserve checkout path should be valid UTF-8"),
         )
         .expect("native bridge should open the svnserve working copy");
-    let expected_repository_id = format!(
-        "{}:{}",
-        identity.repository_uuid, identity.working_copy_root
-    );
     let mut auth = RecordingAuthBroker::new("alice", "secret");
 
-    let result = bridge
+    let failure = bridge
         .operation_commit(
             &identity,
             &subversionr_daemon::CommitOperationRequest {
@@ -1732,55 +1629,23 @@ fn native_bridge_commit_against_svnserve_routes_credentials_through_broker() {
             },
             &mut auth,
         )
-        .expect("native bridge should commit through the auth broker");
+        .expect_err("parent-runtime credential prompts must fail closed");
 
-    assert!(
-        !auth.credential_requests.is_empty(),
-        "svnserve commit must prompt through the SubversionR auth broker"
-    );
     assert_eq!(
-        auth.credential_requests[0].repository_id.as_deref(),
-        Some(expected_repository_id.as_str())
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert_eq!(
-        auth.credential_requests[0].working_copy_root.as_deref(),
-        Some(identity.working_copy_root.as_str())
-    );
-    assert_eq!(result.result.touched_paths, vec!["tracked.txt"]);
-    assert!(result.result.skipped_paths.is_empty());
-    assert!(result.revision >= 3);
-
-    let committed_author = raw_revision_author(
-        &svn,
-        &checkout_url,
-        result.revision,
-        [
-            "--username".as_ref(),
-            "alice".as_ref(),
-            "--password".as_ref(),
-            "secret".as_ref(),
-            "--no-auth-cache".as_ref(),
-            "--non-interactive".as_ref(),
-            "--config-dir".as_ref(),
-            checkout_config.as_os_str(),
-        ],
-    );
-    assert_eq!(
-        committed_author, "alice",
-        "svnserve commits must preserve the authenticated broker identity as svn:author"
-    );
-
-    fixture.update_seed_wc(&svn);
+    assert!(auth.credential_requests.is_empty());
     assert_eq!(
         fs::read_to_string(fixture.seed_wc.join("tracked.txt"))
-            .expect("seed checkout should read broker commit"),
-        "committed through svnserve broker\n"
+            .expect("seed checkout should remain unchanged"),
+        "served over svnserve\n"
     );
 }
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_malicious_svn_server_response_history_log_fails_without_auth_prompts_or_crash() {
+fn native_bridge_svnserve_credentials_fail_closed_before_malicious_response_is_rejected() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -1824,13 +1689,8 @@ fn native_bridge_malicious_svn_server_response_history_log_fails_without_auth_pr
                 .expect("malicious svn server-response checkout path should be valid UTF-8"),
         )
         .expect("native bridge should open the svnserve working copy before malicious swap");
-    let expected_repository_id = format!(
-        "{}:{}",
-        identity.repository_uuid, identity.working_copy_root
-    );
-
     let mut control_auth = RecordingAuthBroker::new("alice", "secret");
-    let control_log = control_bridge
+    let failure = control_bridge
         .history_log(
             &identity,
             &HistoryLogRequest {
@@ -1844,31 +1704,16 @@ fn native_bridge_malicious_svn_server_response_history_log_fails_without_auth_pr
             },
             &mut control_auth,
         )
-        .expect("control svnserve history log should pass before malicious server swap");
-    assert!(
-        control_log
-            .entries
-            .iter()
-            .any(|entry| entry.message.as_deref() == Some("add svnserve fixture file")),
-        "control svnserve history log should prove the checkout and bridge are valid"
-    );
-    assert!(
-        !control_auth.credential_requests.is_empty(),
-        "control svnserve history log must prompt through the SubversionR auth broker"
-    );
+        .expect_err("parent-runtime credential prompts must fail closed");
+
     assert_eq!(
-        control_auth.credential_requests[0].repository_id.as_deref(),
-        Some(expected_repository_id.as_str())
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert_eq!(
-        control_auth.credential_requests[0]
-            .working_copy_root
-            .as_deref(),
-        Some(identity.working_copy_root.as_str())
-    );
+    assert!(control_auth.credential_requests.is_empty());
     assert!(
         control_auth.certificate_requests.is_empty(),
-        "plain svn:// control history log must not route certificate prompts"
+        "plain svn:// history log must not route certificate prompts"
     );
     drop(control_bridge);
 
@@ -2726,7 +2571,7 @@ fn native_bridge_targeted_status_scan_reports_property_only_change() {
 
 #[test]
 #[ignore = "requires a verified native bridge DLL and staged Apache Subversion fixture tools"]
-fn native_bridge_lock_unlock_and_needs_lock_status_use_libsvn() {
+fn native_bridge_needs_lock_status_preserved_while_parent_lock_requires_remote_worker() {
     let _guard = native_test_guard();
     let bridge_path = native_bridge_path();
     let tool_dir = bridge_tool_dir(&bridge_path);
@@ -2739,17 +2584,6 @@ fn native_bridge_lock_unlock_and_needs_lock_status_use_libsvn() {
     );
     let fixture = SvnserveFixture::create(&svnadmin, &svn, &svnserve);
     let locked_path = fixture.seed_wc.join("tracked.txt");
-    let partial_path = fixture.seed_wc.join("partial-first.txt");
-    fs::write(&partial_path, "partial lock fixture\n")
-        .expect("partial lock fixture file should be written");
-    run_tool(
-        &svn,
-        [
-            "add".as_ref(),
-            partial_path.as_os_str(),
-            "--non-interactive".as_ref(),
-        ],
-    );
     run_tool(
         &svn,
         [
@@ -2757,16 +2591,6 @@ fn native_bridge_lock_unlock_and_needs_lock_status_use_libsvn() {
             "svn:needs-lock".as_ref(),
             "yes".as_ref(),
             locked_path.as_os_str(),
-            "--non-interactive".as_ref(),
-        ],
-    );
-    run_tool(
-        &svn,
-        [
-            "propset".as_ref(),
-            "svn:needs-lock".as_ref(),
-            "yes".as_ref(),
-            partial_path.as_os_str(),
             "--non-interactive".as_ref(),
         ],
     );
@@ -2822,7 +2646,7 @@ fn native_bridge_lock_unlock_and_needs_lock_status_use_libsvn() {
     assert!(needs_lock_entry.needs_lock);
     assert_eq!(needs_lock_entry.lock, None);
 
-    let lock_result = bridge
+    let failure = bridge
         .operation_lock(
             &identity,
             &subversionr_daemon::LockOperationRequest {
@@ -2832,172 +2656,13 @@ fn native_bridge_lock_unlock_and_needs_lock_status_use_libsvn() {
             },
             &mut auth,
         )
-        .expect("native bridge should lock the file through libsvn");
-    assert_eq!(lock_result.touched_paths, vec!["tracked.txt"]);
+        .expect_err("parent-runtime credential prompts must fail closed");
 
-    let locked_snapshot = bridge
-        .status_scan(&identity, "tracked.txt", "empty", 92)
-        .expect("native bridge should report lock metadata");
-    assert_eq!(locked_snapshot.summary.local_changes, 0);
-    let locked_entry = locked_snapshot
-        .local_entries
-        .first()
-        .expect("locked file should remain projected");
-    assert!(locked_entry.needs_lock);
-    let lock = locked_entry
-        .lock
-        .as_ref()
-        .expect("locked file should include structured lock info");
-    assert!(lock.token.as_deref().is_some_and(|token| !token.is_empty()));
-    assert_eq!(lock.comment.as_deref(), Some("native lock test"));
-    assert!(!lock.is_remote);
-
-    let unlock_result = bridge
-        .operation_unlock(
-            &identity,
-            &subversionr_daemon::UnlockOperationRequest {
-                paths: vec!["tracked.txt".to_string()],
-                break_lock: false,
-            },
-            &mut auth,
-        )
-        .expect("native bridge should unlock the file through libsvn");
-    assert_eq!(unlock_result.touched_paths, vec!["tracked.txt"]);
-
-    let unlocked_snapshot = bridge
-        .status_scan(&identity, "tracked.txt", "empty", 93)
-        .expect("native bridge should retain needs-lock metadata after unlock");
-    let unlocked_entry = unlocked_snapshot
-        .local_entries
-        .first()
-        .expect("needs-lock file should remain projected after unlock");
-    assert!(unlocked_entry.needs_lock);
-    assert_eq!(unlocked_entry.lock, None);
-
-    let contender_checkout = fixture.temp.path.join("lock-contender-wc");
-    let contender_config = fixture.temp.path.join("lock-contender-config");
-    run_tool(
-        &svn,
-        [
-            "checkout".as_ref(),
-            checkout_url.as_ref(),
-            contender_checkout.as_os_str(),
-            "--username".as_ref(),
-            "alice".as_ref(),
-            "--password".as_ref(),
-            "secret".as_ref(),
-            "--no-auth-cache".as_ref(),
-            "--non-interactive".as_ref(),
-            "--config-dir".as_ref(),
-            contender_config.as_os_str(),
-        ],
-    );
-    let contender_path = contender_checkout.join("tracked.txt");
-    run_tool(
-        &svn,
-        [
-            "lock".as_ref(),
-            contender_path.as_os_str(),
-            "-m".as_ref(),
-            "competing native lock test".as_ref(),
-            "--username".as_ref(),
-            "alice".as_ref(),
-            "--password".as_ref(),
-            "secret".as_ref(),
-            "--no-auth-cache".as_ref(),
-            "--non-interactive".as_ref(),
-            "--config-dir".as_ref(),
-            contender_config.as_os_str(),
-        ],
-    );
-
-    let partial_lock_failure = bridge
-        .operation_lock(
-            &identity,
-            &subversionr_daemon::LockOperationRequest {
-                paths: vec!["partial-first.txt".to_string(), "tracked.txt".to_string()],
-                comment: Some("partial native lock test".to_string()),
-                steal_lock: false,
-            },
-            &mut auth,
-        )
-        .expect_err("a partial per-path libsvn lock failure must fail the bridge operation");
-    assert_eq!(partial_lock_failure.code(), "SVN_OPERATION_LOCK_FAILED");
     assert_eq!(
-        partial_lock_failure.safe_args()["mayHaveMutated"].as_bool(),
-        Some(true),
-        "a real per-path failure after a successful lock must expose partial mutation"
+        failure.code(),
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
     );
-    assert!(
-        partial_lock_failure
-            .diagnostics()
-            .is_some_and(|diagnostics| !diagnostics.svn.entries.is_empty()),
-        "the partial lock error must retain safe libsvn diagnostics"
-    );
-    let partially_locked_snapshot = bridge
-        .status_scan(&identity, "partial-first.txt", "empty", 94)
-        .expect("the successful target from a partial lock must remain inspectable");
-    assert!(
-        partially_locked_snapshot
-            .local_entries
-            .first()
-            .and_then(|entry| entry.lock.as_ref())
-            .is_some_and(|lock| !lock.is_remote),
-        "the first target must remain locally locked when the second target fails"
-    );
-
-    let unlock_failure_after_partial_lock = bridge
-        .operation_unlock(
-            &identity,
-            &subversionr_daemon::UnlockOperationRequest {
-                paths: vec!["partial-first.txt".to_string(), "tracked.txt".to_string()],
-                break_lock: false,
-            },
-            &mut auth,
-        )
-        .expect_err("a per-path libsvn unlock failure must fail the bridge operation");
-    assert_eq!(
-        unlock_failure_after_partial_lock.code(),
-        "SVN_OPERATION_UNLOCK_FAILED"
-    );
-    assert_eq!(
-        unlock_failure_after_partial_lock.safe_args()["mayHaveMutated"].as_bool(),
-        Some(false),
-        "a failed unlock with no successful notification must not claim mutation"
-    );
-    assert!(
-        unlock_failure_after_partial_lock
-            .diagnostics()
-            .is_some_and(|diagnostics| !diagnostics.svn.entries.is_empty()),
-        "the unlock error must retain safe libsvn diagnostics"
-    );
-    let failed_unlock_snapshot = bridge
-        .status_scan(&identity, "partial-first.txt", "empty", 95)
-        .expect("the failed unlock target must remain inspectable");
-    assert!(
-        failed_unlock_snapshot
-            .local_entries
-            .first()
-            .and_then(|entry| entry.lock.as_ref())
-            .is_some(),
-        "a batch with no successful unlock notification must not be treated as mutated"
-    );
-
-    run_tool(
-        &svn,
-        [
-            "unlock".as_ref(),
-            contender_path.as_os_str(),
-            "--username".as_ref(),
-            "alice".as_ref(),
-            "--password".as_ref(),
-            "secret".as_ref(),
-            "--no-auth-cache".as_ref(),
-            "--non-interactive".as_ref(),
-            "--config-dir".as_ref(),
-            contender_config.as_os_str(),
-        ],
-    );
+    assert!(auth.credential_requests.is_empty());
 }
 
 #[test]
@@ -5168,17 +4833,6 @@ impl SvnserveFixture {
         );
     }
 
-    fn update_seed_wc(&self, svn: &PathBuf) {
-        run_tool(
-            svn,
-            [
-                "update".as_ref(),
-                self.seed_wc.as_os_str(),
-                "--non-interactive".as_ref(),
-            ],
-        );
-    }
-
     fn stop_server(&mut self) {
         if let Some(mut server) = self.server.take() {
             let _ = server.kill();
@@ -6273,11 +5927,25 @@ impl AuthRequestBroker for RecordingAuthBroker {
         self.credential_requests.push(request.clone());
         Ok(CredentialResponse::Provide {
             request_id: request.request_id,
+            operation_id: request.operation_id,
+            lease_id: "test-credential-lease".to_string(),
             credential: Credential {
-                username: Some(self.username.clone()),
+                username: self.username.clone(),
                 secret: self.secret.clone(),
             },
-            persistence: "session".to_string(),
+            persistence_intent: CredentialPersistenceIntent::Session,
+        })
+    }
+
+    fn settle_credential(
+        &mut self,
+        request: CredentialSettlementRequest,
+    ) -> Result<CredentialSettlementAck, BridgeFailure> {
+        Ok(CredentialSettlementAck {
+            request_id: request.request_id,
+            operation_id: request.operation_id,
+            lease_id: request.lease_id,
+            outcome: request.outcome,
         })
     }
 

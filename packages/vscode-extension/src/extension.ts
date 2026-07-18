@@ -17,9 +17,10 @@ import {
 } from "./auth/certificateTrustController";
 import {
   createCredentialController,
+  discardCredentialOperationAfterBackendRequest,
   type CredentialController,
   type CredentialRequest,
-  type CredentialPersistence,
+  type CredentialPersistenceIntent,
 } from "./auth/credentialController";
 import { CacheCommandController } from "./cache/cacheCommandController";
 import {
@@ -47,6 +48,7 @@ import {
   type DiagnosticsContext,
 } from "./diagnostics/diagnosticsReportService";
 import { collectInstalledRedactionReport } from "./diagnostics/installedRedactionReport";
+import { collectInstalledCredentialLeaseReport } from "./diagnostics/installedCredentialLeaseReport";
 import { collectInstalledRemoteWorkerReport } from "./diagnostics/installedRemoteWorkerReport";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
@@ -305,13 +307,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     workspaceTrusted: () => vscode.workspace.isTrusted,
     secretStorage,
     ui: {
-      promptUsername: async (request) =>
-        await showCredentialInputBox(request, {
-          title: vscode.l10n.t("SVN Credentials"),
-          prompt: credentialUsernamePrompt(request),
-          value: request.username,
-          ignoreFocusOut: true,
-        }),
+      pickAccount: pickCredentialAccount,
       promptSecret: async (request, username) =>
         await showCredentialInputBox(request, {
           title: vscode.l10n.t("SVN Credentials"),
@@ -320,8 +316,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           ignoreFocusOut: true,
         }),
       pickPersistence: pickCredentialPersistence,
+      confirmLegacyClear: confirmLegacyCredentialClear,
     },
   });
+  context.subscriptions.push({ dispose: () => credentialController.dispose() });
   const certificateTrustController = createCertificateTrustController({
     workspaceTrusted: () => vscode.workspace.isTrusted,
     secretStorage,
@@ -397,6 +395,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         requestHandler: authRequestHandler,
         notificationHandler: statusNotificationHandler,
         onRequestError: (method, error) => diagnostics.recordRpcFailure(method, error),
+        onRequestSettled: (_method, params) => {
+          discardCredentialOperationAfterBackendRequest(credentialController, params);
+        },
       }),
     lifecycleClock: systemBackendLifecycleClock(),
     heartbeatPolicy: {
@@ -410,6 +411,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
   backendService = service;
+  context.subscriptions.push(service.onDidChangeLifecycleState((event) => {
+    if (event.status === "ready" || event.status === "recovered" || event.status === "degraded") {
+      credentialController.invalidateBackendConnection();
+    }
+  }));
   const backendLifecycleUiService = new BackendLifecycleUiService({
     backend: service,
     api: {
@@ -1167,6 +1173,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             request,
             targetPath: nodePath.join(context.globalStorageUri.fsPath, "installed-remote-worker-report-target"),
             initialize: () => service.initialize(),
+            collectCredentialLeaseReport: () =>
+              collectInstalledCredentialLeaseReport({
+                expectedToken: installedRemoteWorkerReportToken,
+                request,
+                secretStorage,
+              }),
           }),
         );
   const installedCoreWorkflowReportCommand = vscode.commands.registerCommand(
@@ -1882,6 +1894,10 @@ async function runHistoryCommand(command: () => Promise<void>): Promise<void> {
 }
 
 function historyFailureMessage(error: unknown): string {
+  const credentialMessage = credentialOperationFailureMessage(error, vscode.l10n.t("History"));
+  if (credentialMessage !== undefined) {
+    return credentialMessage;
+  }
   const cause = extensionOperationFailureCause(error);
   switch (cause) {
     case "authenticationFailed":
@@ -1890,6 +1906,36 @@ function historyFailureMessage(error: unknown): string {
       return vscode.l10n.t("SVN {0} failed because the selected target is not a working copy.", vscode.l10n.t("History"));
     default:
       return vscode.l10n.t("SVN {0} failed. Open the SubversionR log for details.", vscode.l10n.t("History"));
+  }
+}
+
+function credentialOperationFailureMessage(error: unknown, operation: string): string | undefined {
+  switch (extensionErrorCode(error)) {
+    case "SUBVERSIONR_CREDENTIAL_CANCELLED":
+      return vscode.l10n.t("SVN {0} credential entry was cancelled.", operation);
+    case "SUBVERSIONR_CREDENTIAL_TIMEOUT":
+    case "SUBVERSIONR_CREDENTIAL_LEASE_EXPIRED":
+      return vscode.l10n.t("SVN {0} authentication timed out. Retry the operation.", operation);
+    case "SUBVERSIONR_CREDENTIAL_STORAGE_INTEGRITY":
+      return vscode.l10n.t(
+        "SubversionR blocked SVN {0} because saved credential storage failed an integrity check. Clear saved credentials before retrying.",
+        operation,
+      );
+    case "SUBVERSIONR_CREDENTIAL_LEGACY_BLOCKED":
+    case "SUBVERSIONR_CREDENTIAL_LEGACY_CLEAR_DECLINED":
+      return vscode.l10n.t(
+        "SubversionR blocked SVN {0} because legacy saved credentials must be cleared first. Run Clear Saved Credentials and retry.",
+        operation,
+      );
+    case "SUBVERSIONR_CREDENTIAL_SECRET_INVALID":
+      return vscode.l10n.t("Enter a non-empty SVN password no larger than 32768 UTF-8 bytes and retry {0}.", operation);
+    case "SUBVERSIONR_CREDENTIAL_RETRY_INVALID":
+    case "SUBVERSIONR_CREDENTIAL_LEASE_UNKNOWN":
+    case "SUBVERSIONR_CREDENTIAL_LEASE_FOREIGN":
+    case "SUBVERSIONR_CREDENTIAL_SETTLEMENT_CONFLICT":
+      return vscode.l10n.t("SubversionR rejected an invalid SVN credential exchange for {0}. Retry the operation.", operation);
+    default:
+      return undefined;
   }
 }
 
@@ -1922,8 +1968,39 @@ async function clearSavedCredentials(credentialController: CredentialController)
   }
 }
 
-async function pickCredentialPersistence(request: CredentialRequest): Promise<CredentialPersistence | undefined> {
-  const items: Array<vscode.QuickPickItem & { persistence: CredentialPersistence }> = [
+async function pickCredentialAccount(
+  request: CredentialRequest,
+  storedAccounts: readonly string[],
+): Promise<string | undefined> {
+  const useAnother = vscode.l10n.t("Use another SVN account");
+  const items: Array<vscode.QuickPickItem & { username?: string }> = [
+    ...storedAccounts.map((username) => ({ label: username, username })),
+    { label: useAnother },
+  ];
+  const selected = await withCredentialCancellation(request.timeoutMs, (token) =>
+    vscode.window.showQuickPick(
+      items,
+      { placeHolder: vscode.l10n.t("Choose an SVN account for {0}", credentialEndpointLabel(request)) },
+      token,
+    ),
+  );
+  if (!selected) {
+    return undefined;
+  }
+  if (selected.username !== undefined) {
+    return selected.username;
+  }
+  return await showCredentialInputBox(request, {
+    title: vscode.l10n.t("SVN Account"),
+    prompt: vscode.l10n.t("Username for SVN server {0}", credentialEndpointLabel(request)),
+    ignoreFocusOut: true,
+  });
+}
+
+async function pickCredentialPersistence(
+  request: CredentialRequest,
+): Promise<CredentialPersistenceIntent | undefined> {
+  const items: Array<vscode.QuickPickItem & { persistence: CredentialPersistenceIntent }> = [
     {
       label: vscode.l10n.t("Save in VS Code Secret Storage"),
       persistence: "secretStorage",
@@ -1952,30 +2029,25 @@ async function showCredentialInputBox(
   return await withCredentialCancellation(request.timeoutMs, (token) => vscode.window.showInputBox(options, token));
 }
 
-function credentialUsernamePrompt(request: CredentialRequest): string {
-  if (request.kind === "proxyPassword") {
-    return vscode.l10n.t("Proxy username for SVN realm {0}", request.realm);
-  }
-  return vscode.l10n.t("Username for SVN realm {0}", request.realm);
+function credentialSecretPrompt(request: CredentialRequest, username: string): string {
+  return vscode.l10n.t("Password for SVN user {0} at {1}", username, credentialEndpointLabel(request));
 }
 
-function credentialSecretPrompt(request: CredentialRequest, username: string | undefined): string {
-  if (request.kind === "proxyPassword") {
-    if (username !== undefined) {
-      return vscode.l10n.t("Proxy password for SVN user {0} in realm {1}", username, request.realm);
-    }
-    return vscode.l10n.t("Proxy password for SVN realm {0}", request.realm);
-  }
-  if (request.kind === "clientCertificatePassword") {
-    return vscode.l10n.t("Client certificate password for SVN realm {0}", request.realm);
-  }
-  if (request.kind === "sshPassphrase") {
-    if (username !== undefined) {
-      return vscode.l10n.t("SSH passphrase for SVN user {0} in realm {1}", username, request.realm);
-    }
-    return vscode.l10n.t("SSH passphrase for SVN realm {0}", request.realm);
-  }
-  return vscode.l10n.t("Password for SVN user {0} in realm {1}", username ?? "", request.realm);
+function credentialEndpointLabel(request: CredentialRequest): string {
+  return `${request.endpoint.scheme}://${request.endpoint.canonicalHost}:${request.endpoint.effectivePort}`;
+}
+
+async function confirmLegacyCredentialClear(_request: CredentialRequest, entryCount: number): Promise<boolean> {
+  const clear = vscode.l10n.t("Clear Legacy Credentials");
+  const selected = await vscode.window.showWarningMessage(
+    vscode.l10n.t(
+      "SubversionR found {0} legacy saved SVN credential(s). They must be cleared before remote password authentication can continue.",
+      entryCount,
+    ),
+    { modal: true },
+    clear,
+  );
+  return selected === clear;
 }
 
 async function pickCertificateTrust(

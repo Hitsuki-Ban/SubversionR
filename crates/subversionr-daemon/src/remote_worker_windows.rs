@@ -460,6 +460,13 @@ impl ActiveWorkerRegistry {
         }
     }
 
+    pub(super) fn launches_allowed(&self) -> bool {
+        self.state
+            .lock()
+            .expect("active worker mutex poisoned")
+            .launch_allowed
+    }
+
     pub(super) fn wait_for_zero(&self, timeout: Duration) -> Result<(), BridgeFailure> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -585,6 +592,23 @@ impl Drop for LaneReservation {
     }
 }
 
+enum WorkerIoEvent {
+    Complete(io::Result<WorkerResponse>),
+    Credential {
+        request: CredentialRequest,
+        responder: mpsc::SyncSender<Result<WorkerIoReply, ()>>,
+    },
+    Settlement {
+        request: CredentialSettlementRequest,
+        responder: mpsc::SyncSender<Result<WorkerIoReply, BridgeFailure>>,
+    },
+}
+
+enum WorkerIoReply {
+    Credential(CredentialResponse),
+    Settlement(CredentialSettlementAck),
+}
+
 pub(super) fn execute_worker(
     worker_executable: &Path,
     bridge_path: &Path,
@@ -592,10 +616,12 @@ pub(super) fn execute_worker(
     envelope: &RemoteOperationEnvelope,
     mut plan: RemoteConfigPlan,
     cancellation: &dyn BridgeCancellationToken,
+    auth: &mut dyn AuthRequestBroker,
     disconnected: &AtomicBool,
     parent_disconnected: &AtomicBool,
     active: &ActiveWorkerRegistry,
     deadline: Instant,
+    execution: WorkerExecution,
 ) -> Result<(), BridgeFailure> {
     let launch = active.reserve_launch(disconnected, parent_disconnected)?;
     let operation_temp_root = temp_base.join(format!("subversionr-remote-{}", envelope.operation_id));
@@ -607,11 +633,13 @@ pub(super) fn execute_worker(
         envelope,
         &mut plan,
         cancellation,
+        auth,
         disconnected,
         parent_disconnected,
         active,
         launch,
         deadline,
+        execution,
     );
     if fs::remove_dir_all(&operation_temp_root).is_err() {
         return Err(cleanup_blocked_failure());
@@ -650,11 +678,13 @@ fn execute_worker_inner(
     envelope: &RemoteOperationEnvelope,
     plan: &mut RemoteConfigPlan,
     cancellation: &dyn BridgeCancellationToken,
+    auth: &mut dyn AuthRequestBroker,
     disconnected: &AtomicBool,
     parent_disconnected: &AtomicBool,
     active: &ActiveWorkerRegistry,
     launch: LaunchReservation,
     deadline: Instant,
+    execution: WorkerExecution,
 ) -> Result<(), BridgeFailure> {
     plan.timeout_ms = remaining_timeout_ms(deadline, plan.timeout_ms)?;
 
@@ -669,8 +699,13 @@ fn execute_worker_inner(
         operation_temp_root: operation_temp_root_text.to_string(),
         envelope: envelope.clone(),
         plan: *plan,
+        execution,
     };
-    let request_bytes = serde_json::to_vec(&request).map_err(|_| worker_protocol_failure())?;
+    let start_frame = ParentWorkerFrame::Start {
+        protocol_version: PRIVATE_WORKER_PROTOCOL_VERSION,
+        request,
+    };
+    let request_bytes = serde_json::to_vec(&start_frame).map_err(|_| worker_protocol_failure())?;
     if request_bytes.is_empty() || request_bytes.len() > MAX_REQUEST_FRAME_BYTES {
         return Err(worker_protocol_failure());
     }
@@ -730,10 +765,17 @@ fn execute_worker_inner(
 
     let request_writer = inbound.write.into_file();
     let response_reader = outbound.read.into_file();
-    let (sender, receiver) = mpsc::sync_channel(1);
+    let (sender, receiver) = mpsc::sync_channel(4);
+    let expected_operation_id = envelope.operation_id.clone();
     let io_thread = thread::spawn(move || {
-        let result = exchange_frames(request_writer, response_reader, &request_bytes);
-        let _ = sender.send(result);
+        let result = exchange_frames(
+            request_writer,
+            response_reader,
+            &request_bytes,
+            &expected_operation_id,
+            &sender,
+        );
+        let _ = sender.send(WorkerIoEvent::Complete(result));
     });
 
     let response = loop {
@@ -765,8 +807,8 @@ fn execute_worker_inner(
             );
         };
         match receiver.recv_timeout(remaining.min(SUPERVISION_POLL)) {
-            Ok(Ok(response)) => break response,
-            Ok(Err(_)) => {
+            Ok(WorkerIoEvent::Complete(Ok(response))) => break response,
+            Ok(WorkerIoEvent::Complete(Err(_))) => {
                 registration.job.terminate();
                 return finish_hard_stop(
                     registration,
@@ -774,6 +816,71 @@ fn execute_worker_inner(
                     worker_protocol_failure(),
                     Some(io_thread),
                 );
+            }
+            Ok(WorkerIoEvent::Credential { request, responder }) => {
+                match auth.request_credential(request) {
+                    Ok(response) => {
+                        if responder.send(Ok(WorkerIoReply::Credential(response))).is_err() {
+                            registration.job.terminate();
+                            return finish_hard_stop(
+                                registration,
+                                operation_temp_root,
+                                worker_protocol_failure(),
+                                Some(io_thread),
+                            );
+                        }
+                    }
+                    Err(failure) => {
+                        let _ = responder.send(Err(()));
+                        registration.job.terminate();
+                        return finish_hard_stop(
+                            registration,
+                            operation_temp_root,
+                            failure,
+                            Some(io_thread),
+                        );
+                    }
+                }
+            }
+            Ok(WorkerIoEvent::Settlement { request, responder }) => {
+                match auth.settle_credential(request) {
+                    Ok(ack) => {
+                        if responder.send(Ok(WorkerIoReply::Settlement(ack))).is_err() {
+                            registration.job.terminate();
+                            return finish_hard_stop(
+                                registration,
+                                operation_temp_root,
+                                worker_protocol_failure(),
+                                Some(io_thread),
+                            );
+                        }
+                    }
+                    Err(failure) => {
+                        let failure = match validate_credential_settlement_wire_failure(
+                            WireFailure::from_bridge(failure),
+                        ) {
+                            Ok(failure) => failure,
+                            Err(failure) => {
+                                registration.job.terminate();
+                                return finish_hard_stop(
+                                    registration,
+                                    operation_temp_root,
+                                    failure,
+                                    Some(io_thread),
+                                );
+                            }
+                        };
+                        if responder.send(Err(failure)).is_err() {
+                            registration.job.terminate();
+                            return finish_hard_stop(
+                                registration,
+                                operation_temp_root,
+                                worker_protocol_failure(),
+                                Some(io_thread),
+                            );
+                        }
+                    }
+                }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -863,16 +970,131 @@ fn exchange_frames(
     mut writer: File,
     mut reader: File,
     request: &[u8],
+    expected_operation_id: &str,
+    events: &mpsc::SyncSender<WorkerIoEvent>,
 ) -> io::Result<WorkerResponse> {
     write_frame(&mut writer, request, MAX_REQUEST_FRAME_BYTES)?;
-    drop(writer);
-    let bytes = read_frame(&mut reader, MAX_RESPONSE_FRAME_BYTES)?;
-    let mut trailing = [0u8; 1];
-    if reader.read(&mut trailing)? != 0 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "worker emitted trailing data"));
+    writer.flush()?;
+    let mut expected_sequence = 1u32;
+    loop {
+        let bytes = read_frame(&mut reader, MAX_RESPONSE_FRAME_BYTES)?;
+        let frame: ChildWorkerFrame = serde_json::from_slice(&bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid worker frame"))?;
+        match frame {
+            ChildWorkerFrame::CredentialRequest {
+                protocol_version,
+                operation_id,
+                sequence,
+                request,
+            } if protocol_version == PRIVATE_WORKER_PROTOCOL_VERSION
+                && operation_id == expected_operation_id
+                && operation_id == request.operation_id
+                && sequence == expected_sequence =>
+            {
+                let (responder, response) = mpsc::sync_channel(1);
+                events
+                    .send(WorkerIoEvent::Credential { request, responder })
+                    .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "worker broker closed"))?;
+                let reply = response.recv().map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "worker broker reply closed")
+                })?.map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "worker broker rejected"))?;
+                let WorkerIoReply::Credential(response) = reply else {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "worker broker reply kind"));
+                };
+                let parent = ParentWorkerFrame::CredentialResponse {
+                    protocol_version: PRIVATE_WORKER_PROTOCOL_VERSION,
+                    operation_id,
+                    sequence,
+                    response,
+                };
+                write_parent_worker_frame(&mut writer, &parent)?;
+                expected_sequence = expected_sequence.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "worker sequence overflow")
+                })?;
+            }
+            ChildWorkerFrame::CredentialSettlement {
+                protocol_version,
+                operation_id,
+                sequence,
+                request,
+            } if protocol_version == PRIVATE_WORKER_PROTOCOL_VERSION
+                && operation_id == expected_operation_id
+                && operation_id == request.operation_id
+                && sequence == expected_sequence =>
+            {
+                let (responder, response) = mpsc::sync_channel(1);
+                events
+                    .send(WorkerIoEvent::Settlement { request, responder })
+                    .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "worker broker closed"))?;
+                let reply = response.recv().map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "worker broker reply closed")
+                })?;
+                let parent = settlement_parent_frame(operation_id, sequence, reply)?;
+                write_parent_worker_frame(&mut writer, &parent)?;
+                expected_sequence = expected_sequence.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "worker sequence overflow")
+                })?;
+            }
+            ChildWorkerFrame::Final {
+                protocol_version,
+                operation_id,
+                response,
+            } if protocol_version == PRIVATE_WORKER_PROTOCOL_VERSION
+                && operation_id == expected_operation_id
+                && response.operation_id == expected_operation_id => {
+                drop(writer);
+                let mut trailing = [0u8; 1];
+                if reader.read(&mut trailing)? != 0 {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "worker emitted trailing data"));
+                }
+                return Ok(response);
+            }
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "worker frame order")),
+        }
     }
-    serde_json::from_slice(&bytes)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid worker response"))
+}
+
+fn settlement_parent_frame(
+    operation_id: String,
+    sequence: u32,
+    reply: Result<WorkerIoReply, BridgeFailure>,
+) -> io::Result<ParentWorkerFrame> {
+    match reply {
+        Ok(WorkerIoReply::Settlement(ack)) => Ok(ParentWorkerFrame::CredentialSettlementAck {
+            protocol_version: PRIVATE_WORKER_PROTOCOL_VERSION,
+            operation_id,
+            sequence,
+            ack,
+        }),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "worker broker reply kind",
+        )),
+        Err(failure) => {
+            let failure = validate_credential_settlement_wire_failure(WireFailure::from_bridge(
+                failure,
+            ))
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "worker broker failure contract",
+                )
+            })?;
+            Ok(ParentWorkerFrame::CredentialSettlementFailure {
+                protocol_version: PRIVATE_WORKER_PROTOCOL_VERSION,
+                operation_id,
+                sequence,
+                failure: WireFailure::from_bridge(failure),
+            })
+        }
+    }
+}
+
+fn write_parent_worker_frame(writer: &mut File, frame: &ParentWorkerFrame) -> io::Result<()> {
+    let bytes = serde_json::to_vec(frame)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid parent worker frame"))?;
+    write_frame(writer, &bytes, MAX_REQUEST_FRAME_BYTES)?;
+    writer.flush()
 }
 
 fn validate_response(
@@ -892,6 +1114,17 @@ fn validate_response(
 }
 
 fn validate_wire_failure(failure: WireFailure) -> Result<BridgeFailure, BridgeFailure> {
+    if matches!(
+        failure.code.as_str(),
+        "SUBVERSIONR_CREDENTIAL_UNTRUSTED_WORKSPACE"
+            | "SUBVERSIONR_CREDENTIAL_TIMEOUT"
+            | "SUBVERSIONR_CREDENTIAL_LEASE_UNKNOWN"
+            | "SUBVERSIONR_CREDENTIAL_LEASE_FOREIGN"
+            | "SUBVERSIONR_CREDENTIAL_LEASE_EXPIRED"
+            | "SUBVERSIONR_CREDENTIAL_SETTLEMENT_CONFLICT"
+    ) {
+        return validate_credential_settlement_wire_failure(failure);
+    }
     if failure.retryable {
         return Err(worker_protocol_failure());
     }
@@ -1292,6 +1525,91 @@ mod tests {
                 .expect_err("untrusted failure values must be rejected")
                 .code(),
             "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
+        );
+
+        let settlement = WireFailure {
+            code: "SUBVERSIONR_CREDENTIAL_TIMEOUT".to_string(),
+            category: "auth".to_string(),
+            message_key: "error.auth.credentialTimeout".to_string(),
+            args: json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+            retryable: false,
+        };
+        assert_eq!(
+            validate_wire_failure(settlement)
+                .expect("allowlisted settlement failure must survive")
+                .code(),
+            "SUBVERSIONR_CREDENTIAL_TIMEOUT"
+        );
+
+        let settlement_with_extra_args = WireFailure {
+            code: "SUBVERSIONR_CREDENTIAL_TIMEOUT".to_string(),
+            category: "auth".to_string(),
+            message_key: "error.auth.credentialTimeout".to_string(),
+            args: json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted",
+                "realm": "must-not-cross-worker-boundary"
+            }),
+            retryable: false,
+        };
+        assert_eq!(
+            validate_wire_failure(settlement_with_extra_args)
+                .expect_err("extra settlement args must fail closed")
+                .code(),
+            "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
+        );
+    }
+
+    #[test]
+    fn settlement_broker_failure_is_encoded_as_a_strict_private_parent_frame() {
+        let operation_id = "01234567-89ab-4def-8123-456789abcdef";
+        let failure = BridgeFailure::new(
+            "SUBVERSIONR_CREDENTIAL_TIMEOUT",
+            "auth",
+            "error.auth.credentialTimeout",
+            json!({
+                "operationHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "leaseHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "outcome": "accepted"
+            }),
+            false,
+        );
+        let frame = settlement_parent_frame(operation_id.to_string(), 7, Err(failure))
+            .expect("stable settlement failure must become a private parent frame");
+        let encoded = serde_json::to_vec(&frame).expect("private parent frame must serialize");
+        let decoded: ParentWorkerFrame =
+            serde_json::from_slice(&encoded).expect("private parent frame must deserialize");
+        let ParentWorkerFrame::CredentialSettlementFailure {
+            protocol_version,
+            operation_id: decoded_operation_id,
+            sequence,
+            failure,
+        } = decoded
+        else {
+            panic!("settlement failure must use its dedicated private frame")
+        };
+        assert_eq!(protocol_version, PRIVATE_WORKER_PROTOCOL_VERSION);
+        assert_eq!(decoded_operation_id, operation_id);
+        assert_eq!(sequence, 7);
+        assert_eq!(failure.code, "SUBVERSIONR_CREDENTIAL_TIMEOUT");
+
+        let unknown = BridgeFailure::new(
+            "SUBVERSIONR_CREDENTIAL_UNKNOWN",
+            "auth",
+            "error.auth.credentialUnknown",
+            json!({}),
+            false,
+        );
+        assert_eq!(
+            settlement_parent_frame(operation_id.to_string(), 8, Err(unknown))
+                .expect_err("unknown failure must not cross the private worker boundary")
+                .kind(),
+            io::ErrorKind::InvalidData
         );
     }
 }

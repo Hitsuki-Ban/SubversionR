@@ -1545,6 +1545,10 @@ Assert-Terms $packagedNativeProbe @(
   "tempRootCleanup",
   "sameLaneSubsequent",
   "remoteWorkerIsolation",
+  "credentialLeaseSettlement",
+  "--subversionr-private-credential-provider-probe-v1",
+  "subversionr.private.credential-provider-probe.v1",
+  "credentialProviderProbe",
   "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",
   "svn.example.invalid",
   "connection.shutdown()",
@@ -1561,6 +1565,9 @@ Assert-Terms $packagedNativeProbeVerifier @(
   "SUBVERSIONR_PACKAGED_NATIVE_PROBE_TIMEOUT",
   "subversionr.release.packaged-native-version-evidence.v2",
   "remoteWorkerIsolation",
+  "credentialLeaseSettlement",
+  "credentialProviderProbe",
+  "networkAccess",
   "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",
   "subsequentDiagnostics",
   "ExpectedProductVersion",
@@ -2662,8 +2669,8 @@ Assert-Terms $protocolContractTests @(
 Assert-Terms $backendProcessTests @(
   "rejects initialize and terminates the sidecar when protocol minor is too old",
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
-  "expectedMinimum: 32"
-) "REP-004 protocol v1.32 startup gate"
+  "expectedMinimum: 33"
+) "REP-004 protocol v1.33 startup gate"
 Assert-Terms $protocolSource @(
   "OperationFailureDiagnostics",
   "OperationFailureCause",
@@ -4301,7 +4308,7 @@ Assert-Terms $nativeBridgeRustSource @(
   'source: "libsvn-log".to_string()'
 ) "HIS-001 native bridge Rust adapter"
 Assert-Terms $nativeBridgeTests @(
-  "native_bridge_history_log_against_svnserve_routes_credentials_through_broker",
+  "native_bridge_history_log_against_svnserve_requires_remote_worker_credentials",
   "native_bridge_history_log_returns_file_revision_entries",
   'assert_eq!(log.source, "libsvn-log")'
 ) "HIS-001 native bridge tests"
@@ -4531,7 +4538,7 @@ Assert-Terms $nativeBridgeRustSource @(
 ) "HIS-002 native bridge copy metadata adapter"
 Assert-Terms $nativeBridgeTests @(
   "native_bridge_history_log_returns_file_revision_entries",
-  "native_bridge_history_log_against_svnserve_routes_credentials_through_broker"
+  "native_bridge_history_log_against_svnserve_requires_remote_worker_credentials"
 ) "HIS-002 native bridge file history tests"
 Assert-Terms $historyLogRpcClientSource @(
   "export class HistoryLogRpcClient",
@@ -5006,10 +5013,12 @@ Assert-Terms $nativeBridgeRustSource @(
   'source: "libsvn-blame".to_string()'
 ) "HIS-004 native bridge Rust adapter"
 Assert-Terms $nativeBridgeTests @(
-  "native_bridge_history_blame_against_svnserve_routes_credentials_through_broker",
+  "native_bridge_history_blame_against_svnserve_requires_remote_worker_credentials",
   "native_bridge_history_blame_returns_line_revision_entries",
   'assert_eq!(blame.source, "libsvn-blame")',
-  "history blame should include lines from the remote svnserve file"
+  'failure.code(),',
+  '"SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"',
+  "parent-runtime credential prompts must fail closed"
 ) "HIS-004 native bridge tests"
 Assert-Terms $historyBlameRpcClientSource @(
   "export class HistoryBlameRpcClient",

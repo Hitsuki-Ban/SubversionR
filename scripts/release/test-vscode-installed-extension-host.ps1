@@ -395,16 +395,36 @@ async function run() {
   ]);
   if (
     !installedRemoteWorkerReport ||
-    installedRemoteWorkerReport.schemaVersion !== 1 ||
+    installedRemoteWorkerReport.schemaVersion !== 2 ||
     installedRemoteWorkerReport.kind !== "subversionr.installedRemoteWorkerReport" ||
     installedRemoteWorkerReport.protocol?.major !== 1 ||
-    installedRemoteWorkerReport.protocol?.minor !== 32 ||
+    installedRemoteWorkerReport.protocol?.minor !== 33 ||
     installedRemoteWorkerReport.remoteWorkerIsolation !== true ||
+    installedRemoteWorkerReport.credentialLeaseSettlement !== true ||
     installedRemoteWorkerReport.transportResult !== "unsupportedAfterWorker" ||
     installedRemoteWorkerReport.sameLaneSubsequent !== true ||
-    installedRemoteWorkerReport.subsequentDiagnostics !== true
+    installedRemoteWorkerReport.subsequentDiagnostics !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.schemaVersion !== 1 ||
+    installedRemoteWorkerReport.credentialLeaseReport?.kind !== "subversionr.installedCredentialLeaseReport" ||
+    installedRemoteWorkerReport.credentialLeaseReport?.legacyBackgroundBlocked !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.legacyForegroundCleared !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.fixedStoredReuse !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.chooserMultiAccount !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.promptSingleFlight !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.independentLeases !== true ||
+    JSON.stringify(installedRemoteWorkerReport.credentialLeaseReport?.settlementOutcomes) !== JSON.stringify(["accepted", "rejected", "unused", "cancelled", "timedOut"]) ||
+    installedRemoteWorkerReport.credentialLeaseReport?.duplicateSettlementIdempotent !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.conflictingSettlementRejected !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.reloadDiscardedPendingLease !== true ||
+    installedRemoteWorkerReport.credentialLeaseReport?.storageCleanup !== true
   ) {
-    throw new Error("Installed remote worker report did not prove the v1.32 isolated worker boundary, same-lane recovery, and follow-up request.");
+    throw new Error("Installed remote worker report did not prove the v1.33 isolated worker, credential lease lifecycle, same-lane recovery, and follow-up request.");
+  }
+  const credentialEvidenceText = JSON.stringify(installedRemoteWorkerReport.credentialLeaseReport);
+  for (const forbidden of ["alice", "bob", "charlie", "installed-evidence-secret", "svn.example.invalid", "SubversionR installed credential evidence"]) {
+    if (credentialEvidenceText.includes(forbidden)) {
+      throw new Error(`Installed credential lease report leaked forbidden fixture token: ${forbidden}`);
+    }
   }
 
   fs.writeFileSync(resultPath, JSON.stringify({
@@ -502,16 +522,39 @@ function Assert-HarnessResult(
     }
   }
   if (
-    $Result.installedRemoteWorkerReport.schemaVersion -ne 1 -or
+    $Result.installedRemoteWorkerReport.schemaVersion -ne 2 -or
     $Result.installedRemoteWorkerReport.kind -ne "subversionr.installedRemoteWorkerReport" -or
     $Result.installedRemoteWorkerReport.protocol.major -ne 1 -or
-    $Result.installedRemoteWorkerReport.protocol.minor -ne 32 -or
+    $Result.installedRemoteWorkerReport.protocol.minor -ne 33 -or
     $Result.installedRemoteWorkerReport.remoteWorkerIsolation -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseSettlement -ne $true -or
     $Result.installedRemoteWorkerReport.transportResult -ne "unsupportedAfterWorker" -or
     $Result.installedRemoteWorkerReport.sameLaneSubsequent -ne $true -or
-    $Result.installedRemoteWorkerReport.subsequentDiagnostics -ne $true
+    $Result.installedRemoteWorkerReport.subsequentDiagnostics -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.schemaVersion -ne 1 -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.kind -ne "subversionr.installedCredentialLeaseReport" -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.legacyBackgroundBlocked -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.legacyForegroundCleared -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.fixedStoredReuse -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.chooserMultiAccount -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.promptSingleFlight -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.independentLeases -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.duplicateSettlementIdempotent -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.conflictingSettlementRejected -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.reloadDiscardedPendingLease -ne $true -or
+    $Result.installedRemoteWorkerReport.credentialLeaseReport.storageCleanup -ne $true
   ) {
-    throw "Installed-host result must prove the v1.32 isolated remote worker boundary, same-lane recovery, and a subsequent diagnostics request."
+    throw "Installed-host result must prove the v1.33 isolated remote worker, credential lease lifecycle, same-lane recovery, and a subsequent diagnostics request."
+  }
+  $settlementOutcomes = @($Result.installedRemoteWorkerReport.credentialLeaseReport.settlementOutcomes)
+  if (($settlementOutcomes -join ",") -ne "accepted,rejected,unused,cancelled,timedOut") {
+    throw "Installed credential lease report must prove every settlement outcome."
+  }
+  $installedCredentialText = $Result.installedRemoteWorkerReport.credentialLeaseReport | ConvertTo-Json -Depth 20
+  foreach ($forbidden in @("alice", "bob", "charlie", "installed-evidence-secret", "svn.example.invalid", "SubversionR installed credential evidence")) {
+    if ($installedCredentialText.Contains($forbidden)) {
+      throw "Installed credential lease report leaked forbidden fixture token: $forbidden"
+    }
   }
   $extensionPath = [string]$Result.extensionPath
   if (-not (Test-IsPathWithin -Path $extensionPath -Root $ExtensionsRoot)) {
@@ -627,8 +670,8 @@ Assert-HarnessResult -Result $harnessResult -ExpectedVersion $extensionVersion -
 $sentinelAfter = Assert-WorkingCopySentinelUnchanged -Sentinel $sentinel
 
 $report = [pscustomobject]@{
-  schemaVersion = 2
-  schema = "subversionr.release.installed-extension-host.win32-x64.v2"
+  schemaVersion = 3
+  schema = "subversionr.release.installed-extension-host.win32-x64.v3"
   publicReadinessClaim = $false
   target = $Target
   traceIds = @("MIG-009", "TST-024")
@@ -686,7 +729,7 @@ $report = [pscustomobject]@{
     "SubversionR became active inside a real VS Code Extension Host",
     "SubversionR version report command executed and opened a readonly report document",
     "SubversionR installed redaction report command executed and returned a redacted diagnostics bundle",
-    "SubversionR installed remote worker report proved protocol v1.32 isolation, transport boundary, same-lane recovery, and subsequent diagnostics",
+    "SubversionR installed remote worker report proved protocol v1.33 isolation, credential settlement, transport boundary, same-lane recovery, and subsequent diagnostics",
     "working-copy sentinel .svn tree hash was unchanged",
     "publicReadinessClaim remains false"
   )

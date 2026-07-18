@@ -6,10 +6,13 @@ use std::sync::Arc;
 
 use subversionr_daemon::{
     NativeBridge, ProcessRemoteWorkerSupervisor, remote_worker_control_channel_is_private,
-    run_json_rpc_stdio_with_remote_worker, run_remote_worker,
+    run_json_rpc_stdio_with_remote_worker, run_private_credential_provider_probe,
+    run_remote_worker,
 };
 
 const PRIVATE_REMOTE_WORKER_MODE: &str = "--subversionr-private-remote-worker-v1";
+const PRIVATE_CREDENTIAL_PROVIDER_PROBE_MODE: &str =
+    "--subversionr-private-credential-provider-probe-v1";
 
 fn main() -> ExitCode {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
@@ -20,23 +23,32 @@ fn main() -> ExitCode {
         }
         return run_remote_worker(io::stdin().lock(), io::stdout().lock());
     }
+    if arguments.len() == 1 && arguments[0] == PRIVATE_CREDENTIAL_PROVIDER_PROBE_MODE {
+        let Some(bridge_path) = verified_bridge_path() else {
+            return ExitCode::from(2);
+        };
+        let worker_executable = match env::current_exe().and_then(|path| path.canonicalize()) {
+            Ok(path) if path.is_absolute() && path.is_file() => path,
+            _ => return ExitCode::from(2),
+        };
+        let temp_base = env::temp_dir().join(format!(
+            "subversionr-private-credential-provider-probe-{}",
+            std::process::id()
+        ));
+        return run_private_credential_provider_probe(
+            worker_executable,
+            bridge_path,
+            temp_base,
+            io::stdout().lock(),
+        );
+    }
     if !arguments.is_empty() {
         eprintln!("SubversionR daemon does not accept command-line arguments.");
         return ExitCode::from(2);
     }
 
-    let Some(bridge_path) = env::var_os("SUBVERSIONR_BRIDGE_DLL") else {
-        eprintln!("SUBVERSIONR_BRIDGE_DLL is required.");
+    let Some(bridge_path) = verified_bridge_path() else {
         return ExitCode::from(2);
-    };
-
-    let bridge_path = PathBuf::from(bridge_path);
-    let bridge_path = match bridge_path.canonicalize() {
-        Ok(path) if path.is_absolute() && path.is_file() => path,
-        _ => {
-            eprintln!("SUBVERSIONR_BRIDGE_DLL must resolve to an absolute file.");
-            return ExitCode::from(2);
-        }
     };
     let bridge = match NativeBridge::load(&bridge_path) {
         Ok(bridge) => bridge,
@@ -69,6 +81,21 @@ fn main() -> ExitCode {
         Err(error) => {
             eprintln!("{error}");
             ExitCode::from(1)
+        }
+    }
+}
+
+fn verified_bridge_path() -> Option<PathBuf> {
+    let Some(bridge_path) = env::var_os("SUBVERSIONR_BRIDGE_DLL") else {
+        eprintln!("SUBVERSIONR_BRIDGE_DLL is required.");
+        return None;
+    };
+    let bridge_path = PathBuf::from(bridge_path);
+    match bridge_path.canonicalize() {
+        Ok(path) if path.is_absolute() && path.is_file() => Some(path),
+        _ => {
+            eprintln!("SUBVERSIONR_BRIDGE_DLL must resolve to an absolute file.");
+            None
         }
     }
 }

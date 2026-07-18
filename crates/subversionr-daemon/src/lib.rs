@@ -25,8 +25,9 @@ pub use bridge::{
 };
 pub use native::{NativeBridge, NativeBridgeLoadError, RemoteNativeBridge};
 pub use remote_worker::{
-    InlineRemoteWorkerSupervisor, ProcessRemoteWorkerSupervisor, RemoteWorkerSupervisor,
-    remote_worker_control_channel_is_private, run_remote_worker,
+    InlineRemoteWorkerSupervisor, ProcessRemoteWorkerSupervisor, RemoteCredentialProbeScenario,
+    RemoteWorkerSupervisor, remote_worker_control_channel_is_private,
+    run_private_credential_provider_probe, run_remote_worker,
 };
 pub use state::DaemonState;
 pub use stdio::{run_json_rpc_stdio, run_json_rpc_stdio_with_remote_worker};

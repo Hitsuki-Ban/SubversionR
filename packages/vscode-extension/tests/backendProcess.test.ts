@@ -147,6 +147,75 @@ describe("startBackendProcess", () => {
     connection.dispose();
   });
 
+  it("notifies request settlement after both daemon success and failure", async () => {
+    const spawner = new RecordingSpawner();
+    const onRequestSettled = vi.fn();
+    const start = startBackendProcess(backendConfig(), backendDeps({ spawner, onRequestSettled }));
+    const initialize = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(initialize.id, initializeResponse()));
+    const connection = await start;
+    const params = {
+      remote: { version: 1, operationId: "00000000-0000-4000-8000-000000000001" },
+    };
+
+    const success = connection.sendRequest("repository/checkout", params);
+    const successRequest = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(successRequest.id, { revision: 1 }));
+    await expect(success).resolves.toEqual({ revision: 1 });
+
+    const failure = connection.sendRequest("repository/checkout", params);
+    const failureRequest = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(encodeContentLengthFrame(JSON.stringify({
+      jsonrpc: "2.0",
+      id: failureRequest.id,
+      error: { code: -32_000, message: "fixture failure" },
+    })));
+    await expect(failure).rejects.toBeDefined();
+
+    expect(onRequestSettled).toHaveBeenNthCalledWith(1, "repository/checkout", params);
+    expect(onRequestSettled).toHaveBeenNthCalledWith(2, "repository/checkout", params);
+    connection.dispose();
+  });
+
+  it("notifies request settlement after AbortSignal cancellation", async () => {
+    const spawner = new RecordingSpawner();
+    const onRequestSettled = vi.fn();
+    const start = startBackendProcess(backendConfig(), backendDeps({ spawner, onRequestSettled }));
+    const initialize = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(initialize.id, initializeResponse()));
+    const connection = await start;
+    const cancellation = new AbortController();
+    const params = {
+      remote: { version: 1, operationId: "00000000-0000-4000-8000-000000000001" },
+    };
+
+    const pending = connection.sendRequest("repository/checkout", params, { signal: cancellation.signal });
+    await readJsonRpcRequest(spawner.child.stdin);
+    cancellation.abort();
+
+    await expect(pending).rejects.toBeDefined();
+    expect(onRequestSettled).toHaveBeenCalledWith("repository/checkout", params);
+    connection.dispose();
+  });
+
+  it("does not let request settlement cleanup replace the daemon result", async () => {
+    const spawner = new RecordingSpawner();
+    const start = startBackendProcess(backendConfig(), backendDeps({
+      spawner,
+      onRequestSettled: () => { throw new Error("cleanup fixture failure"); },
+    }));
+    const initialize = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(initialize.id, initializeResponse()));
+    const connection = await start;
+
+    const response = connection.sendRequest("diagnostics/get", {});
+    const request = await readJsonRpcRequest(spawner.child.stdin);
+    spawner.child.stdout.write(jsonRpcResponse(request.id, { source: "subversionr-daemon" }));
+
+    await expect(response).resolves.toEqual({ source: "subversionr-daemon" });
+    connection.dispose();
+  });
+
   it("keeps remote submission disabled until the exact trust update acknowledgement arrives", async () => {
     const spawner = new RecordingSpawner();
     const start = startBackendProcess(
@@ -265,7 +334,7 @@ describe("startBackendProcess", () => {
       jsonRpcResponse(
         request.id,
         initializeResponse({
-          protocol: { major: 1, minor: 31 },
+          protocol: { major: 1, minor: 32 },
         }),
       ),
     );
@@ -275,8 +344,8 @@ describe("startBackendProcess", () => {
       category: "protocol",
       messageKey: "error.backend.protocolMinorUnsupported",
       safeArgs: {
-        expectedMinimum: 32,
-        actual: 31,
+        expectedMinimum: 33,
+        actual: 32,
       },
     });
     expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
@@ -477,6 +546,7 @@ describe("startBackendProcess", () => {
     "remoteOperationEnvelope",
     "trustedConfigSnapshot",
     "remoteWorkerIsolation",
+    "credentialLeaseSettlement",
   ] as const)(
     "rejects initialize and terminates the sidecar when %s is unavailable",
     async (capability) => {
@@ -920,7 +990,7 @@ function initializeResponse(
 
 function initializeResponseBase() {
   return {
-    protocol: { major: 1, minor: 32 },
+    protocol: { major: 1, minor: 33 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -974,6 +1044,7 @@ function initializeResponseBase() {
       remoteOperationEnvelope: true,
       trustedConfigSnapshot: true,
       remoteWorkerIsolation: true,
+      credentialLeaseSettlement: true,
     },
     acknowledgedTrustEpoch: 1,
   };

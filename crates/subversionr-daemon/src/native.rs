@@ -6,16 +6,20 @@ use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
 use std::slice;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use libloading::Library;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use subversionr_protocol::{
-    CertificateTrustRequest, CertificateTrustResponse, CredentialRequest, CredentialResponse,
-    HistoryBlameLine, HistoryLogChangedPath, HistoryLogEntry, LockInfo, OperationFailureCause,
-    OperationFailureDiagnostics, RepositoryIdentity, StatusEntry, StatusSnapshot, StatusSummary,
-    SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
+    CertificateTrustRequest, CertificateTrustResponse, CredentialAttempt, CredentialAuthKind,
+    CredentialPersistenceIntent, CredentialRequest, CredentialResponse, CredentialSettlementAck,
+    CredentialSettlementOutcome, CredentialSettlementRequest, HistoryBlameLine,
+    HistoryLogChangedPath, HistoryLogEntry, LockInfo, OperationFailureCause,
+    OperationFailureDiagnostics, RemoteInteraction, RemoteOperationEnvelope, RemoteServerAuth,
+    RepositoryIdentity, ServerAccountSelection, ServerAccountSnapshot, StatusEntry, StatusSnapshot,
+    StatusSummary, SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
 };
 
 use crate::{
@@ -36,6 +40,7 @@ use crate::{
 const BRIDGE_RUNTIME_VERSION: &str = concat!("subversionr-svn-bridge/", env!("CARGO_PKG_VERSION"));
 const MAX_SVN_REVNUM: u64 = 2_147_483_647;
 const RAW_AUTH_ABI_VERSION: u32 = 1;
+const RAW_REMOTE_CREDENTIAL_ABI_VERSION: u32 = 2;
 const RAW_AUTH_CALLBACK_OK: c_int = 0;
 const RAW_AUTH_CALLBACK_DENIED: c_int = 1;
 const RAW_AUTH_CALLBACK_INVALID: c_int = 2;
@@ -107,6 +112,44 @@ struct RawCredentialResponse {
 }
 
 #[repr(C)]
+struct RawRemoteCredentialRequestV2 {
+    realm: *const c_char,
+    suggested_username: *const c_char,
+    working_copy_root: *const c_char,
+    attempt: u32,
+    previous_lease_id: *const c_char,
+}
+
+#[repr(C)]
+struct RawRemoteCredentialResponseV2 {
+    username: *const c_char,
+    secret: *const c_char,
+    lease_id: *const c_char,
+    persistence_requested: c_int,
+}
+
+#[repr(C)]
+struct RawPrivateCredentialProbeRequest {
+    abi_version: u32,
+    scenario: u32,
+    realm: *const c_char,
+    suggested_username: *const c_char,
+    terminal_outcome: u32,
+}
+
+const RAW_CREDENTIAL_PROBE_EVENT_LIMIT: usize = 8;
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct RawPrivateCredentialProbeInspection {
+    abi_version: u32,
+    scenario: u32,
+    terminal_outcome: u32,
+    event_count: u32,
+    events: [u32; RAW_CREDENTIAL_PROBE_EVENT_LIMIT],
+}
+
+#[repr(C)]
 struct RawCertificateRequest {
     realm: *const c_char,
     host: *const c_char,
@@ -132,6 +175,15 @@ type RawCredentialCallback = unsafe extern "C" fn(
     *mut RawCredentialResponse,
 ) -> c_int;
 type RawCredentialResponseDispose = unsafe extern "C" fn(*mut c_void, *mut RawCredentialResponse);
+type RawRemoteCredentialCallbackV2 = unsafe extern "C" fn(
+    *mut c_void,
+    *const RawRemoteCredentialRequestV2,
+    *mut RawRemoteCredentialResponseV2,
+) -> c_int;
+type RawRemoteCredentialResponseDisposeV2 =
+    unsafe extern "C" fn(*mut c_void, *mut RawRemoteCredentialResponseV2);
+type RawRemoteCredentialSettlementCallbackV2 =
+    unsafe extern "C" fn(*mut c_void, *const c_char, u32) -> c_int;
 type RawCertificateCallback = unsafe extern "C" fn(
     *mut c_void,
     *const RawCertificateRequest,
@@ -145,6 +197,15 @@ struct RawAuthCallbacks {
     credential_callback: Option<RawCredentialCallback>,
     credential_response_dispose: Option<RawCredentialResponseDispose>,
     certificate_callback: Option<RawCertificateCallback>,
+}
+
+#[repr(C)]
+struct RawRemoteCredentialCallbacksV2 {
+    abi_version: u32,
+    baton: *mut c_void,
+    credential_callback: Option<RawRemoteCredentialCallbackV2>,
+    credential_response_dispose: Option<RawRemoteCredentialResponseDisposeV2>,
+    credential_settlement_callback: Option<RawRemoteCredentialSettlementCallbackV2>,
 }
 
 type RawCancelCallback = unsafe extern "C" fn(*mut c_void) -> c_int;
@@ -310,11 +371,20 @@ struct RawRemoteConfigInspection {
 
 type RuntimeCreate = unsafe extern "C" fn(*mut *mut c_void) -> c_int;
 type RuntimeDestroy = unsafe extern "C" fn(*mut c_void);
-type RemoteContextCreate =
-    unsafe extern "C" fn(*const RawRemoteConfigV1, *mut *mut c_void) -> c_int;
+type RemoteContextCreate = unsafe extern "C" fn(
+    *const RawRemoteConfigV1,
+    *const RawRemoteCredentialCallbacksV2,
+    *mut *mut c_void,
+) -> c_int;
 type RemoteContextInspect =
     unsafe extern "C" fn(*const c_void, *mut RawRemoteConfigInspection) -> c_int;
 type RemoteContextDestroy = unsafe extern "C" fn(*mut c_void);
+type RemoteContextFinishCredentials = unsafe extern "C" fn(*mut c_void, u32) -> c_int;
+type PrivateRemoteCredentialProviderProbe = unsafe extern "C" fn(
+    *const RawRemoteCredentialCallbacksV2,
+    *const RawPrivateCredentialProbeRequest,
+    *mut RawPrivateCredentialProbeInspection,
+) -> c_int;
 type Version = unsafe extern "C" fn() -> RawVersionInfo;
 type OpenWorkingCopy =
     unsafe extern "C" fn(*mut c_void, *const c_char, *mut RawWorkingCopyInfo) -> c_int;
@@ -725,6 +795,8 @@ struct RemoteNativeSymbols {
     remote_context_create: RemoteContextCreate,
     remote_context_inspect: RemoteContextInspect,
     remote_context_destroy: RemoteContextDestroy,
+    remote_context_finish_credentials: RemoteContextFinishCredentials,
+    private_remote_credential_provider_probe: PrivateRemoteCredentialProviderProbe,
     version: Version,
 }
 
@@ -739,6 +811,12 @@ impl RemoteNativeSymbols {
             }?,
             remote_context_destroy: *unsafe {
                 library.get(b"subversionr_bridge_remote_context_destroy\0")
+            }?,
+            remote_context_finish_credentials: *unsafe {
+                library.get(b"subversionr_bridge_remote_context_finish_credentials\0")
+            }?,
+            private_remote_credential_provider_probe: *unsafe {
+                library.get(b"subversionr_bridge_private_remote_credential_provider_probe\0")
             }?,
             version: *unsafe { library.get(b"subversionr_bridge_version\0") }?,
         })
@@ -899,13 +977,94 @@ impl RemoteNativeBridge {
     pub fn create_remote_context_foundation(
         &self,
         plan: RemoteConfigPlan,
+        envelope: &RemoteOperationEnvelope,
+        auth: &mut dyn AuthRequestBroker,
+        deadline: Instant,
     ) -> Result<(), BridgeFailure> {
-        create_remote_context_foundation_raw(
+        let _required_finish_symbol = self.symbols.remote_context_finish_credentials;
+        create_remote_context_foundation_worker_raw(
             self.symbols.remote_context_create,
             self.symbols.remote_context_inspect,
             self.symbols.remote_context_destroy,
             plan,
+            envelope,
+            auth,
+            deadline,
         )
+    }
+
+    pub(crate) fn probe_remote_credentials(
+        &self,
+        envelope: &RemoteOperationEnvelope,
+        auth: &mut dyn AuthRequestBroker,
+        deadline: Instant,
+        scenario: u32,
+    ) -> Result<(), BridgeFailure> {
+        let (raw_scenario, terminal_outcome) = match scenario {
+            1 => (1, 0),
+            2 => (2, 0),
+            3 => (3, 3),
+            4 => (4, 4),
+            5 => (5, 5),
+            _ => return Err(native_auth_response_invalid("credentials/probe")),
+        };
+        let realm = CString::new("SubversionR private credential provider probe")
+            .expect("fixed probe realm");
+        let suggested_username = match &envelope.profile.server_account {
+            ServerAccountSnapshot::Selection(ServerAccountSelection::Fixed { username }) => {
+                username.as_str()
+            }
+            ServerAccountSnapshot::Selection(ServerAccountSelection::ChooseForeground) => {
+                "subversionr-probe"
+            }
+            ServerAccountSnapshot::None(_) => {
+                return Err(native_auth_response_invalid("credentials/probe"));
+            }
+        };
+        if !valid_remote_username(suggested_username) {
+            return Err(native_auth_response_invalid("credentials/probe"));
+        }
+        let suggested_username = CString::new(suggested_username)
+            .map_err(|_| native_auth_response_invalid("credentials/probe"))?;
+        let mut baton = RemoteCredentialBaton {
+            auth,
+            envelope,
+            deadline,
+            failure: None,
+        };
+        let callbacks = raw_remote_credential_callbacks(&mut baton);
+        let request = RawPrivateCredentialProbeRequest {
+            abi_version: RAW_REMOTE_CREDENTIAL_ABI_VERSION,
+            scenario: raw_scenario,
+            realm: realm.as_ptr(),
+            suggested_username: suggested_username.as_ptr(),
+            terminal_outcome,
+        };
+        let mut inspection = RawPrivateCredentialProbeInspection::default();
+        let status = unsafe {
+            (self.symbols.private_remote_credential_provider_probe)(
+                &callbacks,
+                &request,
+                &mut inspection,
+            )
+        };
+        if let Some(failure) = baton.take_failure() {
+            return Err(failure);
+        }
+        if status != 0
+            || inspection.abi_version != RAW_REMOTE_CREDENTIAL_ABI_VERSION
+            || inspection.scenario != raw_scenario
+            || inspection.terminal_outcome != terminal_outcome
+            || inspection.event_count == 0
+            || inspection.event_count as usize > RAW_CREDENTIAL_PROBE_EVENT_LIMIT
+        {
+            return Err(remote_context_failure(
+                "SUBVERSIONR_REMOTE_CREDENTIAL_PROBE_FAILED",
+                "error.remote.credentialProbeFailed",
+                status,
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -3234,6 +3393,382 @@ impl<'a> NativeAuthBaton<'a> {
     }
 }
 
+struct RemoteCredentialBaton<'a> {
+    auth: &'a mut dyn AuthRequestBroker,
+    envelope: &'a RemoteOperationEnvelope,
+    deadline: Instant,
+    failure: Option<BridgeFailure>,
+}
+
+impl RemoteCredentialBaton<'_> {
+    fn request_id(&self, kind: &str) -> String {
+        let id = NEXT_NATIVE_AUTH_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        format!("remote-{kind}-{id}")
+    }
+
+    fn record_failure(&mut self, failure: BridgeFailure) {
+        if self.failure.is_none() {
+            self.failure = Some(failure);
+        }
+    }
+
+    fn take_failure(&mut self) -> Option<BridgeFailure> {
+        self.failure.take()
+    }
+
+    fn remaining_timeout_ms(&self, method: &str) -> Result<u64, BridgeFailure> {
+        let remaining = self
+            .deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| remote_credential_timeout(method))?;
+        let millis = remaining.as_millis().min(u64::MAX as u128) as u64;
+        if millis == 0 {
+            return Err(remote_credential_timeout(method));
+        }
+        Ok(millis)
+    }
+}
+
+unsafe extern "C" fn remote_credential_callback_v2(
+    baton: *mut c_void,
+    request: *const RawRemoteCredentialRequestV2,
+    response: *mut RawRemoteCredentialResponseV2,
+) -> c_int {
+    match catch_unwind(AssertUnwindSafe(|| unsafe {
+        remote_credential_callback_v2_inner(baton, request, response)
+    })) {
+        Ok(status) => status,
+        Err(_) => unsafe {
+            dispose_raw_remote_credential_response_v2(response);
+            record_remote_credential_failure(
+                baton,
+                native_auth_response_invalid("credentials/request"),
+            );
+            RAW_AUTH_CALLBACK_DENIED
+        },
+    }
+}
+
+unsafe fn remote_credential_callback_v2_inner(
+    baton: *mut c_void,
+    request: *const RawRemoteCredentialRequestV2,
+    response: *mut RawRemoteCredentialResponseV2,
+) -> c_int {
+    if baton.is_null() || request.is_null() || response.is_null() {
+        return RAW_AUTH_CALLBACK_INVALID;
+    }
+    unsafe { write_empty_remote_credential_response_v2(response) };
+    let auth_baton = unsafe { &mut *(baton.cast::<RemoteCredentialBaton<'_>>()) };
+    let raw = unsafe { &*request };
+    let realm = match unsafe { optional_c_string_to_owned(raw.realm, "remoteCredential.realm") } {
+        Ok(Some(realm)) if !realm.is_empty() && realm.len() <= 4096 => realm,
+        _ => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    let suggested_username = match unsafe {
+        optional_c_string_to_owned(raw.suggested_username, "remoteCredential.suggestedUsername")
+    } {
+        Ok(value) => value,
+        Err(_) => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    let account = match &auth_baton.envelope.profile.server_account {
+        ServerAccountSnapshot::Selection(account) => account.clone(),
+        ServerAccountSnapshot::None(_) => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    if let (ServerAccountSelection::Fixed { username }, Some(suggested)) =
+        (&account, suggested_username.as_ref())
+        && username != suggested
+    {
+        auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+        return RAW_AUTH_CALLBACK_DENIED;
+    }
+    let attempt = match raw.attempt {
+        0 if raw.previous_lease_id.is_null() => CredentialAttempt::Initial,
+        1 => {
+            let previous_lease_id = match unsafe {
+                optional_c_string_to_owned(
+                    raw.previous_lease_id,
+                    "remoteCredential.previousLeaseId",
+                )
+            } {
+                Ok(Some(value)) if !value.is_empty() && value.len() <= 128 => value,
+                _ => {
+                    auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+                    return RAW_AUTH_CALLBACK_DENIED;
+                }
+            };
+            CredentialAttempt::RetryAfterRejected { previous_lease_id }
+        }
+        _ => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    let auth_kind = match auth_baton.envelope.profile.server_auth {
+        RemoteServerAuth::Basic => CredentialAuthKind::Basic,
+        RemoteServerAuth::CramMd5 => CredentialAuthKind::CramMd5,
+        _ => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    let timeout_ms = match auth_baton.remaining_timeout_ms("credentials/request") {
+        Ok(timeout_ms) => timeout_ms,
+        Err(failure) => {
+            auth_baton.record_failure(failure);
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    let request_id = auth_baton.request_id("credential");
+    let protocol_request = CredentialRequest {
+        request_id: request_id.clone(),
+        operation_id: auth_baton.envelope.operation_id.clone(),
+        endpoint: auth_baton.envelope.expected_origin.clone(),
+        auth_kind,
+        realm,
+        account,
+        attempt,
+        interactive: matches!(auth_baton.envelope.interaction, RemoteInteraction::Allowed),
+        persistence_allowed: true,
+        origin: auth_baton.envelope.intent,
+        timeout_ms,
+    };
+    let safe_args = credential_safe_args(&protocol_request);
+    match auth_baton.auth.request_credential(protocol_request) {
+        Ok(CredentialResponse::Provide {
+            request_id: response_request_id,
+            operation_id,
+            lease_id,
+            credential,
+            persistence_intent,
+        }) if response_request_id == request_id
+            && operation_id == auth_baton.envelope.operation_id
+            && valid_remote_username(&credential.username)
+            && !credential.secret.is_empty()
+            && credential.secret.len() <= 32768
+            && !lease_id.is_empty()
+            && lease_id.len() <= 128 =>
+        {
+            if matches!(
+                &auth_baton.envelope.profile.server_account,
+                ServerAccountSnapshot::Selection(ServerAccountSelection::Fixed { username })
+                    if &credential.username != username
+            ) {
+                auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+                return RAW_AUTH_CALLBACK_DENIED;
+            }
+            let username = match CString::new(credential.username) {
+                Ok(value) => value,
+                Err(_) => {
+                    auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+                    return RAW_AUTH_CALLBACK_DENIED;
+                }
+            };
+            let secret = match CString::new(credential.secret) {
+                Ok(value) => value,
+                Err(_) => {
+                    auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+                    return RAW_AUTH_CALLBACK_DENIED;
+                }
+            };
+            let lease_id = match CString::new(lease_id) {
+                Ok(value) => value,
+                Err(_) => {
+                    auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+                    return RAW_AUTH_CALLBACK_DENIED;
+                }
+            };
+            unsafe {
+                (*response).username = username.into_raw();
+                (*response).secret = secret.into_raw();
+                (*response).lease_id = lease_id.into_raw();
+                (*response).persistence_requested = i32::from(matches!(
+                    persistence_intent,
+                    CredentialPersistenceIntent::SecretStorage
+                ));
+            }
+            RAW_AUTH_CALLBACK_OK
+        }
+        Ok(CredentialResponse::Cancel {
+            request_id: response_request_id,
+            operation_id,
+            error,
+        }) if response_request_id == request_id
+            && operation_id == auth_baton.envelope.operation_id =>
+        {
+            auth_baton.record_failure(credential_error_to_bridge(&error, safe_args));
+            RAW_AUTH_CALLBACK_DENIED
+        }
+        Ok(_) => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
+            RAW_AUTH_CALLBACK_DENIED
+        }
+        Err(failure) => {
+            auth_baton.record_failure(failure);
+            RAW_AUTH_CALLBACK_DENIED
+        }
+    }
+}
+
+unsafe extern "C" fn remote_credential_response_dispose_v2(
+    _baton: *mut c_void,
+    response: *mut RawRemoteCredentialResponseV2,
+) {
+    unsafe { dispose_raw_remote_credential_response_v2(response) };
+}
+
+unsafe fn write_empty_remote_credential_response_v2(response: *mut RawRemoteCredentialResponseV2) {
+    if !response.is_null() {
+        unsafe {
+            *response = RawRemoteCredentialResponseV2 {
+                username: ptr::null(),
+                secret: ptr::null(),
+                lease_id: ptr::null(),
+                persistence_requested: 0,
+            };
+        }
+    }
+}
+
+unsafe fn dispose_raw_remote_credential_response_v2(response: *mut RawRemoteCredentialResponseV2) {
+    if response.is_null() {
+        return;
+    }
+    let response = unsafe { &mut *response };
+    unsafe {
+        drop_c_string(response.username, false);
+        drop_c_string(response.secret, true);
+        drop_c_string(response.lease_id, false);
+    }
+    response.username = ptr::null();
+    response.secret = ptr::null();
+    response.lease_id = ptr::null();
+    response.persistence_requested = 0;
+}
+
+unsafe extern "C" fn remote_credential_settlement_callback_v2(
+    baton: *mut c_void,
+    lease_id: *const c_char,
+    outcome: u32,
+) -> c_int {
+    match catch_unwind(AssertUnwindSafe(|| unsafe {
+        remote_credential_settlement_callback_v2_inner(baton, lease_id, outcome)
+    })) {
+        Ok(status) => status,
+        Err(_) => unsafe {
+            record_remote_credential_failure(
+                baton,
+                native_auth_response_invalid("credentials/settle"),
+            );
+            RAW_AUTH_CALLBACK_DENIED
+        },
+    }
+}
+
+unsafe fn remote_credential_settlement_callback_v2_inner(
+    baton: *mut c_void,
+    lease_id: *const c_char,
+    outcome: u32,
+) -> c_int {
+    if baton.is_null() {
+        return RAW_AUTH_CALLBACK_INVALID;
+    }
+    let auth_baton = unsafe { &mut *(baton.cast::<RemoteCredentialBaton<'_>>()) };
+    let lease_id = match unsafe { optional_c_string_to_owned(lease_id, "settlement.leaseId") } {
+        Ok(Some(value)) if !value.is_empty() && value.len() <= 128 => value,
+        _ => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/settle"));
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    let outcome = match raw_settlement_outcome(outcome) {
+        Some(outcome) => outcome,
+        None => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/settle"));
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    let timeout_ms = match auth_baton.remaining_timeout_ms("credentials/settle") {
+        Ok(timeout_ms) => timeout_ms,
+        Err(failure) => {
+            auth_baton.record_failure(failure);
+            return RAW_AUTH_CALLBACK_DENIED;
+        }
+    };
+    let request_id = auth_baton.request_id("settlement");
+    let request = CredentialSettlementRequest {
+        request_id: request_id.clone(),
+        operation_id: auth_baton.envelope.operation_id.clone(),
+        lease_id: lease_id.clone(),
+        outcome,
+        timeout_ms,
+    };
+    match auth_baton.auth.settle_credential(request) {
+        Ok(CredentialSettlementAck {
+            request_id: ack_request_id,
+            operation_id,
+            lease_id: ack_lease_id,
+            outcome: ack_outcome,
+        }) if ack_request_id == request_id
+            && operation_id == auth_baton.envelope.operation_id
+            && ack_lease_id == lease_id
+            && ack_outcome == outcome =>
+        {
+            RAW_AUTH_CALLBACK_OK
+        }
+        Ok(_) => {
+            auth_baton.record_failure(native_auth_response_invalid("credentials/settle"));
+            RAW_AUTH_CALLBACK_DENIED
+        }
+        Err(failure) => {
+            auth_baton.record_failure(failure);
+            RAW_AUTH_CALLBACK_DENIED
+        }
+    }
+}
+
+unsafe fn record_remote_credential_failure(baton: *mut c_void, failure: BridgeFailure) {
+    if !baton.is_null() {
+        unsafe { &mut *(baton.cast::<RemoteCredentialBaton<'_>>()) }.record_failure(failure);
+    }
+}
+
+fn raw_settlement_outcome(value: u32) -> Option<CredentialSettlementOutcome> {
+    match value {
+        1 => Some(CredentialSettlementOutcome::Accepted),
+        2 => Some(CredentialSettlementOutcome::Rejected),
+        3 => Some(CredentialSettlementOutcome::Unused),
+        4 => Some(CredentialSettlementOutcome::Cancelled),
+        5 => Some(CredentialSettlementOutcome::TimedOut),
+        _ => None,
+    }
+}
+
+fn valid_remote_username(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn remote_credential_timeout(method: &str) -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_CREDENTIAL_TIMEOUT",
+        "auth",
+        "error.auth.credentialTimeout",
+        json!({ "method": method }),
+        false,
+    )
+}
+
 struct NativeCancelBaton<'a> {
     token: &'a dyn BridgeCancellationToken,
 }
@@ -3291,106 +3826,16 @@ unsafe fn native_credential_callback_inner(
         return RAW_AUTH_CALLBACK_INVALID;
     }
     let auth_baton = unsafe { &mut *(baton.cast::<NativeAuthBaton<'_>>()) };
-    let request = unsafe { &*request };
+    let _request = unsafe { &*request };
     unsafe { write_empty_credential_response(response) };
-
-    let realm = match unsafe { optional_c_string_to_owned(request.realm, "credential.realm") } {
-        Ok(Some(realm)) if !realm.trim().is_empty() => realm,
-        _ => {
-            auth_baton.record_failure(credential_realm_required());
-            return RAW_AUTH_CALLBACK_DENIED;
-        }
-    };
-    let username = match unsafe {
-        optional_c_string_to_owned(request.username, "credential.username")
-    } {
-        Ok(username) => username,
-        Err(failure) => {
-            auth_baton.record_failure(native_auth_invalid_string("credentials/request", failure));
-            return RAW_AUTH_CALLBACK_DENIED;
-        }
-    };
-    let raw_working_copy_root = match unsafe {
-        optional_c_string_to_owned(request.working_copy_root, "credential.workingCopyRoot")
-    } {
-        Ok(root) => root,
-        Err(failure) => {
-            auth_baton.record_failure(native_auth_invalid_string("credentials/request", failure));
-            return RAW_AUTH_CALLBACK_DENIED;
-        }
-    };
-    let working_copy_root = auth_baton
-        .working_copy_root
-        .clone()
-        .or(raw_working_copy_root);
-
-    let persistence_allowed = request.may_save != 0;
-    let request_id = auth_baton.request_id("credential");
-    let protocol_request = CredentialRequest {
-        request_id: request_id.clone(),
-        realm: realm.clone(),
-        kind: "usernamePassword".to_string(),
-        username,
-        interactive: true,
-        persistence_allowed,
-        origin: "foreground".to_string(),
-        timeout_ms: NATIVE_AUTH_REQUEST_TIMEOUT_MS,
-        repository_id: auth_baton.repository_id.clone(),
-        working_copy_root,
-    };
-    let safe_args = credential_safe_args(&protocol_request);
-
-    match auth_baton.auth.request_credential(protocol_request) {
-        Ok(CredentialResponse::Provide {
-            request_id: response_request_id,
-            credential,
-            persistence,
-        }) if response_request_id == request_id => {
-            if !credential_persistence_is_allowed(&persistence, persistence_allowed) {
-                auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
-                return RAW_AUTH_CALLBACK_DENIED;
-            }
-            let Some(username) = credential.username else {
-                auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
-                return RAW_AUTH_CALLBACK_DENIED;
-            };
-            let username = match CString::new(username) {
-                Ok(username) => username,
-                Err(_) => {
-                    auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
-                    return RAW_AUTH_CALLBACK_DENIED;
-                }
-            };
-            let secret = match CString::new(credential.secret) {
-                Ok(secret) => secret,
-                Err(_) => {
-                    auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
-                    return RAW_AUTH_CALLBACK_DENIED;
-                }
-            };
-            unsafe {
-                (*response).username = username.into_raw();
-                (*response).secret = secret.into_raw();
-                (*response).may_save = 0;
-            }
-            RAW_AUTH_CALLBACK_OK
-        }
-        Ok(CredentialResponse::Cancel {
-            request_id: response_request_id,
-            error,
-        }) if response_request_id == request_id => {
-            auth_baton.record_failure(credential_error_to_bridge(&error, safe_args));
-            RAW_AUTH_CALLBACK_DENIED
-        }
-        Ok(_) => {
-            auth_baton.record_failure(native_auth_response_invalid("credentials/request"));
-            RAW_AUTH_CALLBACK_DENIED
-        }
-        Err(failure) => {
-            auth_baton.record_failure(failure);
-            RAW_AUTH_CALLBACK_DENIED
-        }
-    }
+    auth_baton.record_failure(BridgeFailure::new(
+        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED",
+        "auth",
+        "error.auth.credentialRemoteWorkerRequired",
+        json!({ "method": "credentials/request" }),
+        false,
+    ));
+    RAW_AUTH_CALLBACK_DENIED
 }
 
 unsafe extern "C" fn native_credential_response_dispose(
@@ -3674,10 +4119,29 @@ fn repository_identity_from_raw(
 
 fn credential_safe_args(request: &CredentialRequest) -> serde_json::Value {
     json!({
-        "realmHash": auth_realm_hash(&request.kind, &request.realm),
-        "kind": request.kind,
+        "authorityHash": credential_authority_hash(request),
+        "authKind": request.auth_kind,
+        "attempt": request.attempt,
         "origin": request.origin,
     })
+}
+
+fn credential_authority_hash(request: &CredentialRequest) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_vec(&request.endpoint).expect("endpoint serialization"));
+    hasher.update([0]);
+    hasher.update(serde_json::to_vec(&request.auth_kind).expect("auth kind serialization"));
+    hasher.update([0]);
+    hasher.update(request.realm.as_bytes());
+    hex_digest(hasher.finalize())
+}
+
+fn hex_digest(digest: impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn certificate_safe_args(request: &CertificateTrustRequest) -> serde_json::Value {
@@ -3695,11 +4159,7 @@ fn auth_realm_hash(kind: &str, realm: &str) -> String {
     hasher.update(kind.as_bytes());
     hasher.update([0]);
     hasher.update(realm.as_bytes());
-    let digest = hasher.finalize();
-    digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+    hex_digest(hasher.finalize())
 }
 
 fn credential_error_to_bridge(
@@ -3734,11 +4194,6 @@ fn certificate_error_to_bridge(
     )
 }
 
-fn credential_persistence_is_allowed(persistence: &str, persistence_allowed: bool) -> bool {
-    matches!(persistence, "session")
-        || (persistence_allowed && matches!(persistence, "secretStorage"))
-}
-
 fn certificate_trust_is_allowed(trust: &str, persistence_allowed: bool) -> bool {
     matches!(trust, "once") || (persistence_allowed && matches!(trust, "permanent"))
 }
@@ -3756,14 +4211,6 @@ fn credential_error_contract_is_allowed(error: &subversionr_protocol::Credential
                 "lifecycle",
                 "error.auth.credentialUntrustedWorkspace"
             ) | (
-                "SUBVERSIONR_CREDENTIAL_REALM_REQUIRED",
-                "auth",
-                "error.auth.credentialRealmRequired"
-            ) | (
-                "SUBVERSIONR_CREDENTIAL_UNSUPPORTED_KIND",
-                "auth",
-                "error.auth.credentialUnsupportedKind"
-            ) | (
                 "SUBVERSIONR_CREDENTIAL_NON_INTERACTIVE",
                 "auth",
                 "error.auth.credentialNonInteractive"
@@ -3776,9 +4223,29 @@ fn credential_error_contract_is_allowed(error: &subversionr_protocol::Credential
                 "auth",
                 "error.auth.credentialCancelled"
             ) | (
-                "SUBVERSIONR_CREDENTIAL_STORE_INVALID",
+                "SUBVERSIONR_CREDENTIAL_LEGACY_BLOCKED",
                 "auth",
-                "error.auth.credentialStoreInvalid"
+                "error.auth.credentialLegacyBlocked"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_LEGACY_CLEAR_DECLINED",
+                "auth",
+                "error.auth.credentialLegacyClearDeclined"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_ACCOUNT_UNAVAILABLE",
+                "auth",
+                "error.auth.credentialAccountUnavailable"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_RETRY_INVALID",
+                "auth",
+                "error.auth.credentialRetryInvalid"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_STORAGE_INTEGRITY",
+                "auth",
+                "error.auth.credentialStorageIntegrity"
+            ) | (
+                "SUBVERSIONR_CREDENTIAL_SECRET_INVALID",
+                "auth",
+                "error.auth.credentialSecretInvalid"
             )
         )
 }
@@ -3835,20 +4302,6 @@ fn certificate_error_contract_is_allowed(
                 "error.auth.certificateStoreInvalid"
             )
         )
-}
-
-fn credential_realm_required() -> BridgeFailure {
-    BridgeFailure::new(
-        "SUBVERSIONR_CREDENTIAL_REALM_REQUIRED",
-        "auth",
-        "error.auth.credentialRealmRequired",
-        json!({
-            "realmHash": auth_realm_hash("usernamePassword", ""),
-            "kind": "usernamePassword",
-            "origin": "foreground",
-        }),
-        false,
-    )
 }
 
 fn certificate_realm_required(failure_bits: u32) -> BridgeFailure {
@@ -3973,6 +4426,15 @@ fn create_remote_context_foundation_raw(
     destroy: RemoteContextDestroy,
     plan: RemoteConfigPlan,
 ) -> Result<(), BridgeFailure> {
+    if !matches!(plan.server_auth, RemoteConfigServerAuth::Anonymous) {
+        return Err(BridgeFailure::new(
+            "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED",
+            "auth",
+            "error.auth.credentialRemoteWorkerRequired",
+            json!({ "method": "credentials/request" }),
+            false,
+        ));
+    }
     let config = RawRemoteConfigV1 {
         abi_version: RAW_REMOTE_CONFIG_ABI_VERSION,
         scheme: match plan.scheme {
@@ -3989,7 +4451,7 @@ fn create_remote_context_foundation_raw(
         trust_windows_roots: i32::from(plan.trust_windows_roots),
     };
     let mut context = ptr::null_mut();
-    let status = unsafe { create(&config, &mut context) };
+    let status = unsafe { create(&config, ptr::null(), &mut context) };
     if status != 0 {
         return Err(remote_context_failure(
             "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED",
@@ -4018,6 +4480,107 @@ fn create_remote_context_foundation_raw(
         || inspection.category_mask != RAW_REMOTE_CATEGORY_MASK
         || inspection.option_mask != RAW_REMOTE_OPTION_MASK
         || inspection.provider_mask != 0
+        || inspection.forbidden_input_mask != 0
+    {
+        return Err(BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_INVALID",
+            "native",
+            "error.remote.configInspectionInvalid",
+            json!({}),
+            false,
+        ));
+    }
+    Ok(())
+}
+
+fn raw_remote_credential_callbacks(
+    baton: &mut RemoteCredentialBaton<'_>,
+) -> RawRemoteCredentialCallbacksV2 {
+    RawRemoteCredentialCallbacksV2 {
+        abi_version: RAW_REMOTE_CREDENTIAL_ABI_VERSION,
+        baton: (baton as *mut RemoteCredentialBaton<'_>).cast::<c_void>(),
+        credential_callback: Some(remote_credential_callback_v2),
+        credential_response_dispose: Some(remote_credential_response_dispose_v2),
+        credential_settlement_callback: Some(remote_credential_settlement_callback_v2),
+    }
+}
+
+fn create_remote_context_foundation_worker_raw(
+    create: RemoteContextCreate,
+    inspect: RemoteContextInspect,
+    destroy: RemoteContextDestroy,
+    plan: RemoteConfigPlan,
+    envelope: &RemoteOperationEnvelope,
+    auth: &mut dyn AuthRequestBroker,
+    deadline: Instant,
+) -> Result<(), BridgeFailure> {
+    let config = RawRemoteConfigV1 {
+        abi_version: RAW_REMOTE_CONFIG_ABI_VERSION,
+        scheme: match plan.scheme {
+            RemoteConfigScheme::Http => 1,
+            RemoteConfigScheme::Https => 2,
+            RemoteConfigScheme::Svn => 3,
+        },
+        server_auth: match plan.server_auth {
+            RemoteConfigServerAuth::Anonymous => 1,
+            RemoteConfigServerAuth::Basic => 2,
+            RemoteConfigServerAuth::CramMd5 => 3,
+        },
+        timeout_ms: plan.timeout_ms,
+        trust_windows_roots: i32::from(plan.trust_windows_roots),
+    };
+    let mut baton = RemoteCredentialBaton {
+        auth,
+        envelope,
+        deadline,
+        failure: None,
+    };
+    let callbacks = raw_remote_credential_callbacks(&mut baton);
+    let callback_ptr = if matches!(plan.server_auth, RemoteConfigServerAuth::Anonymous) {
+        ptr::null()
+    } else {
+        &callbacks
+    };
+    let mut context = ptr::null_mut();
+    let status = unsafe { create(&config, callback_ptr, &mut context) };
+    if let Some(failure) = baton.take_failure() {
+        return Err(failure);
+    }
+    if status != 0 {
+        return Err(remote_context_failure(
+            "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED",
+            "error.remote.configCreateFailed",
+            status,
+        ));
+    }
+    let Some(context) = NonNull::new(context) else {
+        return Err(remote_context_failure(
+            "SUBVERSIONR_REMOTE_CONFIG_CREATE_NULL",
+            "error.remote.configCreateNull",
+            0,
+        ));
+    };
+    let mut inspection = RawRemoteConfigInspection::default();
+    let inspect_status = unsafe { inspect(context.as_ptr(), &mut inspection) };
+    unsafe { destroy(context.as_ptr()) };
+    if let Some(failure) = baton.take_failure() {
+        return Err(failure);
+    }
+    if inspect_status != 0 {
+        return Err(remote_context_failure(
+            "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_FAILED",
+            "error.remote.configInspectionFailed",
+            inspect_status,
+        ));
+    }
+    let expected_provider_mask = u32::from(!matches!(
+        plan.server_auth,
+        RemoteConfigServerAuth::Anonymous
+    ));
+    if inspection.abi_version != RAW_REMOTE_CONFIG_ABI_VERSION
+        || inspection.category_mask != RAW_REMOTE_CATEGORY_MASK
+        || inspection.option_mask != RAW_REMOTE_OPTION_MASK
+        || inspection.provider_mask != expected_provider_mask
         || inspection.forbidden_input_mask != 0
     {
         return Err(BridgeFailure::new(
@@ -6436,12 +6999,8 @@ mod tests {
     }
 
     #[test]
-    fn native_credential_callback_round_trips_simple_prompt_to_broker() {
-        let mut broker = RecordingAuthBroker::credential_provide(
-            Some("alice".to_string()),
-            "correct horse",
-            "secretStorage",
-        );
+    fn native_parent_credential_callback_rejects_without_invoking_broker() {
+        let mut broker = RecordingAuthBroker::empty();
         let mut baton =
             NativeAuthBaton::new(&mut broker, None, Some("C:/workspace/wc".to_string()));
         let realm = CString::new("<https://svn.example.com> SubversionR").unwrap();
@@ -6467,155 +7026,58 @@ mod tests {
             )
         };
 
-        assert_eq!(status, RAW_AUTH_CALLBACK_OK);
-        assert_eq!(
-            unsafe { CStr::from_ptr(response.username) }
-                .to_str()
-                .unwrap(),
-            "alice"
-        );
-        assert_eq!(
-            unsafe { CStr::from_ptr(response.secret) }.to_str().unwrap(),
-            "correct horse"
-        );
-        assert_eq!(response.may_save, 0);
-        assert!(baton.failure().is_none());
-
-        unsafe {
-            native_credential_response_dispose(
-                (&mut baton as *mut NativeAuthBaton<'_>).cast::<c_void>(),
-                &mut response,
-            );
-        }
-        assert!(response.username.is_null());
-        assert!(response.secret.is_null());
-        drop(baton);
-
-        assert_eq!(broker.credential_requests.len(), 1);
-        let captured = &broker.credential_requests[0];
-        assert!(captured.request_id.starts_with("native-credential-"));
-        assert_eq!(captured.realm, "<https://svn.example.com> SubversionR");
-        assert_eq!(captured.kind, "usernamePassword");
-        assert_eq!(captured.username.as_deref(), Some("alice"));
-        assert!(captured.interactive);
-        assert!(captured.persistence_allowed);
-        assert_eq!(captured.origin, "foreground");
-        assert_eq!(captured.timeout_ms, NATIVE_AUTH_REQUEST_TIMEOUT_MS);
-        assert_eq!(
-            captured.working_copy_root.as_deref(),
-            Some("C:/workspace/wc")
-        );
-    }
-
-    #[test]
-    fn native_credential_callback_records_cancel_failure_without_secret_response() {
-        let mut broker = RecordingAuthBroker::credential_cancelled();
-        let mut baton =
-            NativeAuthBaton::new(&mut broker, None, Some("C:/workspace/wc".to_string()));
-        let realm = CString::new("<https://svn.example.com> SubversionR").unwrap();
-        let request = RawCredentialRequest {
-            realm: realm.as_ptr(),
-            username: ptr::null(),
-            may_save: 1,
-            working_copy_root: ptr::null(),
-        };
-        let mut response = RawCredentialResponse {
-            username: ptr::null(),
-            secret: ptr::null(),
-            may_save: 0,
-        };
-
-        let status = unsafe {
-            native_credential_callback(
-                (&mut baton as *mut NativeAuthBaton<'_>).cast::<c_void>(),
-                &request,
-                &mut response,
-            )
-        };
-
         assert_eq!(status, RAW_AUTH_CALLBACK_DENIED);
         assert!(response.username.is_null());
         assert!(response.secret.is_null());
-        let failure = baton.failure().expect("cancel should be captured");
-        assert_eq!(failure.code, "SUBVERSIONR_CREDENTIAL_CANCELLED");
+        let failure = baton
+            .failure()
+            .expect("parent credential route must fail closed");
+        assert_eq!(
+            failure.code,
+            "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
+        );
         assert_eq!(failure.category, "auth");
-        assert_eq!(failure.message_key, "error.auth.credentialCancelled");
-        assert_eq!(failure.args["kind"], "usernamePassword");
-        assert!(failure.args.get("secret").is_none());
-    }
-
-    #[test]
-    fn native_credential_callback_rejects_unrecognized_persistence() {
-        let mut broker = RecordingAuthBroker::credential_provide(
-            Some("alice".to_string()),
-            "correct horse",
-            "forever",
+        assert_eq!(
+            failure.message_key,
+            "error.auth.credentialRemoteWorkerRequired"
         );
-        let mut baton =
-            NativeAuthBaton::new(&mut broker, None, Some("C:/workspace/wc".to_string()));
-        let realm = CString::new("<https://svn.example.com> SubversionR").unwrap();
-        let request = RawCredentialRequest {
-            realm: realm.as_ptr(),
-            username: ptr::null(),
-            may_save: 1,
-            working_copy_root: ptr::null(),
-        };
-        let mut response = RawCredentialResponse {
-            username: ptr::null(),
-            secret: ptr::null(),
-            may_save: 0,
-        };
-
-        let status = unsafe {
-            native_credential_callback(
-                (&mut baton as *mut NativeAuthBaton<'_>).cast::<c_void>(),
-                &request,
-                &mut response,
-            )
-        };
-
-        assert_eq!(status, RAW_AUTH_CALLBACK_DENIED);
-        assert!(response.username.is_null());
-        assert!(response.secret.is_null());
-        let failure = baton.failure().expect("invalid persistence should fail");
-        assert_eq!(failure.code, "SUBVERSIONR_AUTH_RESPONSE_INVALID");
-        assert_eq!(failure.message_key, "error.auth.responseInvalid");
         assert_eq!(failure.args["method"], "credentials/request");
     }
 
     #[test]
-    fn native_credential_callback_records_panic_failure_without_crossing_ffi() {
-        let mut broker = RecordingAuthBroker::credential_panic();
-        let mut baton =
-            NativeAuthBaton::new(&mut broker, None, Some("C:/workspace/wc".to_string()));
-        let realm = CString::new("<https://svn.example.com> SubversionR").unwrap();
-        let request = RawCredentialRequest {
-            realm: realm.as_ptr(),
-            username: ptr::null(),
-            may_save: 1,
-            working_copy_root: ptr::null(),
-        };
-        let mut response = RawCredentialResponse {
-            username: ptr::null(),
-            secret: ptr::null(),
-            may_save: 0,
-        };
+    fn native_credential_error_allowlist_preserves_current_codes_with_safe_args() {
+        for (code, category, message_key) in [
+            (
+                "SUBVERSIONR_CREDENTIAL_SECRET_INVALID",
+                "auth",
+                "error.auth.credentialSecretInvalid",
+            ),
+            (
+                "SUBVERSIONR_CREDENTIAL_TIMEOUT",
+                "auth",
+                "error.auth.credentialTimeout",
+            ),
+            (
+                "SUBVERSIONR_CREDENTIAL_UNTRUSTED_WORKSPACE",
+                "lifecycle",
+                "error.auth.credentialUntrustedWorkspace",
+            ),
+        ] {
+            let error = subversionr_protocol::CredentialError {
+                code: code.to_string(),
+                category: category.to_string(),
+                message_key: message_key.to_string(),
+                args: json!({ "secret": "must-not-leak" }),
+                retryable: false,
+            };
 
-        let status = unsafe {
-            native_credential_callback(
-                (&mut baton as *mut NativeAuthBaton<'_>).cast::<c_void>(),
-                &request,
-                &mut response,
-            )
-        };
+            let failure = credential_error_to_bridge(&error, json!({ "authorityHash": "safe" }));
 
-        assert_eq!(status, RAW_AUTH_CALLBACK_DENIED);
-        assert!(response.username.is_null());
-        assert!(response.secret.is_null());
-        let failure = baton.failure().expect("panic should be captured");
-        assert_eq!(failure.code, "SUBVERSIONR_AUTH_RESPONSE_INVALID");
-        assert_eq!(failure.message_key, "error.auth.responseInvalid");
-        assert_eq!(failure.args["method"], "credentials/request");
+            assert_eq!(failure.code, code);
+            assert_eq!(failure.category, category);
+            assert_eq!(failure.message_key, message_key);
+            assert_eq!(failure.args, json!({ "authorityHash": "safe" }));
+        }
     }
 
     #[test]
@@ -6952,16 +7414,6 @@ mod tests {
             .expect("native auth request id should end with a numeric sequence")
     }
 
-    enum RecordingCredentialOutcome {
-        Provide {
-            username: Option<String>,
-            secret: String,
-            persistence: String,
-        },
-        Cancelled,
-        Panic,
-    }
-
     enum RecordingCertificateOutcome {
         Ready(CertificateTrustResponse),
         Trust {
@@ -6973,49 +7425,21 @@ mod tests {
     }
 
     struct RecordingAuthBroker {
-        credential_outcome: Option<RecordingCredentialOutcome>,
         certificate_outcome: Option<RecordingCertificateOutcome>,
-        credential_requests: Vec<CredentialRequest>,
         certificate_requests: Vec<CertificateTrustRequest>,
     }
 
     impl RecordingAuthBroker {
-        fn credential_provide(username: Option<String>, secret: &str, persistence: &str) -> Self {
+        fn empty() -> Self {
             Self {
-                credential_outcome: Some(RecordingCredentialOutcome::Provide {
-                    username,
-                    secret: secret.to_string(),
-                    persistence: persistence.to_string(),
-                }),
                 certificate_outcome: None,
-                credential_requests: Vec::new(),
-                certificate_requests: Vec::new(),
-            }
-        }
-
-        fn credential_cancelled() -> Self {
-            Self {
-                credential_outcome: Some(RecordingCredentialOutcome::Cancelled),
-                certificate_outcome: None,
-                credential_requests: Vec::new(),
-                certificate_requests: Vec::new(),
-            }
-        }
-
-        fn credential_panic() -> Self {
-            Self {
-                credential_outcome: Some(RecordingCredentialOutcome::Panic),
-                certificate_outcome: None,
-                credential_requests: Vec::new(),
                 certificate_requests: Vec::new(),
             }
         }
 
         fn certificate(response: CertificateTrustResponse) -> Self {
             Self {
-                credential_outcome: None,
                 certificate_outcome: Some(RecordingCertificateOutcome::Ready(response)),
-                credential_requests: Vec::new(),
                 certificate_requests: Vec::new(),
             }
         }
@@ -7026,22 +7450,18 @@ mod tests {
             fingerprint_algorithm: &str,
         ) -> Self {
             Self {
-                credential_outcome: None,
                 certificate_outcome: Some(RecordingCertificateOutcome::Trust {
                     trust: trust.to_string(),
                     fingerprint,
                     fingerprint_algorithm: fingerprint_algorithm.to_string(),
                 }),
-                credential_requests: Vec::new(),
                 certificate_requests: Vec::new(),
             }
         }
 
         fn certificate_panic() -> Self {
             Self {
-                credential_outcome: None,
                 certificate_outcome: Some(RecordingCertificateOutcome::Panic),
-                credential_requests: Vec::new(),
                 certificate_requests: Vec::new(),
             }
         }
@@ -7050,36 +7470,16 @@ mod tests {
     impl AuthRequestBroker for RecordingAuthBroker {
         fn request_credential(
             &mut self,
-            request: CredentialRequest,
+            _request: CredentialRequest,
         ) -> Result<CredentialResponse, BridgeFailure> {
-            let request_id = request.request_id.clone();
-            self.credential_requests.push(request);
-            match self
-                .credential_outcome
-                .take()
-                .expect("credential outcome should be configured")
-            {
-                RecordingCredentialOutcome::Provide {
-                    username,
-                    secret,
-                    persistence,
-                } => Ok(CredentialResponse::Provide {
-                    request_id,
-                    credential: subversionr_protocol::Credential { username, secret },
-                    persistence,
-                }),
-                RecordingCredentialOutcome::Cancelled => Ok(CredentialResponse::Cancel {
-                    request_id,
-                    error: subversionr_protocol::CredentialError {
-                        code: "SUBVERSIONR_CREDENTIAL_CANCELLED".to_string(),
-                        category: "auth".to_string(),
-                        message_key: "error.auth.credentialCancelled".to_string(),
-                        args: serde_json::json!({ "secret": "must-not-survive" }),
-                        retryable: false,
-                    },
-                }),
-                RecordingCredentialOutcome::Panic => panic!("credential broker panic"),
-            }
+            panic!("parent credential callback must not invoke the broker")
+        }
+
+        fn settle_credential(
+            &mut self,
+            _request: subversionr_protocol::CredentialSettlementRequest,
+        ) -> Result<subversionr_protocol::CredentialSettlementAck, BridgeFailure> {
+            panic!("parent credential callback must not settle a lease")
         }
 
         fn request_certificate_trust(

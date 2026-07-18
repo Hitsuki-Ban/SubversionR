@@ -212,13 +212,30 @@ if ($null -eq $installedPackage) {
     }
   }
   installedRemoteWorkerReport = [pscustomobject]@{
-    schemaVersion = 1
+    schemaVersion = 2
     kind = "subversionr.installedRemoteWorkerReport"
-    protocol = [pscustomobject]@{ major = 1; minor = 32 }
+    protocol = [pscustomobject]@{ major = 1; minor = 33 }
     remoteWorkerIsolation = $true
+    credentialLeaseSettlement = $true
     transportResult = "unsupportedAfterWorker"
     sameLaneSubsequent = $true
     subsequentDiagnostics = $true
+    credentialLeaseReport = [pscustomobject]@{
+      schemaVersion = 1
+      kind = "subversionr.installedCredentialLeaseReport"
+      legacyBackgroundBlocked = $true
+      legacyForegroundCleared = $true
+      fixedStoredReuse = $true
+      chooserMultiAccount = $true
+      promptSingleFlight = $true
+      independentLeases = $true
+      settlementOutcomes = @("accepted", "rejected", "unused", "cancelled", "timedOut")
+      duplicateSettlementIdempotent = $true
+      conflictingSettlementRejected = $true
+      reloadDiscardedPendingLease = $true
+      savedCredentialEntriesCleared = 2
+      storageCleanup = $true
+    }
   }
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $resultPath -Encoding utf8
 exit 0
@@ -258,8 +275,8 @@ try {
   }
 
   $report = Get-Content -Raw -LiteralPath $evidencePath | ConvertFrom-Json
-  Assert-Equal "subversionr.release.installed-extension-host.win32-x64.v2" $report.schema "Installed-host evidence should use the I3 schema."
-  Assert-Equal "2" ([string]$report.schemaVersion) "Installed-host evidence should use schema version 2."
+  Assert-Equal "subversionr.release.installed-extension-host.win32-x64.v3" $report.schema "Installed-host evidence should use the I4 schema."
+  Assert-Equal "3" ([string]$report.schemaVersion) "Installed-host evidence should use schema version 3."
   Assert-Equal "False" ([string]$report.publicReadinessClaim) "Installed-host evidence must not claim public readiness."
   Assert-Equal "win32-x64" $report.target "Installed-host evidence should record the target."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Installed-host evidence should record the extension id."
@@ -296,11 +313,25 @@ try {
   Assert-True ($installedRedactionJson.Contains("[REDACTED:repository-log]")) "Installed redaction report should include repository log redaction markers."
   Assert-True ($installedRedactionJson.Contains("[REDACTED:source-content]")) "Installed redaction report should include source content redaction markers."
   Assert-Equal "subversionr.installedRemoteWorkerReport" $report.installedRemoteWorkerReport.kind "Installed-host evidence should include the remote worker report."
-  Assert-Equal "32" ([string]$report.installedRemoteWorkerReport.protocol.minor) "Installed remote worker evidence should bind protocol v1.32."
+  Assert-Equal "33" ([string]$report.installedRemoteWorkerReport.protocol.minor) "Installed remote worker evidence should bind protocol v1.33."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteWorkerIsolation) "Installed remote worker evidence should prove the runtime capability."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseSettlement) "Installed remote worker evidence should prove credential lease settlement."
   Assert-Equal "unsupportedAfterWorker" $report.installedRemoteWorkerReport.transportResult "Installed remote worker evidence should stop at the transport boundary."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.sameLaneSubsequent) "Installed remote worker evidence should prove the same lane is reusable after worker cleanup."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.subsequentDiagnostics) "Installed remote worker evidence should prove a subsequent diagnostics request."
+  Assert-Equal "2" ([string]$report.installedRemoteWorkerReport.schemaVersion) "Installed remote worker evidence should use the credential lease schema."
+  Assert-Equal "subversionr.installedCredentialLeaseReport" $report.installedRemoteWorkerReport.credentialLeaseReport.kind "Installed remote worker evidence should include the credential lease report."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.legacyBackgroundBlocked) "Installed credential evidence should block legacy state in the background."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.legacyForegroundCleared) "Installed credential evidence should clear legacy state in the foreground."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.fixedStoredReuse) "Installed credential evidence should prove stored fixed-account reuse."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.chooserMultiAccount) "Installed credential evidence should prove multi-account selection."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.promptSingleFlight) "Installed credential evidence should prove prompt single-flight."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.independentLeases) "Installed credential evidence should prove independent leases."
+  Assert-Equal "accepted,rejected,unused,cancelled,timedOut" (@($report.installedRemoteWorkerReport.credentialLeaseReport.settlementOutcomes) -join ",") "Installed credential evidence should prove every settlement outcome."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.duplicateSettlementIdempotent) "Installed credential evidence should prove duplicate settlement idempotency."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.conflictingSettlementRejected) "Installed credential evidence should reject conflicting settlement."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.reloadDiscardedPendingLease) "Installed credential evidence should discard pending leases on reload."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.storageCleanup) "Installed credential evidence should clean its namespaced SecretStorage entries."
   Assert-Equal "none" $report.workingCopySentinel.mutation "Installed-host smoke should not mutate the working-copy sentinel."
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixtureRoot "workspace\.svn"))) "Installed-host workspace must not contain .svn before command activation."
   Assert-Equal $report.workingCopySentinel.svnTreeBeforeSha256 $report.workingCopySentinel.svnTreeAfterSha256 "Installed-host smoke should prove recursive .svn tree non-mutation."

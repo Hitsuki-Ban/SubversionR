@@ -16,9 +16,33 @@ use subversionr_daemon::{
 };
 
 use subversionr_protocol::{
-    CredentialRequest, HistoryBlameLine, HistoryLogChangedPath, HistoryLogEntry, LockInfo,
-    RemoteOperationEnvelope, RepositoryIdentity, StatusEntry, StatusSnapshot, StatusSummary,
+    CanonicalEndpoint, CredentialAttempt, CredentialAuthKind, CredentialRequest, HistoryBlameLine,
+    HistoryLogChangedPath, HistoryLogEntry, LockInfo, RemoteOperationEnvelope,
+    RemoteOperationIntent, RemoteScheme, RepositoryIdentity, ServerAccountSelection, StatusEntry,
+    StatusSnapshot, StatusSummary,
 };
+
+fn credential_request(request_id: &str, realm: &str) -> CredentialRequest {
+    CredentialRequest {
+        request_id: request_id.to_string(),
+        operation_id: format!("{request_id}-operation"),
+        endpoint: CanonicalEndpoint {
+            scheme: RemoteScheme::Https,
+            canonical_host: "svn.example.invalid".to_string(),
+            effective_port: 443,
+        },
+        auth_kind: CredentialAuthKind::Basic,
+        realm: realm.to_string(),
+        account: ServerAccountSelection::Fixed {
+            username: "alice".to_string(),
+        },
+        attempt: CredentialAttempt::Initial,
+        interactive: true,
+        persistence_allowed: true,
+        origin: RemoteOperationIntent::Foreground,
+        timeout_ms: 30_000,
+    }
+}
 
 #[derive(Debug)]
 struct FakeBridge {
@@ -1006,27 +1030,16 @@ impl BridgeApi for FakeBridge {
 
     fn history_log(
         &self,
-        identity: &RepositoryIdentity,
+        _identity: &RepositoryIdentity,
         request: &HistoryLogRequest,
         auth: &mut dyn subversionr_daemon::AuthRequestBroker,
     ) -> Result<HistoryLogResult, BridgeFailure> {
         self.history_requests.borrow_mut().push(request.clone());
         if self.history_requires_auth {
-            auth.request_credential(CredentialRequest {
-                request_id: "history-log-dispatch-cred-1".to_string(),
-                realm: "svn://example/history-log".to_string(),
-                kind: "usernamePassword".to_string(),
-                username: Some("alice".to_string()),
-                interactive: true,
-                persistence_allowed: true,
-                origin: "foreground".to_string(),
-                timeout_ms: 30000,
-                repository_id: Some(format!(
-                    "{}:{}",
-                    identity.repository_uuid, identity.working_copy_root
-                )),
-                working_copy_root: Some(identity.working_copy_root.clone()),
-            })?;
+            auth.request_credential(credential_request(
+                "history-log-dispatch-cred-1",
+                "svn://example/history-log",
+            ))?;
         }
         self.history_results
             .get(&request.path)
@@ -1044,27 +1057,16 @@ impl BridgeApi for FakeBridge {
 
     fn history_blame(
         &self,
-        identity: &RepositoryIdentity,
+        _identity: &RepositoryIdentity,
         request: &HistoryBlameRequest,
         auth: &mut dyn subversionr_daemon::AuthRequestBroker,
     ) -> Result<HistoryBlameResult, BridgeFailure> {
         self.blame_requests.borrow_mut().push(request.clone());
         if self.blame_requires_auth {
-            auth.request_credential(CredentialRequest {
-                request_id: "history-blame-dispatch-cred-1".to_string(),
-                realm: "svn://example/history-blame".to_string(),
-                kind: "usernamePassword".to_string(),
-                username: Some("alice".to_string()),
-                interactive: true,
-                persistence_allowed: true,
-                origin: "foreground".to_string(),
-                timeout_ms: 30000,
-                repository_id: Some(format!(
-                    "{}:{}",
-                    identity.repository_uuid, identity.working_copy_root
-                )),
-                working_copy_root: Some(identity.working_copy_root.clone()),
-            })?;
+            auth.request_credential(credential_request(
+                "history-blame-dispatch-cred-1",
+                "svn://example/history-blame",
+            ))?;
         }
         self.blame_results
             .get(&request.path)
@@ -1688,27 +1690,16 @@ impl BridgeApi for FakeBridge {
 
     fn operation_commit(
         &self,
-        identity: &RepositoryIdentity,
+        _identity: &RepositoryIdentity,
         request: &subversionr_daemon::CommitOperationRequest,
         auth: &mut dyn subversionr_daemon::AuthRequestBroker,
     ) -> Result<subversionr_daemon::CommitOperationResult, BridgeFailure> {
         self.commit_requests.borrow_mut().push(request.clone());
         if self.commit_requires_auth {
-            auth.request_credential(subversionr_protocol::CredentialRequest {
-                request_id: "commit-dispatch-cred-1".to_string(),
-                realm: "svn://example/commit".to_string(),
-                kind: "usernamePassword".to_string(),
-                username: Some("alice".to_string()),
-                interactive: true,
-                persistence_allowed: true,
-                origin: "foreground".to_string(),
-                timeout_ms: 30000,
-                repository_id: Some(format!(
-                    "{}:{}",
-                    identity.repository_uuid, identity.working_copy_root
-                )),
-                working_copy_root: Some(identity.working_copy_root.clone()),
-            })?;
+            auth.request_credential(credential_request(
+                "commit-dispatch-cred-1",
+                "svn://example/commit",
+            ))?;
         }
         let first_path = request.paths.first().cloned().unwrap_or_default();
         self.commit_results
@@ -1747,13 +1738,13 @@ fn initialize_request_returns_versions_and_keeps_process_running() {
     assert_eq!(outcome, DispatchOutcome::Continue);
     assert_eq!(outcome.response()["id"], 1);
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 32);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 33);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["schemaId"],
         "subversionr.cache.v1"
     );
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 32);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 33);
     assert_eq!(outcome.response()["result"]["cacheSchema"]["version"], 1);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["rollback"],
@@ -9089,6 +9080,7 @@ impl RemoteWorkerSupervisor for RetryableTrustUpdateSupervisor {
         _plan: RemoteConfigPlan,
         _lane_key: &str,
         _cancellation: &dyn BridgeCancellationToken,
+        _auth: &mut dyn subversionr_daemon::AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
     ) -> Result<(), BridgeFailure> {

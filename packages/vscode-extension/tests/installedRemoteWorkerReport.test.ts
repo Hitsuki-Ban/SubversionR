@@ -14,6 +14,7 @@ describe("installed remote worker report", () => {
         request: { token: "token-1" },
         targetPath: "C:/evidence/checkout",
         initialize: vi.fn(),
+        collectCredentialLeaseReport: vi.fn(),
       }),
     ).rejects.toMatchObject({
       code: "SUBVERSIONR_INSTALLED_REMOTE_WORKER_REPORT_FORBIDDEN",
@@ -27,6 +28,21 @@ describe("installed remote worker report", () => {
         request: { token: "token-1" },
         targetPath: "C:/evidence/checkout",
         initialize: vi.fn().mockResolvedValue(connection({ capability: false })),
+        collectCredentialLeaseReport: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      code: "SUBVERSIONR_INSTALLED_REMOTE_WORKER_CAPABILITY_UNAVAILABLE",
+    });
+  });
+
+  it("fails closed when credential lease settlement is absent", async () => {
+    await expect(
+      collectInstalledRemoteWorkerReport({
+        expectedToken: "token-1",
+        request: { token: "token-1" },
+        targetPath: "C:/evidence/checkout",
+        initialize: vi.fn().mockResolvedValue(connection({ credentialLeaseSettlement: false })),
+        collectCredentialLeaseReport: vi.fn(),
       }),
     ).rejects.toMatchObject({
       code: "SUBVERSIONR_INSTALLED_REMOTE_WORKER_CAPABILITY_UNAVAILABLE",
@@ -57,8 +73,8 @@ describe("installed remote worker report", () => {
       expect(method).toBe("diagnostics/get");
       expect(params).toEqual({});
       return {
-        protocol: { major: 1, minor: 32 },
-        capabilities: { remoteWorkerIsolation: true },
+        protocol: { major: 1, minor: 33 },
+        capabilities: { remoteWorkerIsolation: true, credentialLeaseSettlement: true },
       };
     });
 
@@ -67,6 +83,7 @@ describe("installed remote worker report", () => {
       request: { token: "token-1" },
       targetPath: "C:/evidence/checkout",
       initialize: vi.fn().mockResolvedValue(connection({ sendRequest })),
+      collectCredentialLeaseReport: vi.fn().mockResolvedValue(credentialLeaseReport()),
       createOperationId: vi
         .fn()
         .mockReturnValueOnce(OPERATION_ID)
@@ -74,13 +91,15 @@ describe("installed remote worker report", () => {
     });
 
     expect(report).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "subversionr.installedRemoteWorkerReport",
-      protocol: { major: 1, minor: 32 },
+      protocol: { major: 1, minor: 33 },
       remoteWorkerIsolation: true,
+      credentialLeaseSettlement: true,
       transportResult: "unsupportedAfterWorker",
       sameLaneSubsequent: true,
       subsequentDiagnostics: true,
+      credentialLeaseReport: credentialLeaseReport(),
     });
     expect(sendRequest.mock.calls.map(([method]) => method)).toEqual([
       "repository/checkout",
@@ -101,6 +120,7 @@ describe("installed remote worker report", () => {
         request: { token: "token-1" },
         targetPath: "C:/evidence/checkout",
         initialize: vi.fn().mockResolvedValue(successConnection),
+        collectCredentialLeaseReport: vi.fn(),
         createOperationId: vi
           .fn()
           .mockReturnValueOnce(OPERATION_ID)
@@ -117,6 +137,7 @@ describe("installed remote worker report", () => {
         request: { token: "token-1" },
         targetPath: "C:/evidence/checkout",
         initialize: vi.fn().mockResolvedValue(failedConnection),
+        collectCredentialLeaseReport: vi.fn(),
         createOperationId: vi
           .fn()
           .mockReturnValueOnce(OPERATION_ID)
@@ -129,13 +150,17 @@ describe("installed remote worker report", () => {
 function connection(
   overrides: {
     capability?: boolean;
+    credentialLeaseSettlement?: boolean;
     sendRequest?: (method: string, params: unknown) => Promise<unknown>;
   } = {},
 ): Pick<BackendConnection, "initializeResult" | "isRemoteSubmissionEnabled" | "sendRequest"> {
   return {
     initializeResult: {
-      protocol: { major: 1, minor: 32 },
-      capabilities: { remoteWorkerIsolation: overrides.capability ?? true },
+      protocol: { major: 1, minor: 33 },
+      capabilities: {
+        remoteWorkerIsolation: overrides.capability ?? true,
+        credentialLeaseSettlement: overrides.credentialLeaseSettlement ?? true,
+      },
       acknowledgedTrustEpoch: 1,
     } as BackendConnection["initializeResult"],
     isRemoteSubmissionEnabled: () => true,
@@ -152,4 +177,12 @@ function rpcError(code: string): JsonRpcStreamError {
     retryable: false,
     diagnostics: null,
   });
+}
+
+function credentialLeaseReport(): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    kind: "subversionr.installedCredentialLeaseReport",
+    storageCleanup: true,
+  };
 }

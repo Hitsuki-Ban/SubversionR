@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use subversionr_protocol::{
     Capabilities, CertificateTrustRequest, CertificateTrustResponse, CredentialRequest,
-    CredentialResponse, HistoryBlameLine, HistoryLogEntry, OperationFailureDiagnostics,
-    RepositoryIdentity, StatusSnapshot, default_capabilities,
+    CredentialResponse, CredentialSettlementAck, CredentialSettlementRequest, HistoryBlameLine,
+    HistoryLogEntry, OperationFailureDiagnostics, RepositoryIdentity, StatusSnapshot,
+    default_capabilities,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -898,6 +899,11 @@ pub trait AuthRequestBroker {
         request: CredentialRequest,
     ) -> Result<CredentialResponse, BridgeFailure>;
 
+    fn settle_credential(
+        &mut self,
+        request: CredentialSettlementRequest,
+    ) -> Result<CredentialSettlementAck, BridgeFailure>;
+
     fn request_certificate_trust(
         &mut self,
         request: CertificateTrustRequest,
@@ -917,6 +923,19 @@ impl AuthRequestBroker for UnavailableAuthRequestBroker {
             "auth",
             "error.auth.brokerUnavailable",
             json!({ "method": "credentials/request" }),
+            false,
+        ))
+    }
+
+    fn settle_credential(
+        &mut self,
+        _request: CredentialSettlementRequest,
+    ) -> Result<CredentialSettlementAck, BridgeFailure> {
+        Err(BridgeFailure::new(
+            "SUBVERSIONR_AUTH_BROKER_UNAVAILABLE",
+            "auth",
+            "error.auth.brokerUnavailable",
+            json!({ "method": "credentials/settle" }),
             false,
         ))
     }

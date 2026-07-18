@@ -10,6 +10,31 @@ pub fn run_daemon(
     backend_version: &str,
     bridge_version: &str,
 ) -> io::Result<()> {
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments == ["--subversionr-private-credential-provider-probe-v1"] {
+        println!(
+            "{}",
+            json!({
+                "schema": "subversionr.private.credential-provider-probe.v1",
+                "status": "passed",
+                "networkAccess": false,
+                "scenarios": [
+                    {"scenario":"firstSave","events":["request:initial","settle:accepted"]},
+                    {"scenario":"firstNextSave","events":["request:initial","settle:rejected","request:retryAfterRejected","settle:accepted"]},
+                    {"scenario":"unused","events":["request:initial","settle:unused"]},
+                    {"scenario":"cancelled","events":["request:initial","settle:cancelled"]},
+                    {"scenario":"timedOut","events":["request:initial","settle:timedOut"]}
+                ]
+            })
+        );
+        return Ok(());
+    }
+    if !arguments.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported fixture argument",
+        ));
+    }
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let stdout = io::stdout();
@@ -250,6 +275,7 @@ fn initialize_result(protocol_minor: u64, backend_version: &str, bridge_version:
             "remoteOperationEnvelope": true,
             "trustedConfigSnapshot": true,
             "remoteWorkerIsolation": true,
+            "credentialLeaseSettlement": true,
         },
         "acknowledgedTrustEpoch": 1,
     })
