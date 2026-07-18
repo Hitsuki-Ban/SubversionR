@@ -99,7 +99,7 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
         response.protocol,
         ProtocolVersion {
             major: 1,
-            minor: 31
+            minor: 32
         }
     );
     assert_eq!(response.cache_schema, default_cache_schema());
@@ -163,7 +163,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     let json = serde_json::to_value(response).expect("initialize response must serialize");
 
     assert_eq!(json["protocol"]["major"], 1);
-    assert_eq!(json["protocol"]["minor"], 31);
+    assert_eq!(json["protocol"]["minor"], 32);
     assert_eq!(json["cacheSchema"]["schemaId"], "subversionr.cache.v1");
     assert_eq!(json["cacheSchema"]["version"], 1);
     assert_eq!(json["cacheSchema"]["rollback"], "delete-and-reconcile");
@@ -213,6 +213,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     assert_eq!(json["capabilities"]["certificateRequest"], true);
     assert_eq!(json["capabilities"]["remoteOperationEnvelope"], true);
     assert_eq!(json["capabilities"]["trustedConfigSnapshot"], true);
+    assert_eq!(json["capabilities"]["remoteWorkerIsolation"], false);
     assert_eq!(json["acknowledgedTrustEpoch"], 1);
     assert!(json["capabilities"].get("authCallbacks").is_none());
 }

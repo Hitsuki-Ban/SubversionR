@@ -5,6 +5,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 mod bridge;
 mod native;
 mod remote;
+mod remote_worker;
 mod state;
 mod stdio;
 
@@ -22,9 +23,13 @@ pub use bridge::{
     SwitchOperationRequest, SwitchOperationResult, UnavailableAuthRequestBroker, UnavailableBridge,
     UnlockOperationRequest, UpdateOperationRequest, UpdateOperationResult, UpgradeOperationRequest,
 };
-pub use native::{NativeBridge, NativeBridgeLoadError};
+pub use native::{NativeBridge, NativeBridgeLoadError, RemoteNativeBridge};
+pub use remote_worker::{
+    InlineRemoteWorkerSupervisor, ProcessRemoteWorkerSupervisor, RemoteWorkerSupervisor,
+    remote_worker_control_channel_is_private, run_remote_worker,
+};
 pub use state::DaemonState;
-pub use stdio::run_json_rpc_stdio;
+pub use stdio::{run_json_rpc_stdio, run_json_rpc_stdio_with_remote_worker};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchOutcome {
@@ -37,6 +42,7 @@ pub struct DispatchResult {
     outcome: DispatchOutcome,
     response: Value,
     notifications: Vec<Value>,
+    remote_launch: Option<remote::RemoteLaunchPlan>,
 }
 
 impl DispatchResult {
@@ -50,6 +56,10 @@ impl DispatchResult {
 
     pub fn notifications(&self) -> &[Value] {
         &self.notifications
+    }
+
+    pub(crate) fn take_remote_launch(&mut self) -> Option<remote::RemoteLaunchPlan> {
+        self.remote_launch.take()
     }
 }
 
@@ -155,6 +165,7 @@ impl From<(DispatchOutcome, Value)> for DispatchResult {
             outcome,
             response,
             notifications: Vec::new(),
+            remote_launch: None,
         }
     }
 }

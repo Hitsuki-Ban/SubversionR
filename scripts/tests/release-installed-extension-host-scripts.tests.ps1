@@ -129,6 +129,9 @@ if ([string]::IsNullOrWhiteSpace($resultPath) -or [string]::IsNullOrWhiteSpace($
 if ([string]::IsNullOrWhiteSpace($env:SUBVERSIONR_INSTALLED_E2E_REDACTION_REPORT_TOKEN)) {
   throw "installed redaction report harness token was not set."
 }
+if ([string]::IsNullOrWhiteSpace($env:SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN)) {
+  throw "installed remote worker report harness token was not set."
+}
 $installedPackage = Get-ChildItem -LiteralPath $extensionsRoot -Directory |
   Where-Object { $_.Name -like "hitsuki-ban.subversionr-*" } |
   Select-Object -First 1
@@ -143,8 +146,10 @@ if ($null -eq $installedPackage) {
   extensionPath = $installedPackage.FullName
   invokedCommand = "subversionr.diagnostics.versionReport"
   redactionCommand = "subversionr.diagnostics.installedRedactionReport"
+  remoteWorkerCommand = "subversionr.diagnostics.installedRemoteWorkerReport"
   hasVersionReportCommand = $true
   hasInstalledRedactionReportCommand = $true
+  hasInstalledRemoteWorkerReportCommand = $true
   source = "installed-vsix"
   versionReport = [pscustomobject]@{
     kind = "subversionr.versionReport"
@@ -206,6 +211,15 @@ if ($null -eq $installedPackage) {
       lines = @('{"diagnostics":{"cause":"outOfDate","svn":{"entries":[{"code":155011,"name":"SVN_ERR_WC_NOT_UP_TO_DATE"}]}}}')
     }
   }
+  installedRemoteWorkerReport = [pscustomobject]@{
+    schemaVersion = 1
+    kind = "subversionr.installedRemoteWorkerReport"
+    protocol = [pscustomobject]@{ major = 1; minor = 32 }
+    remoteWorkerIsolation = $true
+    transportResult = "unsupportedAfterWorker"
+    sameLaneSubsequent = $true
+    subsequentDiagnostics = $true
+  }
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $resultPath -Encoding utf8
 exit 0
 '@ | Set-Content -LiteralPath $scriptPath -NoNewline
@@ -224,6 +238,7 @@ try {
   Assert-True ($rootPackage.scripts."release:test-installed-extension-host:win32-x64".Contains("%SUBVERSIONR_CODE_CLI%")) "Installed-host gate should require an explicit Code CLI path."
   $extensionManifest = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "packages\vscode-extension\package.json") | ConvertFrom-Json
   Assert-True (@($extensionManifest.activationEvents | Where-Object { $_ -eq "onCommand:subversionr.diagnostics.installedRedactionReport" }).Count -eq 0) "Installed redaction report must not be directly command-activatable."
+  Assert-True (@($extensionManifest.activationEvents | Where-Object { $_ -eq "onCommand:subversionr.diagnostics.installedRemoteWorkerReport" }).Count -eq 0) "Installed remote worker report must not be directly command-activatable."
 
   $vsixPath = Join-Path $tempRoot "subversionr-win32-x64-0.2.0.vsix"
   New-TestVsix -Path $vsixPath -Version "0.2.0"
@@ -243,7 +258,8 @@ try {
   }
 
   $report = Get-Content -Raw -LiteralPath $evidencePath | ConvertFrom-Json
-  Assert-Equal "subversionr.release.installed-extension-host.win32-x64.v1" $report.schema "Installed-host evidence should use the M7h schema."
+  Assert-Equal "subversionr.release.installed-extension-host.win32-x64.v2" $report.schema "Installed-host evidence should use the I3 schema."
+  Assert-Equal "2" ([string]$report.schemaVersion) "Installed-host evidence should use schema version 2."
   Assert-Equal "False" ([string]$report.publicReadinessClaim) "Installed-host evidence must not claim public readiness."
   Assert-Equal "win32-x64" $report.target "Installed-host evidence should record the target."
   Assert-Equal "hitsuki-ban.subversionr" $report.extension.id "Installed-host evidence should record the extension id."
@@ -252,8 +268,10 @@ try {
   Assert-Equal "True" ([string]$report.extension.afterActive) "Installed-host evidence should prove activation."
   Assert-Equal "subversionr.diagnostics.versionReport" $report.extension.invokedCommand "Installed-host evidence should record the invoked command."
   Assert-Equal "subversionr.diagnostics.installedRedactionReport" $report.extension.redactionCommand "Installed-host evidence should record the installed redaction command."
+  Assert-Equal "subversionr.diagnostics.installedRemoteWorkerReport" $report.extension.remoteWorkerCommand "Installed-host evidence should record the installed remote worker command."
   Assert-Equal "True" ([string]$report.extension.hasVersionReportCommand) "Installed-host evidence should prove version report command registration."
   Assert-Equal "True" ([string]$report.extension.hasInstalledRedactionReportCommand) "Installed-host evidence should prove installed redaction command registration."
+  Assert-Equal "True" ([string]$report.extension.hasInstalledRemoteWorkerReportCommand) "Installed-host evidence should prove installed remote worker command registration."
   Assert-Equal "win32-x64" $report.vsix.targetPlatform "Installed-host evidence should bind to the VSIX manifest target platform."
   Assert-Equal "subversionr.versionReport" $report.versionReport.kind "Installed-host evidence should include a version report."
   Assert-True (@("initialized", "unavailable") -contains $report.versionReport.backend.status) "Installed-host evidence should include a supported backend status."
@@ -277,6 +295,12 @@ try {
   Assert-True ($installedRedactionJson.Contains("[REDACTED:secret]")) "Installed redaction report should include secret redaction markers."
   Assert-True ($installedRedactionJson.Contains("[REDACTED:repository-log]")) "Installed redaction report should include repository log redaction markers."
   Assert-True ($installedRedactionJson.Contains("[REDACTED:source-content]")) "Installed redaction report should include source content redaction markers."
+  Assert-Equal "subversionr.installedRemoteWorkerReport" $report.installedRemoteWorkerReport.kind "Installed-host evidence should include the remote worker report."
+  Assert-Equal "32" ([string]$report.installedRemoteWorkerReport.protocol.minor) "Installed remote worker evidence should bind protocol v1.32."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteWorkerIsolation) "Installed remote worker evidence should prove the runtime capability."
+  Assert-Equal "unsupportedAfterWorker" $report.installedRemoteWorkerReport.transportResult "Installed remote worker evidence should stop at the transport boundary."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.sameLaneSubsequent) "Installed remote worker evidence should prove the same lane is reusable after worker cleanup."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.subsequentDiagnostics) "Installed remote worker evidence should prove a subsequent diagnostics request."
   Assert-Equal "none" $report.workingCopySentinel.mutation "Installed-host smoke should not mutate the working-copy sentinel."
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixtureRoot "workspace\.svn"))) "Installed-host workspace must not contain .svn before command activation."
   Assert-Equal $report.workingCopySentinel.svnTreeBeforeSha256 $report.workingCopySentinel.svnTreeAfterSha256 "Installed-host smoke should prove recursive .svn tree non-mutation."

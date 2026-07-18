@@ -600,5 +600,9 @@
   "The selected SVN lock target is outside an open repository. Select a resource from an open SVN working copy and try Lock again.": "選択した SVN ロック対象は開いているリポジトリの外部にあります。開いている SVN 作業コピーのリソースを選択し、ロックを再試行してください。",
   "The selected SVN unlock target is no longer current. Select the current resource in Source Control and try Unlock again.": "選択した SVN ロック解除対象は現在のものではありません。ソース管理で現在のリソースを選択し、ロック解除を再試行してください。",
   "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.": "選択した SVN ロック解除対象は開いているリポジトリの外部にあります。開いている SVN 作業コピーのリソースを選択し、ロック解除を再試行してください。",
-  "SubversionR could not acknowledge the Workspace Trust update: {0}": "SubversionR はワークスペース信頼更新を確認できませんでした: {0}"
+  "SubversionR could not acknowledge the Workspace Trust update: {0}": "SubversionR はワークスペース信頼更新を確認できませんでした: {0}",
+  "SubversionR could not start or complete the isolated SVN remote worker. Retry the SVN operation.": "分離された SVN リモートワーカーを起動または完了できませんでした。SVN 操作を再試行してください。",
+  "The isolated SVN remote operation exceeded its deadline. Retry the operation.": "分離された SVN リモート操作が期限を超えました。操作を再試行してください。",
+  "Another isolated SVN operation is still using this working copy. Wait for it to finish and retry.": "別の分離された SVN 操作がこの作業コピーを使用中です。完了を待ってから再試行してください。",
+  "SubversionR blocked this working copy because isolated worker cleanup could not be verified. Restart VS Code before retrying SVN operations.": "分離ワーカーのクリーンアップを確認できなかったため、この作業コピーはブロックされました。VS Code を再起動してから SVN 操作を再試行してください。"
 }

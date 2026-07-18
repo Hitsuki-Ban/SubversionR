@@ -94,6 +94,7 @@ pub struct Capabilities {
     pub certificate_request: bool,
     pub remote_operation_envelope: bool,
     pub trusted_config_snapshot: bool,
+    pub remote_worker_isolation: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -893,7 +894,7 @@ impl InitializeResponse {
         Self {
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 31,
+                minor: 32,
             },
             backend_version,
             bridge_version,
@@ -959,6 +960,7 @@ pub fn default_capabilities() -> Capabilities {
         certificate_request: true,
         remote_operation_envelope: true,
         trusted_config_snapshot: true,
+        remote_worker_isolation: false,
     }
 }
 

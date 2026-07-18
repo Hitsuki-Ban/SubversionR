@@ -85,7 +85,7 @@ try {
   if ($probeResult -isnot [System.Collections.IDictionary]) {
     throw "SUBVERSIONR_PACKAGED_NATIVE_PROBE_OUTPUT_INVALID"
   }
-  if (-not $probeResult.ContainsKey("schema") -or $probeResult["schema"] -ne "subversionr.release.packaged-native-compatibility.v1") {
+  if (-not $probeResult.ContainsKey("schema") -or $probeResult["schema"] -ne "subversionr.release.packaged-native-compatibility.v2") {
     throw "SUBVERSIONR_PACKAGED_NATIVE_PROBE_SCHEMA_INVALID"
   }
   if ($exitCode -ne 0) {
@@ -105,11 +105,41 @@ try {
     throw "SUBVERSIONR_PACKAGED_NATIVE_BRIDGE_VERSION_MISMATCH"
   }
   $protocol = $probeResult["protocol"]
+  $capabilities = $probeResult["capabilities"]
+  $localDiscovery = $probeResult["localDiscovery"]
+  $workerIsolation = $probeResult["workerIsolation"]
+  $tempRootCleanup = if ($workerIsolation -is [System.Collections.IDictionary]) { $workerIsolation["tempRootCleanup"] } else { $null }
+  $sameLaneSubsequent = if ($workerIsolation -is [System.Collections.IDictionary]) { $workerIsolation["sameLaneSubsequent"] } else { $null }
+  $subsequentDiagnostics = if ($workerIsolation -is [System.Collections.IDictionary]) { $workerIsolation["subsequentDiagnostics"] } else { $null }
+  $subsequentProtocol = if ($subsequentDiagnostics -is [System.Collections.IDictionary]) { $subsequentDiagnostics["protocol"] } else { $null }
   if (
     $probeResult["status"] -ne "passed" `
     -or $protocol -isnot [System.Collections.IDictionary] `
     -or [int]$protocol["major"] -ne 1 `
-    -or [int]$protocol["minor"] -lt 31 `
+    -or [int]$protocol["minor"] -ne 32 `
+    -or $capabilities -isnot [System.Collections.IDictionary] `
+    -or $capabilities["remoteWorkerIsolation"] -isnot [bool] `
+    -or $capabilities["remoteWorkerIsolation"] -ne $true `
+    -or $localDiscovery -isnot [System.Collections.IDictionary] `
+    -or [string]$localDiscovery["status"] -cne "passed" `
+    -or [int]$localDiscovery["candidateCount"] -ne 0 `
+    -or [int]$localDiscovery["fileExternalBoundaryCount"] -ne 0 `
+    -or $workerIsolation -isnot [System.Collections.IDictionary] `
+    -or [string]$workerIsolation["operation"] -cne "repository/checkout" `
+    -or [string]$workerIsolation["expectedOriginScheme"] -cne "https" `
+    -or [string]$workerIsolation["resultCode"] -cne "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED" `
+    -or $tempRootCleanup -isnot [System.Collections.IDictionary] `
+    -or [string]$tempRootCleanup["status"] -cne "passed" `
+    -or [int]$tempRootCleanup["residualEntryCount"] -ne 0 `
+    -or $sameLaneSubsequent -isnot [System.Collections.IDictionary] `
+    -or [string]$sameLaneSubsequent["status"] -cne "passed" `
+    -or [string]$sameLaneSubsequent["resultCode"] -cne "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED" `
+    -or $subsequentDiagnostics -isnot [System.Collections.IDictionary] `
+    -or [string]$subsequentDiagnostics["status"] -cne "passed" `
+    -or [string]$subsequentDiagnostics["source"] -cne "subversionr-daemon" `
+    -or $subsequentProtocol -isnot [System.Collections.IDictionary] `
+    -or [int]$subsequentProtocol["major"] -ne 1 `
+    -or [int]$subsequentProtocol["minor"] -ne 32 `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["backendVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["bridgeVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["libsvnVersion"])
@@ -118,7 +148,7 @@ try {
   }
 
   $compatibility = [pscustomobject]@{
-    schema = "subversionr.release.packaged-native-version-evidence.v1"
+    schema = "subversionr.release.packaged-native-version-evidence.v2"
     expectedProductVersion = $ExpectedProductVersion
     backendVersion = [string]$probeResult["backendVersion"]
     bridgeVersion = [string]$probeResult["bridgeVersion"]
@@ -127,8 +157,37 @@ try {
       major = [int]$protocol["major"]
       minor = [int]$protocol["minor"]
     }
+    capabilities = [pscustomobject]@{
+      remoteWorkerIsolation = [bool]$capabilities["remoteWorkerIsolation"]
+    }
+    localDiscovery = [pscustomobject]@{
+      status = [string]$localDiscovery["status"]
+      candidateCount = [int]$localDiscovery["candidateCount"]
+      fileExternalBoundaryCount = [int]$localDiscovery["fileExternalBoundaryCount"]
+    }
+    workerIsolation = [pscustomobject]@{
+      operation = [string]$workerIsolation["operation"]
+      expectedOriginScheme = [string]$workerIsolation["expectedOriginScheme"]
+      resultCode = [string]$workerIsolation["resultCode"]
+      tempRootCleanup = [pscustomobject]@{
+        status = [string]$tempRootCleanup["status"]
+        residualEntryCount = [int]$tempRootCleanup["residualEntryCount"]
+      }
+      sameLaneSubsequent = [pscustomobject]@{
+        status = [string]$sameLaneSubsequent["status"]
+        resultCode = [string]$sameLaneSubsequent["resultCode"]
+      }
+      subsequentDiagnostics = [pscustomobject]@{
+        status = [string]$subsequentDiagnostics["status"]
+        source = [string]$subsequentDiagnostics["source"]
+        protocol = [pscustomobject]@{
+          major = [int]$subsequentProtocol["major"]
+          minor = [int]$subsequentProtocol["minor"]
+        }
+      }
+    }
   }
-  Write-Host "Verified packaged native startup, protocol, ABI, read-only bridge operation, and product version $ExpectedProductVersion for $Target."
+  Write-Host "Verified packaged native startup, protocol, ABI, local discovery, one-operation remote worker isolation, subsequent diagnostics, and product version $ExpectedProductVersion for $Target."
   $compatibility
 }
 finally {

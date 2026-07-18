@@ -1,4 +1,6 @@
 use std::io::{self, Read};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -7,12 +9,15 @@ use subversionr_daemon::{
     BridgeInfo, CleanupOperationRequest, CommitOperationRequest, CommitOperationResult,
     ContentBlob, HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
     MoveOperationRequest, OperationResult, PropertiesListResult, PropertyDeleteOperationRequest,
-    PropertyEntry, PropertySetOperationRequest, RemoveOperationRequest, ResolveOperationRequest,
-    RevertOperationRequest, UpdateOperationRequest, UpdateOperationResult, run_json_rpc_stdio,
+    PropertyEntry, PropertySetOperationRequest, RemoteConfigPlan, RemoteWorkerSupervisor,
+    RemoveOperationRequest, ResolveOperationRequest, RevertOperationRequest,
+    UpdateOperationRequest, UpdateOperationResult, run_json_rpc_stdio,
+    run_json_rpc_stdio_with_remote_worker,
 };
 use subversionr_protocol::{
     CertificateTrustRequest, CertificateTrustResponse, Credential, CredentialRequest,
-    CredentialResponse, RepositoryIdentity, StatusEntry, StatusSnapshot, StatusSummary,
+    CredentialResponse, RemoteOperationEnvelope, RepositoryIdentity, StatusEntry, StatusSnapshot,
+    StatusSummary,
 };
 
 #[derive(Debug)]
@@ -3201,6 +3206,302 @@ fn stdio_loop_keeps_repository_session_between_framed_requests() {
         0
     );
     assert_eq!(responses[2]["result"]["accepted"], true);
+}
+
+#[derive(Debug, Default)]
+struct DelayedRemoteWorker {
+    executions: AtomicUsize,
+    disconnects: AtomicUsize,
+}
+
+impl RemoteWorkerSupervisor for DelayedRemoteWorker {
+    fn execute(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        cancellation: &dyn BridgeCancellationToken,
+        _bridge: &dyn BridgeApi,
+        deadline: Instant,
+    ) -> Result<(), BridgeFailure> {
+        self.executions.fetch_add(1, Ordering::SeqCst);
+        let finish = Instant::now() + Duration::from_millis(80);
+        while Instant::now() < finish {
+            if cancellation.is_cancelled() || Instant::now() >= deadline {
+                return Err(remote_worker_test_failure(
+                    "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+                ));
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        Ok(())
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        self.disconnects.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Default)]
+struct DisconnectBlockingRemoteWorker {
+    started: AtomicBool,
+    disconnected: AtomicBool,
+}
+
+#[derive(Debug, Default)]
+struct RecoveryBlockedRemoteWorker;
+
+impl RemoteWorkerSupervisor for RecoveryBlockedRemoteWorker {
+    fn execute(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        _cancellation: &dyn BridgeCancellationToken,
+        _bridge: &dyn BridgeApi,
+        _deadline: Instant,
+    ) -> Result<(), BridgeFailure> {
+        Err(remote_worker_test_failure(
+            "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+        ))
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+}
+
+impl RemoteWorkerSupervisor for DisconnectBlockingRemoteWorker {
+    fn execute(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        _cancellation: &dyn BridgeCancellationToken,
+        _bridge: &dyn BridgeApi,
+        _deadline: Instant,
+    ) -> Result<(), BridgeFailure> {
+        self.started.store(true, Ordering::SeqCst);
+        while !self.disconnected.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(2));
+        }
+        Err(remote_worker_test_failure(
+            "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
+        ))
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        self.disconnected.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        self.disconnected.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn stdio_remote_worker_keeps_diagnostics_and_other_working_copies_responsive() {
+    let worker = Arc::new(DelayedRemoteWorker::default());
+    let initialize = frame(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#,
+    );
+    let checkout =
+        remote_checkout_frame(2, "01234567-89ab-cdef-0123-456789abcdef", "C:/checkout/a");
+    let diagnostics = frame(r#"{"jsonrpc":"2.0","id":3,"method":"diagnostics/get","params":{}}"#);
+    let same_lane =
+        remote_checkout_frame(4, "11234567-89ab-cdef-0123-456789abcdef", "C:/checkout/a");
+    let child_path = frame(
+        r#"{"jsonrpc":"2.0","id":6,"method":"repository/open","params":{"path":"C:/checkout/a/child"}}"#,
+    );
+    let discovery_ancestor = frame(
+        r#"{"jsonrpc":"2.0","id":7,"method":"repository/discover","params":{"workspaceRoots":["C:/checkout"],"discoverNested":false,"discoveryDepth":0,"discoveryIgnore":[],"ignoredRoots":[],"externalsMode":"off"}}"#,
+    );
+    let repository_b =
+        frame(r#"{"jsonrpc":"2.0","id":5,"method":"repository/open","params":{"path":"C:/wc-b"}}"#);
+    let first = [
+        initialize,
+        checkout,
+        diagnostics,
+        same_lane,
+        child_path,
+        discovery_ancestor,
+        repository_b,
+    ]
+    .concat();
+    let shutdown = frame(r#"{"jsonrpc":"2.0","id":8,"method":"shutdown","params":{}}"#);
+    let reader = DelayedSecondChunkReader::new(first, shutdown, Duration::from_millis(180));
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
+        .expect("stdio coordinator should remain responsive while a remote worker runs");
+
+    let responses = decode_frames(&output).expect("responses should be content-length framed");
+    let ids = responses
+        .iter()
+        .map(|value| value["id"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![1, 3, 4, 6, 7, 5, 2, 8]);
+    assert_eq!(
+        responses[0]["result"]["capabilities"]["remoteWorkerIsolation"],
+        true
+    );
+    assert_eq!(responses[1]["result"]["protocol"]["minor"], 32);
+    assert_eq!(
+        responses[2]["error"]["code"],
+        "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY"
+    );
+    assert_eq!(
+        responses[3]["error"]["code"],
+        "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY"
+    );
+    assert_eq!(
+        responses[4]["error"]["code"],
+        "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY"
+    );
+    assert_eq!(responses[5]["result"]["repositoryId"], "repo-uuid:C:/wc-b");
+    assert_eq!(
+        responses[6]["error"]["code"],
+        "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED"
+    );
+    assert_eq!(responses[7]["result"]["accepted"], true);
+    assert_eq!(worker.executions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn stdio_eof_disconnects_an_active_remote_worker_before_returning() {
+    let worker = Arc::new(DisconnectBlockingRemoteWorker::default());
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        remote_checkout_frame(2, "21234567-89ab-cdef-0123-456789abcdef", "C:/checkout/eof"),
+    ]
+    .concat();
+    let reader = DelayedEofReader::new(input, Duration::from_millis(60));
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
+        .expect("EOF should terminate and settle the active remote worker");
+
+    assert!(worker.started.load(Ordering::SeqCst));
+    assert!(worker.disconnected.load(Ordering::SeqCst));
+    let responses = decode_frames(&output).expect("initialize response should remain framed");
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["id"], 1);
+}
+
+#[test]
+fn stdio_recovery_blocked_lane_rejects_child_and_discovery_paths_but_keeps_diagnostics_live() {
+    let worker = Arc::new(RecoveryBlockedRemoteWorker);
+    let first = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        remote_checkout_frame(2, "31234567-89ab-cdef-0123-456789abcdef", "C:/checkout/blocked"),
+    ]
+    .concat();
+    let second = [
+        frame(r#"{"jsonrpc":"2.0","id":3,"method":"repository/open","params":{"path":"C:/checkout/blocked/child"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":4,"method":"repository/discover","params":{"workspaceRoots":["C:/checkout"],"discoverNested":false,"discoveryDepth":0,"discoveryIgnore":[],"ignoredRoots":[],"externalsMode":"off"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":5,"method":"diagnostics/get","params":{}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":6,"method":"shutdown","params":{}}"#),
+    ]
+    .concat();
+    let reader = DelayedSecondChunkReader::new(first, second, Duration::from_millis(40));
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker)
+        .expect("blocked recovery lane must not stop unrelated diagnostics or shutdown");
+
+    let responses = decode_frames(&output).expect("responses should remain framed");
+    let ids = responses
+        .iter()
+        .map(|value| value["id"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![1, 2, 3, 4, 5, 6]);
+    assert_eq!(
+        responses[1]["error"]["code"],
+        "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    );
+    assert_eq!(
+        responses[2]["error"]["code"],
+        "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    );
+    assert_eq!(
+        responses[3]["error"]["code"],
+        "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    );
+    assert_eq!(responses[4]["result"]["protocol"]["minor"], 32);
+    assert_eq!(responses[5]["result"]["accepted"], true);
+}
+
+fn remote_worker_test_failure(code: &str) -> BridgeFailure {
+    BridgeFailure::new(
+        code,
+        "state",
+        "error.remote.workerTest",
+        serde_json::json!({}),
+        false,
+    )
+}
+
+fn remote_checkout_frame(id: u64, operation_id: &str, target_path: &str) -> Vec<u8> {
+    frame(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "repository/checkout",
+            "params": {
+                "url": "https://svn.example.invalid/project/trunk",
+                "targetPath": target_path,
+                "revision": "head",
+                "depth": "infinity",
+                "ignoreExternals": true,
+                "remote": {
+                    "version": 1,
+                    "operationId": operation_id,
+                    "intent": "foreground",
+                    "interaction": "allowed",
+                    "timeoutMs": 30000,
+                    "workspaceTrust": "trusted",
+                    "trustEpoch": 1,
+                    "profile": {
+                        "schema": "subversionr.remote-profile.v1",
+                        "profileId": "stdio-worker-test",
+                        "authority": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 },
+                        "serverAuth": "anonymous",
+                        "serverAccount": "none",
+                        "serverCredentialPersistence": "secretStorage",
+                        "tls": { "trust": "windowsRootsThenBroker" },
+                        "proxy": "none",
+                        "ssh": "none",
+                        "redirectPolicy": "rejectAll"
+                    },
+                    "expectedOrigin": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 }
+                }
+            }
+        })
+        .to_string(),
+    )
 }
 
 fn frame(payload: &str) -> Vec<u8> {

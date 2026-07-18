@@ -4528,6 +4528,24 @@ function repositoryFailureMessage(
       return localize(
         "The selected SVN unlock target is outside an open repository. Select a resource from an open SVN working copy and try Unlock again.",
       );
+    case "SUBVERSIONR_REMOTE_WORKER_START_FAILED":
+    case "SUBVERSIONR_REMOTE_WORKER_CONFIGURATION_INVALID":
+    case "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID":
+    case "SUBVERSIONR_REMOTE_WORKER_CRASHED":
+    case "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED":
+      return localize(
+        "SubversionR could not start or complete the isolated SVN remote worker. Retry the SVN operation.",
+      );
+    case "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT":
+      return localize("The isolated SVN remote operation exceeded its deadline. Retry the operation.");
+    case "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY":
+      return localize(
+        "Another isolated SVN operation is still using this working copy. Wait for it to finish and retry.",
+      );
+    case "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED":
+      return localize(
+        "SubversionR blocked this working copy because isolated worker cleanup could not be verified. Restart VS Code before retrying SVN operations.",
+      );
   }
   const cause = operationFailureCause(error);
   switch (cause) {
@@ -4576,7 +4594,11 @@ function isStatusRefreshCancellation(error: unknown): boolean {
 
 function isRepositoryCommandCancellation(error: unknown): boolean {
   const code = errorCode(error);
-  return code === "SVN_OPERATION_CANCELLED" || code === "SUBVERSIONR_OPERATION_SCHEDULER_CANCELLED";
+  return (
+    code === "SVN_OPERATION_CANCELLED" ||
+    code === "SUBVERSIONR_OPERATION_SCHEDULER_CANCELLED" ||
+    code === "SUBVERSIONR_REMOTE_WORKER_CANCELLED"
+  );
 }
 
 function isUnknownRepositoryCommandError(error: unknown): boolean {

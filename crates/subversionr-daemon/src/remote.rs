@@ -1,4 +1,7 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    time::Instant,
+};
 
 use serde_json::{Value, json};
 use subversionr_protocol::{
@@ -39,11 +42,7 @@ impl RemoteTrustState {
         self.acknowledged_epoch
     }
 
-    pub(crate) fn apply_update(
-        &mut self,
-        trusted: bool,
-        trust_epoch: u64,
-    ) -> Result<u64, BridgeFailure> {
+    pub(crate) fn validate_update(&self, trust_epoch: u64) -> Result<(), BridgeFailure> {
         let expected_epoch = self.current_epoch.checked_add(1).ok_or_else(|| {
             BridgeFailure::new(
                 "SUBVERSIONR_REMOTE_TRUST_EPOCH_EXHAUSTED",
@@ -56,10 +55,15 @@ impl RemoteTrustState {
         if trust_epoch != expected_epoch {
             return Err(trust_epoch_mismatch());
         }
+        Ok(())
+    }
+
+    pub(crate) fn commit_update(&mut self, trusted: bool, trust_epoch: u64) -> u64 {
+        debug_assert_eq!(self.current_epoch.checked_add(1), Some(trust_epoch));
         self.trusted = trusted;
         self.current_epoch = trust_epoch;
         self.acknowledged_epoch = trust_epoch;
-        Ok(trust_epoch)
+        trust_epoch
     }
 
     fn permits(&self, envelope_epoch: u64) -> bool {
@@ -73,6 +77,21 @@ impl RemoteTrustState {
 pub(crate) enum ClassifiedRepositoryUrl {
     LocalFile,
     Remote(CanonicalEndpoint),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ValidatedRemoteOperation {
+    pub(crate) endpoint: CanonicalEndpoint,
+    pub(crate) envelope: RemoteOperationEnvelope,
+    pub(crate) config: RemoteConfigPlan,
+    pub(crate) deadline: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteLaunchPlan {
+    pub(crate) request_id: Value,
+    pub(crate) lane_key: String,
+    pub(crate) operation: ValidatedRemoteOperation,
 }
 
 pub(crate) fn classify_repository_url(url: &str) -> Result<ClassifiedRepositoryUrl, BridgeFailure> {
@@ -119,7 +138,7 @@ pub(crate) fn validate_remote_envelope(
     request: &JsonRpcRequest,
     endpoint: &CanonicalEndpoint,
     trust: Option<&RemoteTrustState>,
-) -> Result<RemoteConfigPlan, BridgeFailure> {
+) -> Result<ValidatedRemoteOperation, BridgeFailure> {
     let value = envelope_value(request).ok_or_else(|| {
         BridgeFailure::new(
             "SUBVERSIONR_REMOTE_ENVELOPE_REQUIRED",
@@ -131,7 +150,16 @@ pub(crate) fn validate_remote_envelope(
     })?;
     let envelope: RemoteOperationEnvelope =
         serde_json::from_value(value.clone()).map_err(|_| invalid_remote_field("remote"))?;
-    validate_envelope(&envelope, endpoint, trust)
+    let config = validate_envelope(&envelope, endpoint, trust)?;
+    let deadline = Instant::now()
+        .checked_add(std::time::Duration::from_millis(envelope.timeout_ms))
+        .ok_or_else(|| invalid_remote_field("remote.timeoutMs"))?;
+    Ok(ValidatedRemoteOperation {
+        endpoint: endpoint.clone(),
+        envelope,
+        config,
+        deadline,
+    })
 }
 
 pub(crate) fn reject_file_envelope(request: &JsonRpcRequest) -> Result<(), BridgeFailure> {
@@ -151,8 +179,7 @@ pub(crate) fn preflight_repository_urls(
     request: &JsonRpcRequest,
     urls: &[&str],
     trust: Option<&RemoteTrustState>,
-    bridge: &dyn crate::BridgeApi,
-) -> Result<(), BridgeFailure> {
+) -> Result<Option<ValidatedRemoteOperation>, BridgeFailure> {
     let mut remote_endpoint: Option<CanonicalEndpoint> = None;
     let mut saw_file = false;
     for url in urls {
@@ -185,11 +212,10 @@ pub(crate) fn preflight_repository_urls(
         ));
     }
     let Some(endpoint) = remote_endpoint else {
-        return reject_file_envelope(request);
+        reject_file_envelope(request)?;
+        return Ok(None);
     };
-    let plan = validate_remote_envelope(request, &endpoint, trust)?;
-    bridge.create_remote_context_foundation(plan)?;
-    Err(unsupported_transport(&endpoint))
+    validate_remote_envelope(request, &endpoint, trust).map(Some)
 }
 
 pub(crate) fn unsupported_transport(endpoint: &CanonicalEndpoint) -> BridgeFailure {
@@ -207,6 +233,17 @@ fn validate_envelope(
     endpoint: &CanonicalEndpoint,
     trust: Option<&RemoteTrustState>,
 ) -> Result<RemoteConfigPlan, BridgeFailure> {
+    if envelope.trust_epoch == 0 || !trust.is_some_and(|state| state.permits(envelope.trust_epoch))
+    {
+        return Err(trust_epoch_mismatch());
+    }
+    validate_envelope_contract(envelope, endpoint)
+}
+
+fn validate_envelope_contract(
+    envelope: &RemoteOperationEnvelope,
+    endpoint: &CanonicalEndpoint,
+) -> Result<RemoteConfigPlan, BridgeFailure> {
     if envelope.version != REMOTE_OPERATION_VERSION {
         return Err(invalid_remote_field("remote.version"));
     }
@@ -216,9 +253,8 @@ fn validate_envelope(
     if envelope.timeout_ms == 0 || envelope.timeout_ms > MAX_REMOTE_TIMEOUT_MS {
         return Err(invalid_remote_field("remote.timeoutMs"));
     }
-    if envelope.trust_epoch == 0 || !trust.is_some_and(|state| state.permits(envelope.trust_epoch))
-    {
-        return Err(trust_epoch_mismatch());
+    if envelope.trust_epoch == 0 {
+        return Err(invalid_remote_field("remote.trustEpoch"));
     }
     if envelope.intent == RemoteOperationIntent::Background
         && envelope.interaction != RemoteInteraction::Forbidden
@@ -243,6 +279,22 @@ fn validate_envelope(
             trust_windows_roots,
         },
     )
+}
+
+pub(crate) fn validate_worker_envelope_plan(
+    envelope: &RemoteOperationEnvelope,
+    plan: RemoteConfigPlan,
+) -> Result<(), BridgeFailure> {
+    let expected = validate_envelope_contract(envelope, &envelope.expected_origin)?;
+    if plan.timeout_ms == 0
+        || plan.timeout_ms > envelope.timeout_ms
+        || plan.scheme != expected.scheme
+        || plan.server_auth != expected.server_auth
+        || plan.trust_windows_roots != expected.trust_windows_roots
+    {
+        return Err(invalid_remote_field("worker.plan"));
+    }
+    Ok(())
 }
 
 fn validate_profile(
