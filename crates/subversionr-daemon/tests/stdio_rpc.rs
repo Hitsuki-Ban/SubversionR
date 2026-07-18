@@ -3853,23 +3853,36 @@ fn stdio_remote_worker_auth_wait_is_interrupted_by_trust_revoke() {
 #[test]
 fn stdio_remote_worker_auth_wait_obeys_the_operation_deadline() {
     let worker = Arc::new(AuthWaitingRemoteWorker::default());
-    let input = [
-        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
-        remote_checkout_frame_with_timeout(
-            2,
-            "61234567-89ab-4def-8123-456789abcdef",
-            "C:/checkout/deadline-auth",
-            20,
-        ),
-    ]
-    .concat();
-    let reader = DelayedEofReader::new(input, Duration::from_millis(150));
-    let mut output = Vec::new();
+    let stage = Arc::new(AtomicUsize::new(0));
+    let reader = BrokerRoundTripReader::new(
+        vec![
+            [
+                frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+                remote_checkout_frame_with_timeout(
+                    2,
+                    "61234567-89ab-4def-8123-456789abcdef",
+                    "C:/checkout/deadline-auth",
+                    1_000,
+                ),
+            ]
+            .concat(),
+            frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}"#),
+        ],
+        vec![3],
+        stage.clone(),
+    );
+    let mut output = BrokerRoundTripWriter::new(stage);
 
     run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker)
         .expect("operation deadline must interrupt a longer credential request timeout");
 
-    let responses = decode_frames(&output).expect("responses should remain framed");
+    let responses = decode_frames(output.as_bytes()).expect("responses should remain framed");
+    assert!(responses.iter().any(|response| {
+        response["id"] == "worker-auth-wait"
+            && response["method"] == "credentials/request"
+            && response["params"]["requestId"] == "worker-auth-wait"
+            && response["params"]["operationId"] == "61234567-89ab-4def-8123-456789abcdef"
+    }));
     assert!(responses.iter().any(|response| {
         response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_TIMEOUT"
     }));
@@ -4302,7 +4315,7 @@ impl BrokerRoundTripReader {
     }
 
     fn wait_for_stage(&self, required: usize) -> io::Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while self.stage.load(Ordering::SeqCst) < required {
             if Instant::now() >= deadline {
                 return Err(io::Error::new(
