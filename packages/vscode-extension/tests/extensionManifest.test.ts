@@ -65,6 +65,8 @@ describe("extension manifest", () => {
       "onCommand:subversionr.diagnostics.installedSvnAnonymousStressCheckout",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousNegativeReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
       "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
       "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
       "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
@@ -178,11 +180,19 @@ describe("extension manifest", () => {
     );
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousNegativeReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport");
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousNegativeReport",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
     );
   });
 

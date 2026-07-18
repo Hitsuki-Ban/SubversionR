@@ -34,6 +34,14 @@ export interface RepositoryWatcherServiceOptions {
   now?: () => number;
 }
 
+export interface AcceptedRepositoryWatcherEvent {
+  repositoryId: string;
+  epoch: number;
+  absolutePath: string;
+  kind: RawWatcherEventKind;
+  timestamp: number;
+}
+
 interface RepositoryWatcherRegistration {
   watcher: RepositoryFileWatcher;
   subscriptions: DisposableLike[];
@@ -43,6 +51,7 @@ interface RepositoryWatcherRegistration {
 
 export class RepositoryWatcherService implements DisposableLike {
   private readonly registrations = new Map<string, RepositoryWatcherRegistration>();
+  private readonly acceptedEventListeners = new Set<(event: AcceptedRepositoryWatcherEvent) => void>();
   private readonly now: () => number;
 
   public constructor(private readonly options: RepositoryWatcherServiceOptions) {
@@ -118,18 +127,46 @@ export class RepositoryWatcherService implements DisposableLike {
     }
   }
 
+  public onDidAcceptWatcherEvent(listener: (event: AcceptedRepositoryWatcherEvent) => void): DisposableLike {
+    this.acceptedEventListeners.add(listener);
+    return {
+      dispose: () => {
+        this.acceptedEventListeners.delete(listener);
+      },
+    };
+  }
+
   public dispose(): void {
     for (const repositoryId of Array.from(this.registrations.keys())) {
       this.unregisterRepository(repositoryId);
     }
+    this.acceptedEventListeners.clear();
   }
 
   private accept(repositoryId: string, kind: RawWatcherEventKind, uri: WatcherUriLike): void {
-    this.options.pipeline.accept(repositoryId, {
+    const registration = this.registrations.get(repositoryId);
+    if (!registration) {
+      throw new Error(`Repository watcher is not registered: ${repositoryId}`);
+    }
+    const timestamp = this.now();
+    const accepted = this.options.pipeline.accept(repositoryId, {
       fsPath: uri.fsPath,
       kind,
-      timestamp: this.now(),
+      timestamp,
     });
+    if (!accepted) {
+      return;
+    }
+    const event: AcceptedRepositoryWatcherEvent = {
+      repositoryId,
+      epoch: registration.scope.epoch,
+      absolutePath: normalizeAbsoluteWatcherPath(uri.fsPath),
+      kind,
+      timestamp,
+    };
+    for (const listener of this.acceptedEventListeners) {
+      listener({ ...event });
+    }
   }
 }
 
@@ -161,4 +198,8 @@ function normalizeWatchRoot(path: string): string {
     return normalized.replace(/\/$/u, "");
   }
   return normalized.replace(/\/+$/u, "");
+}
+
+function normalizeAbsoluteWatcherPath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/\/+$/u, "");
 }

@@ -39,6 +39,8 @@ $installedStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRo
 $installedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-negative.ps1"))
 $packagedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-authz-denied.mjs"))
 $installedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-authz-denied.ps1"))
+$installedLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-local-event-zero-network.ps1"))
+$countingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-counting-proxy.mjs"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $packagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-negative.mjs"))
 $installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host"))
@@ -479,6 +481,57 @@ function Get-InstalledNegativeProcessObservation(
   }
 }
 
+function Get-InstalledLocalEventProcessObservation(
+  [object[]]$AllEvents,
+  [long]$ProbePid,
+  [string]$ExpectedProbeProcessName,
+  [string]$ExpectedDaemonProcessName,
+  [string[]]$ForbiddenFixtureProcessNames,
+  [object[]]$SettlementSnapshot
+) {
+  $probeStarts = @($AllEvents | Where-Object {
+      [long]$_.processId -eq $ProbePid -and
+      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  Assert-True ($probeStarts.Count -eq 1) "The installed local-event probe PID must have exactly one subscribed start identity."
+  Assert-True (
+    @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
+  ) "The installed local-event probe PID was reused during its subscribed observation."
+
+  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $candidateStarts = @($recordedDescendants | Where-Object {
+      ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  Assert-True ($candidateStarts.Count -eq 1) "The installed local-event surface must start exactly one candidate daemon and no remote worker."
+  $daemonStart = $candidateStarts[0]
+  Assert-True (
+    [long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime -and
+    @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1
+  ) "The installed local-event candidate daemon start identity was invalid or reused."
+  $daemonDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$daemonStart.processId))
+  Assert-True ($daemonDescendantStarts.Count -eq 0) "The installed local-event status refresh started a remote worker or another daemon descendant."
+
+  $forbiddenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($processName in $ForbiddenFixtureProcessNames) {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "An installed local-event forbidden fixture process name was invalid."
+    $null = $forbiddenNames.Add($processName)
+  }
+  Assert-True ($forbiddenNames.Count -eq $ForbiddenFixtureProcessNames.Count) "Installed local-event forbidden fixture process names must be unique."
+  $fixtureCliStarts = @($recordedDescendants | Where-Object { $forbiddenNames.Contains([string]$_.processName) })
+
+  $liveDaemon = @($SettlementSnapshot | Where-Object {
+      [long]$_.ProcessId -eq [long]$daemonStart.processId -and
+      (Get-ProcessSnapshotStartFileTime $_) -le [long]$daemonStart.eventFileTime
+    })
+  Assert-True ($liveDaemon.Count -eq 0) "The installed local-event candidate daemon remained alive at settlement."
+  return [pscustomobject]@{
+    daemonProcessId = [long]$daemonStart.processId
+    workerStarts = $daemonDescendantStarts.Count
+    workerDescendantsAfter = $liveDaemon.Count
+    fixtureCliInvocations = $fixtureCliStarts.Count
+  }
+}
+
 function Get-CandidateProcessIds([string]$ExecutablePath) {
   try {
     return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
@@ -616,6 +669,115 @@ function Stop-FaultFixture([object]$Fixture, [string]$Scenario) {
   }
 }
 
+function Read-CountingProxyState(
+  [string]$StatePath,
+  [System.Diagnostics.Process]$Process,
+  [bool]$RequireIdle = $false
+) {
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+  while ([DateTimeOffset]::UtcNow -lt $deadline) {
+    if ($Process.HasExited) {
+      throw "The I6 counting proxy exited before its state was ready."
+    }
+    if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+      $state = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json -Depth 8
+      $expectedProperties = @(
+        "schema", "pid", "listenHost", "port", "upstreamHost", "upstreamPort",
+          "acceptedConnections", "upstreamAttempts", "upstreamConnections",
+          "clientToUpstreamBytes", "upstreamToClientBytes",
+        "activeConnections", "upstreamConnectFailures", "status"
+      ) | Sort-Object
+      $actualProperties = @($state.PSObject.Properties.Name | Sort-Object)
+      Assert-True (($actualProperties -join ",") -ceq ($expectedProperties -join ",")) "The I6 counting proxy state shape was invalid."
+      Assert-True (
+        [string]$state.schema -ceq "subversionr.release.m8-i6-counting-proxy.v1" -and
+        [int]$state.pid -eq $Process.Id -and
+        [string]$state.listenHost -ceq "127.0.0.1" -and
+        [string]$state.upstreamHost -ceq "127.0.0.1" -and
+        [int]$state.port -ge 1 -and [int]$state.port -le 65535 -and
+        [int]$state.upstreamPort -ge 1 -and [int]$state.upstreamPort -le 65535 -and
+        [int64]$state.acceptedConnections -ge 0 -and [int64]$state.upstreamAttempts -ge 0 -and
+        [int64]$state.upstreamConnections -ge 0 -and
+        [int64]$state.clientToUpstreamBytes -ge 0 -and [int64]$state.upstreamToClientBytes -ge 0 -and
+        [int]$state.activeConnections -ge 0 -and [int]$state.upstreamConnectFailures -ge 0
+      ) "The I6 counting proxy state values were invalid."
+      if ([string]$state.status -ceq "ready" -and (-not $RequireIdle -or [int]$state.activeConnections -eq 0)) {
+        return $state
+      }
+    }
+    Start-Sleep -Milliseconds 25
+  }
+  throw "The I6 counting proxy did not reach its required state before the deadline."
+}
+
+function Start-CountingProxy(
+  [string]$NodeHost,
+  [string]$ProxyScript,
+  [int]$UpstreamPort,
+  [string]$StatePath
+) {
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $NodeHost
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardInput = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.Environment["ELECTRON_RUN_AS_NODE"] = "1"
+  foreach ($argument in @(
+      $ProxyScript,
+      "--listen-host", "127.0.0.1",
+      "--port", "0",
+      "--upstream-host", "127.0.0.1",
+      "--upstream-port", ([string]$UpstreamPort),
+      "--state-path", $StatePath
+    )) {
+    $startInfo.ArgumentList.Add($argument)
+  }
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  Assert-True $process.Start() "Failed to start the I6 transparent counting proxy."
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+  $stderrTask = $process.StandardError.ReadToEndAsync()
+  try {
+    $state = Read-CountingProxyState $StatePath $process
+    return [pscustomobject]@{
+      Process = $process; State = $state; StatePath = $StatePath
+      StdoutTask = $stdoutTask; StderrTask = $stderrTask
+    }
+  }
+  catch {
+    if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+    $process.Dispose()
+    throw
+  }
+}
+
+function Stop-CountingProxy([object]$Proxy) {
+  $process = [System.Diagnostics.Process]$Proxy.Process
+  try {
+    if (-not $process.HasExited) {
+      $process.StandardInput.Write("stop`n")
+      $process.StandardInput.Flush()
+      $process.StandardInput.Close()
+      if (-not $process.WaitForExit(10000)) {
+        $process.Kill($true)
+        $process.WaitForExit()
+        throw "The I6 counting proxy exceeded its shutdown deadline."
+      }
+    }
+    $stdout = $Proxy.StdoutTask.GetAwaiter().GetResult()
+    $stderr = $Proxy.StderrTask.GetAwaiter().GetResult()
+    Assert-True ($process.ExitCode -eq 0 -and $stdout.Length -eq 0 -and $stderr.Length -eq 0) "The I6 counting proxy did not stop cleanly."
+    $finalState = Get-Content -Raw -LiteralPath $Proxy.StatePath | ConvertFrom-Json -Depth 8
+    Assert-True ([string]$finalState.status -ceq "stopped" -and [int]$finalState.activeConnections -eq 0) "The I6 counting proxy final state was invalid."
+    return $finalState
+  }
+  finally {
+    $process.Dispose()
+  }
+}
+
 function Resolve-CodeNodeHost([string]$CodePath) {
   $leaf = [System.IO.Path]::GetFileName($CodePath)
   if ($leaf.Equals("code.exe", [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -681,6 +843,8 @@ $installedStressProbeResolved = Resolve-RequiredFile $installedStressProbePath "
 $installedNegativeProbeResolved = Resolve-RequiredFile $installedNegativeProbePath "installed I6 negative Extension Host probe"
 $packagedAuthzDeniedProbeResolved = Resolve-RequiredFile $packagedAuthzDeniedProbePath "packaged-native I6 authz-denied probe"
 $installedAuthzDeniedProbeResolved = Resolve-RequiredFile $installedAuthzDeniedProbePath "installed VSIX I6 authz-denied probe"
+$installedLocalEventProbeResolved = Resolve-RequiredFile $installedLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
+$countingProxyResolved = Resolve-RequiredFile $countingProxyPath "I6 transparent counting proxy"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
 $packagedNegativeProbeResolved = Resolve-RequiredFile $packagedNegativeProbePath "packaged-native I6 negative probe"
 
@@ -1268,6 +1432,165 @@ finally {
   }
 }
 
+$localEventWorkingCopy = Join-Path $fixtureRootResolved "local-event-zero-network-wc"
+$localEventProbeRoot = Join-Path $probeRoot "installed-local-event-zero-network"
+$localEventProxyRoot = Join-Path $probeRoot "local-event-counting-proxy"
+$localEventProxyStatePath = Join-Path $localEventProxyRoot "state.json"
+Assert-True (-not (Test-Path -LiteralPath $localEventWorkingCopy)) "The installed local-event working-copy path must not exist before checkout."
+Assert-True (-not (Test-Path -LiteralPath $localEventProbeRoot)) "The installed local-event probe root must not exist before execution."
+New-Item -ItemType Directory -Path $localEventProxyRoot | Out-Null
+$countingProxy = Start-CountingProxy $nodeHost $countingProxyResolved $repositoryUri.Port $localEventProxyStatePath
+$localEventProcessSourceIdentifier = "subversionr-m8-i6-installed-local-event-$([Guid]::NewGuid().ToString('N'))"
+$localEventProcessSubscriber = $null
+$localEventProcessEvents = [System.Collections.Generic.List[object]]::new()
+$localEventProcessEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$proxyBaseline = $null
+try {
+  $proxyRepositoryUri = [System.UriBuilder]::new($repositoryUri)
+  $proxyRepositoryUri.Host = "127.0.0.1"
+  $proxyRepositoryUri.Port = [int]$countingProxy.State.port
+  $localEventCheckout = Invoke-BoundedProcess $svnResolved @(
+    "checkout", $proxyRepositoryUri.Uri.AbsoluteUri, $localEventWorkingCopy,
+    "--revision", "2", "--ignore-externals",
+    "--non-interactive", "--no-auth-cache", "--config-dir", $oracleConfigRoot
+  ) 60
+  Assert-True ($localEventCheckout.ExitCode -eq 0) "The controlled fixture CLI could not create the proxy-bound local-event working copy."
+  $localEventTarget = Resolve-RequiredFile (Join-Path $localEventWorkingCopy "tracked.txt") "installed local-event target"
+  Assert-True ((Get-Item -LiteralPath $localEventTarget).Length -gt 0) "The installed local-event target must be non-empty."
+
+  $proxyBaseline = Read-CountingProxyState $localEventProxyStatePath $countingProxy.Process $true
+  Assert-True (
+    [int64]$proxyBaseline.acceptedConnections -gt 0 -and
+    [int64]$proxyBaseline.acceptedConnections -eq [int64]$proxyBaseline.upstreamAttempts -and
+    [int64]$proxyBaseline.acceptedConnections -eq [int64]$proxyBaseline.upstreamConnections -and
+    [int64]$proxyBaseline.clientToUpstreamBytes -gt 0 -and
+    [int64]$proxyBaseline.upstreamToClientBytes -gt 0 -and
+    [int]$proxyBaseline.activeConnections -eq 0 -and
+    [int]$proxyBaseline.upstreamConnectFailures -eq 0
+  ) "The installed local-event counting-proxy checkout baseline was invalid."
+  $localEventLogOffset = (Get-Item -LiteralPath $fixtureLogResolved).Length
+  Assert-CandidateProcessAbsent $daemonResolved "The installed local-event preflight"
+
+  try {
+    try {
+      Register-CimIndicationEvent -ClassName Win32_ProcessStartTrace -SourceIdentifier $localEventProcessSourceIdentifier -ErrorAction Stop | Out-Null
+    }
+    catch {
+      throw "Win32_ProcessStartTrace is required for the installed local-event process observation: $($_.Exception.Message)"
+    }
+    $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $localEventProcessSourceIdentifier -ErrorAction Stop)
+    Assert-True ($matchingSubscribers.Count -eq 1) "The installed local-event process-start subscription was not created exactly once."
+    $localEventProcessSubscriber = $matchingSubscribers[0]
+    Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+    $installedLocalEventResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", $installedLocalEventProbeResolved,
+      "-VsixPath", $vsixResolved,
+      "-CodeCliPath", $codeCliResolved,
+      "-FixtureRoot", $localEventProbeRoot,
+      "-WorkingCopyPath", $localEventWorkingCopy,
+      "-RelativePath", "tracked.txt",
+      "-ExpectedProductVersion", $ExpectedProductVersion,
+      "-DaemonPath", $daemonResolved,
+      "-BridgePath", $bridgeResolved,
+      "-ObservationTimeoutMilliseconds", "30000",
+      "-TimeoutSeconds", "180"
+    ) 240
+    $installedLocalEventFailure = $installedLocalEventResult.Stderr.Trim()
+    Assert-True (
+      $installedLocalEventResult.ExitCode -eq 0 -and $installedLocalEventResult.Stderr.Length -eq 0
+    ) "The installed VSIX local-event zero-network probe failed: $installedLocalEventFailure"
+    $installedLocalEventReport = Convert-JsonObject $installedLocalEventResult.Stdout.Trim() "installed VSIX local-event zero-network probe stdout"
+    Assert-True (
+      [string]$installedLocalEventReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-local-event-zero-network.v1" -and
+      [string]$installedLocalEventReport.status -ceq "passed" -and
+      [string]$installedLocalEventReport.surface -ceq "installed-vsix-extension-host" -and
+      [string]$installedLocalEventReport.cell -ceq "localEventZeroNetwork" -and
+      $installedLocalEventReport.watcherObserved -eq $true -and
+      [string]$installedLocalEventReport.target.path -ceq "tracked.txt" -and
+      [string]$installedLocalEventReport.target.depth -ceq "empty" -and
+      [string]$installedLocalEventReport.target.reason -ceq "fileChanged" -and
+      [int64]$installedLocalEventReport.statusRefreshRequestDelta -ge 1 -and
+      [int64]$installedLocalEventReport.remoteStatusRequestDelta -eq 0 -and
+      [int64]$installedLocalEventReport.reconcileRequestDelta -eq 0 -and
+      $installedLocalEventReport.projectionObserved -eq $true -and
+      [int64]$installedLocalEventReport.credentialRequests -eq 0 -and
+      [int64]$installedLocalEventReport.credentialSettlements -eq 0 -and
+      [int64]$installedLocalEventReport.certificateRequests -eq 0 -and
+      $installedLocalEventReport.diagnosticsRedacted -eq $true -and
+      [int]$installedLocalEventReport.temporaryRootsAfter -eq 0 -and
+      $installedLocalEventReport.candidateDaemonExitedAfter -eq $true
+    ) "The installed VSIX local-event zero-network observation was incomplete."
+
+    $proxyAfterObservation = Read-CountingProxyState $localEventProxyStatePath $countingProxy.Process $true
+    foreach ($counterName in @(
+        "acceptedConnections", "upstreamAttempts", "upstreamConnections",
+        "clientToUpstreamBytes", "upstreamToClientBytes", "upstreamConnectFailures"
+      )) {
+      Assert-True (
+        [int64]$proxyAfterObservation.$counterName -eq [int64]$proxyBaseline.$counterName
+      ) "The installed local-event surface changed counting-proxy counter '$counterName'."
+    }
+    Assert-True ([int]$proxyAfterObservation.activeConnections -eq 0) "The installed local-event surface left an active proxy connection."
+    Assert-True ((Get-Item -LiteralPath $fixtureLogResolved).Length -eq $localEventLogOffset) "The installed local-event surface produced a high-level svnserve operation."
+
+    Complete-ProcessStartEventDrain `
+      $localEventProcessSourceIdentifier `
+      $localEventProcessEvents `
+      $localEventProcessEventKeys `
+      $ProcessStartEventSettlementMilliseconds
+    $localEventProcessObservation = Get-InstalledLocalEventProcessObservation `
+      -AllEvents @($localEventProcessEvents) `
+      -ProbePid ([long]$installedLocalEventResult.ProcessId) `
+      -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+      -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+      -ForbiddenFixtureProcessNames @(
+        [System.IO.Path]::GetFileName($svnResolved),
+        [System.IO.Path]::GetFileName($svnadminResolved),
+        [System.IO.Path]::GetFileName($svnserveResolved)
+      ) `
+      -SettlementSnapshot (Get-CimProcessSnapshot)
+    Assert-True ([int]$localEventProcessObservation.fixtureCliInvocations -eq 0) "The installed local-event product surface invoked a fixture CLI."
+    Assert-True ([int]$localEventProcessObservation.workerStarts -eq 0) "The installed local-event product surface started a remote worker."
+
+    $localEventZeroNetworkObservation = [pscustomobject]@{
+      surface = "installed-vsix-extension-host"
+      stableCode = "none"; reason = "none"
+      originCode = "none"; originReason = "none"
+      settlementCode = "none"; settlementReason = "none"
+      networkProgress = "none"; networkAttempts = 0; networkConnections = 0
+      fixtureCliInvocations = [int]$localEventProcessObservation.fixtureCliInvocations
+      credentialRequests = [int]$installedLocalEventReport.credentialRequests
+      credentialSettlements = [int]$installedLocalEventReport.credentialSettlements
+      followupNetworkContacts = 0
+      workerDescendantsAfter = [int]$localEventProcessObservation.workerDescendantsAfter
+      temporaryRootsAfter = [int]$installedLocalEventReport.temporaryRootsAfter
+      diagnosticsRedacted = [bool]$installedLocalEventReport.diagnosticsRedacted
+    }
+  }
+  finally {
+    if ($null -ne $localEventProcessSubscriber) {
+      Unregister-Event -SubscriptionId $localEventProcessSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+    }
+    Get-Event -SourceIdentifier $localEventProcessSourceIdentifier -ErrorAction SilentlyContinue |
+      Remove-Event -ErrorAction SilentlyContinue
+  }
+}
+finally {
+  $proxyFinalState = Stop-CountingProxy $countingProxy
+  if ($null -ne $proxyBaseline) {
+    foreach ($counterName in @(
+        "acceptedConnections", "upstreamAttempts", "upstreamConnections",
+        "clientToUpstreamBytes", "upstreamToClientBytes", "upstreamConnectFailures"
+      )) {
+      Assert-True (
+        [int64]$proxyFinalState.$counterName -eq [int64]$proxyBaseline.$counterName
+      ) "The stopped installed local-event counting proxy changed final counter '$counterName'."
+    }
+    Assert-True ([int]$proxyFinalState.activeConnections -eq 0) "The stopped installed local-event counting proxy retained an active connection."
+  }
+}
+
 $installedStressRoot = Join-Path $probeRoot "installed-stress"
 $installedStressResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
   "-NoProfile",
@@ -1425,4 +1748,4 @@ finally {
 }
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the installed malicious-root and SASL-only fault cells, the packaged/installed authz-denied remote-status cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the installed malicious-root and SASL-only fault cells, the packaged/installed authz-denied remote-status cell, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."

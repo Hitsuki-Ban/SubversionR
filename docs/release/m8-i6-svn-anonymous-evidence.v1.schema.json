@@ -63,9 +63,11 @@
         "packagedNegativeProbe",
         "packagedAuthzDeniedProbe",
         "raSvnFaultFixture",
+        "countingProxy",
         "installedStressProbe",
         "installedNegativeProbe",
         "installedAuthzDeniedProbe",
+        "installedLocalEventProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
         "installedExtensionHostProbe",
@@ -105,6 +107,9 @@
         "raSvnFaultFixture": {
           "$ref": "#/$defs/artifact"
         },
+        "countingProxy": {
+          "$ref": "#/$defs/artifact"
+        },
         "installedStressProbe": {
           "$ref": "#/$defs/artifact"
         },
@@ -112,6 +117,9 @@
           "$ref": "#/$defs/artifact"
         },
         "installedAuthzDeniedProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedLocalEventProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedVsixProbe": {

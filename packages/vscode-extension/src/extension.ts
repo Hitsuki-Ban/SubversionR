@@ -61,6 +61,7 @@ import {
 } from "./diagnostics/installedSvnAnonymousStressCheckout";
 import { collectInstalledSvnAnonymousNegativeReport } from "./diagnostics/installedSvnAnonymousNegativeReport";
 import { collectInstalledSvnAnonymousAuthzDeniedReport } from "./diagnostics/installedSvnAnonymousAuthzDeniedReport";
+import { InstalledSvnAnonymousLocalEventZeroNetworkObserver } from "./diagnostics/installedSvnAnonymousLocalEventZeroNetwork";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
@@ -312,6 +313,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const installedSvnAnonymousStressCheckoutToken = consumeInstalledSvnAnonymousStressCheckoutToken();
   const installedSvnAnonymousNegativeReportToken = consumeInstalledSvnAnonymousNegativeReportToken();
   const installedSvnAnonymousAuthzDeniedReportToken = consumeInstalledSvnAnonymousAuthzDeniedReportToken();
+  const installedSvnAnonymousLocalEventZeroNetworkToken =
+    consumeInstalledSvnAnonymousLocalEventZeroNetworkToken();
   const installedSvnAnonymousStressCheckoutContext =
     installedSvnAnonymousStressCheckoutToken === undefined
       ? undefined
@@ -385,7 +388,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       installedSvnAnonymousReportToken !== undefined ||
       installedSvnAnonymousStressCheckoutToken !== undefined ||
       installedSvnAnonymousNegativeReportToken !== undefined ||
-      installedSvnAnonymousAuthzDeniedReportToken !== undefined
+      installedSvnAnonymousAuthzDeniedReportToken !== undefined ||
+      installedSvnAnonymousLocalEventZeroNetworkToken !== undefined
     ) {
       if (method === "credentials/request") {
         installedSvnAnonymousAuthActivity.credentialRequests += 1;
@@ -1468,6 +1472,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
             }),
         );
+  const installedSvnAnonymousLocalEventZeroNetworkObserver =
+    installedSvnAnonymousLocalEventZeroNetworkToken === undefined
+      ? undefined
+      : new InstalledSvnAnonymousLocalEventZeroNetworkObserver({
+          expectedToken: installedSvnAnonymousLocalEventZeroNetworkToken,
+          workspaceTrusted: () => vscode.workspace.isTrusted,
+          pathCase: pathCasePolicy(process.platform),
+          sessionService,
+          watcherService,
+          statusRefreshCoverage,
+          sourceControlSurface: sourceControlPresenter,
+          counters: () => ({
+            statusRefreshRequestCount: statusRefreshClient.requestCount(),
+            remoteStatusRequestCount,
+            reconcileRequestCount,
+          }),
+          authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+          collectDiagnostics: async () =>
+            await (await service.initialize()).sendRequest<unknown>("diagnostics/get", {}),
+        });
+  const installedSvnAnonymousLocalEventZeroNetworkArmCommand =
+    installedSvnAnonymousLocalEventZeroNetworkObserver === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
+          (request: unknown) => installedSvnAnonymousLocalEventZeroNetworkObserver.arm(request),
+        );
+  const installedSvnAnonymousLocalEventZeroNetworkReportCommand =
+    installedSvnAnonymousLocalEventZeroNetworkObserver === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
+          async (request: unknown) =>
+            await installedSvnAnonymousLocalEventZeroNetworkObserver.awaitReport(request),
+        );
   const installedCoreWorkflowReportCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedCoreWorkflowReport",
     (request: unknown) =>
@@ -2244,6 +2283,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   if (installedSvnAnonymousAuthzDeniedReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousAuthzDeniedReportCommand);
+  }
+  if (
+    installedSvnAnonymousLocalEventZeroNetworkObserver !== undefined &&
+    installedSvnAnonymousLocalEventZeroNetworkArmCommand !== undefined &&
+    installedSvnAnonymousLocalEventZeroNetworkReportCommand !== undefined
+  ) {
+    context.subscriptions.push(
+      installedSvnAnonymousLocalEventZeroNetworkObserver,
+      installedSvnAnonymousLocalEventZeroNetworkArmCommand,
+      installedSvnAnonymousLocalEventZeroNetworkReportCommand,
+    );
   }
   if (installedSourceControlUiE2eExecuteResourceCommand !== undefined) {
     context.subscriptions.push(installedSourceControlUiE2eExecuteResourceCommand);
@@ -4217,6 +4267,12 @@ function consumeInstalledSvnAnonymousNegativeReportToken(): string | undefined {
 function consumeInstalledSvnAnonymousAuthzDeniedReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_AUTHZ_DENIED_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_AUTHZ_DENIED_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousLocalEventZeroNetworkToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_LOCAL_EVENT_ZERO_NETWORK_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_LOCAL_EVENT_ZERO_NETWORK_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 

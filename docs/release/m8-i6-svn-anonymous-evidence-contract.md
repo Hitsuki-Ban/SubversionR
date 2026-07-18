@@ -168,8 +168,23 @@ surface; a shared aggregate constant is not evidence. The
 `localEventZeroNetwork` cell is installed-only because #135 requires the real
 Extension Host watcher/dirty-path path and the packaged daemon has no filesystem
 event surface. It requires both network-attempt and successful-connection counts
-to remain zero. The blackhole cell independently requires one measured network
-attempt and zero successful connections.
+to remain zero. The installed harness arms a one-shot observer before changing
+an existing versioned file, then requires the production VS Code filesystem
+watcher callback, the exact `fileChanged` / `empty` dirty-path refresh with
+`libsvn-local` coverage, and the corresponding SCM modified projection. The
+observer has one absolute deadline. Because VS Code exposes no watcher-readiness
+promise, the harness allows one bounded registration-stability window before its
+single target write; that window is never treated as evidence and is not a retry.
+Direct dirty-path injection, delay-only success, repeated writes, or polling
+compensation is not evidence. The dedicated working copy is checked
+out through a transparent loopback counting proxy to the source-built
+`svnserve`. After checkout traffic has settled, the observation window requires
+the proxy's accepted-connection, upstream-connection, client-byte, and
+server-byte counters to remain unchanged and its active-connection count to
+remain zero. The source-built `svnserve --log-file` must also remain unchanged,
+but is only a high-level operation-log corroboration and is never substituted
+for the proxy counters. The blackhole cell independently requires one measured
+network attempt and zero successful connections.
 
 Safe, Indeterminate, and Blocked recovery settlements are likewise recorded
 separately for both product surfaces. Blocked checkout recovery binds the exact
@@ -198,9 +213,11 @@ duplicate, or reordered cycles, and requires an independent successful cycle
 
 The source branch contains real candidate drivers for the packaged-native and
 installed Extension Host positive operation matrix, malicious-root, SASL-only,
-and authz-denied cells. The authz-denied cell additionally binds the exact
-svnserve command log and requires atomic deny/restore controls. All drivers keep
-the evidence report absent when any candidate observation fails.
+authz-denied, and installed local-event zero-network cells. The authz-denied
+cell additionally binds the exact svnserve command log and requires atomic
+deny/restore controls. The local-event cell binds a transparent byte-counting
+proxy and a real VS Code watcher observer. All drivers keep the evidence report
+absent when any candidate observation fails.
 
 This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
