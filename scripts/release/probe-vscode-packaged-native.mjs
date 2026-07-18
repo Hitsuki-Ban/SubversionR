@@ -5,7 +5,7 @@ import path from "node:path";
 
 const PROBE_SCHEMA = "subversionr.release.packaged-native-compatibility.v2";
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const EXPECTED_PROTOCOL_MINOR = 33;
+const EXPECTED_PROTOCOL_MINOR = 34;
 const EXPECTED_REMOTE_RESULT_CODE = "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED";
 
 class ProbeError extends Error {
@@ -71,6 +71,7 @@ try {
   }
   if (
     initializeResult.capabilities?.remoteWorkerIsolation !== true ||
+    initializeResult.capabilities?.remoteConnectionState !== true ||
     initializeResult.capabilities?.credentialLeaseSettlement !== true
   ) {
     throw new ProbeError(
@@ -126,6 +127,7 @@ try {
     diagnostics.protocol.minor !== EXPECTED_PROTOCOL_MINOR ||
     !isRecord(diagnostics.capabilities) ||
     diagnostics.capabilities.remoteWorkerIsolation !== true ||
+    diagnostics.capabilities.remoteConnectionState !== true ||
     diagnostics.capabilities.credentialLeaseSettlement !== true ||
     diagnostics.source !== "subversionr-daemon"
   ) {
@@ -147,6 +149,7 @@ try {
       libsvnVersion: initializeResult.libsvnVersion,
       capabilities: {
         remoteWorkerIsolation: true,
+        remoteConnectionState: true,
         credentialLeaseSettlement: true,
       },
       localDiscovery: {

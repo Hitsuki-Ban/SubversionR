@@ -16,6 +16,7 @@ import type {
 } from "../src/repository/repositorySessionService";
 import type { RepositoryRefreshService } from "../src/status/repositoryRefreshService";
 import type { RemoteStatusCheckService } from "../src/status/remoteStatusCheckService";
+import type { RemoteRecoveryService } from "../src/status/remoteRecoveryService";
 import type { PathCasePolicy } from "../src/status/types";
 import type {
   OperationClient,
@@ -609,7 +610,7 @@ describe("RepositoryCommandController", () => {
       expect.any(Function),
     );
     expect(remoteStatusCheckService.checkRemoteChanges).toHaveBeenCalledWith(
-      { repositoryId: "repo-uuid:C:/workspace", epoch: 7 },
+      { repositoryId: "repo-uuid:C:/workspace", epoch: 7, repositoryRootUrl: "file:///C:/repo" },
       { signal: progressCancellation.signal },
     );
     expect(ui.showInformationMessage).toHaveBeenCalledWith(
@@ -658,6 +659,89 @@ describe("RepositoryCommandController", () => {
       expect.not.stringContaining("SubversionR repository command failed:"),
       "Show Log",
     );
+  });
+
+  it("retries a read-only indeterminate remote check with the selected repository", async () => {
+    const session = repositorySession();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    ui.showErrorMessage.mockResolvedValueOnce("Retry").mockResolvedValueOnce(undefined);
+    const remoteFailure = {
+      safeArgs: {
+        remoteFailure: { category: "process", reason: "workerContainmentFailed", cleanupAppropriate: false },
+      },
+    };
+    const remoteStatusCheckService = {
+      checkRemoteChanges: vi.fn().mockRejectedValueOnce(remoteFailure).mockResolvedValueOnce(0),
+    };
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      { remoteStatusCheckService },
+    );
+
+    await controller.checkRemoteChanges();
+    await vi.waitFor(() => expect(remoteStatusCheckService.checkRemoteChanges).toHaveBeenCalledTimes(2));
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "SubversionR remote access failed (workerContainmentFailed).",
+      "Retry",
+      "Show Log",
+    );
+    expect(remoteStatusCheckService.checkRemoteChanges.mock.calls[1]?.[0]).toMatchObject({
+      repositoryId: session.repositoryId,
+    });
+  });
+
+  it("uses Retry Recovery only for an indeterminate recovery operation", async () => {
+    const session = repositorySession();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    ui.showErrorMessage.mockResolvedValueOnce("Retry Recovery").mockResolvedValueOnce(undefined);
+    const failure = {
+      safeArgs: {
+        remoteFailure: { category: "process", reason: "workerContainmentFailed", cleanupAppropriate: false },
+      },
+    };
+    const remoteRecoveryService = {
+      recover: vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce("safe"),
+    };
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      { remoteRecoveryService },
+    );
+
+    await controller.retryRemoteRecovery();
+    await vi.waitFor(() => expect(remoteRecoveryService.recover).toHaveBeenCalledTimes(2));
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "SubversionR remote access failed (workerContainmentFailed).",
+      "Retry Recovery",
+      "Show Log",
+    );
+    expect(remoteRecoveryService.recover.mock.calls[1]?.[0]).toEqual({
+      repositoryId: session.repositoryId,
+      epoch: session.epoch,
+    });
+  });
+
+  it("reports an explicit foreground warning when recovery remains indeterminate", async () => {
+    const session = repositorySession();
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [session] }),
+      ui,
+      { remoteRecoveryService: { recover: vi.fn().mockResolvedValue("indeterminate") } },
+    );
+
+    await controller.retryRemoteRecovery(session.repositoryId);
+
+    expect(ui.showWarningMessage).toHaveBeenCalledWith(
+      "SubversionR remote recovery remains indeterminate: C:\\workspace",
+    );
+    expect(ui.showInformationMessage).not.toHaveBeenCalled();
   });
 
   it("rejects invalid refresh repository id command arguments with a refresh error code", async () => {
@@ -11696,6 +11780,7 @@ function commandController(
       "refreshRepository" | "fullReconcileRepository" | "refreshResource" | "refreshTargets"
     >;
     remoteStatusCheckService?: Pick<RemoteStatusCheckService, "checkRemoteChanges">;
+    remoteRecoveryService?: Pick<RemoteRecoveryService, "recover">;
     operationClient?: Pick<
       OperationClient,
       | "add"
@@ -11744,6 +11829,7 @@ function commandController(
     sessionService,
     refreshService: deps.refreshService ?? fakeRefreshService(),
     remoteStatusCheckService: deps.remoteStatusCheckService ?? fakeRemoteStatusCheckService(0),
+    remoteRecoveryService: deps.remoteRecoveryService ?? { recover: vi.fn().mockResolvedValue("safe") },
     operationClient: deps.operationClient ?? fakeOperationClient(operationResponse()),
     checkoutClient: deps.checkoutClient ?? fakeCheckoutClient(),
     propertiesClient: deps.propertiesClient ?? fakePropertiesClient(propertiesResponse()),
@@ -12218,7 +12304,7 @@ function fakeRemoteStatusCheckService(remoteChanges: number): Pick<
   checkRemoteChanges: ReturnType<
     typeof vi.fn<
       (
-        request: { repositoryId: string; epoch: number },
+        request: { repositoryId: string; epoch: number; repositoryRootUrl: string },
         options?: { signal?: AbortSignal },
       ) => Promise<number>
     >
@@ -12228,7 +12314,7 @@ function fakeRemoteStatusCheckService(remoteChanges: number): Pick<
     checkRemoteChanges: vi
       .fn<
         (
-          request: { repositoryId: string; epoch: number },
+          request: { repositoryId: string; epoch: number; repositoryRootUrl: string },
           options?: { signal?: AbortSignal },
         ) => Promise<number>
       >()
@@ -12367,7 +12453,8 @@ interface FakeCommandUi {
   pickOpenRepository: ReturnType<typeof vi.fn<(sessions: RepositorySession[]) => Promise<RepositorySession | undefined>>>;
   showInformationMessage: ReturnType<typeof vi.fn<(message: string) => Promise<void>>>;
   showWarningMessage: ReturnType<typeof vi.fn<(message: string) => Promise<void>>>;
-  showErrorMessage: ReturnType<typeof vi.fn<(message: string) => Promise<void>>>;
+  showErrorMessage: ReturnType<typeof vi.fn<RepositoryCommandUi["showErrorMessage"]>>;
+  openRemoteAccessSettings: ReturnType<typeof vi.fn<() => Promise<void>>>;
   showTextDocument: ReturnType<
     typeof vi.fn<(document: { title: string; content: string; language: string }) => Promise<void>>
   >;
@@ -12566,7 +12653,8 @@ function fakeCommandUi(options: {
     pickOpenRepository: vi.fn(async () => options.pickedSession),
     showInformationMessage: vi.fn(async () => undefined),
     showWarningMessage: vi.fn(async () => undefined),
-    showErrorMessage: vi.fn(async () => undefined),
+    showErrorMessage: vi.fn<RepositoryCommandUi["showErrorMessage"]>(async () => undefined),
+    openRemoteAccessSettings: vi.fn(async () => undefined),
     showTextDocument: vi.fn(async () => undefined),
     showReadonlyRepositoryReport: vi.fn(async () => undefined),
     confirmRevertResource: vi.fn(async () => options.revertConfirmed ?? true),

@@ -117,10 +117,12 @@ try {
     $probeResult["status"] -ne "passed" `
     -or $protocol -isnot [System.Collections.IDictionary] `
     -or [int]$protocol["major"] -ne 1 `
-    -or [int]$protocol["minor"] -ne 33 `
+    -or [int]$protocol["minor"] -ne 34 `
     -or $capabilities -isnot [System.Collections.IDictionary] `
     -or $capabilities["remoteWorkerIsolation"] -isnot [bool] `
     -or $capabilities["remoteWorkerIsolation"] -ne $true `
+    -or $capabilities["remoteConnectionState"] -isnot [bool] `
+    -or $capabilities["remoteConnectionState"] -ne $true `
     -or $capabilities["credentialLeaseSettlement"] -isnot [bool] `
     -or $capabilities["credentialLeaseSettlement"] -ne $true `
     -or $credentialProviderProbe -isnot [System.Collections.IDictionary] `
@@ -150,7 +152,7 @@ try {
     -or [string]$subsequentDiagnostics["source"] -cne "subversionr-daemon" `
     -or $subsequentProtocol -isnot [System.Collections.IDictionary] `
     -or [int]$subsequentProtocol["major"] -ne 1 `
-    -or [int]$subsequentProtocol["minor"] -ne 33 `
+    -or [int]$subsequentProtocol["minor"] -ne 34 `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["backendVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["bridgeVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["libsvnVersion"])
@@ -191,6 +193,7 @@ try {
     }
     capabilities = [pscustomobject]@{
       remoteWorkerIsolation = [bool]$capabilities["remoteWorkerIsolation"]
+      remoteConnectionState = [bool]$capabilities["remoteConnectionState"]
       credentialLeaseSettlement = [bool]$capabilities["credentialLeaseSettlement"]
     }
     credentialProviderProbe = $credentialProviderProbe

@@ -16,6 +16,7 @@ import {
   isChangelistResourceGroupId,
   isSparseStatusDepth,
 } from "./resourceStateClassifier";
+import type { RemoteConnectionState } from "../status/remoteConnectionStateStore";
 
 export interface VscodeSourceControlPresenterApi {
   createSourceControl(id: string, label: string, rootUri: unknown, repositoryId: string, epoch: number): VscodeSourceControl;
@@ -56,6 +57,7 @@ export interface VscodeSourceControlQuickDiffProvider {
 }
 
 export interface VscodeSourceControlResourceGroup {
+  label?: string;
   contextValue?: string;
   hideWhenEmpty?: boolean;
   subversionrRepositoryId?: string;
@@ -113,6 +115,7 @@ interface RegisteredSourceControl {
   workingCopyRoot: string;
   generation: number | undefined;
   freshness: ScmProjectionFreshness | undefined;
+  remoteConnectionState: RemoteConnectionState | undefined;
   groupOrder: string[];
   quickDiffPaths: Map<string, string>;
   currentResourceStates: Set<VscodeSourceControlResourceState>;
@@ -210,6 +213,7 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
       workingCopyRoot: repository.workingCopyRoot,
       generation: undefined,
       freshness: undefined,
+      remoteConnectionState: undefined,
       groupOrder: [...SCM_RESOURCE_GROUP_IDS],
       quickDiffPaths: new Map(),
       currentResourceStates: new Set(),
@@ -253,6 +257,7 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
       this.api,
       projection.repositoryId,
       projection.freshness,
+      registered.remoteConnectionState,
     );
     registered.workingCopyRoot = projection.workingCopyRoot;
     registered.generation = projection.generation;
@@ -269,7 +274,13 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
     for (const group of projection.groups) {
       const resourceGroup = ensureSourceControlGroup(this.api, registered, group);
       resourceGroup.resourceStates = group.resources.map((resource) => {
-        const state = resourceState(this.api, projection.workingCopyRoot, projection.generation, resource);
+        const state = resourceState(
+          this.api,
+          projection.workingCopyRoot,
+          projection.generation,
+          resource,
+          registered.remoteConnectionState?.incoming.kind === "stale",
+        );
         currentResourceStates.add(state);
         currentResourceStatesByGroupAndPath.set(resourceStateKey(group.id, resource.path), state);
         return state;
@@ -284,6 +295,33 @@ export class VscodeSourceControlPresenter implements SourceControlProjectionPres
     registered.groupOrder = projection.groups.map((group) => group.id);
     registered.currentResourceStates = currentResourceStates;
     registered.currentResourceStatesByGroupAndPath = currentResourceStatesByGroupAndPath;
+  }
+
+  public updateRemoteConnectionState(state: RemoteConnectionState): void {
+    const registered = this.requireRegistered(state.repositoryId);
+    if (registered.epoch !== state.epoch) {
+      throw new Error(`Source control repository epoch does not match remote state: ${state.repositoryId}`);
+    }
+    registered.remoteConnectionState = cloneRemoteConnectionState(state);
+    registered.sourceControl.statusBarCommands = registered.freshness
+      ? freshnessStatusBarCommands(this.api, state.repositoryId, registered.freshness, state)
+      : remoteStatusBarCommands(this.api, state.repositoryId, state);
+    const incoming = registered.groups.get("incoming");
+    if (incoming) {
+      incoming.label = this.api.localize(state.incoming.kind === "stale" ? "Incoming (stale)" : "Incoming");
+      const staleLine = this.api.localize("Incoming SVN result is stale");
+      for (const resource of incoming.resourceStates) {
+        const currentLines = resource.decorations?.tooltip?.split("\n").filter((line) => line !== staleLine) ?? [];
+        if (state.incoming.kind === "stale") {
+          currentLines.push(staleLine);
+        }
+        resource.decorations = {
+          ...resource.decorations,
+          tooltip: currentLines.join("\n"),
+        };
+      }
+      incoming.resourceStates = [...incoming.resourceStates];
+    }
   }
 
   public isCurrentResourceState(resourceState: unknown): boolean {
@@ -426,26 +464,80 @@ function freshnessStatusBarCommands(
   api: VscodeSourceControlPresenterApi,
   repositoryId: string,
   freshness: ScmProjectionFreshness,
+  remoteState: RemoteConnectionState | undefined,
 ): VscodeSourceControlCommand[] | undefined {
+  const commands: VscodeSourceControlCommand[] = [];
   if (freshness.repositoryCompleteness === "partial") {
-    return [
-      {
-        command: "subversionr.fullReconcile",
-        title: api.localize("SVN status partial"),
-        arguments: [repositoryId],
-      },
-    ];
+    commands.push({
+      command: "subversionr.fullReconcile",
+      title: api.localize("SVN status partial"),
+      arguments: [repositoryId],
+    });
   }
   if (freshness.repositoryCompleteness === "stale") {
-    return [
-      {
-        command: "subversionr.fullReconcile",
-        title: api.localize("SVN status stale"),
-        arguments: [repositoryId],
-      },
-    ];
+    commands.push({
+      command: "subversionr.fullReconcile",
+      title: api.localize("SVN status stale"),
+      arguments: [repositoryId],
+    });
   }
-  return undefined;
+  commands.push(...remoteStatusBarCommands(api, repositoryId, remoteState));
+  return commands.length === 0 ? undefined : commands;
+}
+
+function remoteStatusBarCommands(
+  api: VscodeSourceControlPresenterApi,
+  repositoryId: string,
+  state: RemoteConnectionState | undefined,
+): VscodeSourceControlCommand[] {
+  if (!state) {
+    return [];
+  }
+  if (state.kind === "unchecked") {
+    if (state.lastFailure?.reason === "operationCancelled") {
+      return [{ command: "subversionr.diagnostics.collect", title: api.localize("SVN remote check cancelled") }];
+    }
+    if (state.lastFailure?.reason === "unknownRemote") {
+      return [{ command: "subversionr.diagnostics.collect", title: api.localize("SVN remote check failed") }];
+    }
+    return [];
+  }
+  if (state.kind === "checking") {
+    return [{ command: "subversionr.diagnostics.collect", title: api.localize("SVN remote checking") }];
+  }
+  if (state.kind === "online") {
+    return [{
+      command: "subversionr.checkRemoteChanges",
+      title: api.localize("SVN remote check succeeded ({0})", state.transport),
+      arguments: [repositoryId],
+    }];
+  }
+  if (state.kind === "indeterminate" && state.recovery.kind === "blocked") {
+    return [{ command: "subversionr.diagnostics.collect", title: api.localize("SVN remote recovery blocked") }];
+  }
+  if (state.kind === "indeterminate" && state.recovery.kind === "checking") {
+    return [{ command: "subversionr.diagnostics.collect", title: api.localize("SVN remote recovery checking") }];
+  }
+  if (state.kind === "indeterminate" && state.recovery.kind === "required") {
+    return [{ command: "subversionr.retryRemoteRecovery", title: api.localize("SVN remote recovery required"), arguments: [repositoryId] }];
+  }
+  if (state.kind === "indeterminate") {
+    return [{ command: "subversionr.checkRemoteChanges", title: api.localize("SVN remote check failed"), arguments: [repositoryId] }];
+  }
+  if (state.kind === "attention" && state.reason === "configurationInvalid") {
+    return [{
+      command: "workbench.action.openSettings",
+      title: api.localize("Configure SVN remote access"),
+      arguments: ["subversionr.remote.profiles"],
+    }];
+  }
+  if (state.kind === "attention" && state.reason !== "authRequired") {
+    return [{ command: "subversionr.diagnostics.collect", title: api.localize("SVN remote attention required") }];
+  }
+  const title = state.kind === "attention"
+    ? api.localize("SVN remote attention required")
+    : api.localize("SVN remote unreachable");
+  return [{ command: "subversionr.checkRemoteChanges", title, arguments: [repositoryId] }];
 }
 
 function sourceControlGroupSnapshot(
@@ -541,6 +633,7 @@ function resourceState(
   workingCopyRoot: string,
   generation: number,
   resource: ScmProjectedResource,
+  incomingStale: boolean,
 ): VscodeSourceControlResourceState {
   return {
     resourceUri: api.uriFile(nativePath(workingCopyRoot, resource.path)),
@@ -548,13 +641,20 @@ function resourceState(
     subversionrResourceKind: resource.entry.kind,
     subversionrProjectionGeneration: generation,
     decorations: {
-      tooltip: resourceTooltip(api, resource),
+      tooltip: resourceTooltip(api, resource, incomingStale),
     },
   };
 }
 
-function resourceTooltip(api: VscodeSourceControlPresenterApi, resource: ScmProjectedResource): string {
+function resourceTooltip(
+  api: VscodeSourceControlPresenterApi,
+  resource: ScmProjectedResource,
+  incomingStale: boolean,
+): string {
   const lines = [api.localize(RESOURCE_TOOLTIPS[resource.tooltipKey])];
+  if (incomingStale && resource.source === "remote") {
+    lines.push(api.localize("Incoming SVN result is stale"));
+  }
   if (CHANGED_METADATA_TOOLTIP_KEYS.has(resource.tooltipKey)) {
     if (resource.entry.changedRevision >= 0) {
       lines.push(`${api.localize("SVN changed revision")}: r${resource.entry.changedRevision}`);
@@ -604,6 +704,15 @@ function resourceTooltip(api: VscodeSourceControlPresenterApi, resource: ScmProj
     lines.push(`${api.localize("SVN sparse depth")}: ${resource.entry.depth}`);
   }
   return lines.join("\n");
+}
+
+function cloneRemoteConnectionState(state: RemoteConnectionState): RemoteConnectionState {
+  return {
+    ...state,
+    incoming: { ...state.incoming },
+    recovery: { ...state.recovery },
+    ...(state.lastFailure ? { lastFailure: { ...state.lastFailure } } : {}),
+  };
 }
 
 export function sourceControlResourceStateContextValue(resource: ScmProjectedResource): string {

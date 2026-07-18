@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRemoteOperationEnvelope,
+  canonicalEndpointFromRepositoryUrl,
   readRemoteAccessProfiles,
   selectRemoteAccessProfile,
   type RemoteProfileConfigurationInspection,
@@ -20,6 +21,20 @@ const HTTPS_PROFILE = {
 } as const;
 
 describe("remote access profile foundation", () => {
+  it.each([
+    ["http://svn.example.invalid/repo", "http", 80],
+    ["https://svn.example.invalid/repo", "https", 443],
+    ["svn://svn.example.invalid/repo", "svn", 3690],
+    ["svn+ssh://svn.example.invalid/repo", "svn+ssh", 22],
+    ["https://svn.example.invalid:8443/repo", "https", 8443],
+  ] as const)("derives the exact canonical endpoint for %s", (url, scheme, effectivePort) => {
+    expect(canonicalEndpointFromRepositoryUrl(url)).toEqual({
+      scheme,
+      canonicalHost: "svn.example.invalid",
+      effectivePort,
+    });
+  });
+
   it("reads a strict machine-scoped Tier-1 snapshot", () => {
     expect(read({ globalValue: [HTTPS_PROFILE] })).toEqual([HTTPS_PROFILE]);
   });

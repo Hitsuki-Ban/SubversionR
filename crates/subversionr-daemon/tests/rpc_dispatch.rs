@@ -12,7 +12,8 @@ use std::{
 use subversionr_daemon::{
     BridgeApi, BridgeCancellationToken, BridgeFailure, BridgeInfo, ContentBlob, DaemonState,
     DispatchOutcome, HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
-    RemoteConfigPlan, RemoteWorkerSupervisor, dispatch_json_rpc, dispatch_json_rpc_with_bridge,
+    RemoteConfigPlan, RemoteOperationEffect, RemoteWorkerSettlement, RemoteWorkerSupervisor,
+    dispatch_json_rpc, dispatch_json_rpc_with_bridge,
 };
 
 use subversionr_protocol::{
@@ -1738,13 +1739,13 @@ fn initialize_request_returns_versions_and_keeps_process_running() {
     assert_eq!(outcome, DispatchOutcome::Continue);
     assert_eq!(outcome.response()["id"], 1);
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 33);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 34);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["schemaId"],
         "subversionr.cache.v1"
     );
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 33);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 34);
     assert_eq!(outcome.response()["result"]["cacheSchema"]["version"], 1);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["rollback"],
@@ -9079,11 +9080,12 @@ impl RemoteWorkerSupervisor for RetryableTrustUpdateSupervisor {
         _envelope: &RemoteOperationEnvelope,
         _plan: RemoteConfigPlan,
         _lane_key: &str,
+        _effect: RemoteOperationEffect,
         _cancellation: &dyn BridgeCancellationToken,
         _auth: &mut dyn subversionr_daemon::AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
+    ) -> RemoteWorkerSettlement {
         unreachable!("trust transaction test never launches a worker")
     }
 

@@ -3,6 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -12,16 +13,18 @@ use subversionr_protocol::{
     DiagnosticsRepositorySummary, HistoryBlameResponse, HistoryLogResponse, InitializeParams,
     InitializeResponse, OperationReconcileHint, OperationRunResponse, OperationSummary,
     OperationWarning, PropertiesListResponse, PropertyEntry as ProtocolPropertyEntry,
-    ProtocolVersion, RepositoryCheckoutResponse, RepositoryCloseResponse,
-    RepositoryDiscoverResponse, RepositoryDiscoveryCandidate, RepositoryIdentity,
-    RepositoryOpenResponse, StatusCoverageScope, StatusDelta, StatusEntry, StatusRefreshTarget,
-    StatusSnapshot, StatusSummary, StatusSummaryDelta, WorkspaceTrustState,
-    WorkspaceTrustUpdateParams, WorkspaceTrustUpdateResponse, current_platform,
-    default_cache_schema,
+    ProtocolVersion, RemoteAttentionReason, RemoteConnectionState, RemoteFailureClass,
+    RemoteIndeterminateReason, RemoteRecoveryOutcome, RemoteRecoveryState, RemoteUnreachableReason,
+    RepositoryCheckoutResponse, RepositoryCloseResponse, RepositoryDiscoverResponse,
+    RepositoryDiscoveryCandidate, RepositoryIdentity, RepositoryOpenResponse, StatusCoverageScope,
+    StatusDelta, StatusEntry, StatusRefreshTarget, StatusSnapshot, StatusSummary,
+    StatusSummaryDelta, WorkspaceTrustState, WorkspaceTrustUpdateParams,
+    WorkspaceTrustUpdateResponse, current_platform, default_cache_schema,
 };
 
 use crate::remote::{
-    RemoteLaunchPlan, RemoteTrustState, envelope_value, preflight_repository_urls,
+    MAX_REMOTE_TIMEOUT_MS, RemoteLaunchPlan, RemoteTrustState, attach_remote_failure,
+    classify_remote_failure, envelope_value, is_canonical_uuid, preflight_repository_urls,
     unsupported_transport,
 };
 use crate::{
@@ -36,11 +39,15 @@ use crate::{
     UnlockOperationRequest, UpdateOperationRequest, UpgradeOperationRequest, bridge_error,
     current_timestamp, rpc_error,
 };
-use crate::{InlineRemoteWorkerSupervisor, RemoteWorkerSupervisor};
+use crate::{
+    InlineRemoteWorkerSupervisor, RemoteOperationEffect, RemoteWorkerSettlement,
+    RemoteWorkerSupervisor,
+};
 
 const MAX_SVN_REVNUM: u64 = 2_147_483_647;
 const SVN_ADMIN_DIR_NAME: &str = ".svn";
 const MAX_REPOSITORY_DISCOVERY_DEPTH: u64 = 64;
+const MAX_REMOTE_RECOVERY_OPERATION_IDS: usize = 64;
 
 pub struct DaemonState {
     repositories: BTreeMap<String, RepositorySession>,
@@ -50,14 +57,43 @@ pub struct DaemonState {
     remote_trust: Option<RemoteTrustState>,
     remote_worker: Arc<dyn RemoteWorkerSupervisor>,
     pending_remote_launch: Option<RemoteLaunchPlan>,
+    pending_remote_recovery_launch: Option<RemoteRecoveryLaunchPlan>,
     remote_native_lanes: BTreeMap<String, RemoteNativeLaneState>,
     active_remote_operation_ids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RemoteNativeLaneState {
-    Active { operation_id: String },
-    Blocked { operation_id: String },
+    Active {
+        operation_id: String,
+        effect: RemoteOperationEffect,
+        repository_id: Option<String>,
+        epoch: Option<u64>,
+    },
+    Recovering {
+        origin_operation_id: String,
+        recovery_operation_id: Option<String>,
+        used_recovery_operation_ids: BTreeSet<String>,
+    },
+    Blocked {
+        origin_operation_id: String,
+        reason: RemoteFailureClass,
+        cleanup_appropriate: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteRecoveryLaunchPlan {
+    pub request_id: Value,
+    pub repository_id: String,
+    pub epoch: u64,
+    pub lane_key: String,
+    pub origin_operation_id: String,
+    pub operation_id: String,
+    pub identity: RepositoryIdentity,
+    pub boundary_roots: Vec<String>,
+    pub generation: u64,
+    pub deadline: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -111,9 +147,14 @@ impl DaemonState {
             remote_trust: None,
             remote_worker,
             pending_remote_launch: None,
+            pending_remote_recovery_launch: None,
             remote_native_lanes: BTreeMap::new(),
             active_remote_operation_ids: BTreeSet::new(),
         }
+    }
+
+    pub(crate) fn take_pending_notifications(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.pending_notifications)
     }
 
     pub fn dispatch_json_rpc_with_bridge(
@@ -153,6 +194,7 @@ impl DaemonState {
                 }),
                 notifications: std::mem::take(&mut self.pending_notifications),
                 remote_launch: None,
+                remote_recovery_launch: None,
             };
         }
         let (outcome, response) = match request.method.as_str() {
@@ -176,6 +218,7 @@ impl DaemonState {
             "history/log" => self.dispatch_history_log(&request, bridge, auth, cancellation),
             "history/blame" => self.dispatch_history_blame(&request, bridge, auth, cancellation),
             "operation/run" => self.dispatch_operation_run(&request, bridge, auth, cancellation),
+            "remote/recoverWorkingCopy" => self.dispatch_remote_recover_working_copy(&request),
             "diagnostics/get" => self.dispatch_diagnostics_get(&request, bridge),
             "shutdown" => self.dispatch_shutdown(&request),
             _ => crate::dispatch_known_request(&request, bridge),
@@ -187,6 +230,7 @@ impl DaemonState {
             response,
             notifications,
             remote_launch: self.pending_remote_launch.take(),
+            remote_recovery_launch: self.pending_remote_recovery_launch.take(),
         }
     }
 
@@ -277,6 +321,7 @@ impl DaemonState {
         let bridge_info = bridge.info();
         let mut capabilities = bridge_info.capabilities();
         capabilities.remote_worker_isolation = self.remote_worker.capability_available();
+        capabilities.remote_connection_state = true;
         capabilities.credential_lease_settlement =
             self.remote_worker.credential_lease_settlement_available();
         let result = InitializeResponse::new(
@@ -355,6 +400,7 @@ impl DaemonState {
         let bridge_info = bridge.info();
         let mut capabilities = bridge_info.capabilities();
         capabilities.remote_worker_isolation = self.remote_worker.capability_available();
+        capabilities.remote_connection_state = true;
         capabilities.credential_lease_settlement =
             self.remote_worker.credential_lease_settlement_available();
         let response = DiagnosticsGetResponse {
@@ -363,7 +409,7 @@ impl DaemonState {
             libsvn_version: bridge_info.libsvn_version,
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 33,
+                minor: 34,
             },
             platform: current_platform(),
             cache_schema: default_cache_schema(),
@@ -2338,6 +2384,397 @@ impl DaemonState {
         )
     }
 
+    fn dispatch_remote_recover_working_copy(
+        &mut self,
+        request: &JsonRpcRequest,
+    ) -> (DispatchOutcome, Value) {
+        if let Some(field) = unexpected_param(
+            request,
+            &[
+                "repositoryId",
+                "epoch",
+                "originOperationId",
+                "operationId",
+                "timeoutMs",
+            ],
+        ) {
+            return invalid_param(request, &field);
+        }
+        let Some(repository_id) = repository_id_param(request) else {
+            return invalid_repository_id(request);
+        };
+        let Some(epoch) = epoch_param(request) else {
+            return invalid_param(request, "epoch");
+        };
+        let Some(operation_id) = request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("operationId"))
+            .and_then(Value::as_str)
+            .filter(|operation_id| is_canonical_uuid(operation_id))
+        else {
+            return invalid_param(request, "operationId");
+        };
+        let operation_id = operation_id.to_string();
+        let Some(origin_operation_id) = request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("originOperationId"))
+            .and_then(Value::as_str)
+            .filter(|origin_operation_id| is_canonical_uuid(origin_operation_id))
+        else {
+            return invalid_param(request, "originOperationId");
+        };
+        if origin_operation_id == operation_id {
+            return invalid_param(request, "operationId");
+        }
+        let origin_operation_id = origin_operation_id.to_string();
+        let Some(timeout_ms) = request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("timeoutMs"))
+            .and_then(Value::as_u64)
+            .filter(|timeout_ms| *timeout_ms > 0 && *timeout_ms <= MAX_REMOTE_TIMEOUT_MS)
+        else {
+            return invalid_param(request, "timeoutMs");
+        };
+        let Some(session) = self.repositories.get(repository_id) else {
+            return repository_not_open(request, repository_id);
+        };
+        if session.epoch != epoch {
+            return repository_not_open(request, repository_id);
+        }
+        let lane_key = absolute_path_key(&normalize_absolute_path_text(
+            &session.identity.working_copy_root,
+        ));
+        let identity = session.identity.clone();
+        let boundary_roots = session.boundary_roots.clone();
+        let generation = session.next_generation;
+
+        let recovery_id_reused = self
+            .remote_native_lanes
+            .get(&lane_key)
+            .is_some_and(|state| {
+                matches!(
+                    state,
+                    RemoteNativeLaneState::Recovering {
+                        origin_operation_id,
+                        recovery_operation_id,
+                        used_recovery_operation_ids,
+                    } if origin_operation_id == &operation_id
+                        || recovery_operation_id.as_ref() == Some(&operation_id)
+                        || used_recovery_operation_ids.contains(&operation_id)
+                )
+            });
+        if recovery_id_reused || self.active_remote_operation_ids.contains(&operation_id) {
+            return bridge_failure_response(
+                request,
+                BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_RECOVERY_OPERATION_ID_REUSED",
+                    "protocol",
+                    "error.remote.recoveryOperationIdReused",
+                    json!({}),
+                    false,
+                ),
+            );
+        }
+
+        let (origin_operation_id, used_recovery_operation_ids) =
+            match self.remote_native_lanes.get(&lane_key) {
+                Some(RemoteNativeLaneState::Recovering {
+                    origin_operation_id: lane_origin_operation_id,
+                    recovery_operation_id: None,
+                    used_recovery_operation_ids,
+                }) if lane_origin_operation_id == &origin_operation_id => {
+                    (origin_operation_id, used_recovery_operation_ids.clone())
+                }
+                Some(RemoteNativeLaneState::Recovering {
+                    recovery_operation_id: None,
+                    ..
+                }) => {
+                    return bridge_failure_response(
+                        request,
+                        BridgeFailure::new(
+                            "SUBVERSIONR_REMOTE_RECOVERY_ORIGIN_MISMATCH",
+                            "protocol",
+                            "error.remote.recoveryOriginMismatch",
+                            json!({}),
+                            false,
+                        ),
+                    );
+                }
+                Some(RemoteNativeLaneState::Blocked {
+                    cleanup_appropriate,
+                    ..
+                }) => {
+                    let failure = subversionr_protocol::RemoteFailure {
+                        category: subversionr_protocol::RemoteFailureCategory::Recovery,
+                        reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                        cleanup_appropriate: *cleanup_appropriate,
+                    };
+                    return remote_recovery_response(
+                        request,
+                        RemoteRecoveryOutcome::Blocked {
+                            operation_id,
+                            failure,
+                        },
+                    );
+                }
+                Some(RemoteNativeLaneState::Recovering { .. })
+                | Some(RemoteNativeLaneState::Active { .. }) => {
+                    return bridge_failure_response(
+                        request,
+                        BridgeFailure::new(
+                            "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
+                            "state",
+                            "error.remote.nativeLaneBusy",
+                            json!({}),
+                            true,
+                        ),
+                    );
+                }
+                None => (origin_operation_id, BTreeSet::new()),
+            };
+
+        if used_recovery_operation_ids.len() >= MAX_REMOTE_RECOVERY_OPERATION_IDS {
+            self.remote_native_lanes.insert(
+                lane_key,
+                RemoteNativeLaneState::Blocked {
+                    origin_operation_id: origin_operation_id.clone(),
+                    reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                    cleanup_appropriate: false,
+                },
+            );
+            self.push_remote_connection_state(
+                Some(repository_id),
+                Some(epoch),
+                RemoteConnectionState::Indeterminate {
+                    reason: RemoteIndeterminateReason::WorkerTerminated,
+                    origin_operation_id,
+                    recovery: RemoteRecoveryState::Blocked,
+                    cleanup_appropriate: false,
+                },
+            );
+            return remote_recovery_response(
+                request,
+                RemoteRecoveryOutcome::Blocked {
+                    operation_id,
+                    failure: subversionr_protocol::RemoteFailure {
+                        category: subversionr_protocol::RemoteFailureCategory::Recovery,
+                        reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                        cleanup_appropriate: false,
+                    },
+                },
+            );
+        }
+
+        self.active_remote_operation_ids
+            .insert(operation_id.clone());
+        self.remote_native_lanes.insert(
+            lane_key.clone(),
+            RemoteNativeLaneState::Recovering {
+                origin_operation_id: origin_operation_id.clone(),
+                recovery_operation_id: Some(operation_id.clone()),
+                used_recovery_operation_ids,
+            },
+        );
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        self.pending_remote_recovery_launch = Some(RemoteRecoveryLaunchPlan {
+            request_id: request.id.clone(),
+            repository_id: repository_id.to_string(),
+            epoch,
+            lane_key,
+            origin_operation_id,
+            operation_id,
+            identity,
+            boundary_roots,
+            generation,
+            deadline,
+        });
+        (DispatchOutcome::Continue, Value::Null)
+    }
+
+    pub(crate) fn settle_remote_recovery(
+        &mut self,
+        launch: &RemoteRecoveryLaunchPlan,
+        recovery: Result<StatusSnapshot, BridgeFailure>,
+    ) -> (DispatchOutcome, Value) {
+        let request = JsonRpcRequest {
+            id: launch.request_id.clone(),
+            method: "remote/recoverWorkingCopy".to_string(),
+            params: None,
+        };
+        let lane_matches = matches!(
+            self.remote_native_lanes.get(&launch.lane_key),
+            Some(RemoteNativeLaneState::Recovering {
+                origin_operation_id,
+                recovery_operation_id: Some(recovery_operation_id),
+                ..
+            }) if origin_operation_id == &launch.origin_operation_id
+                && recovery_operation_id == &launch.operation_id
+        );
+        self.active_remote_operation_ids
+            .remove(&launch.operation_id);
+        if !lane_matches {
+            return bridge_failure_response(
+                &request,
+                BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_RECOVERY_SETTLEMENT_INVALID",
+                    "state",
+                    "error.remote.recoverySettlementInvalid",
+                    json!({}),
+                    false,
+                ),
+            );
+        }
+
+        match recovery {
+            Ok(mut snapshot) => {
+                let Some(session) = self.repositories.get_mut(&launch.repository_id) else {
+                    return bridge_failure_response(
+                        &request,
+                        BridgeFailure::new(
+                            "SUBVERSIONR_REMOTE_RECOVERY_SESSION_LOST",
+                            "state",
+                            "error.remote.recoverySessionLost",
+                            json!({}),
+                            false,
+                        ),
+                    );
+                };
+                if session.epoch != launch.epoch {
+                    return bridge_failure_response(
+                        &request,
+                        BridgeFailure::new(
+                            "SUBVERSIONR_REMOTE_RECOVERY_SESSION_LOST",
+                            "state",
+                            "error.remote.recoverySessionLost",
+                            json!({}),
+                            false,
+                        ),
+                    );
+                }
+                snapshot.repository_id = launch.repository_id.clone();
+                snapshot.epoch = launch.epoch;
+                snapshot.generation = launch.generation;
+                for entry in &mut snapshot.local_entries {
+                    entry.generation = launch.generation;
+                }
+                filter_snapshot_boundaries(&mut snapshot, &launch.boundary_roots);
+                remove_conflict_artifact_entries(&mut snapshot.local_entries);
+                session.local_entries = snapshot
+                    .local_entries
+                    .into_iter()
+                    .filter(is_projectable_status)
+                    .map(|entry| (entry.path.clone(), entry))
+                    .collect();
+                session.next_generation += 1;
+                self.remote_native_lanes.remove(&launch.lane_key);
+                self.pending_notifications.push(status_stale_notification(
+                    &launch.repository_id,
+                    launch.epoch,
+                    "remoteRecoverySafeRequiresFullReconcile",
+                ));
+                self.push_remote_connection_state(
+                    Some(&launch.repository_id),
+                    Some(launch.epoch),
+                    RemoteConnectionState::Unchecked,
+                );
+                remote_recovery_response(
+                    &request,
+                    RemoteRecoveryOutcome::Safe {
+                        operation_id: launch.operation_id.clone(),
+                        completed_at: current_timestamp(),
+                    },
+                )
+            }
+            Err(failure) => self.finish_indeterminate_recovery(
+                &request,
+                &launch.lane_key,
+                &launch.repository_id,
+                launch.epoch,
+                launch.origin_operation_id.clone(),
+                launch.operation_id.clone(),
+                failure,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_indeterminate_recovery(
+        &mut self,
+        request: &JsonRpcRequest,
+        lane_key: &str,
+        repository_id: &str,
+        epoch: u64,
+        origin_operation_id: String,
+        operation_id: String,
+        failure: BridgeFailure,
+    ) -> (DispatchOutcome, Value) {
+        let remote_failure = classify_remote_failure(&failure);
+        if remote_failure.reason == RemoteFailureClass::RemoteRecoveryBlocked {
+            self.remote_native_lanes.insert(
+                lane_key.to_string(),
+                RemoteNativeLaneState::Blocked {
+                    origin_operation_id: origin_operation_id.clone(),
+                    reason: remote_failure.reason,
+                    cleanup_appropriate: remote_failure.cleanup_appropriate,
+                },
+            );
+            self.push_remote_connection_state(
+                Some(repository_id),
+                Some(epoch),
+                RemoteConnectionState::Indeterminate {
+                    reason: RemoteIndeterminateReason::WorkerTerminated,
+                    origin_operation_id,
+                    recovery: RemoteRecoveryState::Blocked,
+                    cleanup_appropriate: remote_failure.cleanup_appropriate,
+                },
+            );
+            remote_recovery_response(
+                request,
+                RemoteRecoveryOutcome::Blocked {
+                    operation_id,
+                    failure: remote_failure,
+                },
+            )
+        } else {
+            let mut used_recovery_operation_ids = match self.remote_native_lanes.get(lane_key) {
+                Some(RemoteNativeLaneState::Recovering {
+                    used_recovery_operation_ids,
+                    ..
+                }) => used_recovery_operation_ids.clone(),
+                _ => BTreeSet::new(),
+            };
+            used_recovery_operation_ids.insert(operation_id.clone());
+            self.remote_native_lanes.insert(
+                lane_key.to_string(),
+                RemoteNativeLaneState::Recovering {
+                    origin_operation_id: origin_operation_id.clone(),
+                    recovery_operation_id: None,
+                    used_recovery_operation_ids,
+                },
+            );
+            self.push_remote_connection_state(
+                Some(repository_id),
+                Some(epoch),
+                RemoteConnectionState::Indeterminate {
+                    reason: RemoteIndeterminateReason::WorkerTerminated,
+                    origin_operation_id,
+                    recovery: RemoteRecoveryState::Pending,
+                    cleanup_appropriate: remote_failure.cleanup_appropriate,
+                },
+            );
+            remote_recovery_response(
+                request,
+                RemoteRecoveryOutcome::Indeterminate {
+                    operation_id,
+                    failure: remote_failure,
+                },
+            )
+        }
+    }
+
     fn dispatch_shutdown(&self, request: &JsonRpcRequest) -> (DispatchOutcome, Value) {
         if let Some(field) = unexpected_param(request, &[]) {
             return invalid_param(request, &field);
@@ -2366,43 +2803,99 @@ impl DaemonState {
         let operation = match preflight_repository_urls(request, urls, self.remote_trust.as_ref()) {
             Ok(None) => return None,
             Ok(Some(operation)) => operation,
-            Err(failure) => return Some(bridge_failure_response(request, failure)),
+            Err(failure) => {
+                return Some(bridge_failure_response(
+                    request,
+                    attach_remote_failure(failure),
+                ));
+            }
+        };
+        let effect = match remote_effect_for_request(request) {
+            Some(effect) => effect,
+            None => {
+                return Some(bridge_failure_response(
+                    request,
+                    attach_remote_failure(BridgeFailure::new(
+                        "SUBVERSIONR_REMOTE_EFFECT_UNCLASSIFIED",
+                        "protocol",
+                        "error.remote.effectUnclassified",
+                        json!({}),
+                        false,
+                    )),
+                ));
+            }
         };
 
         if !self.remote_worker.capability_available() {
             let endpoint = operation.endpoint.clone();
             let mut unavailable_auth = UnavailableAuthRequestBroker;
             return Some(
-                match self.remote_worker.execute(
-                    &operation.envelope,
-                    operation.config,
-                    lane_key,
-                    cancellation,
-                    &mut unavailable_auth,
-                    bridge,
-                    operation.deadline,
-                ) {
-                    Ok(()) => bridge_failure_response(request, unsupported_transport(&endpoint)),
-                    Err(failure) => bridge_failure_response(request, failure),
+                match self
+                    .remote_worker
+                    .execute(
+                        &operation.envelope,
+                        operation.config,
+                        lane_key,
+                        effect,
+                        cancellation,
+                        &mut unavailable_auth,
+                        bridge,
+                        operation.deadline,
+                    )
+                    .result
+                {
+                    Ok(()) => bridge_failure_response(
+                        request,
+                        attach_remote_failure(unsupported_transport(&endpoint)),
+                    ),
+                    Err(failure) => {
+                        bridge_failure_response(request, attach_remote_failure(failure))
+                    }
                 },
             );
         }
 
         let normalized_lane = absolute_path_key(&normalize_absolute_path_text(lane_key));
-        if let Some(failure) =
-            self.reserve_remote_lane(&normalized_lane, &operation.envelope.operation_id)
-        {
+        let attribution = self.repositories.values().find(|session| {
+            absolute_path_key(&normalize_absolute_path_text(
+                &session.identity.working_copy_root,
+            )) == normalized_lane
+        });
+        let repository_id = attribution.map(|session| session.repository_id.clone());
+        let epoch = attribution.map(|session| session.epoch);
+        if let Some(failure) = self.reserve_remote_lane(
+            &normalized_lane,
+            &operation.envelope.operation_id,
+            effect,
+            repository_id.clone(),
+            epoch,
+        ) {
             return Some(bridge_failure_response(request, failure));
         }
+        let checking_state = RemoteConnectionState::Checking {
+            operation_id: operation.envelope.operation_id.clone(),
+            started_at: current_timestamp(),
+        };
         self.pending_remote_launch = Some(RemoteLaunchPlan {
             request_id: request.id.clone(),
-            lane_key: normalized_lane,
+            lane_key: normalized_lane.clone(),
+            repository_id: repository_id.clone(),
+            epoch,
+            effect,
             operation,
         });
+        self.push_remote_connection_state(repository_id.as_deref(), epoch, checking_state);
         Some((DispatchOutcome::Continue, Value::Null))
     }
 
-    fn reserve_remote_lane(&mut self, lane_key: &str, operation_id: &str) -> Option<BridgeFailure> {
+    fn reserve_remote_lane(
+        &mut self,
+        lane_key: &str,
+        operation_id: &str,
+        effect: RemoteOperationEffect,
+        repository_id: Option<String>,
+        epoch: Option<u64>,
+    ) -> Option<BridgeFailure> {
         if self.active_remote_operation_ids.contains(operation_id) {
             return Some(BridgeFailure::new(
                 "SUBVERSIONR_REMOTE_OPERATION_IN_PROGRESS",
@@ -2421,6 +2914,13 @@ impl DaemonState {
                     json!({}),
                     true,
                 ),
+                RemoteNativeLaneState::Recovering { .. } => BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE",
+                    "state",
+                    "error.remote.operationIndeterminate",
+                    json!({}),
+                    false,
+                ),
                 RemoteNativeLaneState::Blocked { .. } => BridgeFailure::new(
                     "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
                     "state",
@@ -2436,6 +2936,9 @@ impl DaemonState {
             lane_key.to_string(),
             RemoteNativeLaneState::Active {
                 operation_id: operation_id.to_string(),
+                effect,
+                repository_id,
+                epoch,
             },
         );
         None
@@ -2445,28 +2948,137 @@ impl DaemonState {
         &mut self,
         lane_key: &str,
         operation_id: &str,
-        recovery_blocked: bool,
-    ) {
-        let matches = self.remote_native_lanes.get(lane_key).is_some_and(|state| {
-            matches!(
-                state,
-                RemoteNativeLaneState::Active { operation_id: active } if active == operation_id
-            )
-        });
-        if !matches {
-            return;
-        }
+        settlement: &RemoteWorkerSettlement,
+    ) -> Option<BridgeFailure> {
+        let (attributed_repository_id, attributed_epoch, daemon_effect) =
+            match self.remote_native_lanes.get(lane_key) {
+                Some(RemoteNativeLaneState::Active {
+                    operation_id: active,
+                    effect,
+                    repository_id,
+                    epoch,
+                }) if active == operation_id => (repository_id.clone(), *epoch, *effect),
+                _ => {
+                    let owned_by_another_lane =
+                        self.remote_native_lanes
+                            .iter()
+                            .any(|(candidate_lane, state)| {
+                                candidate_lane != lane_key
+                                    && matches!(
+                                        state,
+                                        RemoteNativeLaneState::Active {
+                                            operation_id: active,
+                                            ..
+                                        } if active == operation_id
+                                    )
+                            });
+                    if !owned_by_another_lane {
+                        self.active_remote_operation_ids.remove(operation_id);
+                    }
+                    return None;
+                }
+            };
         self.active_remote_operation_ids.remove(operation_id);
-        if recovery_blocked {
+        let attribution = (attributed_repository_id, attributed_epoch);
+        if attribution.0.is_none() != attribution.1.is_none() {
             self.remote_native_lanes.insert(
                 lane_key.to_string(),
                 RemoteNativeLaneState::Blocked {
-                    operation_id: operation_id.to_string(),
+                    origin_operation_id: operation_id.to_string(),
+                    reason: RemoteFailureClass::RemoteOperationIndeterminate,
+                    cleanup_appropriate: false,
+                },
+            );
+            return Some(attach_remote_failure(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+                "state",
+                "error.remote.recoveryBlocked",
+                json!({}),
+                false,
+            )));
+        }
+        if daemon_effect != settlement.effect || !settlement.cleanup_safe() {
+            self.remote_native_lanes.insert(
+                lane_key.to_string(),
+                RemoteNativeLaneState::Blocked {
+                    origin_operation_id: operation_id.to_string(),
+                    reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                    cleanup_appropriate: false,
+                },
+            );
+            self.push_remote_connection_state(
+                attribution.0.as_deref(),
+                attribution.1,
+                RemoteConnectionState::Indeterminate {
+                    reason: RemoteIndeterminateReason::WorkerTerminated,
+                    origin_operation_id: operation_id.to_string(),
+                    recovery: RemoteRecoveryState::Blocked,
+                    cleanup_appropriate: false,
+                },
+            );
+            return Some(attach_remote_failure(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+                "state",
+                "error.remote.recoveryBlocked",
+                json!({}),
+                false,
+            )));
+        } else if settlement.result.is_err() && settlement.may_have_mutated() {
+            if attribution.0.is_none() {
+                self.remote_native_lanes.insert(
+                    lane_key.to_string(),
+                    RemoteNativeLaneState::Blocked {
+                        origin_operation_id: operation_id.to_string(),
+                        reason: RemoteFailureClass::RemoteOperationIndeterminate,
+                        cleanup_appropriate: false,
+                    },
+                );
+                return Some(attach_remote_failure(BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+                    "state",
+                    "error.remote.recoveryBlocked",
+                    json!({}),
+                    false,
+                )));
+            }
+            let reason = if settlement
+                .remote_failure
+                .as_ref()
+                .is_some_and(|failure| failure.reason == RemoteFailureClass::OperationCancelled)
+            {
+                RemoteIndeterminateReason::CancelledAfterMutation
+            } else {
+                RemoteIndeterminateReason::WorkerTerminated
+            };
+            self.remote_native_lanes.insert(
+                lane_key.to_string(),
+                RemoteNativeLaneState::Recovering {
+                    origin_operation_id: operation_id.to_string(),
+                    recovery_operation_id: None,
+                    used_recovery_operation_ids: BTreeSet::new(),
+                },
+            );
+            self.push_remote_connection_state(
+                attribution.0.as_deref(),
+                attribution.1,
+                RemoteConnectionState::Indeterminate {
+                    reason,
+                    origin_operation_id: operation_id.to_string(),
+                    recovery: RemoteRecoveryState::Pending,
+                    cleanup_appropriate: false,
                 },
             );
         } else {
             self.remote_native_lanes.remove(lane_key);
+            let state = match settlement.result.as_ref() {
+                Ok(()) => RemoteConnectionState::Attention {
+                    reason: RemoteAttentionReason::UnsupportedCapability,
+                },
+                Err(failure) => connection_state_for_failure(failure, operation_id),
+            };
+            self.push_remote_connection_state(attribution.0.as_deref(), attribution.1, state);
         }
+        None
     }
 
     fn native_lane_failure_for_request(&self, request: &JsonRpcRequest) -> Option<BridgeFailure> {
@@ -2475,7 +3087,7 @@ impl DaemonState {
             "initialize"
                 | "workspaceTrust/update"
                 | "diagnostics/get"
-                | "repository/close"
+                | "remote/recoverWorkingCopy"
                 | "shutdown"
         ) {
             return None;
@@ -2534,6 +3146,13 @@ impl DaemonState {
                         json!({}),
                         true,
                     ),
+                    RemoteNativeLaneState::Recovering { .. } => BridgeFailure::new(
+                        "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE",
+                        "state",
+                        "error.remote.operationIndeterminate",
+                        json!({}),
+                        false,
+                    ),
                     RemoteNativeLaneState::Blocked { .. } => BridgeFailure::new(
                         "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
                         "state",
@@ -2545,6 +3164,114 @@ impl DaemonState {
             }
         }
         None
+    }
+
+    fn push_remote_connection_state(
+        &mut self,
+        repository_id: Option<&str>,
+        epoch: Option<u64>,
+        state: RemoteConnectionState,
+    ) {
+        let (Some(repository_id), Some(epoch)) = (repository_id, epoch) else {
+            return;
+        };
+        self.pending_notifications.push(json!({
+            "jsonrpc": "2.0",
+            "method": "remoteConnection/state",
+            "params": {
+                "repositoryId": repository_id,
+                "epoch": epoch,
+                "state": state,
+            },
+        }));
+    }
+}
+
+fn connection_state_for_failure(
+    failure: &BridgeFailure,
+    operation_id: &str,
+) -> RemoteConnectionState {
+    match classify_remote_failure(failure).reason {
+        RemoteFailureClass::NetworkDns => RemoteConnectionState::Unreachable {
+            reason: RemoteUnreachableReason::Dns,
+        },
+        RemoteFailureClass::NetworkRefused => RemoteConnectionState::Unreachable {
+            reason: RemoteUnreachableReason::Refused,
+        },
+        RemoteFailureClass::NetworkTimeout | RemoteFailureClass::OperationDeadlineExceeded => {
+            RemoteConnectionState::Unreachable {
+                reason: RemoteUnreachableReason::Timeout,
+            }
+        }
+        RemoteFailureClass::ProxyAuthenticationRequired => RemoteConnectionState::Attention {
+            reason: RemoteAttentionReason::AuthRequired,
+        },
+        RemoteFailureClass::ProxyUnreachable => RemoteConnectionState::Unreachable {
+            reason: RemoteUnreachableReason::Proxy,
+        },
+        RemoteFailureClass::AuthenticationRequired | RemoteFailureClass::CredentialRejected => {
+            RemoteConnectionState::Attention {
+                reason: RemoteAttentionReason::AuthRequired,
+            }
+        }
+        RemoteFailureClass::TlsUntrusted
+        | RemoteFailureClass::TlsChanged
+        | RemoteFailureClass::TlsProtocol => RemoteConnectionState::Attention {
+            reason: RemoteAttentionReason::CertificateRequired,
+        },
+        RemoteFailureClass::SshHostKeyRequired | RemoteFailureClass::SshHostKeyChanged => {
+            RemoteConnectionState::Attention {
+                reason: RemoteAttentionReason::HostKeyRequired,
+            }
+        }
+        RemoteFailureClass::RemoteCapabilityUnsupported => RemoteConnectionState::Attention {
+            reason: RemoteAttentionReason::UnsupportedCapability,
+        },
+        RemoteFailureClass::OperationCancelled | RemoteFailureClass::UnknownRemote => {
+            RemoteConnectionState::Unchecked
+        }
+        RemoteFailureClass::WorkerContainmentFailed
+        | RemoteFailureClass::RemoteOperationIndeterminate => {
+            RemoteConnectionState::Indeterminate {
+                reason: RemoteIndeterminateReason::WorkerTerminated,
+                origin_operation_id: operation_id.to_string(),
+                recovery: RemoteRecoveryState::NotRequired,
+                cleanup_appropriate: false,
+            }
+        }
+        RemoteFailureClass::SshTunnelFailed => RemoteConnectionState::Unreachable {
+            reason: RemoteUnreachableReason::Tunnel,
+        },
+        RemoteFailureClass::RemoteConfigurationInvalid
+        | RemoteFailureClass::RedirectRejected
+        | RemoteFailureClass::CrossAuthorityRejected
+        | RemoteFailureClass::SshExecutableInvalid
+        | RemoteFailureClass::SshProvenanceInvalid => RemoteConnectionState::Attention {
+            reason: RemoteAttentionReason::ConfigurationInvalid,
+        },
+        _ => RemoteConnectionState::Unchecked,
+    }
+}
+
+fn remote_effect_for_request(request: &JsonRpcRequest) -> Option<RemoteOperationEffect> {
+    match request.method.as_str() {
+        "repository/checkout" => Some(RemoteOperationEffect::Mutation),
+        "status/checkRemote" | "content/get" | "history/log" | "history/blame" => {
+            Some(RemoteOperationEffect::ReadOnly)
+        }
+        "operation/run" => match request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("kind"))
+            .and_then(Value::as_str)
+        {
+            Some(
+                "update" | "lock" | "unlock" | "branchCreate" | "switch" | "relocate" | "merge"
+                | "commit",
+            ) => Some(RemoteOperationEffect::Mutation),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -3017,6 +3744,20 @@ fn bridge_failure_response(
             "jsonrpc": "2.0",
             "id": request.id,
             "error": bridge_error(failure),
+        }),
+    )
+}
+
+fn remote_recovery_response(
+    request: &JsonRpcRequest,
+    outcome: RemoteRecoveryOutcome,
+) -> (DispatchOutcome, Value) {
+    (
+        DispatchOutcome::Continue,
+        json!({
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "result": outcome,
         }),
     )
 }
@@ -4805,4 +5546,412 @@ fn unsupported_operation_kind(request: &JsonRpcRequest, kind: &str) -> (Dispatch
             ),
         }),
     )
+}
+
+#[cfg(test)]
+mod i5_remote_lane_tests {
+    use super::*;
+    use subversionr_protocol::{RemoteFailure, RemoteFailureCategory};
+
+    fn cancelled_settlement(
+        effect: RemoteOperationEffect,
+        worker_was_resumed: bool,
+    ) -> RemoteWorkerSettlement {
+        RemoteWorkerSettlement {
+            result: Err(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+                "cancelled",
+                "error.remote.workerCancelled",
+                json!({}),
+                false,
+            )),
+            remote_failure: Some(RemoteFailure {
+                category: RemoteFailureCategory::Cancellation,
+                reason: RemoteFailureClass::OperationCancelled,
+                cleanup_appropriate: false,
+            }),
+            effect,
+            worker_was_resumed,
+            execution_origin_known: true,
+            termination: crate::WorkerTerminationDisposition::Settled,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+        }
+    }
+
+    fn insert_remote_recovery_session(state: &mut DaemonState, path: &str) -> String {
+        let repository_id = format!("repo-uuid:{path}");
+        state.repositories.insert(
+            repository_id.clone(),
+            RepositorySession {
+                repository_id: repository_id.clone(),
+                epoch: 1,
+                identity: RepositoryIdentity {
+                    repository_uuid: "repo-uuid".to_string(),
+                    repository_root_url: "https://svn.example.invalid/project".to_string(),
+                    working_copy_root: path.to_string(),
+                    workspace_scope_root: path.to_string(),
+                    format: 31,
+                },
+                boundary_roots: Vec::new(),
+                next_generation: 1,
+                local_entries: BTreeMap::new(),
+                remote_entries: BTreeMap::new(),
+            },
+        );
+        repository_id
+    }
+
+    #[test]
+    fn effect_is_daemon_derived_for_each_remote_entrypoint() {
+        let cases = [
+            ("repository/checkout", None, RemoteOperationEffect::Mutation),
+            ("status/checkRemote", None, RemoteOperationEffect::ReadOnly),
+            ("content/get", None, RemoteOperationEffect::ReadOnly),
+            ("history/log", None, RemoteOperationEffect::ReadOnly),
+            ("history/blame", None, RemoteOperationEffect::ReadOnly),
+            (
+                "operation/run",
+                Some("update"),
+                RemoteOperationEffect::Mutation,
+            ),
+            (
+                "operation/run",
+                Some("switch"),
+                RemoteOperationEffect::Mutation,
+            ),
+            (
+                "operation/run",
+                Some("merge"),
+                RemoteOperationEffect::Mutation,
+            ),
+            (
+                "operation/run",
+                Some("commit"),
+                RemoteOperationEffect::Mutation,
+            ),
+        ];
+        for (method, kind, expected) in cases {
+            let mut params = serde_json::Map::new();
+            if let Some(kind) = kind {
+                params.insert("kind".to_string(), json!(kind));
+            }
+            let request = JsonRpcRequest {
+                id: json!(1),
+                method: method.to_string(),
+                params: Some(Value::Object(params)),
+            };
+            assert_eq!(remote_effect_for_request(&request), Some(expected));
+        }
+    }
+
+    #[test]
+    fn only_post_resume_mutation_failure_enters_recovery() {
+        let lane = "c:/wc";
+        let origin = "81234567-89ab-4def-8123-456789abcdef";
+        let mut state = DaemonState::new();
+        assert!(
+            state
+                .reserve_remote_lane(lane, origin, RemoteOperationEffect::Mutation, None, None,)
+                .is_none()
+        );
+        state.settle_remote_launch(
+            lane,
+            origin,
+            &cancelled_settlement(RemoteOperationEffect::Mutation, false),
+        );
+        assert!(!state.remote_native_lanes.contains_key(lane));
+
+        assert!(
+            state
+                .reserve_remote_lane(
+                    lane,
+                    origin,
+                    RemoteOperationEffect::Mutation,
+                    Some("repo".to_string()),
+                    Some(1),
+                )
+                .is_none()
+        );
+        state.settle_remote_launch(
+            lane,
+            origin,
+            &cancelled_settlement(RemoteOperationEffect::Mutation, true),
+        );
+        assert!(matches!(
+            state.remote_native_lanes.get(lane),
+            Some(RemoteNativeLaneState::Recovering {
+                origin_operation_id,
+                recovery_operation_id: None,
+                ..
+            }) if origin_operation_id == origin
+        ));
+    }
+
+    #[test]
+    fn unattributed_post_resume_checkout_failure_is_terminally_blocked() {
+        let lane = "c:/checkout/new";
+        let origin = "a1234567-89ab-4def-8123-456789abcdef";
+        let mut state = DaemonState::new();
+        assert!(
+            state
+                .reserve_remote_lane(lane, origin, RemoteOperationEffect::Mutation, None, None)
+                .is_none()
+        );
+
+        let override_failure = state
+            .settle_remote_launch(
+                lane,
+                origin,
+                &cancelled_settlement(RemoteOperationEffect::Mutation, true),
+            )
+            .expect("an unattributed mutation cannot enter repository-scoped recovery");
+
+        assert_eq!(
+            override_failure.code(),
+            "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+        );
+        assert!(matches!(
+            state.remote_native_lanes.get(lane),
+            Some(RemoteNativeLaneState::Blocked {
+                origin_operation_id,
+                reason: RemoteFailureClass::RemoteOperationIndeterminate,
+                cleanup_appropriate: false,
+            }) if origin_operation_id == origin
+        ));
+        assert!(state.take_pending_notifications().is_empty());
+
+        let child_request = JsonRpcRequest {
+            id: json!(2),
+            method: "repository/open".to_string(),
+            params: Some(json!({ "path": "C:/checkout/new/child" })),
+        };
+        assert_eq!(
+            state
+                .native_lane_failure_for_request(&child_request)
+                .expect("the blocked checkout lane must reject child paths")
+                .code(),
+            "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+        );
+
+        let unrelated_request = JsonRpcRequest {
+            id: json!(3),
+            method: "repository/open".to_string(),
+            params: Some(json!({ "path": "C:/unrelated" })),
+        };
+        assert!(
+            state
+                .native_lane_failure_for_request(&unrelated_request)
+                .is_none(),
+            "a blocked checkout lane must not affect an unrelated working copy"
+        );
+    }
+
+    #[test]
+    fn unsafe_cleanup_blocks_success_before_lane_release() {
+        let lane = "c:/wc";
+        let origin = "91234567-89ab-4def-8123-456789abcdef";
+        let mut state = DaemonState::new();
+        assert!(
+            state
+                .reserve_remote_lane(lane, origin, RemoteOperationEffect::ReadOnly, None, None)
+                .is_none()
+        );
+        state.settle_remote_launch(
+            lane,
+            origin,
+            &RemoteWorkerSettlement {
+                result: Ok(()),
+                remote_failure: None,
+                effect: RemoteOperationEffect::ReadOnly,
+                worker_was_resumed: true,
+                execution_origin_known: true,
+                termination: crate::WorkerTerminationDisposition::Blocked,
+                job_descendants_zero: true,
+                temp_root_removed: false,
+            },
+        );
+        assert!(matches!(
+            state.remote_native_lanes.get(lane),
+            Some(RemoteNativeLaneState::Blocked {
+                reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn all_used_recovery_ids_are_rejected_for_the_lane_lifetime() {
+        let path = "C:/wc-recovery-id-history";
+        let lane = absolute_path_key(&normalize_absolute_path_text(path));
+        let origin = "41234567-89ab-4def-8123-456789abcdef";
+        let older = "51234567-89ab-4def-8123-456789abcdef";
+        let newer = "61234567-89ab-4def-8123-456789abcdef";
+        let mut state = DaemonState::new();
+        let repository_id = insert_remote_recovery_session(&mut state, path);
+        state.remote_native_lanes.insert(
+            lane,
+            RemoteNativeLaneState::Recovering {
+                origin_operation_id: origin.to_string(),
+                recovery_operation_id: None,
+                used_recovery_operation_ids: [older.to_string(), newer.to_string()]
+                    .into_iter()
+                    .collect(),
+            },
+        );
+        let request = JsonRpcRequest {
+            id: json!(1),
+            method: "remote/recoverWorkingCopy".to_string(),
+            params: Some(json!({
+                "repositoryId": repository_id,
+                "epoch": 1,
+                "originOperationId": origin,
+                "operationId": older,
+                "timeoutMs": 30_000
+            })),
+        };
+
+        let (_, response) = state.dispatch_remote_recover_working_copy(&request);
+        assert_eq!(
+            response["error"]["code"],
+            "SUBVERSIONR_REMOTE_RECOVERY_OPERATION_ID_REUSED"
+        );
+        assert!(state.pending_remote_recovery_launch.is_none());
+    }
+
+    #[test]
+    fn bounded_recovery_id_history_transitions_atomically_to_blocked() {
+        let path = "C:/wc-recovery-id-limit";
+        let lane = absolute_path_key(&normalize_absolute_path_text(path));
+        let origin = "71234567-89ab-4def-8123-456789abcdef";
+        let mut state = DaemonState::new();
+        let repository_id = insert_remote_recovery_session(&mut state, path);
+        let used_recovery_operation_ids = (0..MAX_REMOTE_RECOVERY_OPERATION_IDS)
+            .map(|index| format!("{index:08x}-89ab-4def-8123-{index:012x}"))
+            .collect();
+        state.remote_native_lanes.insert(
+            lane.clone(),
+            RemoteNativeLaneState::Recovering {
+                origin_operation_id: origin.to_string(),
+                recovery_operation_id: None,
+                used_recovery_operation_ids,
+            },
+        );
+        let request = JsonRpcRequest {
+            id: json!(1),
+            method: "remote/recoverWorkingCopy".to_string(),
+            params: Some(json!({
+                "repositoryId": repository_id,
+                "epoch": 1,
+                "originOperationId": origin,
+                "operationId": "81234567-89ab-4def-8123-456789abcdef",
+                "timeoutMs": 30_000
+            })),
+        };
+
+        let (_, response) = state.dispatch_remote_recover_working_copy(&request);
+        assert_eq!(response["result"]["outcome"], "blocked");
+        assert!(matches!(
+            state.remote_native_lanes.get(&lane),
+            Some(RemoteNativeLaneState::Blocked {
+                reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                ..
+            })
+        ));
+        assert!(state.pending_notifications.iter().any(|notification| {
+            notification["method"] == "remoteConnection/state"
+                && notification["params"]["state"]["recovery"] == "blocked"
+        }));
+    }
+
+    #[test]
+    fn unmatched_settlement_does_not_leak_or_steal_active_operation_ids() {
+        let orphan = "91234567-89ab-4def-8123-456789abcdef";
+        let owned = "a1234567-89ab-4def-8123-456789abcdef";
+        let mut state = DaemonState::new();
+        state.active_remote_operation_ids.insert(orphan.to_string());
+        state.active_remote_operation_ids.insert(owned.to_string());
+        state.remote_native_lanes.insert(
+            "c:/owned".to_string(),
+            RemoteNativeLaneState::Active {
+                operation_id: owned.to_string(),
+                effect: RemoteOperationEffect::ReadOnly,
+                repository_id: None,
+                epoch: None,
+            },
+        );
+        let settlement = RemoteWorkerSettlement::pre_launch(
+            RemoteOperationEffect::ReadOnly,
+            Err(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_WORKER_START_FAILED",
+                "process",
+                "error.remote.workerStartFailed",
+                json!({}),
+                false,
+            )),
+        );
+
+        assert!(
+            state
+                .settle_remote_launch("c:/missing", orphan, &settlement)
+                .is_none()
+        );
+        assert!(!state.active_remote_operation_ids.contains(orphan));
+        assert!(
+            state
+                .settle_remote_launch("c:/wrong", owned, &settlement)
+                .is_none()
+        );
+        assert!(state.active_remote_operation_ids.contains(owned));
+    }
+
+    #[test]
+    fn repository_close_is_gated_for_every_non_free_lane_state() {
+        let path = "C:/wc-close-gate";
+        let lane = absolute_path_key(&normalize_absolute_path_text(path));
+        let mut state = DaemonState::new();
+        let repository_id = insert_remote_recovery_session(&mut state, path);
+        let close = JsonRpcRequest {
+            id: json!(1),
+            method: "repository/close".to_string(),
+            params: Some(json!({ "repositoryId": repository_id, "epoch": 1 })),
+        };
+        let cases = [
+            (
+                RemoteNativeLaneState::Active {
+                    operation_id: "b1234567-89ab-4def-8123-456789abcdef".to_string(),
+                    effect: RemoteOperationEffect::Mutation,
+                    repository_id: Some("repo".to_string()),
+                    epoch: Some(1),
+                },
+                "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
+            ),
+            (
+                RemoteNativeLaneState::Recovering {
+                    origin_operation_id: "c1234567-89ab-4def-8123-456789abcdef".to_string(),
+                    recovery_operation_id: None,
+                    used_recovery_operation_ids: BTreeSet::new(),
+                },
+                "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE",
+            ),
+            (
+                RemoteNativeLaneState::Blocked {
+                    origin_operation_id: "d1234567-89ab-4def-8123-456789abcdef".to_string(),
+                    reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                    cleanup_appropriate: false,
+                },
+                "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+            ),
+        ];
+        for (lane_state, expected) in cases {
+            state.remote_native_lanes.insert(lane.clone(), lane_state);
+            assert_eq!(
+                state
+                    .native_lane_failure_for_request(&close)
+                    .expect("close must be lane gated")
+                    .code(),
+                expected
+            );
+        }
+    }
 }

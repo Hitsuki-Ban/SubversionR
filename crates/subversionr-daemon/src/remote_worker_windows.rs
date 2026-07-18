@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString, c_void};
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -415,9 +415,21 @@ impl ActiveWorkerRegistry {
             drop(state);
             let job = ActiveJob { job };
             job.terminate();
+            if wait_job_zero_until(&job, Instant::now() + CLEANUP_TIMEOUT).is_err() {
+                return Err(cleanup_blocked_failure());
+            }
             return Err(disconnected_failure());
         }
-        state.next_id = state.next_id.checked_add(1).ok_or_else(worker_start_failure)?;
+        let Some(next_id) = state.next_id.checked_add(1) else {
+            drop(state);
+            let job = ActiveJob { job };
+            job.terminate();
+            if wait_job_zero_until(&job, Instant::now() + CLEANUP_TIMEOUT).is_err() {
+                return Err(cleanup_blocked_failure());
+            }
+            return Err(worker_start_failure());
+        };
+        state.next_id = next_id;
         let id = state.next_id;
         let job = Arc::new(ActiveJob { job });
         state.jobs.insert(id, Arc::clone(&job));
@@ -525,73 +537,6 @@ impl ActiveRegistration {
     }
 }
 
-#[derive(Debug, Default)]
-pub(super) struct LaneRegistry {
-    state: Arc<Mutex<(HashSet<String>, HashSet<String>)>>,
-}
-
-pub(super) struct LaneReservation {
-    key: String,
-    state: Arc<Mutex<(HashSet<String>, HashSet<String>)>>,
-    settled: bool,
-}
-
-impl LaneRegistry {
-    pub(super) fn reserve(&self, key: &str) -> Result<LaneReservation, BridgeFailure> {
-        let mut state = self.state.lock().expect("lane registry mutex poisoned");
-        if state.1.contains(key) || !state.0.insert(key.to_string()) {
-            return Err(if state.1.contains(key) {
-                cleanup_blocked_failure()
-            } else {
-                lane_busy_failure()
-            });
-        }
-        Ok(LaneReservation {
-            key: key.to_string(),
-            state: Arc::clone(&self.state),
-            settled: false,
-        })
-    }
-
-    pub(super) fn blocked_count(&self) -> usize {
-        self.state
-            .lock()
-            .expect("lane registry mutex poisoned")
-            .1
-            .len()
-    }
-}
-
-impl LaneReservation {
-    pub(super) fn release(mut self) {
-        self.state
-            .lock()
-            .expect("lane registry mutex poisoned")
-            .0
-            .remove(&self.key);
-        self.settled = true;
-    }
-
-    pub(super) fn block(mut self) {
-        let mut state = self.state.lock().expect("lane registry mutex poisoned");
-        state.0.remove(&self.key);
-        state.1.insert(self.key.clone());
-        self.settled = true;
-    }
-}
-
-impl Drop for LaneReservation {
-    fn drop(&mut self) {
-        if !self.settled {
-            self.state
-                .lock()
-                .expect("lane registry mutex poisoned")
-                .0
-                .remove(&self.key);
-        }
-    }
-}
-
 enum WorkerIoEvent {
     Complete(io::Result<WorkerResponse>),
     Credential {
@@ -622,10 +567,19 @@ pub(super) fn execute_worker(
     active: &ActiveWorkerRegistry,
     deadline: Instant,
     execution: WorkerExecution,
-) -> Result<(), BridgeFailure> {
-    let launch = active.reserve_launch(disconnected, parent_disconnected)?;
+    effect: RemoteOperationEffect,
+) -> RemoteWorkerSettlement {
+    let launch = match active.reserve_launch(disconnected, parent_disconnected) {
+        Ok(launch) => launch,
+        Err(failure) => return RemoteWorkerSettlement::pre_launch(effect, Err(failure)),
+    };
     let operation_temp_root = temp_base.join(format!("subversionr-remote-{}", envelope.operation_id));
-    fs::create_dir(&operation_temp_root).map_err(|_| worker_start_failure())?;
+    if fs::create_dir(&operation_temp_root).is_err() {
+        return RemoteWorkerSettlement::pre_launch(effect, Err(worker_start_failure()));
+    }
+    let worker_was_resumed = AtomicBool::new(false);
+    let hard_stopped = AtomicBool::new(false);
+    let job_descendants_zero = AtomicBool::new(true);
     let result = execute_worker_inner(
         worker_executable,
         bridge_path,
@@ -640,11 +594,42 @@ pub(super) fn execute_worker(
         launch,
         deadline,
         execution,
+        &worker_was_resumed,
+        &hard_stopped,
+        &job_descendants_zero,
     );
-    if fs::remove_dir_all(&operation_temp_root).is_err() {
-        return Err(cleanup_blocked_failure());
+    let temp_root_removed = fs::remove_dir_all(&operation_temp_root).is_ok();
+    let descendants_zero = job_descendants_zero.load(Ordering::Acquire)
+        && !result.as_ref().is_err_and(|failure| {
+            failure.code() == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+        });
+    let hard_stop = hard_stopped.load(Ordering::Acquire);
+    let cleanup_safe = descendants_zero && temp_root_removed;
+    let result = if cleanup_safe {
+        result
+    } else {
+        Err(cleanup_blocked_failure())
+    };
+    let remote_failure = result
+        .as_ref()
+        .err()
+        .map(crate::remote::classify_remote_failure);
+    RemoteWorkerSettlement {
+        result,
+        remote_failure,
+        effect,
+        worker_was_resumed: worker_was_resumed.load(Ordering::Acquire),
+        execution_origin_known: true,
+        termination: if !cleanup_safe {
+            WorkerTerminationDisposition::Blocked
+        } else if hard_stop {
+            WorkerTerminationDisposition::Settled
+        } else {
+            WorkerTerminationDisposition::NotRequired
+        },
+        job_descendants_zero: descendants_zero,
+        temp_root_removed,
     }
-    result
 }
 
 pub(super) fn worker_control_channel_is_private() -> bool {
@@ -685,6 +670,9 @@ fn execute_worker_inner(
     launch: LaunchReservation,
     deadline: Instant,
     execution: WorkerExecution,
+    worker_was_resumed: &AtomicBool,
+    hard_stopped: &AtomicBool,
+    job_descendants_zero: &AtomicBool,
 ) -> Result<(), BridgeFailure> {
     plan.timeout_ms = remaining_timeout_ms(deadline, plan.timeout_ms)?;
 
@@ -732,10 +720,13 @@ fn execute_worker_inner(
     assign_and_verify(&job, child.process())
         .map_err(|error| win32_start_failure("assignJob", &error))?;
     let registration = active.register(job, disconnected, parent_disconnected)?;
+    job_descendants_zero.store(false, Ordering::Release);
     drop(launch);
     if disconnected.load(Ordering::Acquire) || parent_disconnected.load(Ordering::Acquire) {
         registration.job.terminate();
         return finish_hard_stop(
+            hard_stopped,
+            job_descendants_zero,
             registration,
             operation_temp_root,
             disconnected_failure(),
@@ -744,19 +735,20 @@ fn execute_worker_inner(
     }
     if cancellation.is_cancelled() {
         registration.job.terminate();
-        return finish_hard_stop(registration, operation_temp_root, cancelled_failure(), None);
+        return finish_hard_stop(hard_stopped, job_descendants_zero, registration, operation_temp_root, cancelled_failure(), None);
     }
     if Instant::now() >= deadline {
         registration.job.terminate();
-        return finish_hard_stop(registration, operation_temp_root, timed_out_failure(), None);
+        return finish_hard_stop(hard_stopped, job_descendants_zero, registration, operation_temp_root, timed_out_failure(), None);
     }
 
     // SAFETY: this is the primary thread from CREATE_SUSPENDED and containment was verified.
     let previous = unsafe { ResumeThread(child.thread().raw()) };
     if previous != 1 {
         registration.job.terminate();
-        return finish_hard_stop(registration, operation_temp_root, worker_start_failure(), None);
+        return finish_hard_stop(hard_stopped, job_descendants_zero, registration, operation_temp_root, worker_start_failure(), None);
     }
+    worker_was_resumed.store(true, Ordering::Release);
     let (process, thread_handle) = child.disarm();
     drop(thread_handle);
     drop(inbound.read);
@@ -782,6 +774,8 @@ fn execute_worker_inner(
         if disconnected.load(Ordering::Acquire) || parent_disconnected.load(Ordering::Acquire) {
             registration.job.terminate();
             return finish_hard_stop(
+                hard_stopped,
+                job_descendants_zero,
                 registration,
                 operation_temp_root,
                 disconnected_failure(),
@@ -791,6 +785,8 @@ fn execute_worker_inner(
         if cancellation.is_cancelled() {
             registration.job.terminate();
             return finish_hard_stop(
+                hard_stopped,
+                job_descendants_zero,
                 registration,
                 operation_temp_root,
                 cancelled_failure(),
@@ -800,6 +796,8 @@ fn execute_worker_inner(
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             registration.job.terminate();
             return finish_hard_stop(
+                hard_stopped,
+                job_descendants_zero,
                 registration,
                 operation_temp_root,
                 timed_out_failure(),
@@ -811,6 +809,8 @@ fn execute_worker_inner(
             Ok(WorkerIoEvent::Complete(Err(_))) => {
                 registration.job.terminate();
                 return finish_hard_stop(
+                    hard_stopped,
+                    job_descendants_zero,
                     registration,
                     operation_temp_root,
                     worker_protocol_failure(),
@@ -823,6 +823,8 @@ fn execute_worker_inner(
                         if responder.send(Ok(WorkerIoReply::Credential(response))).is_err() {
                             registration.job.terminate();
                             return finish_hard_stop(
+                                hard_stopped,
+                                job_descendants_zero,
                                 registration,
                                 operation_temp_root,
                                 worker_protocol_failure(),
@@ -834,6 +836,8 @@ fn execute_worker_inner(
                         let _ = responder.send(Err(()));
                         registration.job.terminate();
                         return finish_hard_stop(
+                            hard_stopped,
+                            job_descendants_zero,
                             registration,
                             operation_temp_root,
                             failure,
@@ -848,6 +852,8 @@ fn execute_worker_inner(
                         if responder.send(Ok(WorkerIoReply::Settlement(ack))).is_err() {
                             registration.job.terminate();
                             return finish_hard_stop(
+                                hard_stopped,
+                                job_descendants_zero,
                                 registration,
                                 operation_temp_root,
                                 worker_protocol_failure(),
@@ -863,6 +869,8 @@ fn execute_worker_inner(
                             Err(failure) => {
                                 registration.job.terminate();
                                 return finish_hard_stop(
+                                    hard_stopped,
+                                    job_descendants_zero,
                                     registration,
                                     operation_temp_root,
                                     failure,
@@ -873,6 +881,8 @@ fn execute_worker_inner(
                         if responder.send(Err(failure)).is_err() {
                             registration.job.terminate();
                             return finish_hard_stop(
+                                hard_stopped,
+                                job_descendants_zero,
                                 registration,
                                 operation_temp_root,
                                 worker_protocol_failure(),
@@ -886,6 +896,8 @@ fn execute_worker_inner(
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 registration.job.terminate();
                 return finish_hard_stop(
+                    hard_stopped,
+                    job_descendants_zero,
                     registration,
                     operation_temp_root,
                     worker_protocol_failure(),
@@ -900,6 +912,8 @@ fn execute_worker_inner(
         Err(failure) => {
             registration.job.terminate();
             return finish_hard_stop(
+                hard_stopped,
+                job_descendants_zero,
                 registration,
                 operation_temp_root,
                 failure,
@@ -915,6 +929,8 @@ fn execute_worker_inner(
             _ => {
                 registration.job.terminate();
                 return finish_hard_stop(
+                    hard_stopped,
+                    job_descendants_zero,
                     registration,
                     operation_temp_root,
                     worker_protocol_failure(),
@@ -925,6 +941,8 @@ fn execute_worker_inner(
         if Instant::now() >= deadline {
             registration.job.terminate();
             return finish_hard_stop(
+                hard_stopped,
+                job_descendants_zero,
                 registration,
                 operation_temp_root,
                 timed_out_failure(),
@@ -936,6 +954,8 @@ fn execute_worker_inner(
     if wait_job_zero_until(&registration.job, deadline).is_err() {
         registration.job.terminate();
         return finish_hard_stop(
+            hard_stopped,
+            job_descendants_zero,
             registration,
             operation_temp_root,
             timed_out_failure(),
@@ -944,21 +964,26 @@ fn execute_worker_inner(
     }
     drop(process);
     drop(registration);
+    job_descendants_zero.store(true, Ordering::Release);
     io_thread.join().map_err(|_| worker_protocol_failure())?;
     response
 }
 
 fn finish_hard_stop(
+    hard_stopped: &AtomicBool,
+    job_descendants_zero: &AtomicBool,
     registration: ActiveRegistration,
     _operation_temp_root: &Path,
     settled: BridgeFailure,
     io_thread: Option<thread::JoinHandle<()>>,
 ) -> Result<(), BridgeFailure> {
+    hard_stopped.store(true, Ordering::Release);
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
     if wait_job_zero_until(&registration.job, cleanup_deadline).is_err() {
         registration.retain_blocked();
         return Err(cleanup_blocked_failure());
     }
+    job_descendants_zero.store(true, Ordering::Release);
     drop(registration);
     if let Some(io_thread) = io_thread {
         io_thread.join().map_err(|_| worker_protocol_failure())?;

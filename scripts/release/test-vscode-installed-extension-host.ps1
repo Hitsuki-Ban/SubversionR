@@ -395,12 +395,23 @@ async function run() {
   ]);
   if (
     !installedRemoteWorkerReport ||
-    installedRemoteWorkerReport.schemaVersion !== 2 ||
+    installedRemoteWorkerReport.schemaVersion !== 3 ||
     installedRemoteWorkerReport.kind !== "subversionr.installedRemoteWorkerReport" ||
     installedRemoteWorkerReport.protocol?.major !== 1 ||
-    installedRemoteWorkerReport.protocol?.minor !== 33 ||
+    installedRemoteWorkerReport.protocol?.minor !== 34 ||
     installedRemoteWorkerReport.remoteWorkerIsolation !== true ||
     installedRemoteWorkerReport.credentialLeaseSettlement !== true ||
+    JSON.stringify(installedRemoteWorkerReport.remoteConnectionState?.stateUnion) !== JSON.stringify(["unchecked", "checking", "online", "attention", "unreachable", "indeterminate"]) ||
+    installedRemoteWorkerReport.remoteConnectionState?.staleIncomingPreserved !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.localProjectionUnchanged !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.separateRecoveryOperation !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.separateRecoveryDeadline !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.recoveryGateEnforced !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.terminalBlockedStateProjected !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.cancellationSettledWithoutReprompt !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.unknownFailureRedacted !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.unrelatedRepositoryUnchanged !== true ||
+    installedRemoteWorkerReport.remoteConnectionState?.localEventZeroNetwork !== true ||
     installedRemoteWorkerReport.transportResult !== "unsupportedAfterWorker" ||
     installedRemoteWorkerReport.sameLaneSubsequent !== true ||
     installedRemoteWorkerReport.subsequentDiagnostics !== true ||
@@ -418,7 +429,7 @@ async function run() {
     installedRemoteWorkerReport.credentialLeaseReport?.reloadDiscardedPendingLease !== true ||
     installedRemoteWorkerReport.credentialLeaseReport?.storageCleanup !== true
   ) {
-    throw new Error("Installed remote worker report did not prove the v1.33 isolated worker, credential lease lifecycle, same-lane recovery, and follow-up request.");
+    throw new Error("Installed remote worker report did not prove the v1.34 isolated worker, remote connection state, credential lease lifecycle, same-lane recovery, and follow-up request.");
   }
   const credentialEvidenceText = JSON.stringify(installedRemoteWorkerReport.credentialLeaseReport);
   for (const forbidden of ["alice", "bob", "charlie", "installed-evidence-secret", "svn.example.invalid", "SubversionR installed credential evidence"]) {
@@ -522,12 +533,22 @@ function Assert-HarnessResult(
     }
   }
   if (
-    $Result.installedRemoteWorkerReport.schemaVersion -ne 2 -or
+    $Result.installedRemoteWorkerReport.schemaVersion -ne 3 -or
     $Result.installedRemoteWorkerReport.kind -ne "subversionr.installedRemoteWorkerReport" -or
     $Result.installedRemoteWorkerReport.protocol.major -ne 1 -or
-    $Result.installedRemoteWorkerReport.protocol.minor -ne 33 -or
+    $Result.installedRemoteWorkerReport.protocol.minor -ne 34 -or
     $Result.installedRemoteWorkerReport.remoteWorkerIsolation -ne $true -or
     $Result.installedRemoteWorkerReport.credentialLeaseSettlement -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.staleIncomingPreserved -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.localProjectionUnchanged -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.separateRecoveryOperation -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.separateRecoveryDeadline -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.recoveryGateEnforced -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.terminalBlockedStateProjected -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.cancellationSettledWithoutReprompt -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.unknownFailureRedacted -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.unrelatedRepositoryUnchanged -ne $true -or
+    $Result.installedRemoteWorkerReport.remoteConnectionState.localEventZeroNetwork -ne $true -or
     $Result.installedRemoteWorkerReport.transportResult -ne "unsupportedAfterWorker" -or
     $Result.installedRemoteWorkerReport.sameLaneSubsequent -ne $true -or
     $Result.installedRemoteWorkerReport.subsequentDiagnostics -ne $true -or
@@ -544,7 +565,11 @@ function Assert-HarnessResult(
     $Result.installedRemoteWorkerReport.credentialLeaseReport.reloadDiscardedPendingLease -ne $true -or
     $Result.installedRemoteWorkerReport.credentialLeaseReport.storageCleanup -ne $true
   ) {
-    throw "Installed-host result must prove the v1.33 isolated remote worker, credential lease lifecycle, same-lane recovery, and a subsequent diagnostics request."
+    throw "Installed-host result must prove the v1.34 isolated remote worker, remote connection state, credential lease lifecycle, same-lane recovery, and a subsequent diagnostics request."
+  }
+  $remoteStateUnion = @($Result.installedRemoteWorkerReport.remoteConnectionState.stateUnion)
+  if (($remoteStateUnion -join ",") -ne "unchecked,checking,online,attention,unreachable,indeterminate") {
+    throw "Installed remote connection evidence must prove the exact six-state union."
   }
   $settlementOutcomes = @($Result.installedRemoteWorkerReport.credentialLeaseReport.settlementOutcomes)
   if (($settlementOutcomes -join ",") -ne "accepted,rejected,unused,cancelled,timedOut") {
@@ -729,7 +754,7 @@ $report = [pscustomobject]@{
     "SubversionR became active inside a real VS Code Extension Host",
     "SubversionR version report command executed and opened a readonly report document",
     "SubversionR installed redaction report command executed and returned a redacted diagnostics bundle",
-    "SubversionR installed remote worker report proved protocol v1.33 isolation, credential settlement, transport boundary, same-lane recovery, and subsequent diagnostics",
+    "SubversionR installed remote worker report proved protocol v1.34 isolation, remote connection state, credential settlement, transport boundary, same-lane recovery, and subsequent diagnostics",
     "working-copy sentinel .svn tree hash was unchanged",
     "publicReadinessClaim remains false"
   )

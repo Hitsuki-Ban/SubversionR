@@ -212,11 +212,24 @@ if ($null -eq $installedPackage) {
     }
   }
   installedRemoteWorkerReport = [pscustomobject]@{
-    schemaVersion = 2
+    schemaVersion = 3
     kind = "subversionr.installedRemoteWorkerReport"
-    protocol = [pscustomobject]@{ major = 1; minor = 33 }
+    protocol = [pscustomobject]@{ major = 1; minor = 34 }
     remoteWorkerIsolation = $true
     credentialLeaseSettlement = $true
+    remoteConnectionState = [pscustomobject]@{
+      stateUnion = @("unchecked", "checking", "online", "attention", "unreachable", "indeterminate")
+      staleIncomingPreserved = $true
+      localProjectionUnchanged = $true
+      separateRecoveryOperation = $true
+      separateRecoveryDeadline = $true
+      recoveryGateEnforced = $true
+      terminalBlockedStateProjected = $true
+      cancellationSettledWithoutReprompt = $true
+      unknownFailureRedacted = $true
+      unrelatedRepositoryUnchanged = $true
+      localEventZeroNetwork = $true
+    }
     transportResult = "unsupportedAfterWorker"
     sameLaneSubsequent = $true
     subsequentDiagnostics = $true
@@ -313,13 +326,24 @@ try {
   Assert-True ($installedRedactionJson.Contains("[REDACTED:repository-log]")) "Installed redaction report should include repository log redaction markers."
   Assert-True ($installedRedactionJson.Contains("[REDACTED:source-content]")) "Installed redaction report should include source content redaction markers."
   Assert-Equal "subversionr.installedRemoteWorkerReport" $report.installedRemoteWorkerReport.kind "Installed-host evidence should include the remote worker report."
-  Assert-Equal "33" ([string]$report.installedRemoteWorkerReport.protocol.minor) "Installed remote worker evidence should bind protocol v1.33."
+  Assert-Equal "34" ([string]$report.installedRemoteWorkerReport.protocol.minor) "Installed remote worker evidence should bind protocol v1.34."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteWorkerIsolation) "Installed remote worker evidence should prove the runtime capability."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseSettlement) "Installed remote worker evidence should prove credential lease settlement."
   Assert-Equal "unsupportedAfterWorker" $report.installedRemoteWorkerReport.transportResult "Installed remote worker evidence should stop at the transport boundary."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.sameLaneSubsequent) "Installed remote worker evidence should prove the same lane is reusable after worker cleanup."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.subsequentDiagnostics) "Installed remote worker evidence should prove a subsequent diagnostics request."
-  Assert-Equal "2" ([string]$report.installedRemoteWorkerReport.schemaVersion) "Installed remote worker evidence should use the credential lease schema."
+  Assert-Equal "3" ([string]$report.installedRemoteWorkerReport.schemaVersion) "Installed remote worker evidence should use the remote connection state schema."
+  Assert-Equal "unchecked,checking,online,attention,unreachable,indeterminate" (@($report.installedRemoteWorkerReport.remoteConnectionState.stateUnion) -join ",") "Installed remote connection evidence should prove the exact six-state union."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.staleIncomingPreserved) "Installed remote connection evidence should preserve stale Incoming entries."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.localProjectionUnchanged) "Installed remote connection evidence should preserve Local Changes."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.separateRecoveryOperation) "Installed remote connection evidence should use a separate recovery operation."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.separateRecoveryDeadline) "Installed remote connection evidence should use a separate recovery deadline."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.recoveryGateEnforced) "Installed remote connection evidence should enforce the in-process recovery gate."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.terminalBlockedStateProjected) "Installed remote connection evidence should project the terminal blocked state."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.cancellationSettledWithoutReprompt) "Installed remote connection evidence should settle cancellation without a prompt loop."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.unknownFailureRedacted) "Installed remote connection evidence should redact unknown failure detail."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.unrelatedRepositoryUnchanged) "Installed remote connection evidence should preserve unrelated repository serviceability."
+  Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteConnectionState.localEventZeroNetwork) "Installed remote connection evidence should prove local-event zero-network behavior."
   Assert-Equal "subversionr.installedCredentialLeaseReport" $report.installedRemoteWorkerReport.credentialLeaseReport.kind "Installed remote worker evidence should include the credential lease report."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.legacyBackgroundBlocked) "Installed credential evidence should block legacy state in the background."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseReport.legacyForegroundCleared) "Installed credential evidence should clear legacy state in the foreground."

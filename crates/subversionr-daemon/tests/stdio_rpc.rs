@@ -1,6 +1,7 @@
+use std::collections::BTreeMap;
 use std::io::{self, Read};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,17 +10,18 @@ use subversionr_daemon::{
     BridgeInfo, CleanupOperationRequest, CommitOperationRequest, CommitOperationResult,
     ContentBlob, HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
     MoveOperationRequest, OperationResult, PropertiesListResult, PropertyDeleteOperationRequest,
-    PropertyEntry, PropertySetOperationRequest, RemoteConfigPlan, RemoteWorkerSupervisor,
-    RemoveOperationRequest, ResolveOperationRequest, RevertOperationRequest,
-    UpdateOperationRequest, UpdateOperationResult, run_json_rpc_stdio,
-    run_json_rpc_stdio_with_remote_worker,
+    PropertyEntry, PropertySetOperationRequest, RemoteConfigPlan, RemoteOperationEffect,
+    RemoteWorkerSettlement, RemoteWorkerSupervisor, RemoveOperationRequest,
+    ResolveOperationRequest, RevertOperationRequest, UpdateOperationRequest, UpdateOperationResult,
+    WorkerTerminationDisposition, run_json_rpc_stdio, run_json_rpc_stdio_with_remote_worker,
 };
 use subversionr_protocol::{
     CanonicalEndpoint, CertificateTrustRequest, CertificateTrustResponse, Credential,
     CredentialAttempt, CredentialAuthKind, CredentialPersistenceIntent, CredentialRequest,
-    CredentialResponse, CredentialSettlementOutcome, CredentialSettlementRequest,
-    RemoteOperationEnvelope, RemoteOperationIntent, RemoteScheme, RepositoryIdentity,
-    ServerAccountSelection, StatusEntry, StatusSnapshot, StatusSummary,
+    CredentialResponse, CredentialSettlementOutcome, CredentialSettlementRequest, RemoteFailure,
+    RemoteFailureCategory, RemoteFailureClass, RemoteOperationEnvelope, RemoteOperationIntent,
+    RemoteScheme, RepositoryIdentity, ServerAccountSelection, StatusEntry, StatusSnapshot,
+    StatusSummary,
 };
 
 fn credential_request(
@@ -101,15 +103,62 @@ fn assert_credential_request_frame(frame: &serde_json::Value, request_id: &str, 
 #[derive(Debug)]
 struct FakeBridge;
 
+#[derive(Debug, Clone)]
+struct RecoveryTaskControl {
+    started: Arc<AtomicBool>,
+    release: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+}
+
+fn recovery_task_controls() -> &'static Mutex<BTreeMap<String, RecoveryTaskControl>> {
+    static CONTROLS: OnceLock<Mutex<BTreeMap<String, RecoveryTaskControl>>> = OnceLock::new();
+    CONTROLS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
 impl BridgeApi for FakeBridge {
     fn info(&self) -> BridgeInfo {
         BridgeInfo::available("subversionr-svn-bridge/0.1.0-test", "1.14.5")
     }
 
+    fn create_recovery_status_task(
+        &self,
+        identity: RepositoryIdentity,
+        generation: u64,
+    ) -> Result<subversionr_daemon::BridgeRecoveryTask, BridgeFailure> {
+        let control = recovery_task_controls()
+            .lock()
+            .expect("recovery task controls must not be poisoned")
+            .get(&identity.working_copy_root)
+            .cloned();
+        Ok(Box::new(move |cancellation| {
+            if let Some(control) = control {
+                control.started.store(true, Ordering::SeqCst);
+                while !control.release.load(Ordering::SeqCst) {
+                    if cancellation.is_cancelled() {
+                        control.cancelled.store(true, Ordering::SeqCst);
+                        return Err(BridgeFailure::new(
+                            "SVN_STATUS_CANCELLED",
+                            "cancelled",
+                            "error.native.statusCancelled",
+                            serde_json::json!({}),
+                            false,
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+            }
+            FakeBridge.status_snapshot_with_cancellation(&identity, generation, cancellation)
+        }))
+    }
+
     fn open_working_copy(&self, path: &str) -> Result<RepositoryIdentity, BridgeFailure> {
         Ok(RepositoryIdentity {
             repository_uuid: "repo-uuid".to_string(),
-            repository_root_url: "file:///repo".to_string(),
+            repository_root_url: if path.contains("remote-recovery") {
+                "https://svn.example.invalid/project".to_string()
+            } else {
+                "file:///repo".to_string()
+            },
             working_copy_root: path.to_string(),
             workspace_scope_root: path.to_string(),
             format: 31,
@@ -3500,23 +3549,27 @@ impl RemoteWorkerSupervisor for AuthWaitingRemoteWorker {
         envelope: &RemoteOperationEnvelope,
         _plan: RemoteConfigPlan,
         _lane_key: &str,
+        effect: RemoteOperationEffect,
         _cancellation: &dyn BridgeCancellationToken,
         auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
+    ) -> RemoteWorkerSettlement {
         self.started.store(true, Ordering::SeqCst);
-        let mut request = credential_request(
-            "worker-auth-wait",
-            "private worker auth wait",
-            true,
-            true,
-            RemoteOperationIntent::Foreground,
-            300_000,
-        );
-        request.operation_id = envelope.operation_id.clone();
-        auth.request_credential(request)?;
-        Ok(())
+        let result = (|| {
+            let mut request = credential_request(
+                "worker-auth-wait",
+                "private worker auth wait",
+                true,
+                true,
+                RemoteOperationIntent::Foreground,
+                300_000,
+            );
+            request.operation_id = envelope.operation_id.clone();
+            auth.request_credential(request)?;
+            Ok(())
+        })();
+        worker_settlement(effect, result, true, true)
     }
 
     fn terminate_active(&self) -> Result<(), BridgeFailure> {
@@ -3554,18 +3607,19 @@ impl RemoteWorkerSupervisor for SettlementErrorRemoteWorker {
         envelope: &RemoteOperationEnvelope,
         _plan: RemoteConfigPlan,
         _lane_key: &str,
+        effect: RemoteOperationEffect,
         _cancellation: &dyn BridgeCancellationToken,
         auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
+    ) -> RemoteWorkerSettlement {
         let failure = auth
             .settle_credential(credential_settlement_request(
                 &envelope.operation_id,
                 30_000,
             ))
             .expect_err("settlement error worker fixture must not succeed");
-        Err(failure)
+        worker_settlement(effect, Err(failure), true, true)
     }
 
     fn terminate_active(&self) -> Result<(), BridgeFailure> {
@@ -3587,22 +3641,28 @@ impl RemoteWorkerSupervisor for DelayedRemoteWorker {
         _envelope: &RemoteOperationEnvelope,
         _plan: RemoteConfigPlan,
         _lane_key: &str,
+        effect: RemoteOperationEffect,
         cancellation: &dyn BridgeCancellationToken,
         _auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
+    ) -> RemoteWorkerSettlement {
         self.executions.fetch_add(1, Ordering::SeqCst);
         let finish = Instant::now() + Duration::from_millis(80);
         while Instant::now() < finish {
             if cancellation.is_cancelled() || Instant::now() >= deadline {
-                return Err(remote_worker_test_failure(
-                    "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
-                ));
+                return worker_settlement(
+                    effect,
+                    Err(remote_worker_test_failure(
+                        "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+                    )),
+                    true,
+                    true,
+                );
             }
             thread::sleep(Duration::from_millis(2));
         }
-        Ok(())
+        worker_settlement(effect, Ok(()), true, true)
     }
 
     fn terminate_active(&self) -> Result<(), BridgeFailure> {
@@ -3628,20 +3688,64 @@ struct DisconnectBlockingRemoteWorker {
 #[derive(Debug, Default)]
 struct RecoveryBlockedRemoteWorker;
 
+#[derive(Debug, Default)]
+struct MutationFailureRemoteWorker;
+
+impl RemoteWorkerSupervisor for MutationFailureRemoteWorker {
+    fn execute(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        effect: RemoteOperationEffect,
+        _cancellation: &dyn BridgeCancellationToken,
+        _auth: &mut dyn AuthRequestBroker,
+        _bridge: &dyn BridgeApi,
+        _deadline: Instant,
+    ) -> RemoteWorkerSettlement {
+        worker_settlement(
+            effect,
+            Err(remote_worker_test_failure(
+                "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+            )),
+            true,
+            true,
+        )
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+}
+
 impl RemoteWorkerSupervisor for RecoveryBlockedRemoteWorker {
     fn execute(
         &self,
         _envelope: &RemoteOperationEnvelope,
         _plan: RemoteConfigPlan,
         _lane_key: &str,
+        effect: RemoteOperationEffect,
         _cancellation: &dyn BridgeCancellationToken,
         _auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
-        Err(remote_worker_test_failure(
-            "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
-        ))
+    ) -> RemoteWorkerSettlement {
+        worker_settlement(
+            effect,
+            Err(remote_worker_test_failure(
+                "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+            )),
+            true,
+            false,
+        )
     }
 
     fn terminate_active(&self) -> Result<(), BridgeFailure> {
@@ -3663,18 +3767,24 @@ impl RemoteWorkerSupervisor for DisconnectBlockingRemoteWorker {
         _envelope: &RemoteOperationEnvelope,
         _plan: RemoteConfigPlan,
         _lane_key: &str,
+        effect: RemoteOperationEffect,
         _cancellation: &dyn BridgeCancellationToken,
         _auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
+    ) -> RemoteWorkerSettlement {
         self.started.store(true, Ordering::SeqCst);
         while !self.disconnected.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(2));
         }
-        Err(remote_worker_test_failure(
-            "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
-        ))
+        worker_settlement(
+            effect,
+            Err(remote_worker_test_failure(
+                "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
+            )),
+            true,
+            true,
+        )
     }
 
     fn terminate_active(&self) -> Result<(), BridgeFailure> {
@@ -3738,7 +3848,7 @@ fn stdio_remote_worker_keeps_diagnostics_and_other_working_copies_responsive() {
         responses[0]["result"]["capabilities"]["remoteWorkerIsolation"],
         true
     );
-    assert_eq!(responses[1]["result"]["protocol"]["minor"], 33);
+    assert_eq!(responses[1]["result"]["protocol"]["minor"], 34);
     assert_eq!(
         responses[2]["error"]["code"],
         "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY"
@@ -3812,7 +3922,10 @@ fn stdio_remote_worker_auth_wait_is_interrupted_by_outer_cancellation() {
         .iter()
         .find(|response| response["id"] == 2)
         .expect("cancelled checkout response must be emitted");
-    assert_eq!(checkout["error"]["code"], "SUBVERSIONR_AUTH_CANCELLED");
+    assert_eq!(
+        checkout["error"]["code"],
+        "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    );
 }
 
 #[test]
@@ -3843,7 +3956,7 @@ fn stdio_remote_worker_auth_wait_is_interrupted_by_trust_revoke() {
     assert!(worker.auth_wait_cancelled.load(Ordering::SeqCst));
     let responses = decode_frames(output.as_bytes()).expect("responses should remain framed");
     assert!(responses.iter().any(|response| {
-        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_CANCELLED"
+        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
     }));
     assert!(responses.iter().any(|response| {
         response["id"] == 3 && response["result"]["acknowledgedTrustEpoch"] == 2
@@ -3884,7 +3997,7 @@ fn stdio_remote_worker_auth_wait_obeys_the_operation_deadline() {
             && response["params"]["operationId"] == "61234567-89ab-4def-8123-456789abcdef"
     }));
     assert!(responses.iter().any(|response| {
-        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_TIMEOUT"
+        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
     }));
 }
 
@@ -3941,7 +4054,8 @@ fn stdio_remote_worker_preserves_structured_settlement_error_over_private_broker
             vec![
                 [
                     frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
-                    remote_checkout_frame(2, operation_id, "C:/checkout/settlement-error"),
+                    frame(r#"{"jsonrpc":"2.0","id":10,"method":"repository/open","params":{"path":"C:/wc-remote-recovery"}}"#),
+                    remote_status_frame(2, operation_id, 30_000),
                 ]
                 .concat(),
                 frame(
@@ -4071,7 +4185,7 @@ fn stdio_remote_worker_failure_retires_late_auth_response_and_keeps_serviceable(
 fn assert_late_remote_auth_response_kept_serviceable(output: &[u8]) {
     let responses = decode_frames(output).expect("responses should remain framed");
     assert!(responses.iter().any(|response| {
-        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_AUTH_CANCELLED"
+        response["id"] == 2 && response["error"]["code"] == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
     }));
     assert!(responses.iter().any(|response| {
         response["id"] == 3 && response["result"]["source"] == "subversionr-daemon"
@@ -4122,8 +4236,402 @@ fn stdio_recovery_blocked_lane_rejects_child_and_discovery_paths_but_keeps_diagn
         responses[3]["error"]["code"],
         "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
     );
-    assert_eq!(responses[4]["result"]["protocol"]["minor"], 33);
+    assert_eq!(responses[4]["result"]["protocol"]["minor"], 34);
     assert_eq!(responses[5]["result"]["accepted"], true);
+}
+
+#[test]
+fn stdio_mutation_failure_requires_fresh_recovery_and_safe_reconcile_before_release() {
+    let origin_operation_id = "61234567-89ab-4def-8123-456789abcdef";
+    let wrong_origin_operation_id = "41234567-89ab-4def-8123-456789abcdef";
+    let mismatched_recovery_operation_id = "51234567-89ab-4def-8123-456789abcdef";
+    let recovery_operation_id = "71234567-89ab-4def-8123-456789abcdef";
+    let first = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":2,"method":"repository/open","params":{"path":"C:/wc-remote-recovery"}}"#),
+        remote_update_frame(3, origin_operation_id, 50),
+    ]
+    .concat();
+    let recovery_requests = [
+        frame(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "remote/recoverWorkingCopy",
+                "params": {
+                    "repositoryId": "repo-uuid:C:/wc-remote-recovery",
+                    "epoch": 1,
+                    "originOperationId": wrong_origin_operation_id,
+                    "operationId": mismatched_recovery_operation_id,
+                    "timeoutMs": 30_000
+                }
+            })
+            .to_string(),
+        ),
+        frame(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "remote/recoverWorkingCopy",
+                "params": {
+                    "repositoryId": "repo-uuid:C:/wc-remote-recovery",
+                    "epoch": 1,
+                    "originOperationId": origin_operation_id,
+                    "operationId": origin_operation_id,
+                    "timeoutMs": 30_000
+                }
+            })
+            .to_string(),
+        ),
+        frame(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "remote/recoverWorkingCopy",
+                "params": {
+                    "repositoryId": "repo-uuid:C:/wc-remote-recovery",
+                    "epoch": 1,
+                    "originOperationId": origin_operation_id,
+                    "operationId": recovery_operation_id,
+                    "timeoutMs": 30_000
+                }
+            })
+            .to_string(),
+        ),
+    ]
+    .concat();
+    let reader = DelayedChunkReader::new(
+        vec![
+            first,
+            recovery_requests,
+            frame(r#"{"jsonrpc":"2.0","id":7,"method":"shutdown","params":{}}"#),
+        ],
+        vec![Duration::from_millis(80), Duration::from_millis(40)],
+    );
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(
+        reader,
+        &mut output,
+        &FakeBridge,
+        Arc::new(MutationFailureRemoteWorker),
+    )
+    .expect("mutation recovery workflow must remain serviceable");
+
+    let frames = decode_frames(&output).expect("responses must be framed");
+    let by_id = |id: u64| {
+        frames
+            .iter()
+            .find(|frame| frame["id"].as_u64() == Some(id))
+            .expect("expected response id")
+    };
+    assert_eq!(
+        by_id(1)["result"]["capabilities"]["remoteConnectionState"],
+        true
+    );
+    assert_eq!(
+        by_id(3)["error"]["args"]["remoteFailure"]["reason"],
+        "operationCancelled"
+    );
+    assert_eq!(
+        by_id(4)["error"]["code"],
+        "SUBVERSIONR_REMOTE_RECOVERY_ORIGIN_MISMATCH"
+    );
+    assert_eq!(by_id(5)["error"]["code"], "RPC_INVALID_PARAMS");
+    assert_eq!(by_id(6)["result"]["outcome"], "safe");
+    assert_eq!(by_id(6)["result"]["operationId"], recovery_operation_id);
+    assert!(frames.iter().any(|frame| {
+        frame["method"] == "remoteConnection/state"
+            && frame["params"]["repositoryId"] == "repo-uuid:C:/wc-remote-recovery"
+            && frame["params"]["state"]["kind"] == "checking"
+            && frame["params"]["state"]["operationId"] == origin_operation_id
+    }));
+    let checking_index = frames
+        .iter()
+        .position(|frame| {
+            frame["method"] == "remoteConnection/state"
+                && frame["params"]["state"]["kind"] == "checking"
+                && frame["params"]["state"]["operationId"] == origin_operation_id
+        })
+        .expect("checking notification");
+    let mutation_response_index = frames
+        .iter()
+        .position(|frame| frame["id"] == 3)
+        .expect("mutation response");
+    let indeterminate_index = frames
+        .iter()
+        .position(|frame| {
+            frame["method"] == "remoteConnection/state"
+                && frame["params"]["state"]["kind"] == "indeterminate"
+        })
+        .expect("indeterminate notification");
+    assert!(checking_index < mutation_response_index);
+    assert!(mutation_response_index < indeterminate_index);
+    assert!(frames.iter().any(|frame| {
+        frame["method"] == "remoteConnection/state"
+            && frame["params"]["state"]["kind"] == "indeterminate"
+            && frame["params"]["state"]["recovery"] == "pending"
+    }));
+    assert!(frames.iter().any(|frame| {
+        frame["method"] == "status/stale"
+            && frame["params"]["reason"] == "remoteRecoverySafeRequiresFullReconcile"
+    }));
+}
+
+#[test]
+fn stdio_backend_reconnect_rebuilds_recovery_lane_before_full_reconcile() {
+    let origin_operation_id = "b1234567-89ab-4def-8123-456789abcdef";
+    let recovery_operation_id = "c1234567-89ab-4def-8123-456789abcdef";
+    let recovery_input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":2,"method":"repository/open","params":{"path":"C:/wc-remote-recovery"}}"#),
+        frame(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "remote/recoverWorkingCopy",
+                "params": {
+                    "repositoryId": "repo-uuid:C:/wc-remote-recovery",
+                    "epoch": 1,
+                    "originOperationId": origin_operation_id,
+                    "operationId": recovery_operation_id,
+                    "timeoutMs": 30_000
+                }
+            })
+            .to_string(),
+        ),
+    ]
+    .concat();
+    let reader = DelayedSecondChunkReader::new(
+        recovery_input,
+        frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
+        Duration::from_millis(40),
+    );
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(
+        reader,
+        &mut output,
+        &FakeBridge,
+        Arc::new(MutationFailureRemoteWorker),
+    )
+    .expect("a fresh daemon must conservatively re-drive recovery after reconnect");
+
+    let frames = decode_frames(&output).expect("responses must remain framed");
+    let recovery = frames
+        .iter()
+        .find(|frame| frame["id"] == 3)
+        .expect("recovery response");
+    assert_eq!(recovery["result"]["outcome"], "safe");
+    assert_eq!(recovery["result"]["operationId"], recovery_operation_id);
+    assert!(frames.iter().any(|frame| {
+        frame["method"] == "status/stale"
+            && frame["params"]["reason"] == "remoteRecoverySafeRequiresFullReconcile"
+    }));
+    assert!(frames.iter().any(|frame| {
+        frame["method"] == "remoteConnection/state"
+            && frame["params"]["state"]["kind"] == "unchecked"
+    }));
+}
+
+#[test]
+fn stdio_recovery_keeps_unrelated_requests_live_and_blocks_close_until_safe() {
+    let path = "C:/wc-remote-recovery-blocking-serviceability";
+    let repository_id = format!("repo-uuid:{path}");
+    let origin_operation_id = "d1234567-89ab-4def-8123-456789abcdef";
+    let recovery_operation_id = "e1234567-89ab-4def-8123-456789abcdef";
+    let control = RecoveryTaskControl {
+        started: Arc::new(AtomicBool::new(false)),
+        release: Arc::new(AtomicBool::new(false)),
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    recovery_task_controls()
+        .lock()
+        .expect("recovery task controls must not be poisoned")
+        .insert(path.to_string(), control.clone());
+
+    let first = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        frame(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"repository/open","params":{"path":path}}).to_string()),
+        remote_recovery_frame(3, &repository_id, origin_operation_id, recovery_operation_id, 30_000),
+    ]
+    .concat();
+    let while_blocked = [
+        frame(r#"{"jsonrpc":"2.0","id":4,"method":"diagnostics/get","params":{}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":5,"method":"repository/open","params":{"path":"C:/unrelated-during-recovery"}}"#),
+        frame(&serde_json::json!({"jsonrpc":"2.0","id":6,"method":"repository/close","params":{"repositoryId":repository_id,"epoch":1}}).to_string()),
+    ]
+    .concat();
+    let after_safe = [
+        frame(&serde_json::json!({"jsonrpc":"2.0","id":7,"method":"repository/close","params":{"repositoryId":repository_id,"epoch":1}}).to_string()),
+        frame(r#"{"jsonrpc":"2.0","id":8,"method":"shutdown","params":{}}"#),
+    ]
+    .concat();
+    let reader = DelayedChunkReader::new(
+        vec![first, while_blocked, after_safe],
+        vec![Duration::from_millis(30), Duration::from_millis(200)],
+    );
+    let release = control.release.clone();
+    let started = control.started.clone();
+    let releaser = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !started.load(Ordering::SeqCst) {
+            assert!(Instant::now() < deadline, "recovery task did not start");
+            thread::yield_now();
+        }
+        thread::sleep(Duration::from_millis(100));
+        release.store(true, Ordering::SeqCst);
+    });
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(
+        reader,
+        &mut output,
+        &FakeBridge,
+        Arc::new(MutationFailureRemoteWorker),
+    )
+    .expect("blocking recovery must not stall unrelated stdio requests");
+    releaser.join().expect("recovery releaser must finish");
+    recovery_task_controls()
+        .lock()
+        .expect("recovery task controls must not be poisoned")
+        .remove(path);
+
+    let frames = decode_frames(&output).expect("responses must remain framed");
+    let response_index = |id: u64| {
+        frames
+            .iter()
+            .position(|frame| frame["id"] == id)
+            .expect("expected response id")
+    };
+    assert!(response_index(4) < response_index(3));
+    assert!(response_index(5) < response_index(3));
+    assert!(response_index(6) < response_index(3));
+    assert_eq!(
+        frames[response_index(4)]["result"]["source"],
+        "subversionr-daemon"
+    );
+    assert_eq!(
+        frames[response_index(5)]["result"]["repositoryId"],
+        "repo-uuid:C:/unrelated-during-recovery"
+    );
+    assert_eq!(
+        frames[response_index(6)]["error"]["code"],
+        "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE"
+    );
+    assert_eq!(frames[response_index(3)]["result"]["outcome"], "safe");
+    assert_eq!(frames[response_index(7)]["result"]["closed"], true);
+    assert!(!control.cancelled.load(Ordering::SeqCst));
+}
+
+#[test]
+fn stdio_matching_cancel_settles_blocking_recovery_as_indeterminate() {
+    let path = "C:/wc-remote-recovery-blocking-cancel";
+    let repository_id = format!("repo-uuid:{path}");
+    let origin_operation_id = "f1234567-89ab-4def-8123-456789abcdef";
+    let recovery_operation_id = "01234567-89ab-4def-8123-456789abcdef";
+    let control = RecoveryTaskControl {
+        started: Arc::new(AtomicBool::new(false)),
+        release: Arc::new(AtomicBool::new(false)),
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    recovery_task_controls()
+        .lock()
+        .expect("recovery task controls must not be poisoned")
+        .insert(path.to_string(), control.clone());
+    let first = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        frame(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"repository/open","params":{"path":path}}).to_string()),
+        remote_recovery_frame(3, &repository_id, origin_operation_id, recovery_operation_id, 30_000),
+    ]
+    .concat();
+    let cancel_and_diagnostics = [
+        frame(r#"{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":3}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":4,"method":"diagnostics/get","params":{}}"#),
+    ]
+    .concat();
+    let reader = DelayedChunkReader::new(
+        vec![
+            first,
+            cancel_and_diagnostics,
+            frame(r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":{}}"#),
+        ],
+        vec![Duration::from_millis(30), Duration::from_millis(100)],
+    );
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(
+        reader,
+        &mut output,
+        &FakeBridge,
+        Arc::new(MutationFailureRemoteWorker),
+    )
+    .expect("matching cancellation must settle recovery without stalling stdio");
+    recovery_task_controls()
+        .lock()
+        .expect("recovery task controls must not be poisoned")
+        .remove(path);
+
+    let frames = decode_frames(&output).expect("responses must remain framed");
+    let recovery = frames
+        .iter()
+        .find(|frame| frame["id"] == 3)
+        .expect("cancelled recovery response");
+    assert_eq!(recovery["result"]["outcome"], "indeterminate");
+    assert_eq!(
+        recovery["result"]["failure"]["reason"],
+        "operationCancelled"
+    );
+    assert!(frames.iter().any(|frame| frame["id"] == 4));
+    assert!(control.cancelled.load(Ordering::SeqCst));
+}
+
+#[test]
+fn stdio_eof_cancels_and_settles_blocking_recovery_without_a_late_response() {
+    let path = "C:/wc-remote-recovery-blocking-eof";
+    let repository_id = format!("repo-uuid:{path}");
+    let control = RecoveryTaskControl {
+        started: Arc::new(AtomicBool::new(false)),
+        release: Arc::new(AtomicBool::new(false)),
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    recovery_task_controls()
+        .lock()
+        .expect("recovery task controls must not be poisoned")
+        .insert(path.to_string(), control.clone());
+    let input = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        frame(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"repository/open","params":{"path":path}}).to_string()),
+        remote_recovery_frame(
+            3,
+            &repository_id,
+            "11234567-89ab-4def-8123-456789abcdef",
+            "21234567-89ab-4def-8123-456789abcdef",
+            30_000,
+        ),
+    ]
+    .concat();
+    let reader = DelayedEofReader::new(input, Duration::from_millis(40));
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(
+        reader,
+        &mut output,
+        &FakeBridge,
+        Arc::new(MutationFailureRemoteWorker),
+    )
+    .expect("EOF must cancel and settle a blocking recovery task");
+    recovery_task_controls()
+        .lock()
+        .expect("recovery task controls must not be poisoned")
+        .remove(path);
+
+    let frames = decode_frames(&output).expect("completed responses must remain framed");
+    assert!(frames.iter().any(|frame| frame["id"] == 1));
+    assert!(frames.iter().any(|frame| frame["id"] == 2));
+    assert!(!frames.iter().any(|frame| frame["id"] == 3));
+    assert!(control.started.load(Ordering::SeqCst));
+    assert!(control.cancelled.load(Ordering::SeqCst));
 }
 
 fn remote_worker_test_failure(code: &str) -> BridgeFailure {
@@ -4136,8 +4644,162 @@ fn remote_worker_test_failure(code: &str) -> BridgeFailure {
     )
 }
 
+fn worker_settlement(
+    effect: RemoteOperationEffect,
+    result: Result<(), BridgeFailure>,
+    worker_was_resumed: bool,
+    cleanup_safe: bool,
+) -> RemoteWorkerSettlement {
+    let remote_failure = result.as_ref().err().map(|failure| {
+        let (category, reason) = match failure.code() {
+            "SUBVERSIONR_REMOTE_WORKER_CANCELLED" => (
+                RemoteFailureCategory::Cancellation,
+                RemoteFailureClass::OperationCancelled,
+            ),
+            "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" => (
+                RemoteFailureCategory::Recovery,
+                RemoteFailureClass::RemoteRecoveryBlocked,
+            ),
+            "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED" => (
+                RemoteFailureCategory::Process,
+                RemoteFailureClass::WorkerContainmentFailed,
+            ),
+            _ => (
+                RemoteFailureCategory::Unknown,
+                RemoteFailureClass::UnknownRemote,
+            ),
+        };
+        RemoteFailure {
+            category,
+            reason,
+            cleanup_appropriate: false,
+        }
+    });
+    RemoteWorkerSettlement {
+        result,
+        remote_failure,
+        effect,
+        worker_was_resumed,
+        execution_origin_known: true,
+        termination: if cleanup_safe {
+            WorkerTerminationDisposition::NotRequired
+        } else {
+            WorkerTerminationDisposition::Blocked
+        },
+        job_descendants_zero: cleanup_safe,
+        temp_root_removed: cleanup_safe,
+    }
+}
+
 fn remote_checkout_frame(id: u64, operation_id: &str, target_path: &str) -> Vec<u8> {
     remote_checkout_frame_with_timeout(id, operation_id, target_path, 30_000)
+}
+
+fn remote_update_frame(id: u64, operation_id: &str, timeout_ms: u64) -> Vec<u8> {
+    frame(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "operation/run",
+            "params": {
+                "repositoryId": "repo-uuid:C:/wc-remote-recovery",
+                "epoch": 1,
+                "kind": "update",
+                "options": {
+                    "version": 1,
+                    "path": ".",
+                    "revision": "head",
+                    "depth": "workingCopy",
+                    "depthIsSticky": false,
+                    "ignoreExternals": true
+                },
+                "remote": {
+                    "version": 1,
+                    "operationId": operation_id,
+                    "intent": "foreground",
+                    "interaction": "allowed",
+                    "timeoutMs": timeout_ms,
+                    "workspaceTrust": "trusted",
+                    "trustEpoch": 1,
+                    "profile": {
+                        "schema": "subversionr.remote-profile.v1",
+                        "profileId": "stdio-recovery-test",
+                        "authority": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 },
+                        "serverAuth": "anonymous",
+                        "serverAccount": "none",
+                        "serverCredentialPersistence": "secretStorage",
+                        "tls": { "trust": "windowsRootsThenBroker" },
+                        "proxy": "none",
+                        "ssh": "none",
+                        "redirectPolicy": "rejectAll"
+                    },
+                    "expectedOrigin": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 }
+                }
+            }
+        })
+        .to_string(),
+    )
+}
+
+fn remote_recovery_frame(
+    id: u64,
+    repository_id: &str,
+    origin_operation_id: &str,
+    operation_id: &str,
+    timeout_ms: u64,
+) -> Vec<u8> {
+    frame(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "remote/recoverWorkingCopy",
+            "params": {
+                "repositoryId": repository_id,
+                "epoch": 1,
+                "originOperationId": origin_operation_id,
+                "operationId": operation_id,
+                "timeoutMs": timeout_ms
+            }
+        })
+        .to_string(),
+    )
+}
+
+fn remote_status_frame(id: u64, operation_id: &str, timeout_ms: u64) -> Vec<u8> {
+    frame(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "status/checkRemote",
+            "params": {
+                "repositoryId": "repo-uuid:C:/wc-remote-recovery",
+                "epoch": 1,
+                "remote": {
+                    "version": 1,
+                    "operationId": operation_id,
+                    "intent": "foreground",
+                    "interaction": "allowed",
+                    "timeoutMs": timeout_ms,
+                    "workspaceTrust": "trusted",
+                    "trustEpoch": 1,
+                    "profile": {
+                        "schema": "subversionr.remote-profile.v1",
+                        "profileId": "stdio-status-worker-test",
+                        "authority": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 },
+                        "serverAuth": "anonymous",
+                        "serverAccount": "none",
+                        "serverCredentialPersistence": "secretStorage",
+                        "tls": { "trust": "windowsRootsThenBroker" },
+                        "proxy": "none",
+                        "ssh": "none",
+                        "redirectPolicy": "rejectAll"
+                    },
+                    "expectedOrigin": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 }
+                }
+            }
+        })
+        .to_string(),
+    )
 }
 
 fn remote_checkout_frame_with_timeout(
@@ -4221,6 +4883,42 @@ struct DelayedSecondChunkReader {
     second: io::Cursor<Vec<u8>>,
     second_delay: Duration,
     delayed: bool,
+}
+
+struct DelayedChunkReader {
+    chunks: Vec<io::Cursor<Vec<u8>>>,
+    delays: Vec<Duration>,
+    next_chunk: usize,
+}
+
+impl DelayedChunkReader {
+    fn new(chunks: Vec<Vec<u8>>, delays: Vec<Duration>) -> Self {
+        assert_eq!(chunks.len(), delays.len() + 1);
+        Self {
+            chunks: chunks.into_iter().map(io::Cursor::new).collect(),
+            delays,
+            next_chunk: 0,
+        }
+    }
+}
+
+impl Read for DelayedChunkReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if self.next_chunk >= self.chunks.len() {
+                return Ok(0);
+            }
+            let read = self.chunks[self.next_chunk].read(buffer)?;
+            if read > 0 {
+                return Ok(read);
+            }
+            let completed = self.next_chunk;
+            self.next_chunk += 1;
+            if let Some(delay) = self.delays.get(completed) {
+                thread::sleep(*delay);
+            }
+        }
+    }
 }
 
 impl DelayedSecondChunkReader {

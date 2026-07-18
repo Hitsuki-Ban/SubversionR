@@ -12,13 +12,13 @@ describe("StatusRemoteCheckRpcClient", () => {
     const client = new StatusRemoteCheckRpcClient(sender);
 
     const delta = await client.checkRemoteStatus(
-      { repositoryId: "repo-uuid:C:/wc", epoch: 7 },
+      request(),
       { signal },
     );
 
     expect(sender.sendRequest).toHaveBeenCalledWith(
       "status/checkRemote",
-      { repositoryId: "repo-uuid:C:/wc", epoch: 7 },
+      request(),
       { signal },
     );
     expect(delta.remoteUpsert.map((entry) => entry.path)).toEqual(["src/incoming.c"]);
@@ -42,11 +42,40 @@ describe("StatusRemoteCheckRpcClient", () => {
   ])("rejects non-authoritative remote response: %s", async (_label, override) => {
     const client = new StatusRemoteCheckRpcClient(senderReturning({ ...remoteDelta(), ...override }));
 
-    await expect(client.checkRemoteStatus({ repositoryId: "repo-uuid:C:/wc", epoch: 7 })).rejects.toBeInstanceOf(
+    await expect(client.checkRemoteStatus(request())).rejects.toBeInstanceOf(
       StatusRemoteCheckRequestError,
     );
   });
 });
+
+function request() {
+  return {
+    repositoryId: "repo-uuid:C:/wc",
+    epoch: 7,
+    remote: {
+      version: 1 as const,
+      operationId: "00000000-0000-4000-8000-000000000001",
+      intent: "foreground" as const,
+      interaction: "allowed" as const,
+      timeoutMs: 30_000,
+      workspaceTrust: "trusted" as const,
+      trustEpoch: 1,
+      profile: {
+        schema: "subversionr.remote-profile.v1" as const,
+        profileId: "test",
+        authority: { scheme: "https" as const, canonicalHost: "svn.example.test", effectivePort: 443 },
+        serverAuth: "anonymous" as const,
+        serverAccount: "none" as const,
+        serverCredentialPersistence: "secretStorage" as const,
+        tls: { trust: "windowsRootsThenBroker" as const },
+        proxy: "none" as const,
+        ssh: "none" as const,
+        redirectPolicy: "rejectAll" as const,
+      },
+      expectedOrigin: { scheme: "https" as const, canonicalHost: "svn.example.test", effectivePort: 443 },
+    },
+  };
+}
 
 function senderReturning(response: unknown): JsonRpcSender & { sendRequest: ReturnType<typeof vi.fn> } {
   return { sendRequest: vi.fn().mockResolvedValue(response) };

@@ -11,7 +11,7 @@ import {
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const MINIMUM_PROTOCOL_MINOR = 33;
+const MINIMUM_PROTOCOL_MINOR = 34;
 const EXPECTED_CACHE_SCHEMA_ID = "subversionr.cache.v1";
 const EXPECTED_CACHE_SCHEMA_VERSION = 1;
 const EXPECTED_CACHE_SCHEMA_ROLLBACK = "delete-and-reconcile";
@@ -62,6 +62,7 @@ const REQUIRED_CAPABILITIES: Array<keyof InitializeResult["capabilities"]> = [
   "trustedConfigSnapshot",
   "remoteWorkerIsolation",
   "credentialLeaseSettlement",
+  "remoteConnectionState",
 ];
 
 export type WorkspaceTrustState = "trusted" | "untrusted";
@@ -172,6 +173,7 @@ export interface InitializeResult {
     trustedConfigSnapshot: boolean;
     remoteWorkerIsolation: boolean;
     credentialLeaseSettlement: boolean;
+    remoteConnectionState: boolean;
   };
   acknowledgedTrustEpoch: number;
 }
@@ -179,6 +181,7 @@ export interface InitializeResult {
 export interface BackendConnection extends JsonRpcSender {
   readonly initializeResult: InitializeResult;
   isRemoteSubmissionEnabled(): boolean;
+  currentRemoteTrustEpoch(): number;
   updateWorkspaceTrust(trusted: boolean): Promise<number>;
   onDidTerminate(listener: (event: BackendConnectionTermination) => void): BackendConnectionTerminationSubscription;
   shutdown(): Promise<void>;
@@ -639,6 +642,10 @@ function parseInitializeResult(rawResult: unknown): InitializeResult {
         capabilities.credentialLeaseSettlement,
         "capabilities.credentialLeaseSettlement",
       ),
+      remoteConnectionState: requireBoolean(
+        capabilities.remoteConnectionState,
+        "capabilities.remoteConnectionState",
+      ),
     },
   };
 }
@@ -781,6 +788,10 @@ class BackendConnectionImpl implements BackendConnection {
 
   public isRemoteSubmissionEnabled(): boolean {
     return this.remoteSubmissionEnabled && !this.disposed;
+  }
+
+  public currentRemoteTrustEpoch(): number {
+    return this.currentTrustEpoch;
   }
 
   public updateWorkspaceTrust(trusted: boolean): Promise<number> {

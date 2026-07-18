@@ -95,7 +95,156 @@ pub struct Capabilities {
     pub remote_operation_envelope: bool,
     pub trusted_config_snapshot: bool,
     pub remote_worker_isolation: bool,
+    pub remote_connection_state: bool,
     pub credential_lease_settlement: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteFailureClass {
+    NetworkDns,
+    NetworkRefused,
+    NetworkTimeout,
+    ProxyAuthenticationRequired,
+    ProxyUnreachable,
+    TlsUntrusted,
+    TlsChanged,
+    TlsProtocol,
+    AuthenticationRequired,
+    AuthorizationDenied,
+    SshHostKeyRequired,
+    SshHostKeyChanged,
+    SshTunnelFailed,
+    OperationCancelled,
+    OperationDeadlineExceeded,
+    RedirectRejected,
+    CrossAuthorityRejected,
+    CredentialRejected,
+    SshExecutableInvalid,
+    SshProvenanceInvalid,
+    SshTunnelCleanupFailed,
+    WorkerContainmentFailed,
+    RemoteRecoveryBlocked,
+    RemoteConfigurationInvalid,
+    RemoteCapabilityUnsupported,
+    RemoteOperationIndeterminate,
+    UnknownRemote,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteFailureCategory {
+    Network,
+    Proxy,
+    Tls,
+    Authentication,
+    Authorization,
+    Ssh,
+    Cancellation,
+    Deadline,
+    Policy,
+    Credential,
+    Process,
+    Recovery,
+    Configuration,
+    Capability,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RemoteFailure {
+    pub category: RemoteFailureCategory,
+    pub reason: RemoteFailureClass,
+    pub cleanup_appropriate: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteAttentionReason {
+    AuthRequired,
+    CertificateRequired,
+    HostKeyRequired,
+    ConfigurationInvalid,
+    UnsupportedCapability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteUnreachableReason {
+    Dns,
+    Refused,
+    Proxy,
+    Timeout,
+    Tunnel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteIndeterminateReason {
+    CancelledAfterMutation,
+    WorkerTerminated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteRecoveryState {
+    NotRequired,
+    Pending,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RemoteConnectionState {
+    Unchecked,
+    Checking {
+        operation_id: String,
+        started_at: String,
+    },
+    Online {
+        transport: RemoteScheme,
+        checked_at: String,
+    },
+    Attention {
+        reason: RemoteAttentionReason,
+    },
+    Unreachable {
+        reason: RemoteUnreachableReason,
+    },
+    Indeterminate {
+        reason: RemoteIndeterminateReason,
+        origin_operation_id: String,
+        recovery: RemoteRecoveryState,
+        cleanup_appropriate: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "outcome",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RemoteRecoveryOutcome {
+    Safe {
+        operation_id: String,
+        completed_at: String,
+    },
+    Indeterminate {
+        operation_id: String,
+        failure: RemoteFailure,
+    },
+    Blocked {
+        operation_id: String,
+        failure: RemoteFailure,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -949,7 +1098,7 @@ impl InitializeResponse {
         Self {
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 33,
+                minor: 34,
             },
             backend_version,
             bridge_version,
@@ -1016,6 +1165,7 @@ pub fn default_capabilities() -> Capabilities {
         remote_operation_envelope: true,
         trusted_config_snapshot: true,
         remote_worker_isolation: false,
+        remote_connection_state: false,
         credential_lease_settlement: false,
     }
 }

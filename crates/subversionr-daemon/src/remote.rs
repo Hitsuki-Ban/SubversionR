@@ -5,8 +5,9 @@ use std::{
 
 use serde_json::{Value, json};
 use subversionr_protocol::{
-    CanonicalEndpoint, NoProxyProfile, NoServerAccount, NoSshProfile, RedirectPolicy,
-    RemoteAccessProfileSnapshot, RemoteInteraction, RemoteOperationEnvelope, RemoteOperationIntent,
+    CanonicalEndpoint, NoProxyProfile, NoServerAccount, NoSshProfile, OperationFailureCause,
+    RedirectPolicy, RemoteAccessProfileSnapshot, RemoteFailure, RemoteFailureCategory,
+    RemoteFailureClass, RemoteInteraction, RemoteOperationEnvelope, RemoteOperationIntent,
     RemoteScheme, RemoteServerAuth, ServerAccountSelection, ServerAccountSnapshot,
     SshProfileSnapshot, TlsTrustPolicy,
 };
@@ -91,6 +92,9 @@ pub(crate) struct ValidatedRemoteOperation {
 pub(crate) struct RemoteLaunchPlan {
     pub(crate) request_id: Value,
     pub(crate) lane_key: String,
+    pub(crate) repository_id: Option<String>,
+    pub(crate) epoch: Option<u64>,
+    pub(crate) effect: crate::RemoteOperationEffect,
     pub(crate) operation: ValidatedRemoteOperation,
 }
 
@@ -226,6 +230,123 @@ pub(crate) fn unsupported_transport(endpoint: &CanonicalEndpoint) -> BridgeFailu
         json!({ "scheme": scheme_name(endpoint.scheme) }),
         false,
     )
+}
+
+pub(crate) fn classify_remote_failure(failure: &BridgeFailure) -> RemoteFailure {
+    if failure
+        .diagnostics
+        .as_ref()
+        .is_some_and(|diagnostics| diagnostics.cause == OperationFailureCause::AuthenticationFailed)
+    {
+        return RemoteFailure {
+            category: RemoteFailureCategory::Authentication,
+            reason: RemoteFailureClass::AuthenticationRequired,
+            cleanup_appropriate: false,
+        };
+    }
+    let (category, reason) = match failure.code() {
+        "SUBVERSIONR_REMOTE_WORKER_CANCELLED" | "SUBVERSIONR_CREDENTIAL_CANCELLED" => (
+            RemoteFailureCategory::Cancellation,
+            RemoteFailureClass::OperationCancelled,
+        ),
+        "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" | "SUBVERSIONR_CREDENTIAL_TIMEOUT" => (
+            RemoteFailureCategory::Deadline,
+            RemoteFailureClass::OperationDeadlineExceeded,
+        ),
+        "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" => (
+            RemoteFailureCategory::Recovery,
+            RemoteFailureClass::RemoteRecoveryBlocked,
+        ),
+        "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED" => (
+            RemoteFailureCategory::Capability,
+            RemoteFailureClass::RemoteCapabilityUnsupported,
+        ),
+        "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH" => (
+            RemoteFailureCategory::Policy,
+            RemoteFailureClass::CrossAuthorityRejected,
+        ),
+        "SUBVERSIONR_REMOTE_REDIRECT_REJECTED" => (
+            RemoteFailureCategory::Policy,
+            RemoteFailureClass::RedirectRejected,
+        ),
+        "SUBVERSIONR_REMOTE_WORKER_CRASHED"
+        | "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED"
+        | "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
+        | "SUBVERSIONR_REMOTE_WORKER_START_FAILED" => (
+            RemoteFailureCategory::Process,
+            RemoteFailureClass::WorkerContainmentFailed,
+        ),
+        "SUBVERSIONR_CREDENTIAL_ACCOUNT_UNAVAILABLE" | "SUBVERSIONR_CREDENTIAL_NON_INTERACTIVE" => {
+            (
+                RemoteFailureCategory::Authentication,
+                RemoteFailureClass::AuthenticationRequired,
+            )
+        }
+        "SUBVERSIONR_CREDENTIAL_LEASE_UNKNOWN"
+        | "SUBVERSIONR_CREDENTIAL_LEASE_FOREIGN"
+        | "SUBVERSIONR_CREDENTIAL_LEASE_EXPIRED"
+        | "SUBVERSIONR_CREDENTIAL_SETTLEMENT_CONFLICT"
+        | "SUBVERSIONR_CREDENTIAL_RETRY_INVALID"
+        | "SUBVERSIONR_CREDENTIAL_SECRET_INVALID" => (
+            RemoteFailureCategory::Credential,
+            RemoteFailureClass::CredentialRejected,
+        ),
+        "SUBVERSIONR_CREDENTIAL_LEGACY_BLOCKED"
+        | "SUBVERSIONR_CREDENTIAL_LEGACY_CLEAR_DECLINED"
+        | "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED"
+        | "SUBVERSIONR_CREDENTIAL_STORAGE_INTEGRITY"
+        | "SUBVERSIONR_CREDENTIAL_UNTRUSTED_WORKSPACE"
+        | "SUBVERSIONR_REMOTE_CONFIG_UNAVAILABLE"
+        | "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED"
+        | "SUBVERSIONR_REMOTE_CONFIG_CREATE_NULL"
+        | "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_FAILED"
+        | "SUBVERSIONR_REMOTE_CONFIG_INSPECTION_INVALID"
+        | "SUBVERSIONR_REMOTE_CONTRACT_INVALID"
+        | "SUBVERSIONR_REMOTE_ENVELOPE_FORBIDDEN"
+        | "SUBVERSIONR_REMOTE_ENVELOPE_REQUIRED"
+        | "SUBVERSIONR_REMOTE_TRUST_EPOCH_EXHAUSTED"
+        | "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH"
+        | "SUBVERSIONR_REMOTE_WORKER_CONFIGURATION_INVALID" => (
+            RemoteFailureCategory::Configuration,
+            RemoteFailureClass::RemoteConfigurationInvalid,
+        ),
+        "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+        | "SUBVERSIONR_REMOTE_PROXY_UNSUPPORTED"
+        | "SUBVERSIONR_REMOTE_REDIRECT_POLICY_UNSUPPORTED"
+        | "SUBVERSIONR_REMOTE_SSH_PROFILE_UNSUPPORTED"
+        | "SUBVERSIONR_REMOTE_TLS_POLICY_UNSUPPORTED" => (
+            RemoteFailureCategory::Capability,
+            RemoteFailureClass::RemoteCapabilityUnsupported,
+        ),
+        "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" => (
+            RemoteFailureCategory::Recovery,
+            RemoteFailureClass::RemoteOperationIndeterminate,
+        ),
+        _ => (
+            RemoteFailureCategory::Unknown,
+            RemoteFailureClass::UnknownRemote,
+        ),
+    };
+    RemoteFailure {
+        category,
+        reason,
+        cleanup_appropriate: false,
+    }
+}
+
+pub(crate) fn attach_remote_failure(mut failure: BridgeFailure) -> BridgeFailure {
+    let remote_failure = classify_remote_failure(&failure);
+    let mut args = if remote_failure.reason == RemoteFailureClass::UnknownRemote {
+        serde_json::Map::new()
+    } else {
+        failure.args.as_object().cloned().unwrap_or_default()
+    };
+    args.insert(
+        "remoteFailure".to_string(),
+        serde_json::to_value(remote_failure).expect("remote failure taxonomy must serialize"),
+    );
+    failure.args = Value::Object(args);
+    failure
 }
 
 fn validate_envelope(
@@ -538,7 +659,7 @@ fn parse_authority(authority: &str, scheme: RemoteScheme) -> Result<(String, u16
     Ok((host.to_ascii_lowercase(), port))
 }
 
-fn is_canonical_uuid(value: &str) -> bool {
+pub(crate) fn is_canonical_uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| match index {
             8 | 13 | 18 | 23 => byte == b'-',
@@ -574,4 +695,84 @@ fn trust_epoch_mismatch() -> BridgeFailure {
         json!({}),
         false,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use subversionr_protocol::{
+        OperationFailureDiagnostics, SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
+    };
+
+    #[test]
+    fn remote_failure_mapping_uses_owned_symbols_and_redacts_unknown_args() {
+        let auth = BridgeFailure::new(
+            "SVN_AUTHN_FAILED",
+            "native",
+            "error.native.operationFailed",
+            json!({ "path": "must-not-survive-unknown-mapping" }),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause: OperationFailureCause::AuthenticationFailed,
+            svn: SvnErrorDiagnostics {
+                entries: vec![SvnErrorDiagnosticEntry {
+                    code: 170001,
+                    name: "SVN_ERR_AUTHN_FAILED".to_string(),
+                }],
+                truncated: false,
+            },
+        });
+        assert_eq!(
+            classify_remote_failure(&auth).reason,
+            RemoteFailureClass::AuthenticationRequired
+        );
+
+        let unknown = attach_remote_failure(BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_FUTURE_CODE",
+            "native",
+            "error.native.operationFailed",
+            json!({
+                "realm": "private realm",
+                "url": "https://user:secret@example.invalid/repository"
+            }),
+            false,
+        ));
+        assert_eq!(
+            unknown.safe_args(),
+            &json!({
+                "remoteFailure": {
+                    "category": "unknown",
+                    "reason": "unknownRemote",
+                    "cleanupAppropriate": false
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn owned_worker_outcomes_map_without_message_or_stderr_parsing() {
+        let cases = [
+            (
+                "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT",
+                RemoteFailureClass::OperationDeadlineExceeded,
+            ),
+            (
+                "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+                RemoteFailureClass::OperationCancelled,
+            ),
+            (
+                "SUBVERSIONR_REMOTE_WORKER_CRASHED",
+                RemoteFailureClass::WorkerContainmentFailed,
+            ),
+            (
+                "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",
+                RemoteFailureClass::RemoteCapabilityUnsupported,
+            ),
+        ];
+        for (code, expected) in cases {
+            let failure = BridgeFailure::new(code, "owned", "error.remote.owned", json!({}), false);
+            assert_eq!(classify_remote_failure(&failure).reason, expected);
+        }
+    }
 }

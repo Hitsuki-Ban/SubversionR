@@ -49,6 +49,20 @@ describe("installed remote worker report", () => {
     });
   });
 
+  it("fails closed when remote connection state capability is explicitly unavailable", async () => {
+    await expect(
+      collectInstalledRemoteWorkerReport({
+        expectedToken: "token-1",
+        request: { token: "token-1" },
+        targetPath: "C:/evidence/checkout",
+        initialize: vi.fn().mockResolvedValue(connection({ remoteConnectionState: false })),
+        collectCredentialLeaseReport: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      code: "SUBVERSIONR_INSTALLED_REMOTE_WORKER_CAPABILITY_UNAVAILABLE",
+    });
+  });
+
   it("proves worker completion, transport boundary, and a subsequent diagnostics request", async () => {
     const sendRequest = vi.fn(async (method: string, params: unknown): Promise<unknown> => {
       if (method === "repository/checkout") {
@@ -73,8 +87,8 @@ describe("installed remote worker report", () => {
       expect(method).toBe("diagnostics/get");
       expect(params).toEqual({});
       return {
-        protocol: { major: 1, minor: 33 },
-        capabilities: { remoteWorkerIsolation: true, credentialLeaseSettlement: true },
+        protocol: { major: 1, minor: 34 },
+        capabilities: { remoteWorkerIsolation: true, credentialLeaseSettlement: true, remoteConnectionState: true },
       };
     });
 
@@ -91,11 +105,24 @@ describe("installed remote worker report", () => {
     });
 
     expect(report).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: "subversionr.installedRemoteWorkerReport",
-      protocol: { major: 1, minor: 33 },
+      protocol: { major: 1, minor: 34 },
       remoteWorkerIsolation: true,
       credentialLeaseSettlement: true,
+      remoteConnectionState: {
+        stateUnion: ["unchecked", "checking", "online", "attention", "unreachable", "indeterminate"],
+        staleIncomingPreserved: true,
+        localProjectionUnchanged: true,
+        separateRecoveryOperation: true,
+        separateRecoveryDeadline: true,
+        recoveryGateEnforced: true,
+        terminalBlockedStateProjected: true,
+        cancellationSettledWithoutReprompt: true,
+        unknownFailureRedacted: true,
+        unrelatedRepositoryUnchanged: true,
+        localEventZeroNetwork: true,
+      },
       transportResult: "unsupportedAfterWorker",
       sameLaneSubsequent: true,
       subsequentDiagnostics: true,
@@ -151,15 +178,17 @@ function connection(
   overrides: {
     capability?: boolean;
     credentialLeaseSettlement?: boolean;
+    remoteConnectionState?: boolean;
     sendRequest?: (method: string, params: unknown) => Promise<unknown>;
   } = {},
 ): Pick<BackendConnection, "initializeResult" | "isRemoteSubmissionEnabled" | "sendRequest"> {
   return {
     initializeResult: {
-      protocol: { major: 1, minor: 33 },
+      protocol: { major: 1, minor: 34 },
       capabilities: {
         remoteWorkerIsolation: overrides.capability ?? true,
         credentialLeaseSettlement: overrides.credentialLeaseSettlement ?? true,
+        remoteConnectionState: overrides.remoteConnectionState ?? true,
       },
       acknowledgedTrustEpoch: 1,
     } as BackendConnection["initializeResult"],

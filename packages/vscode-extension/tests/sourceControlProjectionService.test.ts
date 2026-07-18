@@ -218,6 +218,38 @@ describe("SourceControlProjectionService", () => {
     expect(service.getProjection("repo-uuid:C:/wc")).toBeUndefined();
     expect(presenter.unregisterRepository).toHaveBeenCalledWith("repo-uuid:C:/wc");
   });
+
+  it("publishes remote state without changing the local projection generation or count", () => {
+    const presenter = fakePresenter();
+    const service = new SourceControlProjectionService(sourceControlResourceStore(), presenter);
+    const events: unknown[] = [];
+    service.onDidChangeProjection((event) => events.push(event));
+    service.registerRepository(repository());
+    const before = service.applySnapshot(snapshotResponse({ generation: 12 }));
+
+    service.updateRemoteConnectionState({
+      kind: "unreachable",
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      reason: "timeout",
+      incoming: { kind: "stale" },
+      recovery: { kind: "notRequired" },
+      lastFailure: {
+        reason: "networkTimeout",
+        cleanupAppropriate: false,
+        occurredAt: "2026-07-18T01:00:00.000Z",
+      },
+    });
+
+    expect(service.getProjection("repo-uuid:C:/wc")).toEqual(before);
+    expect(presenter.updateRemoteConnectionState).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toEqual({
+      kind: "remoteStateUpdated",
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      state: "unreachable",
+    });
+  });
 });
 
 function sourceControlResourceStore(): SourceControlResourceStore {
@@ -232,12 +264,14 @@ function sourceControlResourceStore(): SourceControlResourceStore {
 function fakePresenter(): SourceControlProjectionPresenter & {
   registerRepository: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["registerRepository"]>>;
   updateRepository: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["updateRepository"]>>;
+  updateRemoteConnectionState: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["updateRemoteConnectionState"]>>;
   unregisterRepository: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["unregisterRepository"]>>;
   isCurrentResourceState: ReturnType<typeof vi.fn<SourceControlProjectionPresenter["isCurrentResourceState"]>>;
 } {
   return {
     registerRepository: vi.fn<SourceControlProjectionPresenter["registerRepository"]>(),
     updateRepository: vi.fn<SourceControlProjectionPresenter["updateRepository"]>(),
+    updateRemoteConnectionState: vi.fn<SourceControlProjectionPresenter["updateRemoteConnectionState"]>(),
     unregisterRepository: vi.fn<SourceControlProjectionPresenter["unregisterRepository"]>(),
     isCurrentResourceState: vi.fn<SourceControlProjectionPresenter["isCurrentResourceState"]>(() => false),
   };

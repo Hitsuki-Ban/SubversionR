@@ -12,11 +12,11 @@ mod stdio;
 pub use bridge::{
     AddOperationRequest, AuthRequestBroker, BranchCreateOperationRequest,
     BranchCreateOperationResult, BridgeApi, BridgeCancellationToken, BridgeFailure, BridgeInfo,
-    ChangelistClearOperationRequest, ChangelistSetOperationRequest, CleanupOperationRequest,
-    CommitOperationRequest, CommitOperationResult, ContentBlob, HistoryBlameRequest,
-    HistoryBlameResult, HistoryLogRequest, HistoryLogResult, LockOperationRequest,
-    MergeOperationRequest, MoveOperationRequest, NeverCancelled, OperationResult,
-    PropertiesListResult, PropertyDeleteOperationRequest, PropertyEntry,
+    BridgeRecoveryTask, ChangelistClearOperationRequest, ChangelistSetOperationRequest,
+    CleanupOperationRequest, CommitOperationRequest, CommitOperationResult, ContentBlob,
+    HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
+    LockOperationRequest, MergeOperationRequest, MoveOperationRequest, NeverCancelled,
+    OperationResult, PropertiesListResult, PropertyDeleteOperationRequest, PropertyEntry,
     PropertySetOperationRequest, RelocateOperationRequest, RemoteConfigPlan, RemoteConfigScheme,
     RemoteConfigServerAuth, RemoveOperationRequest, RepositoryCheckoutRequest,
     RepositoryCheckoutResult, ResolveOperationRequest, RevertOperationRequest,
@@ -26,7 +26,8 @@ pub use bridge::{
 pub use native::{NativeBridge, NativeBridgeLoadError, RemoteNativeBridge};
 pub use remote_worker::{
     InlineRemoteWorkerSupervisor, ProcessRemoteWorkerSupervisor, RemoteCredentialProbeScenario,
-    RemoteWorkerSupervisor, remote_worker_control_channel_is_private,
+    RemoteOperationEffect, RemoteWorkerSettlement, RemoteWorkerSupervisor,
+    WorkerTerminationDisposition, remote_worker_control_channel_is_private,
     run_private_credential_provider_probe, run_remote_worker,
 };
 pub use state::DaemonState;
@@ -44,6 +45,7 @@ pub struct DispatchResult {
     response: Value,
     notifications: Vec<Value>,
     remote_launch: Option<remote::RemoteLaunchPlan>,
+    remote_recovery_launch: Option<state::RemoteRecoveryLaunchPlan>,
 }
 
 impl DispatchResult {
@@ -61,6 +63,12 @@ impl DispatchResult {
 
     pub(crate) fn take_remote_launch(&mut self) -> Option<remote::RemoteLaunchPlan> {
         self.remote_launch.take()
+    }
+
+    pub(crate) fn take_remote_recovery_launch(
+        &mut self,
+    ) -> Option<state::RemoteRecoveryLaunchPlan> {
+        self.remote_recovery_launch.take()
     }
 }
 
@@ -167,6 +175,7 @@ impl From<(DispatchOutcome, Value)> for DispatchResult {
             response,
             notifications: Vec::new(),
             remote_launch: None,
+            remote_recovery_launch: None,
         }
     }
 }

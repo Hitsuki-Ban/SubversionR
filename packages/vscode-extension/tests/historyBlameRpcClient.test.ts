@@ -314,6 +314,7 @@ function fakeBackendConnection(result: unknown): BackendConnection & {
     ...sender,
     initializeResult: {} as BackendConnection["initializeResult"],
     isRemoteSubmissionEnabled: vi.fn(() => true),
+    currentRemoteTrustEpoch: vi.fn(() => 1),
     updateWorkspaceTrust: vi.fn(async () => 2),
     onDidTerminate: vi.fn(() => ({ dispose: vi.fn() })),
     shutdown: vi.fn(async () => {}),

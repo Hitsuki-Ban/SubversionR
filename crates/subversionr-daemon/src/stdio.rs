@@ -15,13 +15,15 @@ use sha2::{Digest, Sha256};
 use subversionr_protocol::{
     CertificateTrustError, CertificateTrustRequest, CertificateTrustResponse, CredentialError,
     CredentialRequest, CredentialResponse, CredentialSettlementAck, CredentialSettlementRequest,
+    RemoteFailure, RemoteFailureCategory, RemoteFailureClass,
 };
 
 use crate::remote::{RemoteLaunchPlan, unsupported_transport};
 use crate::{
-    AuthRequestBroker, BridgeApi, BridgeCancellationToken, BridgeFailure, DaemonState,
-    DispatchOutcome, InlineRemoteWorkerSupervisor, JsonRpcRequest, RemoteWorkerSupervisor,
-    UnavailableBridge, bridge_error, rpc_error,
+    AuthRequestBroker, BridgeApi, BridgeCancellationToken, BridgeFailure, BridgeRecoveryTask,
+    DaemonState, DispatchOutcome, InlineRemoteWorkerSupervisor, JsonRpcRequest,
+    RemoteWorkerSettlement, RemoteWorkerSupervisor, UnavailableBridge,
+    WorkerTerminationDisposition, bridge_error, rpc_error,
 };
 
 const MAX_JSON_RPC_FRAME_BYTES: usize = 4 * 1024 * 1024;
@@ -57,7 +59,7 @@ where
 {
     let mut frames = StdioFrameReceiver::spawn(reader, remote_worker.clone())?;
     let mut state = DaemonState::with_remote_worker(remote_worker.clone());
-    let (worker_sender, worker_receiver) = mpsc::channel::<RemoteWorkerCompletion>();
+    let (completion_sender, completion_receiver) = mpsc::channel::<AsyncRemoteCompletion>();
     let (broker_sender, broker_receiver) = mpsc::channel::<RemoteBrokerCall>();
     let mut pending = BTreeMap::<String, PendingRemoteRequest>::new();
     let mut pending_broker = BTreeMap::<String, PendingRemoteBroker>::new();
@@ -77,9 +79,9 @@ where
                 &mut writer,
             )?;
         }
-        while let Ok(completion) = worker_receiver.try_recv() {
+        while let Ok(completion) = completion_receiver.try_recv() {
             let connection_terminal = terminal || frames.connection_terminal();
-            settle_remote_completion(
+            settle_async_remote_completion(
                 &mut state,
                 &mut frames,
                 &mut pending,
@@ -98,8 +100,8 @@ where
             if pending.is_empty() {
                 break;
             }
-            match worker_receiver.recv_timeout(Duration::from_millis(10)) {
-                Ok(completion) => settle_remote_completion(
+            match completion_receiver.recv_timeout(Duration::from_millis(10)) {
+                Ok(completion) => settle_async_remote_completion(
                     &mut state,
                     &mut frames,
                     &mut pending,
@@ -111,7 +113,7 @@ where
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err(io::Error::other(
-                        "remote worker completion channel closed with pending operations",
+                        "remote completion channel closed with pending operations",
                     ));
                 }
             }
@@ -163,19 +165,32 @@ where
         if let Some(launch) = result.take_remote_launch() {
             let operation_id = launch.operation.envelope.operation_id.clone();
             if frames.connection_terminal() {
-                state.settle_remote_launch(&launch.lane_key, &operation_id, false);
+                let settlement = RemoteWorkerSettlement::pre_launch(
+                    launch.effect,
+                    Err(BridgeFailure::new(
+                        "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
+                        "state",
+                        "error.remote.workerDisconnected",
+                        json!({}),
+                        false,
+                    )),
+                );
+                let _ = state.settle_remote_launch(&launch.lane_key, &operation_id, &settlement);
                 drop(active_cancellation);
                 continue;
             }
+            for notification in result.notifications() {
+                write_content_length_frame(&mut writer, notification)?;
+            }
+            writer.flush()?;
             let pending_request = PendingRemoteRequest {
                 _cancellation: active_cancellation,
-                notifications: result.notifications().to_vec(),
             };
             match spawn_remote_worker(
                 remote_worker.clone(),
                 launch,
                 cancellation,
-                worker_sender.clone(),
+                completion_sender.clone(),
                 broker_sender.clone(),
             ) {
                 Ok(()) => {
@@ -183,15 +198,64 @@ where
                 }
                 Err(error) => {
                     drop(pending_request);
-                    state.settle_remote_launch(
+                    let settlement = RemoteWorkerSettlement::pre_launch(
+                        error.effect,
+                        Err(BridgeFailure::new(
+                            "SUBVERSIONR_REMOTE_WORKER_START_FAILED",
+                            "process",
+                            "error.remote.workerStartFailed",
+                            json!({}),
+                            false,
+                        )),
+                    );
+                    let settlement_override = state.settle_remote_launch(
                         error.lane_key.as_str(),
                         error.operation_id.as_str(),
-                        false,
+                        &settlement,
                     );
-                    write_content_length_frame(
+                    write_remote_worker_spawn_failure_frames(
                         &mut writer,
-                        &remote_worker_start_error_response(error.request_id),
+                        remote_worker_start_error_response(error.request_id, settlement_override),
+                        state.take_pending_notifications(),
                     )?;
+                }
+            }
+            continue;
+        }
+        if let Some(launch) = result.take_remote_recovery_launch() {
+            let operation_id = launch.operation_id.clone();
+            if frames.connection_terminal() {
+                let _ = state.settle_remote_recovery(&launch, Err(remote_recovery_disconnected()));
+                drop(active_cancellation);
+                continue;
+            }
+            for notification in result.notifications() {
+                write_content_length_frame(&mut writer, notification)?;
+            }
+            writer.flush()?;
+            let pending_request = PendingRemoteRequest {
+                _cancellation: active_cancellation,
+            };
+            let task =
+                bridge.create_recovery_status_task(launch.identity.clone(), launch.generation);
+            match task.and_then(|task| {
+                spawn_remote_recovery(
+                    launch.clone(),
+                    task,
+                    cancellation,
+                    completion_sender.clone(),
+                )
+            }) {
+                Ok(()) => {
+                    pending.insert(operation_id, pending_request);
+                }
+                Err(failure) => {
+                    drop(pending_request);
+                    let (_, response) = state.settle_remote_recovery(&launch, Err(failure));
+                    write_content_length_frame(&mut writer, &response)?;
+                    for notification in state.take_pending_notifications() {
+                        write_content_length_frame(&mut writer, &notification)?;
+                    }
                     writer.flush()?;
                 }
             }
@@ -204,6 +268,7 @@ where
         writer.flush()?;
 
         if result.outcome() == DispatchOutcome::Shutdown {
+            frames.disconnect_active_requests();
             terminal = true;
         }
     }
@@ -213,7 +278,11 @@ where
 
 struct PendingRemoteRequest {
     _cancellation: ActiveStdioRequestCancellationGuard,
-    notifications: Vec<Value>,
+}
+
+enum AsyncRemoteCompletion {
+    Worker(RemoteWorkerCompletion),
+    Recovery(RemoteRecoveryCompletion),
 }
 
 struct RemoteBrokerCall {
@@ -237,20 +306,26 @@ struct RemoteWorkerCompletion {
     operation_id: String,
     lane_key: String,
     endpoint: subversionr_protocol::CanonicalEndpoint,
-    result: Result<(), BridgeFailure>,
+    settlement: RemoteWorkerSettlement,
+}
+
+struct RemoteRecoveryCompletion {
+    launch: crate::state::RemoteRecoveryLaunchPlan,
+    result: Result<subversionr_protocol::StatusSnapshot, BridgeFailure>,
 }
 
 struct RemoteWorkerSpawnError {
     request_id: Value,
     operation_id: String,
     lane_key: String,
+    effect: crate::RemoteOperationEffect,
 }
 
 fn spawn_remote_worker(
     remote_worker: Arc<dyn RemoteWorkerSupervisor>,
     launch: RemoteLaunchPlan,
     cancellation: StdioCancellationToken,
-    sender: mpsc::Sender<RemoteWorkerCompletion>,
+    sender: mpsc::Sender<AsyncRemoteCompletion>,
     broker_sender: mpsc::Sender<RemoteBrokerCall>,
 ) -> Result<(), RemoteWorkerSpawnError> {
     let request_id = launch.request_id.clone();
@@ -261,6 +336,7 @@ fn spawn_remote_worker(
         request_id: request_id.clone(),
         operation_id: operation_id.clone(),
         lane_key: lane_key.clone(),
+        effect: launch.effect,
     };
     thread::Builder::new()
         .name(format!("subversionr-remote-worker-{operation_id}"))
@@ -278,31 +354,96 @@ fn spawn_remote_worker(
                     &launch.operation.envelope,
                     launch.operation.config,
                     &lane_key,
+                    launch.effect,
                     &cancellation,
                     &mut auth,
                     &unavailable_bridge,
                     launch.operation.deadline,
                 )
             }))
-            .unwrap_or_else(|_| {
-                Err(BridgeFailure::new(
+            .unwrap_or_else(|_| RemoteWorkerSettlement {
+                result: Err(BridgeFailure::new(
                     "SUBVERSIONR_REMOTE_WORKER_CRASHED",
                     "process",
                     "error.remote.workerCrashed",
                     json!({ "stage": "supervisor" }),
                     false,
-                ))
+                )),
+                remote_failure: Some(RemoteFailure {
+                    category: RemoteFailureCategory::Process,
+                    reason: RemoteFailureClass::WorkerContainmentFailed,
+                    cleanup_appropriate: false,
+                }),
+                effect: launch.effect,
+                worker_was_resumed: false,
+                execution_origin_known: false,
+                termination: WorkerTerminationDisposition::Blocked,
+                job_descendants_zero: false,
+                temp_root_removed: false,
             });
-            let _ = sender.send(RemoteWorkerCompletion {
+            let _ = sender.send(AsyncRemoteCompletion::Worker(RemoteWorkerCompletion {
                 request_id,
                 operation_id,
                 lane_key,
                 endpoint,
-                result,
-            });
+                settlement: result,
+            }));
         })
         .map(|_| ())
         .map_err(|_| spawn_error)
+}
+
+fn spawn_remote_recovery(
+    launch: crate::state::RemoteRecoveryLaunchPlan,
+    task: BridgeRecoveryTask,
+    cancellation: StdioCancellationToken,
+    sender: mpsc::Sender<AsyncRemoteCompletion>,
+) -> Result<(), BridgeFailure> {
+    let operation_id = launch.operation_id.clone();
+    let deadline = launch.deadline;
+    thread::Builder::new()
+        .name(format!("subversionr-remote-recovery-{operation_id}"))
+        .spawn(move || {
+            let bounded_cancellation = RecoveryDeadlineCancellation {
+                outer: cancellation.clone(),
+                deadline,
+            };
+            let task_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                task(&bounded_cancellation)
+            }))
+            .unwrap_or_else(|_| {
+                Err(BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_RECOVERY_TASK_CRASHED",
+                    "process",
+                    "error.remote.recoveryTaskCrashed",
+                    json!({}),
+                    false,
+                ))
+            });
+            let result = if cancellation.was_explicitly_cancelled() {
+                Err(remote_recovery_cancelled())
+            } else if cancellation.was_disconnected() {
+                Err(remote_recovery_disconnected())
+            } else if Instant::now() >= deadline {
+                Err(remote_recovery_timed_out())
+            } else {
+                task_result
+            };
+            let _ = sender.send(AsyncRemoteCompletion::Recovery(RemoteRecoveryCompletion {
+                launch,
+                result,
+            }));
+        })
+        .map(|_| ())
+        .map_err(|_| {
+            BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_RECOVERY_TASK_START_FAILED",
+                "process",
+                "error.remote.recoveryTaskStartFailed",
+                json!({}),
+                false,
+            )
+        })
 }
 
 struct RemoteWorkerAuthBroker {
@@ -590,6 +731,56 @@ fn fail_all_remote_broker_calls(
     }
 }
 
+fn settle_async_remote_completion<W: Write>(
+    state: &mut DaemonState,
+    frames: &mut StdioFrameReceiver,
+    pending: &mut BTreeMap<String, PendingRemoteRequest>,
+    pending_broker: &mut BTreeMap<String, PendingRemoteBroker>,
+    completion: AsyncRemoteCompletion,
+    terminal: bool,
+    writer: &mut W,
+) -> io::Result<()> {
+    match completion {
+        AsyncRemoteCompletion::Worker(completion) => settle_remote_completion(
+            state,
+            frames,
+            pending,
+            pending_broker,
+            completion,
+            terminal,
+            writer,
+        ),
+        AsyncRemoteCompletion::Recovery(completion) => {
+            settle_remote_recovery_completion(state, pending, completion, terminal, writer)
+        }
+    }
+}
+
+fn settle_remote_recovery_completion<W: Write>(
+    state: &mut DaemonState,
+    pending: &mut BTreeMap<String, PendingRemoteRequest>,
+    completion: RemoteRecoveryCompletion,
+    terminal: bool,
+    writer: &mut W,
+) -> io::Result<()> {
+    let operation_id = completion.launch.operation_id.clone();
+    let (_, response) = state.settle_remote_recovery(&completion.launch, completion.result);
+    let notifications = state.take_pending_notifications();
+    let Some(_pending_request) = pending.remove(&operation_id) else {
+        return Err(io::Error::other(
+            "remote recovery completed without a pending request",
+        ));
+    };
+    if terminal {
+        return Ok(());
+    }
+    write_content_length_frame(writer, &response)?;
+    for notification in notifications {
+        write_content_length_frame(writer, &notification)?;
+    }
+    writer.flush()
+}
+
 fn settle_remote_completion<W: Write>(
     state: &mut DaemonState,
     frames: &mut StdioFrameReceiver,
@@ -599,22 +790,19 @@ fn settle_remote_completion<W: Write>(
     terminal: bool,
     writer: &mut W,
 ) -> io::Result<()> {
-    let recovery_blocked = completion
-        .result
-        .as_ref()
-        .is_err_and(|failure| failure.code() == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED");
-    state.settle_remote_launch(
+    let settlement_override = state.settle_remote_launch(
         &completion.lane_key,
         &completion.operation_id,
-        recovery_blocked,
+        &completion.settlement,
     );
+    let settlement_notifications = state.take_pending_notifications();
     fail_operation_remote_broker_calls(
         frames,
         pending_broker,
         &completion.operation_id,
         auth_response_unavailable,
     );
-    let Some(pending_request) = pending.remove(&completion.operation_id) else {
+    let Some(_pending_request) = pending.remove(&completion.operation_id) else {
         return Err(io::Error::other(
             "remote worker completed without a pending request",
         ));
@@ -622,7 +810,11 @@ fn settle_remote_completion<W: Write>(
     if terminal {
         return Ok(());
     }
-    let response = match completion.result {
+    let result = match settlement_override {
+        Some(failure) => Err(failure),
+        None => completion.settlement.result,
+    };
+    let response = match result {
         Ok(()) => json!({
             "jsonrpc": "2.0",
             "id": completion.request_id,
@@ -631,28 +823,46 @@ fn settle_remote_completion<W: Write>(
         Err(failure) => json!({
             "jsonrpc": "2.0",
             "id": completion.request_id,
-            "error": bridge_error(failure),
+            "error": bridge_error(crate::remote::attach_remote_failure(failure)),
         }),
     };
     write_content_length_frame(writer, &response)?;
-    for notification in pending_request.notifications {
+    for notification in settlement_notifications {
         write_content_length_frame(writer, &notification)?;
     }
     writer.flush()
 }
 
-fn remote_worker_start_error_response(request_id: Value) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": bridge_error(BridgeFailure::new(
+fn remote_worker_start_error_response(
+    request_id: Value,
+    settlement_override: Option<BridgeFailure>,
+) -> Value {
+    let failure = settlement_override.unwrap_or_else(|| {
+        BridgeFailure::new(
             "SUBVERSIONR_REMOTE_WORKER_START_FAILED",
             "process",
             "error.remote.workerStartFailed",
             json!({ "stage": "supervisorThread" }),
             false,
-        )),
+        )
+    });
+    json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": bridge_error(crate::remote::attach_remote_failure(failure)),
     })
+}
+
+fn write_remote_worker_spawn_failure_frames<W: Write>(
+    writer: &mut W,
+    response: Value,
+    settlement_notifications: Vec<Value>,
+) -> io::Result<()> {
+    write_content_length_frame(writer, &response)?;
+    for notification in settlement_notifications {
+        write_content_length_frame(writer, &notification)?;
+    }
+    writer.flush()
 }
 
 struct StdioFrameReceiver {
@@ -701,12 +911,57 @@ impl StdioCancellationToken {
     fn was_explicitly_cancelled(&self) -> bool {
         self.state.load(Ordering::SeqCst) == 1
     }
+
+    fn was_disconnected(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == 2
+    }
 }
 
 impl BridgeCancellationToken for StdioCancellationToken {
     fn is_cancelled(&self) -> bool {
         self.state.load(Ordering::SeqCst) != 0
     }
+}
+
+struct RecoveryDeadlineCancellation {
+    outer: StdioCancellationToken,
+    deadline: Instant,
+}
+
+impl BridgeCancellationToken for RecoveryDeadlineCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.outer.is_cancelled() || Instant::now() >= self.deadline
+    }
+}
+
+fn remote_recovery_cancelled() -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+        "cancelled",
+        "error.remote.workerCancelled",
+        json!({}),
+        false,
+    )
+}
+
+fn remote_recovery_disconnected() -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
+        "state",
+        "error.remote.workerDisconnected",
+        json!({}),
+        false,
+    )
+}
+
+fn remote_recovery_timed_out() -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT",
+        "timeout",
+        "error.remote.workerTimedOut",
+        json!({}),
+        false,
+    )
 }
 
 #[derive(Debug, Default, Clone)]
@@ -876,6 +1131,10 @@ impl StdioFrameReceiver {
         token: StdioCancellationToken,
     ) -> ActiveStdioRequestCancellationGuard {
         self.active_cancellation.activate(request_id, token)
+    }
+
+    fn disconnect_active_requests(&self) {
+        self.active_cancellation.cancel_all();
     }
 
     #[cfg(test)]
@@ -1892,5 +2151,55 @@ mod tests {
                 .retired_auth_request_ids
                 .contains(&format!("retired-{MAX_RETIRED_AUTH_REQUEST_IDS}"))
         );
+    }
+
+    #[test]
+    fn spawn_failure_frame_cycle_flushes_response_and_terminal_notification_in_order() {
+        let checking = json!({
+            "jsonrpc": "2.0",
+            "method": "remoteConnection/state",
+            "params": {
+                "repositoryId": "repo",
+                "epoch": 1,
+                "state": {
+                    "kind": "checking",
+                    "operationId": "31234567-89ab-4def-8123-456789abcdef",
+                    "startedAt": "2026-07-18T00:00:00Z"
+                }
+            }
+        });
+        let terminal = json!({
+            "jsonrpc": "2.0",
+            "method": "remoteConnection/state",
+            "params": {
+                "repositoryId": "repo",
+                "epoch": 1,
+                "state": {
+                    "kind": "indeterminate",
+                    "reason": "workerTerminated",
+                    "originOperationId": "31234567-89ab-4def-8123-456789abcdef",
+                    "recovery": "notRequired",
+                    "cleanupAppropriate": false
+                }
+            }
+        });
+        let response = remote_worker_start_error_response(json!(7), None);
+        let mut output = Vec::new();
+        write_content_length_frame(&mut output, &checking).expect("checking frame");
+        write_remote_worker_spawn_failure_frames(&mut output, response, vec![terminal])
+            .expect("spawn failure cycle");
+
+        let mut reader = BufReader::new(io::Cursor::new(output));
+        let mut frames = Vec::new();
+        while let Some(payload) = read_content_length_frame(&mut reader).expect("valid frame") {
+            frames.push(serde_json::from_slice::<Value>(&payload).expect("valid JSON"));
+        }
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0]["params"]["state"]["kind"], "checking");
+        assert_eq!(
+            frames[1]["error"]["code"],
+            "SUBVERSIONR_REMOTE_WORKER_START_FAILED"
+        );
+        assert_eq!(frames[2]["params"]["state"]["kind"], "indeterminate");
     }
 }

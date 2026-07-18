@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 use subversionr_protocol::{
     CertificateTrustRequest, CertificateTrustResponse, Credential, CredentialAttempt,
     CredentialPersistenceIntent, CredentialRequest, CredentialResponse, CredentialSettlementAck,
-    CredentialSettlementOutcome, CredentialSettlementRequest, RemoteOperationEnvelope,
+    CredentialSettlementOutcome, CredentialSettlementRequest, RemoteFailure,
+    RemoteOperationEnvelope,
 };
 
 use crate::{
@@ -32,11 +33,12 @@ pub trait RemoteWorkerSupervisor: Send + Sync {
         envelope: &RemoteOperationEnvelope,
         plan: RemoteConfigPlan,
         lane_key: &str,
+        effect: RemoteOperationEffect,
         cancellation: &dyn BridgeCancellationToken,
         auth: &mut dyn AuthRequestBroker,
         bridge: &dyn BridgeApi,
         deadline: Instant,
-    ) -> Result<(), BridgeFailure>;
+    ) -> RemoteWorkerSettlement;
 
     fn terminate_active(&self) -> Result<(), BridgeFailure>;
 
@@ -54,6 +56,62 @@ pub trait RemoteWorkerSupervisor: Send + Sync {
 
     fn auth_wait_cancelled(&self) -> bool {
         false
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteOperationEffect {
+    ReadOnly,
+    Mutation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerTerminationDisposition {
+    NotRequired,
+    Settled,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteWorkerSettlement {
+    pub result: Result<(), BridgeFailure>,
+    pub remote_failure: Option<RemoteFailure>,
+    pub effect: RemoteOperationEffect,
+    pub worker_was_resumed: bool,
+    pub execution_origin_known: bool,
+    pub termination: WorkerTerminationDisposition,
+    pub job_descendants_zero: bool,
+    pub temp_root_removed: bool,
+}
+
+impl RemoteWorkerSettlement {
+    pub(crate) fn pre_launch(
+        effect: RemoteOperationEffect,
+        result: Result<(), BridgeFailure>,
+    ) -> Self {
+        let remote_failure = result
+            .as_ref()
+            .err()
+            .map(crate::remote::classify_remote_failure);
+        Self {
+            result,
+            remote_failure,
+            effect,
+            worker_was_resumed: false,
+            execution_origin_known: true,
+            termination: WorkerTerminationDisposition::NotRequired,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+        }
+    }
+
+    pub fn cleanup_safe(&self) -> bool {
+        self.job_descendants_zero && self.temp_root_removed
+    }
+
+    pub fn may_have_mutated(&self) -> bool {
+        self.effect == RemoteOperationEffect::Mutation
+            && (self.worker_was_resumed || !self.execution_origin_known)
     }
 }
 
@@ -89,15 +147,16 @@ impl RemoteWorkerSupervisor for InlineRemoteWorkerSupervisor {
         _envelope: &RemoteOperationEnvelope,
         plan: RemoteConfigPlan,
         _lane_key: &str,
+        effect: RemoteOperationEffect,
         cancellation: &dyn BridgeCancellationToken,
         _auth: &mut dyn AuthRequestBroker,
         bridge: &dyn BridgeApi,
         deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
+    ) -> RemoteWorkerSettlement {
         if cancellation.is_cancelled() || Instant::now() >= deadline {
-            return Err(cancelled_failure());
+            return RemoteWorkerSettlement::pre_launch(effect, Err(cancelled_failure()));
         }
-        bridge.create_remote_context_foundation(plan)
+        RemoteWorkerSettlement::pre_launch(effect, bridge.create_remote_context_foundation(plan))
     }
 
     fn disconnect(&self) -> Result<(), BridgeFailure> {
@@ -121,7 +180,6 @@ pub struct ProcessRemoteWorkerSupervisor {
     disconnected: AtomicBool,
     credential_contract_available: bool,
     active: platform::ActiveWorkerRegistry,
-    lanes: platform::LaneRegistry,
 }
 
 impl ProcessRemoteWorkerSupervisor {
@@ -146,7 +204,6 @@ impl ProcessRemoteWorkerSupervisor {
             disconnected: AtomicBool::new(false),
             credential_contract_available,
             active: platform::ActiveWorkerRegistry::default(),
-            lanes: platform::LaneRegistry::default(),
         })
     }
 
@@ -155,24 +212,26 @@ impl ProcessRemoteWorkerSupervisor {
         envelope: &RemoteOperationEnvelope,
         plan: RemoteConfigPlan,
         lane_key: &str,
+        effect: RemoteOperationEffect,
         cancellation: &dyn BridgeCancellationToken,
         auth: &mut dyn AuthRequestBroker,
         parent_disconnected: &AtomicBool,
         deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
+    ) -> RemoteWorkerSettlement {
         if self.disconnected.load(Ordering::Acquire) || parent_disconnected.load(Ordering::Acquire)
         {
-            return Err(disconnected_failure());
+            return RemoteWorkerSettlement::pre_launch(effect, Err(disconnected_failure()));
         }
         if plan.timeout_ms != envelope.timeout_ms {
-            return Err(worker_protocol_failure());
+            return RemoteWorkerSettlement::pre_launch(effect, Err(worker_protocol_failure()));
         }
         if Instant::now() >= deadline {
-            return Err(timed_out_failure());
+            return RemoteWorkerSettlement::pre_launch(effect, Err(timed_out_failure()));
         }
-        validate_request_parts(envelope, plan, lane_key)?;
-        let lane = self.lanes.reserve(lane_key)?;
-        let result = platform::execute_worker(
+        if let Err(failure) = validate_request_parts(envelope, plan, lane_key) {
+            return RemoteWorkerSettlement::pre_launch(effect, Err(failure));
+        }
+        platform::execute_worker(
             &self.worker_executable,
             &self.bridge_path,
             &self.temp_base,
@@ -185,14 +244,8 @@ impl ProcessRemoteWorkerSupervisor {
             &self.active,
             deadline,
             WorkerExecution::Foundation,
-        );
-        match &result {
-            Err(failure) if failure.code() == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" => {
-                lane.block();
-            }
-            _ => lane.release(),
-        }
-        result
+            effect,
+        )
     }
 
     #[doc(hidden)]
@@ -216,9 +269,8 @@ impl ProcessRemoteWorkerSupervisor {
             return Err(worker_protocol_failure());
         }
         validate_request_parts(envelope, plan, lane_key)?;
-        let lane = self.lanes.reserve(lane_key)?;
         let parent_connected = AtomicBool::new(false);
-        let result = platform::execute_worker(
+        let settlement = platform::execute_worker(
             &self.worker_executable,
             &self.bridge_path,
             &self.temp_base,
@@ -231,16 +283,9 @@ impl ProcessRemoteWorkerSupervisor {
             &self.active,
             deadline,
             WorkerExecution::CredentialProbe { scenario },
+            RemoteOperationEffect::ReadOnly,
         );
-        match &result {
-            Err(failure) if failure.code() == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" => lane.block(),
-            _ => lane.release(),
-        }
-        result
-    }
-
-    pub fn blocked_lane_count(&self) -> usize {
-        self.lanes.blocked_count()
+        settlement.result
     }
 
     pub fn active_worker_count(&self) -> usize {
@@ -254,15 +299,17 @@ impl RemoteWorkerSupervisor for ProcessRemoteWorkerSupervisor {
         envelope: &RemoteOperationEnvelope,
         plan: RemoteConfigPlan,
         lane_key: &str,
+        effect: RemoteOperationEffect,
         cancellation: &dyn BridgeCancellationToken,
         auth: &mut dyn AuthRequestBroker,
         _bridge: &dyn BridgeApi,
         deadline: Instant,
-    ) -> Result<(), BridgeFailure> {
+    ) -> RemoteWorkerSettlement {
         self.execute_with_disconnect(
             envelope,
             plan,
             lane_key,
+            effect,
             cancellation,
             auth,
             &self.disconnected,
@@ -627,10 +674,7 @@ fn execute_private_credential_provider_probe(
             Instant::now() + Duration::from_secs(10),
             scenario,
         )?;
-        if broker.events != expected
-            || supervisor.active_worker_count() != 0
-            || supervisor.blocked_lane_count() != 0
-        {
+        if broker.events != expected || supervisor.active_worker_count() != 0 {
             return Err(worker_protocol_failure());
         }
         reports.push(json!({ "scenario": scenario, "events": broker.events }));
@@ -1047,16 +1091,6 @@ fn cleanup_blocked_failure() -> BridgeFailure {
     )
 }
 
-fn lane_busy_failure() -> BridgeFailure {
-    BridgeFailure::new(
-        "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
-        "state",
-        "error.remote.nativeLaneBusy",
-        json!({}),
-        true,
-    )
-}
-
 #[cfg(windows)]
 mod platform {
     include!("remote_worker_windows.rs");
@@ -1065,8 +1099,7 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::*;
-    use std::collections::{HashMap, HashSet};
-    use std::sync::{Arc, Mutex};
+    use std::collections::HashMap;
 
     #[derive(Debug, Default)]
     pub(super) struct ActiveWorkerRegistry;
@@ -1093,61 +1126,6 @@ mod platform {
         }
     }
 
-    #[derive(Debug, Default)]
-    pub(super) struct LaneRegistry {
-        state: Arc<Mutex<(HashSet<String>, HashSet<String>)>>,
-    }
-    pub(super) struct LaneReservation {
-        key: String,
-        state: Arc<Mutex<(HashSet<String>, HashSet<String>)>>,
-    }
-    impl LaneRegistry {
-        pub(super) fn reserve(&self, key: &str) -> Result<LaneReservation, BridgeFailure> {
-            let mut state = self.state.lock().expect("lane registry mutex poisoned");
-            if state.1.contains(key) || !state.0.insert(key.to_string()) {
-                return Err(if state.1.contains(key) {
-                    cleanup_blocked_failure()
-                } else {
-                    lane_busy_failure()
-                });
-            }
-            Ok(LaneReservation {
-                key: key.to_string(),
-                state: Arc::clone(&self.state),
-            })
-        }
-        pub(super) fn blocked_count(&self) -> usize {
-            self.state
-                .lock()
-                .expect("lane registry mutex poisoned")
-                .1
-                .len()
-        }
-    }
-    impl LaneReservation {
-        pub(super) fn release(&self) {
-            self.state
-                .lock()
-                .expect("lane registry mutex poisoned")
-                .0
-                .remove(&self.key);
-        }
-        pub(super) fn block(&self) {
-            let mut s = self.state.lock().expect("lane registry mutex poisoned");
-            s.0.remove(&self.key);
-            s.1.insert(self.key.clone());
-        }
-    }
-    impl Drop for LaneReservation {
-        fn drop(&mut self) {
-            self.state
-                .lock()
-                .expect("lane registry mutex poisoned")
-                .0
-                .remove(&self.key);
-        }
-    }
-
     pub(super) fn execute_worker(
         _worker_executable: &Path,
         _bridge_path: &Path,
@@ -1161,8 +1139,9 @@ mod platform {
         _active: &ActiveWorkerRegistry,
         _deadline: Instant,
         _execution: WorkerExecution,
-    ) -> Result<(), BridgeFailure> {
-        Err(worker_start_failure())
+        effect: RemoteOperationEffect,
+    ) -> RemoteWorkerSettlement {
+        RemoteWorkerSettlement::pre_launch(effect, Err(worker_start_failure()))
     }
 
     pub(super) fn worker_control_channel_is_private() -> bool {

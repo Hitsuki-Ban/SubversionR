@@ -81,6 +81,7 @@
     "onCommand:subversionr.closeRepository",
     "onCommand:subversionr.refreshRepository",
     "onCommand:subversionr.checkRemoteChanges",
+    "onCommand:subversionr.retryRemoteRecovery",
     "onCommand:subversionr.refreshResource",
     "onCommand:subversionr.openConflictArtifact",
     "onCommand:subversionr.addResource",
@@ -248,6 +249,10 @@
       {
         "command": "subversionr.checkRemoteChanges",
         "title": "%command.checkRemoteChanges.title%"
+      },
+      {
+        "command": "subversionr.retryRemoteRecovery",
+        "title": "%command.retryRemoteRecovery.title%"
       },
       {
         "command": "subversionr.refreshResource",
@@ -1204,6 +1209,10 @@
         },
         {
           "command": "subversionr.checkRemoteChanges",
+          "when": "false"
+        },
+        {
+          "command": "subversionr.retryRemoteRecovery",
           "when": "false"
         },
         {
