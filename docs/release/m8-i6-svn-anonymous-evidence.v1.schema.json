@@ -63,6 +63,7 @@
         "packagedNegativeProbe",
         "raSvnFaultFixture",
         "installedStressProbe",
+        "installedNegativeProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
         "installedExtensionHostProbe",
@@ -99,6 +100,9 @@
           "$ref": "#/$defs/artifact"
         },
         "installedStressProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedNegativeProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedVsixProbe": {

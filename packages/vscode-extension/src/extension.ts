@@ -59,6 +59,7 @@ import {
   collectInstalledSvnAnonymousStressCheckout,
   createInstalledSvnAnonymousStressSessionSha256,
 } from "./diagnostics/installedSvnAnonymousStressCheckout";
+import { collectInstalledSvnAnonymousNegativeReport } from "./diagnostics/installedSvnAnonymousNegativeReport";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
@@ -308,6 +309,7 @@ function parseMatchingCompletedRefreshCoverageRequest(rawRequest: unknown): Matc
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const installedSvnAnonymousReportToken = consumeInstalledSvnAnonymousReportToken();
   const installedSvnAnonymousStressCheckoutToken = consumeInstalledSvnAnonymousStressCheckoutToken();
+  const installedSvnAnonymousNegativeReportToken = consumeInstalledSvnAnonymousNegativeReportToken();
   const installedSvnAnonymousStressCheckoutContext =
     installedSvnAnonymousStressCheckoutToken === undefined
       ? undefined
@@ -379,7 +381,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const authRequestHandler = async (method: string, params: unknown): Promise<unknown> => {
     if (
       installedSvnAnonymousReportToken !== undefined ||
-      installedSvnAnonymousStressCheckoutToken !== undefined
+      installedSvnAnonymousStressCheckoutToken !== undefined ||
+      installedSvnAnonymousNegativeReportToken !== undefined
     ) {
       if (method === "credentials/request") {
         installedSvnAnonymousAuthActivity.credentialRequests += 1;
@@ -1434,6 +1437,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
             }),
         );
+  const installedSvnAnonymousNegativeReportCommand =
+    installedSvnAnonymousNegativeReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousNegativeReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousNegativeReport({
+              expectedToken: installedSvnAnonymousNegativeReportToken,
+              request,
+              initialize: () => service.initialize(),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
   const installedCoreWorkflowReportCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedCoreWorkflowReport",
     (request: unknown) =>
@@ -2204,6 +2220,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   if (installedSvnAnonymousStressCheckoutCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousStressCheckoutCommand);
+  }
+  if (installedSvnAnonymousNegativeReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousNegativeReportCommand);
   }
   if (installedSourceControlUiE2eExecuteResourceCommand !== undefined) {
     context.subscriptions.push(installedSourceControlUiE2eExecuteResourceCommand);
@@ -4165,6 +4184,12 @@ function consumeInstalledSvnAnonymousReportToken(): string | undefined {
 function consumeInstalledSvnAnonymousStressCheckoutToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_STRESS_CHECKOUT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_STRESS_CHECKOUT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousNegativeReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 

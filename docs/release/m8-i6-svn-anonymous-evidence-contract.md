@@ -34,8 +34,8 @@ The evidence binds the exact bytes of:
 - the reviewed Apache Subversion 1.14.5 ra_svn origin patch and its adjacent
   contract;
 - the source-controlled I6 probe driver;
-- the packaged-native negative probe, controlled ra_svn fault fixture, and
-  installed-VSIX 100+1 stress probe;
+- the packaged-native and installed-VSIX negative probes, controlled ra_svn
+  fault fixture, and installed-VSIX 100+1 stress probe;
 - the exact source-built `svn.exe`, `svnadmin.exe`, and `svnserve.exe`; and
 - the positive fixture `svnserve.conf` and `authz` files.
 
@@ -191,9 +191,11 @@ installed Extension Host positive operation matrix. Both drivers execute the
 eleven direct-`svn://` operations and keep the evidence report absent when any
 candidate observation fails.
 
-This contract intentionally remains fail-closed until the controlled negative/recovery cells
-and the installed 100-cycle residue stress contract are
-automated and executed against the same candidate artifacts. Missing controlled
-observations may not be represented as `verified` by synthetic evidence. The I6
-readiness/public-claim aggregation must be wired only after a real report passes
-the executable verifier against the candidate artifacts.
+This contract intentionally remains fail-closed. The source branch now contains
+the installed 100+1 stress probe and real packaged/installed `maliciousRoot` and
+`saslOnly` product probes, but the remaining controlled negative/recovery cells
+are incomplete and no complete candidate report has passed the executable
+verifier. Missing controlled observations may not be represented as `verified`
+by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
+only after one real report passes the executable verifier against the candidate
+artifacts.

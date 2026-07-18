@@ -63,6 +63,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.diagnostics.versionReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousStressCheckout",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousNegativeReport",
       "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
       "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
       "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
@@ -171,6 +172,13 @@ describe("extension manifest", () => {
     expect(manifest.activationEvents).not.toContain("workspaceContains:**/.svn");
     expect(manifest.activationEvents).not.toContain("workspaceContains:**/.svn/wc.db");
     expect(manifest.activationEvents).not.toContain("onCommand:subversionr.diagnostics.installedRedactionReport");
+    const contributedCommands = (manifest.contributes?.commands ?? []).map(
+      (command: { command: string }) => command.command,
+    );
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousNegativeReport");
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousNegativeReport",
+    );
   });
 
   it("declares limited Workspace Trust support for trust-sensitive SVN operations and external tool config paths", () => {

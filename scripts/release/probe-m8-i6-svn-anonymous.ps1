@@ -33,6 +33,7 @@ $packagedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "pro
 $installedHarnessPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "test-vscode-installed-extension-host.ps1"))
 $installedI6ProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-vsix.ps1"))
 $installedStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-stress.ps1"))
+$installedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-negative.ps1"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $packagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-negative.mjs"))
 $installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host"))
@@ -329,6 +330,85 @@ function Get-PackagedNegativeProcessObservation(
   }
 }
 
+function Get-InstalledNegativeProcessObservation(
+  [object[]]$AllEvents,
+  [long]$ProbePid,
+  [string]$ExpectedProbeProcessName,
+  [string]$ExpectedDaemonProcessName,
+  [string[]]$ForbiddenFixtureProcessNames,
+  [object[]]$SettlementSnapshot
+) {
+  $probeStarts = @($AllEvents | Where-Object {
+      [long]$_.processId -eq $ProbePid -and
+      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  Assert-True ($probeStarts.Count -eq 1) "The installed-negative probe PID must have exactly one subscribed start identity."
+  Assert-True (
+    @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
+  ) "The installed-negative probe PID was reused during its subscribed observation."
+
+  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $forbiddenFixtureProcessNameSet = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+  )
+  foreach ($processName in $ForbiddenFixtureProcessNames) {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "An installed-negative forbidden fixture process name was invalid."
+    $null = $forbiddenFixtureProcessNameSet.Add($processName)
+  }
+  Assert-True ($forbiddenFixtureProcessNameSet.Count -eq $ForbiddenFixtureProcessNames.Count) "Installed-negative forbidden fixture process names must be unique."
+  $fixtureCliStarts = @($recordedDescendants | Where-Object {
+      $forbiddenFixtureProcessNameSet.Contains([string]$_.processName)
+    })
+  $candidateStarts = @($recordedDescendants | Where-Object {
+      ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  Assert-True ($candidateStarts.Count -eq 2) "The installed-negative Extension Host must start exactly one candidate daemon and one worker."
+  foreach ($candidateStart in $candidateStarts) {
+    Assert-True (
+      @($AllEvents | Where-Object { [long]$_.processId -eq [long]$candidateStart.processId }).Count -eq 1
+    ) "An installed-negative candidate process PID was reused."
+  }
+
+  $candidatePids = [System.Collections.Generic.HashSet[long]]::new()
+  foreach ($candidateStart in $candidateStarts) {
+    $null = $candidatePids.Add([long]$candidateStart.processId)
+  }
+  $daemonStarts = @($candidateStarts | Where-Object {
+      -not $candidatePids.Contains([long]$_.parentProcessId)
+    })
+  Assert-True ($daemonStarts.Count -eq 1) "The installed-negative candidate daemon ancestry was ambiguous."
+  $daemonStart = $daemonStarts[0]
+  $workerStarts = @($candidateStarts | Where-Object {
+      [long]$_.parentProcessId -eq [long]$daemonStart.processId
+    })
+  Assert-True ($workerStarts.Count -eq 1) "The installed-negative candidate daemon must start exactly one direct worker."
+  $workerStart = $workerStarts[0]
+  Assert-True (
+    [long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime -and
+    [long]$daemonStart.eventFileTime -lt [long]$workerStart.eventFileTime
+  ) "The installed-negative probe, daemon, and worker start identities are not strictly ordered."
+
+  $workerDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$workerStart.processId))
+  $settledIdentities = @($daemonStart, $workerStart) + $workerDescendantStarts
+  $liveSettledIds = [System.Collections.Generic.HashSet[long]]::new()
+  foreach ($settledStart in $settledIdentities) {
+    $liveSettledIdentity = @($SettlementSnapshot | Where-Object {
+        [long]$_.ProcessId -eq [long]$settledStart.processId -and
+        (Get-ProcessSnapshotStartFileTime $_) -le [long]$settledStart.eventFileTime
+      })
+    if ($liveSettledIdentity.Count -gt 0) {
+      $null = $liveSettledIds.Add([long]$settledStart.processId)
+    }
+  }
+  Assert-True ($liveSettledIds.Count -eq 0) "The installed-negative daemon, worker, or worker descendant remained alive at settlement."
+  return [pscustomobject]@{
+    daemonProcessId = [long]$daemonStart.processId
+    workerProcessId = [long]$workerStart.processId
+    workerDescendantsAfter = $liveSettledIds.Count
+    fixtureCliInvocations = $fixtureCliStarts.Count
+  }
+}
+
 function Get-CandidateProcessIds([string]$ExecutablePath) {
   try {
     return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
@@ -522,6 +602,7 @@ $packagedProbeResolved = Resolve-RequiredFile $packagedProbePath "packaged nativ
 $installedHarnessResolved = Resolve-RequiredFile $installedHarnessPath "installed Extension Host harness"
 $installedI6ProbeResolved = Resolve-RequiredFile $installedI6ProbePath "installed I6 Extension Host probe"
 $installedStressProbeResolved = Resolve-RequiredFile $installedStressProbePath "installed I6 100+1 stress probe"
+$installedNegativeProbeResolved = Resolve-RequiredFile $installedNegativeProbePath "installed I6 negative Extension Host probe"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
 $packagedNegativeProbeResolved = Resolve-RequiredFile $packagedNegativeProbePath "packaged-native I6 negative probe"
 
@@ -780,6 +861,155 @@ foreach ($contract in $packagedNegativeContracts) {
 }
 Assert-True ($packagedNegativeObservations.Count -eq 4) "The packaged-native controlled negative probe set was incomplete."
 
+$installedNegativeContracts = @(
+  [pscustomobject]@{
+    Scenario = "maliciousRoot"
+    FaultScenario = "malicious-root"
+    Code = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
+    Reason = "crossAuthorityRejected"
+    TimeoutMs = 30000
+    GreetingSent = 1
+    ClientResponseReceived = 1
+    AuthRequestSent = 1
+    ReposInfoSent = 1
+  },
+  [pscustomobject]@{
+    Scenario = "saslOnly"
+    FaultScenario = "sasl-only"
+    Code = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+    Reason = "remoteCapabilityUnsupported"
+    TimeoutMs = 30000
+    GreetingSent = 1
+    ClientResponseReceived = 1
+    AuthRequestSent = 1
+    ReposInfoSent = 0
+  }
+)
+$installedNegativeObservations = @()
+foreach ($contract in $installedNegativeContracts) {
+  $scenarioRoot = Join-Path $probeRoot "installed-negative-$($contract.FaultScenario)"
+  $scenarioStatePath = Join-Path $scenarioRoot "fixture-state.json"
+  New-Item -ItemType Directory -Force -Path $scenarioRoot | Out-Null
+  Assert-CandidateProcessAbsent $daemonResolved "The $($contract.FaultScenario) installed-negative preflight"
+  $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved $contract.FaultScenario $scenarioStatePath
+  $processStartSourceIdentifier = "subversionr-m8-i6-installed-negative-$([Guid]::NewGuid().ToString('N'))"
+  $processStartSubscriber = $null
+  $processStartEvents = [System.Collections.Generic.List[object]]::new()
+  $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  try {
+    try {
+      Register-CimIndicationEvent `
+        -ClassName Win32_ProcessStartTrace `
+        -SourceIdentifier $processStartSourceIdentifier `
+        -ErrorAction Stop | Out-Null
+    }
+    catch {
+      throw "Win32_ProcessStartTrace is required for the $($contract.FaultScenario) installed-negative process observation: $($_.Exception.Message)"
+    }
+    $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
+    Assert-True ($matchingSubscribers.Count -eq 1) "The $($contract.FaultScenario) installed-negative process-start subscription was not created exactly once."
+    $processStartSubscriber = $matchingSubscribers[0]
+    Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+
+    $negativeRepositoryUrl = "svn://127.0.0.1:$([int]$faultFixture.State.port)/repo/trunk"
+    $installedNegativeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy", "Bypass",
+      "-File", $installedNegativeProbeResolved,
+      "-VsixPath", $vsixResolved,
+      "-CodeCliPath", $codeCliResolved,
+      "-FixtureRoot", (Join-Path $scenarioRoot "extension-host"),
+      "-RepositoryUrl", $negativeRepositoryUrl,
+      "-CheckoutPath", (Join-Path $scenarioRoot "extension-host\checkout"),
+      "-Scenario", ([string]$contract.Scenario),
+      "-OperationTimeoutMilliseconds", ([string]$contract.TimeoutMs),
+      "-ExpectedProductVersion", $ExpectedProductVersion,
+      "-DaemonPath", $daemonResolved,
+      "-BridgePath", $bridgeResolved,
+      "-TimeoutSeconds", "180"
+    ) 240
+    $installedNegativeFailure = $installedNegativeResult.Stderr.Trim()
+    Assert-True (
+      $installedNegativeResult.ExitCode -eq 0 -and
+      $installedNegativeResult.Stderr.Length -eq 0
+    ) "The installed VSIX $($contract.FaultScenario) negative probe failed: $installedNegativeFailure"
+    $installedNegativeReport = Convert-JsonObject $installedNegativeResult.Stdout.Trim() "installed VSIX $($contract.FaultScenario) negative probe stdout"
+    Assert-True (
+      [string]$installedNegativeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-negative.v1" -and
+      [string]$installedNegativeReport.status -ceq "passed" -and
+      [string]$installedNegativeReport.surface -ceq "installed-vsix-extension-host" -and
+      [string]$installedNegativeReport.scenario -ceq [string]$contract.Scenario -and
+      [string]$installedNegativeReport.originCode -ceq [string]$contract.Code -and
+      [string]$installedNegativeReport.originReason -ceq [string]$contract.Reason -and
+      [string]$installedNegativeReport.settlementCode -ceq [string]$contract.Code -and
+      [string]$installedNegativeReport.settlementReason -ceq [string]$contract.Reason -and
+      [int]$installedNegativeReport.protocol.major -eq 1 -and
+      [int]$installedNegativeReport.protocol.minor -eq 35 -and
+      [int]$installedNegativeReport.authActivity.credentialRequests -eq 0 -and
+      [int]$installedNegativeReport.authActivity.credentialSettlements -eq 0 -and
+      [int]$installedNegativeReport.authActivity.certificateRequests -eq 0 -and
+      [int]$installedNegativeReport.temporaryRootsAfter -eq 0 -and
+      [int]$installedNegativeReport.checkoutJournalEntriesAfter -eq 0 -and
+      $installedNegativeReport.diagnosticsRedacted -eq $true -and
+      $installedNegativeReport.candidateDaemonExitedAfter -eq $true
+    ) "The installed VSIX $($contract.FaultScenario) negative observation was incomplete."
+
+    $faultState = Get-Content -Raw -LiteralPath $scenarioStatePath | ConvertFrom-Json -Depth 16
+    Assert-True (
+      [int]$faultState.connections -eq 1 -and
+      [int]$faultState.greetingSent -eq [int]$contract.GreetingSent -and
+      [int]$faultState.clientResponseReceived -eq [int]$contract.ClientResponseReceived -and
+      [int]$faultState.authRequestSent -eq [int]$contract.AuthRequestSent -and
+      [int]$faultState.reposInfoSent -eq [int]$contract.ReposInfoSent -and
+      [int]$faultState.commandsReceived -eq 0 -and
+      [int]$faultState.followupContacts -eq 0 -and
+      [int]$faultState.suppliedAuthorityConnections -eq 0
+    ) "The installed VSIX $($contract.FaultScenario) network-stage observation was invalid."
+    Complete-ProcessStartEventDrain `
+      $processStartSourceIdentifier `
+      $processStartEvents `
+      $processStartEventKeys `
+      $ProcessStartEventSettlementMilliseconds
+    $processObservation = Get-InstalledNegativeProcessObservation `
+      -AllEvents @($processStartEvents) `
+      -ProbePid ([long]$installedNegativeResult.ProcessId) `
+      -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+      -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+      -ForbiddenFixtureProcessNames @(
+        [System.IO.Path]::GetFileName($svnResolved),
+        [System.IO.Path]::GetFileName($svnadminResolved),
+        [System.IO.Path]::GetFileName($svnserveResolved)
+      ) `
+      -SettlementSnapshot (Get-CimProcessSnapshot)
+    Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The installed VSIX $($contract.FaultScenario) product surface invoked a fixture CLI."
+    $installedNegativeObservations += [pscustomobject]@{
+      scenario = [string]$contract.Scenario
+      code = [string]$installedNegativeReport.originCode
+      reason = [string]$installedNegativeReport.originReason
+      settlementCode = [string]$installedNegativeReport.settlementCode
+      settlementReason = [string]$installedNegativeReport.settlementReason
+      networkAttempts = [int]$faultState.connections
+      networkConnections = [int]$faultState.connections
+      followupNetworkContacts = [int]$faultState.followupContacts
+      workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+      temporaryRootsAfter = [int]$installedNegativeReport.temporaryRootsAfter
+      checkoutJournalEntriesAfter = [int]$installedNegativeReport.checkoutJournalEntriesAfter
+      diagnosticsRedacted = [bool]$installedNegativeReport.diagnosticsRedacted
+      fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+    }
+  }
+  finally {
+    if ($null -ne $processStartSubscriber) {
+      Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+    }
+    Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue |
+      Remove-Event -ErrorAction SilentlyContinue
+    Stop-FaultFixture $faultFixture $contract.FaultScenario
+  }
+}
+Assert-True ($installedNegativeObservations.Count -eq 2) "The installed VSIX malicious-root and SASL-only negative probe set was incomplete."
+
 $installedStressRoot = Join-Path $probeRoot "installed-stress"
 $installedStressResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
   "-NoProfile",
@@ -937,4 +1167,4 @@ finally {
 }
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the installed malicious-root and SASL-only fault cells, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."

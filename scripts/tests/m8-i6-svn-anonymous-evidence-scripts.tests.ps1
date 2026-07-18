@@ -11,6 +11,7 @@ $packagedNativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-pack
 $packagedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
 $installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
+$installedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
 $packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
 $installedExtensionHostProbePath = Join-Path $repoRoot "scripts\release\test-vscode-installed-extension-host.ps1"
@@ -301,7 +302,7 @@ function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [stri
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $raSvnFaultFixturePath, $installedStressProbePath, $installedNegativeProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
     Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
   }
 
@@ -338,6 +339,7 @@ try {
     packagedNegativeProbe = New-ArtifactBinding "i6-packaged-negative-probe" $packagedNegativeProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
     installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
+    installedNegativeProbe = New-ArtifactBinding "i6-installed-negative-probe" $installedNegativeProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
     packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
     installedExtensionHostProbe = New-ArtifactBinding "installed-extension-host-probe" $installedExtensionHostProbePath
@@ -646,6 +648,7 @@ try {
       @("packagedNegativeProbe", $packagedNegativeProbePath),
       @("raSvnFaultFixture", $raSvnFaultFixturePath),
       @("installedStressProbe", $installedStressProbePath),
+      @("installedNegativeProbe", $installedNegativeProbePath),
       @("installedVsixProbe", $installedVsixProbePath),
       @("packagedCompatibilityProbe", $packagedCompatibilityProbePath),
       @("installedExtensionHostProbe", $installedExtensionHostProbePath)
@@ -781,12 +784,14 @@ try {
       'probe-m8-i6-packaged-negative.mjs',
       'serve-m8-i6-ra-svn-fault-fixture.mjs',
       'probe-m8-i6-installed-stress.ps1',
+      'probe-m8-i6-installed-negative.ps1',
       'probe-m8-i6-installed-vsix.ps1',
       'test-vscode-installed-extension-host.ps1',
       'extension/resources/backend/win32-x64/subversionr-daemon.exe',
       'extension/resources/backend/win32-x64/subversionr_svn_bridge.dll',
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
+      'installed malicious-root and SASL-only fault cells',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface negative/recovery cells',
       'issue #136',
@@ -802,12 +807,15 @@ try {
       'TIME_CREATED',
       'Complete-ProcessStartEventDrain',
       'Get-PackagedNegativeProcessObservation',
+      'Get-InstalledNegativeProcessObservation',
       'Get-CimProcessSnapshot',
       'A packaged-negative probe/daemon/worker identity remained alive at settlement.',
       'The exited packaged-negative worker retained live orphan descendants.',
       'networkAttempts = $networkAttempts',
       'networkConnections = $networkConnections',
       'workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter',
+      'fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations',
+      'product surface invoked a fixture CLI',
       'Unregister-Event',
       'Remove-Event'
     )) {
@@ -832,6 +840,18 @@ try {
     $negativeFinalDrainIndex -gt $negativeProbeLaunchIndex -and
     $negativeUnregisterIndex -gt $negativeFinalDrainIndex
   ) "Packaged-negative process observation must subscribe before launch, drain after completion, and then unregister."
+  $installedNegativeLaunchIndex = $driverText.IndexOf('$installedNegativeResult = Invoke-BoundedProcess', [System.StringComparison]::Ordinal)
+  $installedNegativeSubscriptionIndex = $driverText.LastIndexOf('Register-CimIndicationEvent', $installedNegativeLaunchIndex, [System.StringComparison]::Ordinal)
+  $installedNegativeDrainIndex = $driverText.IndexOf('Complete-ProcessStartEventDrain', $installedNegativeLaunchIndex, [System.StringComparison]::Ordinal)
+  $installedNegativeObservationIndex = $driverText.IndexOf('Get-InstalledNegativeProcessObservation', $installedNegativeDrainIndex, [System.StringComparison]::Ordinal)
+  $installedNegativeUnregisterIndex = $driverText.IndexOf('Unregister-Event', $installedNegativeObservationIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $installedNegativeSubscriptionIndex -ge 0 -and
+    $installedNegativeLaunchIndex -gt $installedNegativeSubscriptionIndex -and
+    $installedNegativeDrainIndex -gt $installedNegativeLaunchIndex -and
+    $installedNegativeObservationIndex -gt $installedNegativeDrainIndex -and
+    $installedNegativeUnregisterIndex -gt $installedNegativeObservationIndex
+  ) "Installed-negative process observation must subscribe before launch, drain and measure after completion, and then unregister."
 
   $driverTokens = $null
   $driverParseErrors = $null
@@ -845,7 +865,8 @@ try {
     "Get-DescendantProcessIds",
     "Get-ProcessSnapshotStartFileTime",
     "Get-RecordedProcessDescendantStarts",
-    "Get-PackagedNegativeProcessObservation"
+    "Get-PackagedNegativeProcessObservation",
+    "Get-InstalledNegativeProcessObservation"
   )
   $observationHelperSources = foreach ($functionName in $observationHelpers) {
     $matches = @($driverAst.FindAll({
@@ -932,6 +953,83 @@ try {
         ProcessId = 401L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(4100L)
       })
   Assert-Equal 0 $reusedDescendantSettlement.workerDescendantsAfter "Packaged-negative settlement must allow a later process to reuse a recorded descendant PID."
+
+  $installedProbeStart = [pscustomobject]@{
+    processId = 500L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 5000L
+  }
+  $codeStart = [pscustomobject]@{
+    processId = 501L; parentProcessId = 500L; processName = "Code.exe"; eventFileTime = 5100L
+  }
+  $extensionHostStart = [pscustomobject]@{
+    processId = 502L; parentProcessId = 501L; processName = "Code.exe"; eventFileTime = 5200L
+  }
+  $installedDaemonStart = [pscustomobject]@{
+    processId = 503L; parentProcessId = 502L; processName = "subversionr-daemon.exe"; eventFileTime = 5300L
+  }
+  $installedWorkerStart = [pscustomobject]@{
+    processId = 504L; parentProcessId = 503L; processName = "subversionr-daemon.exe"; eventFileTime = 5400L
+  }
+  $installedMeasuredBaseline = Get-InstalledNegativeProcessObservation `
+    -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
+    -ProbePid 500L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") -SettlementSnapshot @()
+  Assert-Equal 0 $installedMeasuredBaseline.workerDescendantsAfter "Installed-negative baseline must derive zero descendants from the settlement snapshot."
+  Assert-Equal 0 $installedMeasuredBaseline.fixtureCliInvocations "Installed-negative baseline must derive zero fixture CLI invocations from process events."
+  Assert-ScriptThrowsContaining {
+    Get-InstalledNegativeProcessObservation `
+      -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
+      -ProbePid 500L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @([pscustomobject]@{
+          ProcessId = 504L; ParentProcessId = 503L; CreationDate = [DateTime]::FromFileTimeUtc(5350L)
+        })
+  } "remained alive at settlement" "Installed-negative settlement must reject the live recorded worker identity."
+  $installedReusedSettlement = Get-InstalledNegativeProcessObservation `
+    -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
+    -ProbePid 500L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+    -SettlementSnapshot @([pscustomobject]@{
+        ProcessId = 504L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5450L)
+      })
+  Assert-Equal 0 $installedReusedSettlement.workerDescendantsAfter "Installed-negative settlement must allow later PID reuse."
+
+  foreach ($fixtureCliStart in @(
+      [pscustomobject]@{ processId = 505L; parentProcessId = 502L; processName = "svn.exe"; eventFileTime = 5500L },
+      [pscustomobject]@{ processId = 506L; parentProcessId = 503L; processName = "svnadmin.exe"; eventFileTime = 5501L },
+      [pscustomobject]@{ processId = 507L; parentProcessId = 504L; processName = "svnserve.exe"; eventFileTime = 5502L }
+    )) {
+    $measuredFixtureCli = Get-InstalledNegativeProcessObservation `
+      -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart, $fixtureCliStart) `
+      -ProbePid 500L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") -SettlementSnapshot @()
+    Assert-Equal 1 $measuredFixtureCli.fixtureCliInvocations "Installed-negative process evidence must count fixture CLI starts under every product ancestor."
+  }
+
+  $installedNegativeProbeText = Get-Content -Raw -LiteralPath $installedNegativeProbePath
+  foreach ($requiredText in @(
+      'subversionr.diagnostics.installedSvnAnonymousNegativeReport',
+      'SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN',
+      'maliciousRoot',
+      'saslOnly',
+      'Get-Sha256 $installedDaemonPath',
+      'Get-Sha256 $installedBridgePath',
+      'Get-TemporaryRootCount $remoteWorkersRoot',
+      'Get-CheckoutJournalEntryCount $remoteStateRoot',
+      'Wait-CandidateProcessAbsent $installedDaemonPath'
+    )) {
+    Assert-True ($installedNegativeProbeText.Contains($requiredText)) "Installed-negative probe must retain real-candidate contract text '$requiredText'."
+  }
+  foreach ($forbiddenText in @('workerDescendantsAfter = 0', 'Get-WmiObject')) {
+    Assert-True (-not $installedNegativeProbeText.Contains($forbiddenText)) "Installed-negative probe must not synthesize or fall back through '$forbiddenText'."
+  }
+  $installedNegativeTokens = $null
+  $installedNegativeParseErrors = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile(
+    $installedNegativeProbePath,
+    [ref]$installedNegativeTokens,
+    [ref]$installedNegativeParseErrors
+  )
+  Assert-True ($installedNegativeParseErrors.Count -eq 0) "Installed-negative probe must parse."
 
   $contractText = Get-Content -Raw -LiteralPath $contractPath
   Assert-True ($contractText.Contains('under `target/i6-evidence`')) "I6 contract must document the reviewed short Windows fixture root."
