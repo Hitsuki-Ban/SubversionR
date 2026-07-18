@@ -4013,8 +4013,9 @@ fn stdio_eof_interrupts_a_remote_worker_auth_wait() {
         ),
     ]
     .concat();
-    let reader = DelayedEofReader::new(input, Duration::from_millis(40));
-    let mut output = Vec::new();
+    let stage = Arc::new(AtomicUsize::new(0));
+    let reader = BrokerRoundTripReader::new(vec![input, Vec::new()], vec![1], stage.clone());
+    let mut output = BrokerRoundTripWriter::new(stage);
     let started = Instant::now();
 
     run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
