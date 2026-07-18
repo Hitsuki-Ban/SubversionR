@@ -820,7 +820,7 @@ try {
       'extension/resources/backend/win32-x64/subversionr_svn_bridge.dll',
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
-      'installed malicious-root and SASL-only fault cells',
+      'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
       'packaged/installed authz-denied remote-status cell',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
@@ -1076,10 +1076,19 @@ try {
       'SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN',
       'maliciousRoot',
       'saslOnly',
+      'greetingStall',
+      'connectedStall',
+      'SUBVERSIONR_INSTALLED_I6_NEGATIVE_OPERATION_ID',
+      'SUBVERSIONR_REMOTE_WORKER_TIMED_OUT',
+      'SUBVERSIONR_REMOTE_RECOVERY_BLOCKED',
+      'operationDeadlineExceeded',
+      'remoteRecoveryBlocked',
       'Get-Sha256 $installedDaemonPath',
       'Get-Sha256 $installedBridgePath',
       'Get-TemporaryRootCount $remoteWorkersRoot',
-      'Get-CheckoutJournalEntryCount $remoteStateRoot',
+      'Read-CheckoutJournal $remoteStateRoot',
+      'Get-StringSha256 $checkoutResolved',
+      'installed checkout stall recovery entry',
       'Wait-CandidateProcessAbsent $installedDaemonPath'
     )) {
     Assert-True ($installedNegativeProbeText.Contains($requiredText)) "Installed-negative probe must retain real-candidate contract text '$requiredText'."
@@ -1107,6 +1116,8 @@ try {
       "separate, ordered",
       "localEventZeroNetwork",
       "100 checkout cycles",
+      "checkout-stall probes establish only",
+      "They do not satisfy the",
       "may not be represented as"
     )) {
     Assert-True ($contractText.Contains($requiredText)) "I6 evidence contract must retain fail-closed boundary '$requiredText'."

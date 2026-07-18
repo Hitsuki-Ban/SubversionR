@@ -16,7 +16,11 @@ const REPORT_SCHEMA = "subversionr.release.m8-i6-installed-svn-anonymous-negativ
 const REPORT_KIND = "subversionr.installedSvnAnonymousNegativeReport";
 const MAX_REDACTION_VALUE_BYTES = 32_768;
 
-type InstalledSvnAnonymousNegativeScenario = "maliciousRoot" | "saslOnly";
+type InstalledSvnAnonymousNegativeScenario =
+  | "maliciousRoot"
+  | "saslOnly"
+  | "greetingStall"
+  | "connectedStall";
 type InstalledSvnAnonymousNegativeConnection = Pick<
   BackendConnection,
   "initializeResult" | "isRemoteSubmissionEnabled" | "currentRemoteTrustEpoch" | "sendRequest"
@@ -24,10 +28,16 @@ type InstalledSvnAnonymousNegativeConnection = Pick<
 
 interface NegativeScenarioContract {
   originCode: string;
-  originReason: "crossAuthorityRejected" | "remoteCapabilityUnsupported";
+  originReason:
+    | "crossAuthorityRejected"
+    | "remoteCapabilityUnsupported"
+    | "operationDeadlineExceeded";
   settlementCode: string;
-  settlementCategory: "policy" | "capability";
-  settlementReason: "crossAuthorityRejected" | "remoteCapabilityUnsupported";
+  settlementCategory: "policy" | "capability" | "recovery";
+  settlementReason:
+    | "crossAuthorityRejected"
+    | "remoteCapabilityUnsupported"
+    | "remoteRecoveryBlocked";
 }
 
 const SCENARIO_CONTRACTS: Record<InstalledSvnAnonymousNegativeScenario, NegativeScenarioContract> = {
@@ -44,6 +54,20 @@ const SCENARIO_CONTRACTS: Record<InstalledSvnAnonymousNegativeScenario, Negative
     settlementCode: "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
     settlementCategory: "capability",
     settlementReason: "remoteCapabilityUnsupported",
+  },
+  greetingStall: {
+    originCode: "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT",
+    originReason: "operationDeadlineExceeded",
+    settlementCode: "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+    settlementCategory: "recovery",
+    settlementReason: "remoteRecoveryBlocked",
+  },
+  connectedStall: {
+    originCode: "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT",
+    originReason: "operationDeadlineExceeded",
+    settlementCode: "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+    settlementCategory: "recovery",
+    settlementReason: "remoteRecoveryBlocked",
   },
 };
 
@@ -168,7 +192,10 @@ function parseRequest(
     "timeoutMs",
   ]);
   if (
-    (value.scenario !== "maliciousRoot" && value.scenario !== "saslOnly") ||
+    (value.scenario !== "maliciousRoot" &&
+      value.scenario !== "saslOnly" &&
+      value.scenario !== "greetingStall" &&
+      value.scenario !== "connectedStall") ||
     typeof value.repositoryUrl !== "string" ||
     value.repositoryUrl.length === 0 ||
     /[\0\r\n]/.test(value.repositoryUrl) ||
@@ -255,6 +282,12 @@ function requireExpectedFailure(error: unknown, contract: NegativeScenarioContra
     remoteFailure.category !== contract.settlementCategory ||
     remoteFailure.reason !== contract.settlementReason ||
     remoteFailure.cleanupAppropriate !== false
+  ) {
+    throw negativeReportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_NEGATIVE_SETTLEMENT_INVALID");
+  }
+  if (
+    contract.settlementCode !== contract.originCode &&
+    error.safeArgs.originFailureCode !== contract.originCode
   ) {
     throw negativeReportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_NEGATIVE_SETTLEMENT_INVALID");
   }

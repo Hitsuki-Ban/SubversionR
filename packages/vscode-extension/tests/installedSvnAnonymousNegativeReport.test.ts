@@ -14,22 +14,49 @@ const OPERATION_ID = "20000000-0000-4000-8000-000000000001";
 const SCENARIOS = [
   {
     scenario: "maliciousRoot" as const,
-    code: "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
-    category: "policy",
-    reason: "crossAuthorityRejected",
+    originCode: "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+    originReason: "crossAuthorityRejected",
+    settlementCode: "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+    settlementCategory: "policy",
+    settlementReason: "crossAuthorityRejected",
   },
   {
     scenario: "saslOnly" as const,
-    code: "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
-    category: "capability",
-    reason: "remoteCapabilityUnsupported",
+    originCode: "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
+    originReason: "remoteCapabilityUnsupported",
+    settlementCode: "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
+    settlementCategory: "capability",
+    settlementReason: "remoteCapabilityUnsupported",
+  },
+  {
+    scenario: "greetingStall" as const,
+    originCode: "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT",
+    originReason: "operationDeadlineExceeded",
+    settlementCode: "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+    settlementCategory: "recovery",
+    settlementReason: "remoteRecoveryBlocked",
+  },
+  {
+    scenario: "connectedStall" as const,
+    originCode: "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT",
+    originReason: "operationDeadlineExceeded",
+    settlementCode: "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+    settlementCategory: "recovery",
+    settlementReason: "remoteRecoveryBlocked",
   },
 ];
 
 describe("installed SVN anonymous negative report", () => {
   it.each(SCENARIOS)(
     "executes a real typed $scenario checkout and returns only bounded redacted failure evidence",
-    async ({ scenario, code, category, reason }) => {
+    async ({
+      scenario,
+      originCode,
+      originReason,
+      settlementCode,
+      settlementCategory,
+      settlementReason,
+    }) => {
       const sendRequest = vi.fn(async (method: string, params: unknown): Promise<unknown> => {
         if (method === "repository/checkout") {
           expect(params).toEqual({
@@ -60,7 +87,9 @@ describe("installed SVN anonymous negative report", () => {
               expectedOrigin: { scheme: "svn", canonicalHost: "127.0.0.1", effectivePort: 3691 },
             },
           });
-          throw rpcError(code, category, reason);
+          throw rpcError(settlementCode, settlementCategory, settlementReason, {
+            originFailureCode: settlementCode === originCode ? undefined : originCode,
+          });
         }
         expect(method).toBe("diagnostics/get");
         expect(params).toEqual({});
@@ -76,10 +105,10 @@ describe("installed SVN anonymous negative report", () => {
         schemaVersion: 1,
         kind: "subversionr.installedSvnAnonymousNegativeReport",
         scenario,
-        originCode: code,
-        originReason: reason,
-        settlementCode: code,
-        settlementReason: reason,
+        originCode,
+        originReason,
+        settlementCode,
+        settlementReason,
         protocol: { major: 1, minor: 35 },
         trust: { acknowledgedEpoch: 7, consistent: true },
         authActivity: { credentialRequests: 0, credentialSettlements: 0, certificateRequests: 0 },
@@ -100,11 +129,13 @@ describe("installed SVN anonymous negative report", () => {
 
   it.each(SCENARIOS)(
     "rejects a non-exact structured $scenario settlement",
-    async ({ scenario, code, category, reason }) => {
+    async ({ scenario, originCode, settlementCode, settlementCategory, settlementReason }) => {
       const wrongCode = baseOptions(scenario);
       wrongCode.initialize = vi.fn().mockResolvedValue(connection(vi.fn(async (method: string) => {
         if (method === "repository/checkout") {
-          throw rpcError(`${code}_WRONG`, category, reason);
+          throw rpcError(`${settlementCode}_WRONG`, settlementCategory, settlementReason, {
+            originFailureCode: settlementCode === originCode ? undefined : originCode,
+          });
         }
         return currentDiagnostics();
       })));
@@ -115,13 +146,39 @@ describe("installed SVN anonymous negative report", () => {
       const wrongFailure = baseOptions(scenario);
       wrongFailure.initialize = vi.fn().mockResolvedValue(connection(vi.fn(async (method: string) => {
         if (method === "repository/checkout") {
-          throw rpcError(code, category, reason, { cleanupAppropriate: true });
+          throw rpcError(settlementCode, settlementCategory, settlementReason, {
+            cleanupAppropriate: true,
+            originFailureCode: settlementCode === originCode ? undefined : originCode,
+          });
         }
         return currentDiagnostics();
       })));
       await expect(collectInstalledSvnAnonymousNegativeReport(wrongFailure)).rejects.toMatchObject({
         code: "SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_NEGATIVE_SETTLEMENT_INVALID",
       });
+    },
+  );
+
+  it.each(["greetingStall", "connectedStall"] as const)(
+    "rejects a missing or incorrect $scenario timeout origin",
+    async (scenario) => {
+      for (const originFailureCode of [undefined, "SUBVERSIONR_REMOTE_WORKER_CRASHED"]) {
+        const options = baseOptions(scenario);
+        options.initialize = vi.fn().mockResolvedValue(connection(vi.fn(async (method: string) => {
+          if (method === "repository/checkout") {
+            throw rpcError(
+              "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+              "recovery",
+              "remoteRecoveryBlocked",
+              { originFailureCode },
+            );
+          }
+          return currentDiagnostics();
+        })));
+        await expect(collectInstalledSvnAnonymousNegativeReport(options)).rejects.toMatchObject({
+          code: "SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_NEGATIVE_SETTLEMENT_INVALID",
+        });
+      }
     },
   );
 
@@ -219,7 +276,7 @@ describe("installed SVN anonymous negative report", () => {
 });
 
 function baseOptions(
-  scenario: "maliciousRoot" | "saslOnly",
+  scenario: "maliciousRoot" | "saslOnly" | "greetingStall" | "connectedStall",
 ): InstalledSvnAnonymousNegativeReportOptions {
   return {
     expectedToken: TOKEN,
@@ -229,7 +286,9 @@ function baseOptions(
   };
 }
 
-function request(scenario: "maliciousRoot" | "saslOnly"): Record<string, unknown> {
+function request(
+  scenario: "maliciousRoot" | "saslOnly" | "greetingStall" | "connectedStall",
+): Record<string, unknown> {
   return {
     token: TOKEN,
     scenario,
@@ -269,19 +328,23 @@ function rpcError(
   code: string,
   category: string,
   reason: string,
-  overrides: { cleanupAppropriate?: boolean } = {},
+  overrides: { cleanupAppropriate?: boolean; originFailureCode?: string } = {},
 ): JsonRpcStreamError {
+  const args: Record<string, unknown> = {
+    remoteFailure: {
+      category,
+      reason,
+      cleanupAppropriate: overrides.cleanupAppropriate ?? false,
+    },
+  };
+  if (overrides.originFailureCode !== undefined) {
+    args.originFailureCode = overrides.originFailureCode;
+  }
   return new JsonRpcStreamError({
     code,
     category: "native",
     messageKey: "error.remote.test",
-    args: {
-      remoteFailure: {
-        category,
-        reason,
-        cleanupAppropriate: overrides.cleanupAppropriate ?? false,
-      },
-    },
+    args,
     retryable: false,
     diagnostics: null,
   });

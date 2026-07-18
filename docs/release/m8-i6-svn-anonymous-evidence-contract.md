@@ -221,10 +221,18 @@ absent when any candidate observation fails.
 
 This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
-`saslOnly`, and `authzDenied` product probes, but the remaining controlled
-negative/recovery cells
+`saslOnly`, `greetingStall`, `connectedStall`, and `authzDenied` product probes,
+but the remaining controlled negative/recovery cells
 are incomplete and no complete candidate report has passed the executable
 verifier. Missing controlled observations may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
 only after one real report passes the executable verifier against the candidate
 artifacts.
+
+The two checkout-stall probes establish only the installed surface's exact
+timeout origin, recovery-blocked settlement, and one durable blocked entry bound
+to the checkout target and origin operation. They do not satisfy the
+`stalledMidRead` cell, whose read-only remote-status operation must settle as
+timeout rather than checkout recovery, or the complete `recoveryBlocked` cell,
+which additionally requires restart, explicit disposition confirmation, journal
+clearance, and a subsequent successful checkout.

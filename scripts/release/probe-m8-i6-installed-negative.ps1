@@ -5,7 +5,7 @@ param(
   [Parameter(Mandatory = $true)] [string]$FixtureRoot,
   [Parameter(Mandatory = $true)] [string]$RepositoryUrl,
   [Parameter(Mandatory = $true)] [string]$CheckoutPath,
-  [Parameter(Mandatory = $true)] [ValidateSet("maliciousRoot", "saslOnly")] [string]$Scenario,
+  [Parameter(Mandatory = $true)] [ValidateSet("maliciousRoot", "saslOnly", "greetingStall", "connectedStall")] [string]$Scenario,
   [Parameter(Mandatory = $true)] [ValidateRange(1, 300000)] [int]$OperationTimeoutMilliseconds,
   [Parameter(Mandatory = $true)] [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')] [string]$ExpectedProductVersion,
   [Parameter(Mandatory = $true)] [string]$DaemonPath,
@@ -55,6 +55,11 @@ function Test-PathWithin([string]$Path, [string]$Root) {
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-StringSha256([string]$Value) {
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+  return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
 function ConvertTo-ProcessArgument([string]$Value) {
@@ -141,7 +146,7 @@ function Get-TemporaryRootCount([string]$RemoteWorkersRoot) {
   return @(Get-ChildItem -LiteralPath $RemoteWorkersRoot -Force).Count
 }
 
-function Get-CheckoutJournalEntryCount([string]$RemoteStateRoot) {
+function Read-CheckoutJournal([string]$RemoteStateRoot) {
   Assert-True (Test-Path -LiteralPath $RemoteStateRoot -PathType Container) "The installed negative remote-state root was not created."
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $RemoteStateRoot $JournalTemporaryFileName))) "The installed negative checkout journal left an atomic-write temporary file."
   $journalPath = Join-Path $RemoteStateRoot $JournalFileName
@@ -154,7 +159,7 @@ function Get-CheckoutJournalEntryCount([string]$RemoteStateRoot) {
   }
   Assert-ExactProperties $journal @("schemaVersion", "entries") "installed negative checkout journal"
   Assert-True ([int]$journal.schemaVersion -eq 1) "The installed negative checkout journal schema must be v1."
-  return @($journal.entries).Count
+  return $journal
 }
 
 $vsixResolved = Resolve-RequiredFile $VsixPath "VsixPath"
@@ -222,7 +227,6 @@ foreach ($directory in @(
   Set-Content -LiteralPath (Join-Path $harnessDistRoot "extension.js") -Encoding utf8 -NoNewline
 
 @'
-const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const vscode = require("vscode");
@@ -256,10 +260,14 @@ async function run() {
   const repositoryUrl = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_NEGATIVE_REPOSITORY_URL");
   const checkoutPath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_NEGATIVE_CHECKOUT_PATH");
   const scenario = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_NEGATIVE_SCENARIO");
+  const operationId = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_NEGATIVE_OPERATION_ID");
   const timeoutText = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_NEGATIVE_TIMEOUT_MS");
   const operationTimeoutMs = Number(timeoutText);
   if (!Number.isSafeInteger(operationTimeoutMs) || operationTimeoutMs < 1 || operationTimeoutMs > 300000) {
     throw new Error("Installed negative operation timeout is invalid.");
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(operationId)) {
+    throw new Error("Installed negative operation ID is invalid.");
   }
 
   const extension = vscode.extensions.getExtension("hitsuki-ban.subversionr");
@@ -271,7 +279,6 @@ async function run() {
     throw new Error("SubversionR was not loaded from the isolated installed extensions root.");
   }
 
-  const operationId = crypto.randomUUID();
   const report = await withDeadline(vscode.commands.executeCommand(COMMAND, {
     token,
     scenario,
@@ -311,6 +318,7 @@ $installedBridgePath = Resolve-RequiredFile (Join-Path $installedPackageRoot "re
 Assert-True ((Get-Sha256 $installedDaemonPath) -ceq (Get-Sha256 $daemonResolved)) "Installed negative daemon bytes did not match the candidate daemon."
 Assert-True ((Get-Sha256 $installedBridgePath) -ceq (Get-Sha256 $bridgeResolved)) "Installed negative bridge bytes did not match the candidate bridge."
 Assert-True ((Get-CandidateProcessCount $installedDaemonPath) -eq 0) "The installed negative candidate daemon was already running before the Extension Host probe."
+$operationId = [Guid]::NewGuid().ToString()
 
 $names = @(
   "SUBVERSIONR_INSTALLED_I6_NEGATIVE_RESULT",
@@ -319,6 +327,7 @@ $names = @(
   "SUBVERSIONR_INSTALLED_I6_NEGATIVE_REPOSITORY_URL",
   "SUBVERSIONR_INSTALLED_I6_NEGATIVE_CHECKOUT_PATH",
   "SUBVERSIONR_INSTALLED_I6_NEGATIVE_SCENARIO",
+  "SUBVERSIONR_INSTALLED_I6_NEGATIVE_OPERATION_ID",
   "SUBVERSIONR_INSTALLED_I6_NEGATIVE_TIMEOUT_MS",
   "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME", "TEMP", "TMP"
 )
@@ -333,6 +342,7 @@ try {
   $env:SUBVERSIONR_INSTALLED_I6_NEGATIVE_REPOSITORY_URL = $RepositoryUrl
   $env:SUBVERSIONR_INSTALLED_I6_NEGATIVE_CHECKOUT_PATH = $checkoutResolved
   $env:SUBVERSIONR_INSTALLED_I6_NEGATIVE_SCENARIO = $Scenario
+  $env:SUBVERSIONR_INSTALLED_I6_NEGATIVE_OPERATION_ID = $operationId
   $env:SUBVERSIONR_INSTALLED_I6_NEGATIVE_TIMEOUT_MS = $OperationTimeoutMilliseconds.ToString([Globalization.CultureInfo]::InvariantCulture)
   $env:APPDATA = $appDataRoot
   $env:LOCALAPPDATA = $localAppDataRoot
@@ -385,25 +395,71 @@ Assert-True (
 Assert-True ($report.diagnosticsRedacted -eq $true) "Installed negative product report did not prove redacted execution."
 Assert-True ($report.redaction.rawUrls -eq $false -and $report.redaction.rawPaths -eq $false -and $report.redaction.rawContent -eq $false) "Installed negative report redaction contract was invalid."
 
-$expected = if ($Scenario -ceq "maliciousRoot") {
-  [pscustomobject]@{ Code = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"; Reason = "crossAuthorityRejected" }
-}
-else {
-  [pscustomobject]@{ Code = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"; Reason = "remoteCapabilityUnsupported" }
+$expected = switch -CaseSensitive ($Scenario) {
+  "maliciousRoot" {
+    [pscustomobject]@{
+      OriginCode = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
+      OriginReason = "crossAuthorityRejected"
+      SettlementCode = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
+      SettlementReason = "crossAuthorityRejected"
+    }
+  }
+  "saslOnly" {
+    [pscustomobject]@{
+      OriginCode = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+      OriginReason = "remoteCapabilityUnsupported"
+      SettlementCode = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+      SettlementReason = "remoteCapabilityUnsupported"
+    }
+  }
+  "greetingStall" {
+    [pscustomobject]@{
+      OriginCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
+      OriginReason = "operationDeadlineExceeded"
+      SettlementCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+      SettlementReason = "remoteRecoveryBlocked"
+    }
+  }
+  "connectedStall" {
+    [pscustomobject]@{
+      OriginCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
+      OriginReason = "operationDeadlineExceeded"
+      SettlementCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+      SettlementReason = "remoteRecoveryBlocked"
+    }
+  }
+  default { throw "Installed negative scenario was not recognized." }
 }
 Assert-True (
-  [string]$report.originCode -ceq $expected.Code -and
-  [string]$report.originReason -ceq $expected.Reason -and
-  [string]$report.settlementCode -ceq $expected.Code -and
-  [string]$report.settlementReason -ceq $expected.Reason
+  [string]$report.originCode -ceq $expected.OriginCode -and
+  [string]$report.originReason -ceq $expected.OriginReason -and
+  [string]$report.settlementCode -ceq $expected.SettlementCode -and
+  [string]$report.settlementReason -ceq $expected.SettlementReason
 ) "Installed negative product report did not preserve the exact controlled failure pair."
 
 $reportText = $report | ConvertTo-Json -Depth 32 -Compress
 Assert-True (-not $reportText.Contains($RepositoryUrl) -and -not $reportText.Contains($checkoutResolved)) "Installed negative product report leaked fixture identity."
 $temporaryRootsAfter = Get-TemporaryRootCount $remoteWorkersRoot
-$checkoutJournalEntriesAfter = Get-CheckoutJournalEntryCount $remoteStateRoot
+$checkoutJournal = Read-CheckoutJournal $remoteStateRoot
+$checkoutJournalEntries = @($checkoutJournal.entries)
+$checkoutJournalEntriesAfter = $checkoutJournalEntries.Count
+$expectsBlockedCheckout = $Scenario -ceq "greetingStall" -or $Scenario -ceq "connectedStall"
 Assert-True ($temporaryRootsAfter -eq 0) "Installed negative execution left operation temporary roots."
-Assert-True ($checkoutJournalEntriesAfter -eq 0) "Installed negative execution left durable checkout journal entries."
+if ($expectsBlockedCheckout) {
+  Assert-True ($checkoutJournalEntriesAfter -eq 1) "Installed checkout stall did not preserve exactly one blocked recovery entry."
+  $entry = $checkoutJournalEntries[0]
+  Assert-ExactProperties $entry @("targetPath", "targetSha256", "originOperationId", "effect", "state") "installed checkout stall recovery entry"
+  Assert-True (
+    [string]$entry.targetPath -ceq $checkoutResolved -and
+    [string]$entry.targetSha256 -ceq (Get-StringSha256 $checkoutResolved) -and
+    [string]$entry.originOperationId -ceq $operationId -and
+    [string]$entry.effect -ceq "checkoutTarget" -and
+    [string]$entry.state -ceq "blocked"
+  ) "Installed checkout stall recovery entry did not bind the exact target, operation, effect, and blocked state."
+}
+else {
+  Assert-True ($checkoutJournalEntriesAfter -eq 0) "Installed non-stall negative execution left durable checkout journal entries."
+}
 
 [pscustomobject]@{
   schema = "subversionr.release.m8-i6-installed-vsix-negative.v1"

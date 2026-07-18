@@ -1115,6 +1115,9 @@ $installedNegativeContracts = @(
     FaultScenario = "malicious-root"
     Code = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
     Reason = "crossAuthorityRejected"
+    SettlementCode = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"
+    SettlementReason = "crossAuthorityRejected"
+    JournalEntriesAfter = 0
     TimeoutMs = 30000
     GreetingSent = 1
     ClientResponseReceived = 1
@@ -1126,10 +1129,41 @@ $installedNegativeContracts = @(
     FaultScenario = "sasl-only"
     Code = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
     Reason = "remoteCapabilityUnsupported"
+    SettlementCode = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+    SettlementReason = "remoteCapabilityUnsupported"
+    JournalEntriesAfter = 0
     TimeoutMs = 30000
     GreetingSent = 1
     ClientResponseReceived = 1
     AuthRequestSent = 1
+    ReposInfoSent = 0
+  },
+  [pscustomobject]@{
+    Scenario = "greetingStall"
+    FaultScenario = "greeting-stall"
+    Code = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
+    Reason = "operationDeadlineExceeded"
+    SettlementCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    SettlementReason = "remoteRecoveryBlocked"
+    JournalEntriesAfter = 1
+    TimeoutMs = 2000
+    GreetingSent = 1
+    ClientResponseReceived = 1
+    AuthRequestSent = 0
+    ReposInfoSent = 0
+  },
+  [pscustomobject]@{
+    Scenario = "connectedStall"
+    FaultScenario = "connected-stall"
+    Code = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
+    Reason = "operationDeadlineExceeded"
+    SettlementCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+    SettlementReason = "remoteRecoveryBlocked"
+    JournalEntriesAfter = 1
+    TimeoutMs = 2000
+    GreetingSent = 0
+    ClientResponseReceived = 0
+    AuthRequestSent = 0
     ReposInfoSent = 0
   }
 )
@@ -1190,15 +1224,15 @@ foreach ($contract in $installedNegativeContracts) {
       [string]$installedNegativeReport.scenario -ceq [string]$contract.Scenario -and
       [string]$installedNegativeReport.originCode -ceq [string]$contract.Code -and
       [string]$installedNegativeReport.originReason -ceq [string]$contract.Reason -and
-      [string]$installedNegativeReport.settlementCode -ceq [string]$contract.Code -and
-      [string]$installedNegativeReport.settlementReason -ceq [string]$contract.Reason -and
+      [string]$installedNegativeReport.settlementCode -ceq [string]$contract.SettlementCode -and
+      [string]$installedNegativeReport.settlementReason -ceq [string]$contract.SettlementReason -and
       [int]$installedNegativeReport.protocol.major -eq 1 -and
       [int]$installedNegativeReport.protocol.minor -eq 35 -and
       [int]$installedNegativeReport.authActivity.credentialRequests -eq 0 -and
       [int]$installedNegativeReport.authActivity.credentialSettlements -eq 0 -and
       [int]$installedNegativeReport.authActivity.certificateRequests -eq 0 -and
       [int]$installedNegativeReport.temporaryRootsAfter -eq 0 -and
-      [int]$installedNegativeReport.checkoutJournalEntriesAfter -eq 0 -and
+      [int]$installedNegativeReport.checkoutJournalEntriesAfter -eq [int]$contract.JournalEntriesAfter -and
       $installedNegativeReport.diagnosticsRedacted -eq $true -and
       $installedNegativeReport.candidateDaemonExitedAfter -eq $true
     ) "The installed VSIX $($contract.FaultScenario) negative observation was incomplete."
@@ -1256,7 +1290,7 @@ foreach ($contract in $installedNegativeContracts) {
     Stop-FaultFixture $faultFixture $contract.FaultScenario
   }
 }
-Assert-True ($installedNegativeObservations.Count -eq 2) "The installed VSIX malicious-root and SASL-only negative probe set was incomplete."
+Assert-True ($installedNegativeObservations.Count -eq 4) "The installed VSIX malicious-root, SASL-only, greeting-stall, and connected-stall negative probe set was incomplete."
 
 $deniedAuthz = "[repo:/]`n* = rw`n`n[repo:/denied]`n* ="
 $rootWriteAuthz = "[repo:/]`n* = rw"
@@ -1748,4 +1782,4 @@ finally {
 }
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the installed malicious-root and SASL-only fault cells, the packaged/installed authz-denied remote-status cell, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied remote-status cell, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
