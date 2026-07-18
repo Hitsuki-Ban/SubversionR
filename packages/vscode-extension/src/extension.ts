@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { performance } from "node:perf_hooks";
 import * as vscode from "vscode";
@@ -50,6 +51,10 @@ import {
 import { collectInstalledRedactionReport } from "./diagnostics/installedRedactionReport";
 import { collectInstalledCredentialLeaseReport } from "./diagnostics/installedCredentialLeaseReport";
 import { collectInstalledRemoteWorkerReport } from "./diagnostics/installedRemoteWorkerReport";
+import {
+  collectInstalledSvnAnonymousReport,
+  type InstalledSvnAnonymousAuthActivity,
+} from "./diagnostics/installedSvnAnonymousReport";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
@@ -141,6 +146,10 @@ import {
 import { RepositoryLifecycleCoordinator } from "./repository/repositoryLifecycleCoordinator";
 import { RepositoryLifecycleNotificationService } from "./repository/repositoryLifecycleNotificationService";
 import { RepositorySessionService, type RepositorySession } from "./repository/repositorySessionService";
+import {
+  BackendCheckoutTargetRecoveryClient,
+  type CheckoutTargetRecoveryEntry,
+} from "./repository/checkoutTargetRecoveryRpcClient";
 import { SourceControlProjectionService } from "./scm/sourceControlProjectionService";
 import { SourceControlResourceStore } from "./scm/sourceControlResourceStore";
 import { VscodeSourceControlPresenter } from "./scm/vscodeSourceControlPresenter";
@@ -164,9 +173,10 @@ import { WatcherOverflowDiagnostics } from "./status/watcherOverflowDiagnostics"
 import { RemoteConnectionStateStore } from "./status/remoteConnectionStateStore";
 import { createRemoteConnectionNotificationHandler } from "./status/remoteConnectionNotificationHandler";
 import {
-  buildRemoteOperationEnvelope,
   canonicalEndpointFromRepositoryUrl,
   readRemoteAccessProfiles,
+  RemoteOperationEnvelopeFactory,
+  RemoteProfileConfigurationError,
   selectRemoteAccessProfile,
 } from "./security/remoteAccessProfile";
 import { TortoiseCommandController } from "./tortoise/tortoiseCommandController";
@@ -198,6 +208,7 @@ const BACKEND_RESTART_MAX_BACKOFF_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_INTERVAL_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_TIMEOUT_MS = 5 * 1000;
 const REMOTE_STATUS_CHECK_TIMEOUT_MS = 30 * 1000;
+const REMOTE_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface MatchingCompletedRefreshCoverageRequest {
   repositoryId: string;
@@ -291,6 +302,14 @@ function parseMatchingCompletedRefreshCoverageRequest(rawRequest: unknown): Matc
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const installedSvnAnonymousReportToken = consumeInstalledSvnAnonymousReportToken();
+  const installedSvnAnonymousAuthActivity: InstalledSvnAnonymousAuthActivity = {
+    credentialRequests: 0,
+    credentialSettlements: 0,
+    certificateRequests: 0,
+  };
+  const remoteStateRoot = remoteStateRootPath(context);
+  await vscode.workspace.fs.createDirectory(vscode.Uri.file(remoteStateRoot));
   const commandCancellationSource = new vscode.CancellationTokenSource();
   repositoryCommandCancellationSource = commandCancellationSource;
   context.subscriptions.push({
@@ -339,10 +358,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       pickTrust: pickCertificateTrust,
     },
   });
-  const authRequestHandler = createAuthRequestHandler({
+  const productionAuthRequestHandler = createAuthRequestHandler({
     credentialController,
     certificateTrustController,
   });
+  const authRequestHandler = async (method: string, params: unknown): Promise<unknown> => {
+    if (installedSvnAnonymousReportToken !== undefined) {
+      if (method === "credentials/request") {
+        installedSvnAnonymousAuthActivity.credentialRequests += 1;
+      } else if (method === "credentials/settle") {
+        installedSvnAnonymousAuthActivity.credentialSettlements += 1;
+      } else if (method === "certificate/request") {
+        installedSvnAnonymousAuthActivity.certificateRequests += 1;
+      }
+    }
+    return await productionAuthRequestHandler(method, params);
+  };
   const statusSnapshotStore = new StatusSnapshotStore();
   const remoteConnectionStateStore = new RemoteConnectionStateStore();
   const watcherOverflowDiagnostics = new WatcherOverflowDiagnostics();
@@ -418,6 +449,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clientVersion: extensionVersion(context),
         locale: vscode.env.language,
         cacheRoot: cacheRootPath(context),
+        remoteStateRoot,
         workspaceTrusted: vscode.workspace.isTrusted,
         baseEnv: process.env,
       }),
@@ -442,6 +474,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
   backendService = service;
+  const checkoutTargetRecoveryClient = new BackendCheckoutTargetRecoveryClient(service);
   context.subscriptions.push(service.onDidChangeLifecycleState((event) => {
     if (event.status === "ready" || event.status === "recovered" || event.status === "degraded") {
       credentialController.invalidateBackendConnection();
@@ -463,6 +496,67 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
   void backendLifecycleUiService.refresh();
+  const createAnonymousSvnRemoteEnvelope = async (input: {
+    operationId: string;
+    repositoryRootUrl: string;
+    timeoutMs: number;
+  }) => {
+    const expectedOrigin = canonicalEndpointFromRepositoryUrl(input.repositoryRootUrl);
+    const remoteConfiguration = vscode.workspace.getConfiguration("subversionr");
+    const profiles = readRemoteAccessProfiles({
+      inspect: <T>(section: string) => remoteConfiguration.inspect(section) as T | undefined,
+    });
+    const profile = selectRemoteAccessProfile(profiles, expectedOrigin);
+    const connection = await service.initialize();
+    const factory = new RemoteOperationEnvelopeFactory({
+      remoteSvnAnonymous: connection.initializeResult.capabilities.remoteSvnAnonymous,
+      isRemoteSubmissionEnabled: () => connection.isRemoteSubmissionEnabled(),
+      currentRemoteTrustEpoch: () => connection.currentRemoteTrustEpoch(),
+    });
+    return factory.createAnonymousSvn({
+      operationId: input.operationId,
+      intent: "foreground",
+      interaction: "allowed",
+      timeoutMs: input.timeoutMs,
+      profile,
+      expectedOrigin,
+    });
+  };
+  const createOperationRemoteEnvelope = async (repositoryRootUrl: string) => {
+    const scheme = new URL(repositoryRootUrl).protocol;
+    if (scheme === "file:") {
+      return undefined;
+    }
+    if (scheme !== "svn:") {
+      throw new RemoteProfileConfigurationError(
+        "SUBVERSIONR_REMOTE_SCHEME_UNSUPPORTED",
+        "error.remote.schemeUnsupported",
+        { scheme: scheme.slice(0, 32) },
+      );
+    }
+    return await createAnonymousSvnRemoteEnvelope({
+      operationId: randomUUID(),
+      repositoryRootUrl,
+      timeoutMs: REMOTE_OPERATION_TIMEOUT_MS,
+    });
+  };
+  let sessionService: RepositorySessionService;
+  const createOperationRemoteEnvelopeForSession = async (input: {
+    repositoryId: string;
+    epoch: number;
+  }) => {
+    const session = sessionService
+      .listOpenSessions()
+      .find((candidate) => candidate.repositoryId === input.repositoryId && candidate.epoch === input.epoch);
+    if (!session) {
+      throw new RemoteProfileConfigurationError(
+        "SUBVERSIONR_REMOTE_SESSION_NOT_OPEN",
+        "error.repository.notOpen",
+        { repositoryId: input.repositoryId },
+      );
+    }
+    return await createOperationRemoteEnvelope(session.identity.repositoryRootUrl);
+  };
   const historyClient = new BackendHistoryClient(service);
   const baseContentDocumentProvider = vscode.workspace.registerTextDocumentContentProvider(
     BASE_CONTENT_URI_SCHEME,
@@ -475,6 +569,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     HEAD_CONTENT_URI_SCHEME,
     new HeadContentDocumentProvider({
       contentClient: new BackendContentClient(service),
+      createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
       workspaceTrusted: () => vscode.workspace.isTrusted,
       localize: vscode.l10n.t,
     }),
@@ -483,12 +578,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     REVISION_CONTENT_URI_SCHEME,
     new RevisionContentDocumentProvider({
       contentClient: new BackendContentClient(service),
+      createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
       workspaceTrusted: () => vscode.workspace.isTrusted,
       localize: vscode.l10n.t,
     }),
   );
   const historyTreeDataProvider = new HistoryTreeDataProvider({
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     settings: historySettings,
     workspaceTrusted: () => vscode.workspace.isTrusted,
     api: {
@@ -505,6 +602,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     BLAME_DOCUMENT_URI_SCHEME,
     new HistoryBlameDocumentProvider({
       blameClient: historyClient,
+      createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
       workspaceTrusted: () => vscode.workspace.isTrusted,
       localize: vscode.l10n.t,
     }),
@@ -555,7 +653,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   });
   repositoryWatcherService = watcherService;
-  const sessionService = new RepositorySessionService({
+  sessionService = new RepositorySessionService({
     backendService: service,
     watcherService,
     statusSnapshotClient: new BackendStatusSnapshotClient(service),
@@ -590,6 +688,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => lensSettings,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -611,6 +710,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => lensSettings,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -675,6 +775,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => lensSettings,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -693,6 +794,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => lensSettings,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -821,23 +923,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     remoteConnectionStateStore,
     now: () => new Date().toISOString(),
     createOperationId: randomUUID,
-    createRemoteEnvelope: async ({ operationId, repositoryRootUrl }) => {
-      const expectedOrigin = canonicalEndpointFromRepositoryUrl(repositoryRootUrl);
-      const configuration = vscode.workspace.getConfiguration("subversionr");
-      const profiles = readRemoteAccessProfiles({
-        inspect: <T>(section: string) => configuration.inspect(section) as T | undefined,
-      });
-      const profile = selectRemoteAccessProfile(profiles, expectedOrigin);
-      const connection = await service.initialize();
-      return buildRemoteOperationEnvelope({
-        operationId,
-        intent: "foreground",
-        interaction: "allowed",
+    createRemoteEnvelope: async (input) => {
+      const scheme = new URL(input.repositoryRootUrl).protocol;
+      if (scheme === "file:") {
+        return undefined;
+      }
+      if (scheme !== "svn:") {
+        throw new RemoteProfileConfigurationError(
+          "SUBVERSIONR_REMOTE_SCHEME_UNSUPPORTED",
+          "error.remote.schemeUnsupported",
+          { scheme: scheme.slice(0, 32) },
+        );
+      }
+      return await createAnonymousSvnRemoteEnvelope({
+        ...input,
         timeoutMs: REMOTE_STATUS_CHECK_TIMEOUT_MS,
-        trustEpoch: connection.currentRemoteTrustEpoch(),
-        profile,
-        expectedOrigin,
-        remoteSubmissionEnabled: connection.isRemoteSubmissionEnabled(),
       });
     },
   });
@@ -882,6 +982,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     commandCancellation: commandCancellationSource.token,
     commitMessageHistory,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
+    createRemoteEnvelope: createOperationRemoteEnvelope,
     createRequestId: randomUUID,
     now: () => new Date().toISOString(),
     monotonicNowMs: () => performance.now(),
@@ -1279,6 +1380,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               }),
           }),
         );
+  const installedSvnAnonymousReportCommand =
+    installedSvnAnonymousReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand("subversionr.diagnostics.installedSvnAnonymousReport", (request: unknown) =>
+          collectInstalledSvnAnonymousReport({
+            expectedToken: installedSvnAnonymousReportToken,
+            request,
+            initialize: () => service.initialize(),
+            openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+            closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+            applyRemoteStatusDelta: async (delta) => {
+              await dirtyPathPipeline.runExclusive(delta.repositoryId, async () => {
+                statusSnapshotStore.applyDelta(delta);
+                sourceControlProjection.applyDelta(delta);
+              });
+            },
+            fullReconcile: (repositoryId, epoch) =>
+              repositoryRefreshService.fullReconcileRepository({ repositoryId, epoch }),
+            getProjection: (repositoryId) => sourceControlProjection.getProjection(repositoryId),
+            appendFile: async (path, data) => await appendFile(path, data, { encoding: "utf8" }),
+            authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+          }),
+        );
   const installedCoreWorkflowReportCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedCoreWorkflowReport",
     (request: unknown) =>
@@ -1514,6 +1638,73 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       commitAllRepositoryIdArgument(commandArgument, sourceControlRepositoryIds),
     ),
   );
+  const resolveCheckoutTargetRecoveryCommand = vscode.commands.registerCommand(
+    "subversionr.resolveCheckoutTargetRecovery",
+    async () => {
+      const blocked = (await checkoutTargetRecoveryClient.list()).filter(
+        (entry): entry is CheckoutTargetRecoveryEntry & { state: "blocked" } => entry.state === "blocked",
+      );
+      if (blocked.length === 0) {
+        await vscode.window.showInformationMessage(
+          vscode.l10n.t("No blocked SVN checkout target requires review."),
+        );
+        return;
+      }
+      const selected = blocked.length === 1
+        ? blocked[0]
+        : (await vscode.window.showQuickPick(
+            blocked.map((entry) => ({
+              label: entry.targetPath,
+              description: entry.originOperationId,
+              entry,
+            })),
+            {
+              title: vscode.l10n.t("Review blocked SVN checkout target"),
+              placeHolder: vscode.l10n.t("Select the checkout target whose disposition you reviewed"),
+            },
+          ))?.entry;
+      if (!selected) {
+        return;
+      }
+      const releaseAction = vscode.l10n.t("Release checkout target block");
+      const confirmation = await vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          "Confirm that you reviewed and resolved the possibly changed SVN checkout target before releasing its safety block: {0}",
+          selected.targetPath,
+        ),
+        { modal: true },
+        releaseAction,
+      );
+      if (confirmation !== releaseAction) {
+        return;
+      }
+      await checkoutTargetRecoveryClient.confirm({
+        targetPath: selected.targetPath,
+        targetSha256: selected.targetSha256,
+        originOperationId: selected.originOperationId,
+        confirmation: "reviewedAndResolved",
+      });
+      await vscode.window.showInformationMessage(
+        vscode.l10n.t("SubversionR released the reviewed SVN checkout target: {0}", selected.targetPath),
+      );
+    },
+  );
+  void checkoutTargetRecoveryClient
+    .list()
+    .then(async (entries) => {
+      if (!entries.some((entry) => entry.state === "blocked")) {
+        return;
+      }
+      const reviewAction = vscode.l10n.t("Review checkout target");
+      const selected = await vscode.window.showWarningMessage(
+        vscode.l10n.t("A possibly changed SVN checkout target is blocked until you review its disposition."),
+        reviewAction,
+      );
+      if (selected === reviewAction) {
+        await vscode.commands.executeCommand("subversionr.resolveCheckoutTargetRecovery");
+      }
+    })
+    .catch((error: unknown) => diagnostics.recordFailure("Checkout Target Recovery", error));
   const refreshResourceCommand = vscode.commands.registerCommand("subversionr.refreshResource", (...resourceStates: unknown[]) =>
     repositoryCommandController.refreshResource(...resourceStates),
   );
@@ -1900,6 +2091,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshRepositoryCommand,
     checkRemoteChangesCommand,
     retryRemoteRecoveryCommand,
+    resolveCheckoutTargetRecoveryCommand,
     refreshResourceCommand,
     openConflictArtifactCommand,
     addResourceCommand,
@@ -1976,6 +2168,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (installedRemoteWorkerReportCommand !== undefined) {
     context.subscriptions.push(installedRemoteWorkerReportCommand);
   }
+  if (installedSvnAnonymousReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousReportCommand);
+  }
   if (installedSourceControlUiE2eExecuteResourceCommand !== undefined) {
     context.subscriptions.push(installedSourceControlUiE2eExecuteResourceCommand);
   }
@@ -2006,6 +2201,10 @@ function historyFailureMessage(error: unknown): string {
   switch (cause) {
     case "authenticationFailed":
       return vscode.l10n.t("SVN {0} failed because authentication was rejected. Check the credentials and retry.", vscode.l10n.t("History"));
+    case "authorizationDenied":
+      return vscode.l10n.t("SVN {0} failed because the server denied authorization for this operation.", vscode.l10n.t("History"));
+    case "authorizationConfigurationInvalid":
+      return vscode.l10n.t("SVN {0} failed because the server authorization configuration is invalid.", vscode.l10n.t("History"));
     case "notWorkingCopy":
       return vscode.l10n.t("SVN {0} failed because the selected target is not a working copy.", vscode.l10n.t("History"));
     default:
@@ -2422,6 +2621,10 @@ function setInstalledSourceControlUiE2eInputMessage(
 
 function cacheRootPath(context: vscode.ExtensionContext): string {
   return vscode.Uri.joinPath(context.globalStorageUri, "cache").fsPath;
+}
+
+function remoteStateRootPath(context: vscode.ExtensionContext): string {
+  return vscode.Uri.joinPath(context.globalStorageUri, "remote-state").fsPath;
 }
 
 function cacheStorageRoots(context: vscode.ExtensionContext): CacheStorageRoot[] {
@@ -3916,6 +4119,12 @@ function consumeInstalledRedactionReportToken(): string | undefined {
 function consumeInstalledRemoteWorkerReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 

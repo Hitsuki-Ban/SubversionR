@@ -96,6 +96,7 @@ pub(crate) struct RemoteLaunchPlan {
     pub(crate) epoch: Option<u64>,
     pub(crate) effect: crate::RemoteOperationEffect,
     pub(crate) operation: ValidatedRemoteOperation,
+    pub(crate) svn_anonymous_request: Option<crate::RemoteSvnAnonymousRequest>,
 }
 
 pub(crate) fn classify_repository_url(url: &str) -> Result<ClassifiedRepositoryUrl, BridgeFailure> {
@@ -233,6 +234,26 @@ pub(crate) fn unsupported_transport(endpoint: &CanonicalEndpoint) -> BridgeFailu
 }
 
 pub(crate) fn classify_remote_failure(failure: &BridgeFailure) -> RemoteFailure {
+    if failure.diagnostics.as_ref().is_some_and(|diagnostics| {
+        diagnostics.cause == OperationFailureCause::AuthorizationConfigurationInvalid
+    }) {
+        return RemoteFailure {
+            category: RemoteFailureCategory::Configuration,
+            reason: RemoteFailureClass::RemoteConfigurationInvalid,
+            cleanup_appropriate: false,
+        };
+    }
+    if failure
+        .diagnostics
+        .as_ref()
+        .is_some_and(|diagnostics| diagnostics.cause == OperationFailureCause::AuthorizationDenied)
+    {
+        return RemoteFailure {
+            category: RemoteFailureCategory::Authorization,
+            reason: RemoteFailureClass::AuthorizationDenied,
+            cleanup_appropriate: false,
+        };
+    }
     if failure
         .diagnostics
         .as_ref()
@@ -726,6 +747,56 @@ mod tests {
         assert_eq!(
             classify_remote_failure(&auth).reason,
             RemoteFailureClass::AuthenticationRequired
+        );
+        let authz = BridgeFailure::new(
+            "SVN_AUTHZ_DENIED",
+            "native",
+            "error.native.operationFailed",
+            json!({}),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause: OperationFailureCause::AuthorizationDenied,
+            svn: SvnErrorDiagnostics {
+                entries: vec![SvnErrorDiagnosticEntry {
+                    code: 170001,
+                    name: "SVN_ERR_AUTHZ_UNWRITABLE".to_string(),
+                }],
+                truncated: false,
+            },
+        });
+        assert_eq!(
+            classify_remote_failure(&authz),
+            RemoteFailure {
+                category: RemoteFailureCategory::Authorization,
+                reason: RemoteFailureClass::AuthorizationDenied,
+                cleanup_appropriate: false,
+            }
+        );
+        let invalid_authz_config = BridgeFailure::new(
+            "SVN_AUTHZ_INVALID_CONFIG",
+            "native",
+            "error.native.operationFailed",
+            json!({}),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause: OperationFailureCause::AuthorizationConfigurationInvalid,
+            svn: SvnErrorDiagnostics {
+                entries: vec![SvnErrorDiagnosticEntry {
+                    code: 170003,
+                    name: "SVN_ERR_AUTHZ_INVALID_CONFIG".to_string(),
+                }],
+                truncated: false,
+            },
+        });
+        assert_eq!(
+            classify_remote_failure(&invalid_authz_config),
+            RemoteFailure {
+                category: RemoteFailureCategory::Configuration,
+                reason: RemoteFailureClass::RemoteConfigurationInvalid,
+                cleanup_appropriate: false,
+            }
         );
 
         let unknown = attach_remote_failure(BridgeFailure::new(

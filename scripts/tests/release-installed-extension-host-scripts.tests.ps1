@@ -214,7 +214,7 @@ if ($null -eq $installedPackage) {
   installedRemoteWorkerReport = [pscustomobject]@{
     schemaVersion = 3
     kind = "subversionr.installedRemoteWorkerReport"
-    protocol = [pscustomobject]@{ major = 1; minor = 34 }
+    protocol = [pscustomobject]@{ major = 1; minor = 35 }
     remoteWorkerIsolation = $true
     credentialLeaseSettlement = $true
     remoteConnectionState = [pscustomobject]@{
@@ -326,7 +326,7 @@ try {
   Assert-True ($installedRedactionJson.Contains("[REDACTED:repository-log]")) "Installed redaction report should include repository log redaction markers."
   Assert-True ($installedRedactionJson.Contains("[REDACTED:source-content]")) "Installed redaction report should include source content redaction markers."
   Assert-Equal "subversionr.installedRemoteWorkerReport" $report.installedRemoteWorkerReport.kind "Installed-host evidence should include the remote worker report."
-  Assert-Equal "34" ([string]$report.installedRemoteWorkerReport.protocol.minor) "Installed remote worker evidence should bind protocol v1.34."
+  Assert-Equal "35" ([string]$report.installedRemoteWorkerReport.protocol.minor) "Installed remote worker evidence should bind protocol v1.35."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.remoteWorkerIsolation) "Installed remote worker evidence should prove the runtime capability."
   Assert-Equal "True" ([string]$report.installedRemoteWorkerReport.credentialLeaseSettlement) "Installed remote worker evidence should prove credential lease settlement."
   Assert-Equal "unsupportedAfterWorker" $report.installedRemoteWorkerReport.transportResult "Installed remote worker evidence should stop at the transport boundary."

@@ -538,7 +538,7 @@ impl ActiveRegistration {
 }
 
 enum WorkerIoEvent {
-    Complete(io::Result<WorkerResponse>),
+    Complete(io::Result<WorkerExchange>),
     Credential {
         request: CredentialRequest,
         responder: mpsc::SyncSender<Result<WorkerIoReply, ()>>,
@@ -552,6 +552,12 @@ enum WorkerIoEvent {
 enum WorkerIoReply {
     Credential(CredentialResponse),
     Settlement(CredentialSettlementAck),
+}
+
+struct WorkerExchange {
+    response: WorkerResponse,
+    result_bytes: Vec<u8>,
+    result_chunk_count: u32,
 }
 
 pub(super) fn execute_worker(
@@ -580,7 +586,7 @@ pub(super) fn execute_worker(
     let worker_was_resumed = AtomicBool::new(false);
     let hard_stopped = AtomicBool::new(false);
     let job_descendants_zero = AtomicBool::new(true);
-    let result = execute_worker_inner(
+    let execution_result = execute_worker_inner(
         worker_executable,
         bridge_path,
         &operation_temp_root,
@@ -600,22 +606,25 @@ pub(super) fn execute_worker(
     );
     let temp_root_removed = fs::remove_dir_all(&operation_temp_root).is_ok();
     let descendants_zero = job_descendants_zero.load(Ordering::Acquire)
-        && !result.as_ref().is_err_and(|failure| {
+        && !execution_result.as_ref().is_err_and(|failure| {
             failure.code() == "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
         });
     let hard_stop = hard_stopped.load(Ordering::Acquire);
     let cleanup_safe = descendants_zero && temp_root_removed;
-    let result = if cleanup_safe {
-        result
+    let execution_result = if cleanup_safe {
+        execution_result
     } else {
         Err(cleanup_blocked_failure())
     };
+    let result = execution_result.as_ref().map(|_| ()).map_err(Clone::clone);
+    let operation_output = execution_result.ok().flatten();
     let remote_failure = result
         .as_ref()
         .err()
         .map(crate::remote::classify_remote_failure);
     RemoteWorkerSettlement {
         result,
+        operation_output,
         remote_failure,
         effect,
         worker_was_resumed: worker_was_resumed.load(Ordering::Acquire),
@@ -673,7 +682,7 @@ fn execute_worker_inner(
     worker_was_resumed: &AtomicBool,
     hard_stopped: &AtomicBool,
     job_descendants_zero: &AtomicBool,
-) -> Result<(), BridgeFailure> {
+) -> Result<Option<RemoteSvnAnonymousOutput>, BridgeFailure> {
     plan.timeout_ms = remaining_timeout_ms(deadline, plan.timeout_ms)?;
 
     let bridge_path = bridge_path.to_str().ok_or_else(worker_start_failure)?;
@@ -966,7 +975,7 @@ fn execute_worker_inner(
     drop(registration);
     job_descendants_zero.store(true, Ordering::Release);
     io_thread.join().map_err(|_| worker_protocol_failure())?;
-    response
+    Ok(response)
 }
 
 fn finish_hard_stop(
@@ -976,7 +985,7 @@ fn finish_hard_stop(
     _operation_temp_root: &Path,
     settled: BridgeFailure,
     io_thread: Option<thread::JoinHandle<()>>,
-) -> Result<(), BridgeFailure> {
+) -> Result<Option<RemoteSvnAnonymousOutput>, BridgeFailure> {
     hard_stopped.store(true, Ordering::Release);
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
     if wait_job_zero_until(&registration.job, cleanup_deadline).is_err() {
@@ -997,10 +1006,13 @@ fn exchange_frames(
     request: &[u8],
     expected_operation_id: &str,
     events: &mpsc::SyncSender<WorkerIoEvent>,
-) -> io::Result<WorkerResponse> {
+) -> io::Result<WorkerExchange> {
     write_frame(&mut writer, request, MAX_REQUEST_FRAME_BYTES)?;
     writer.flush()?;
     let mut expected_sequence = 1u32;
+    let mut expected_result_sequence = 0u32;
+    let mut result_bytes = Vec::new();
+    let mut result_started = false;
     loop {
         let bytes = read_frame(&mut reader, MAX_RESPONSE_FRAME_BYTES)?;
         let frame: ChildWorkerFrame = serde_json::from_slice(&bytes)
@@ -1014,7 +1026,8 @@ fn exchange_frames(
             } if protocol_version == PRIVATE_WORKER_PROTOCOL_VERSION
                 && operation_id == expected_operation_id
                 && operation_id == request.operation_id
-                && sequence == expected_sequence =>
+                && sequence == expected_sequence
+                && !result_started =>
             {
                 let (responder, response) = mpsc::sync_channel(1);
                 events
@@ -1045,7 +1058,8 @@ fn exchange_frames(
             } if protocol_version == PRIVATE_WORKER_PROTOCOL_VERSION
                 && operation_id == expected_operation_id
                 && operation_id == request.operation_id
-                && sequence == expected_sequence =>
+                && sequence == expected_sequence
+                && !result_started =>
             {
                 let (responder, response) = mpsc::sync_channel(1);
                 events
@@ -1060,6 +1074,33 @@ fn exchange_frames(
                     io::Error::new(io::ErrorKind::InvalidData, "worker sequence overflow")
                 })?;
             }
+            ChildWorkerFrame::ResultChunk {
+                protocol_version,
+                operation_id,
+                sequence,
+                data_base64,
+            } if protocol_version == PRIVATE_WORKER_PROTOCOL_VERSION
+                && operation_id == expected_operation_id
+                && sequence == expected_result_sequence =>
+            {
+                result_started = true;
+                let chunk = STANDARD.decode(data_base64).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid worker result chunk")
+                })?;
+                if chunk.is_empty()
+                    || chunk.len() > OPERATION_RESULT_CHUNK_BYTES
+                    || result_bytes.len().saturating_add(chunk.len()) > MAX_OPERATION_RESULT_BYTES
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "worker result size",
+                    ));
+                }
+                result_bytes.extend_from_slice(&chunk);
+                expected_result_sequence = expected_result_sequence.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "worker result sequence overflow")
+                })?;
+            }
             ChildWorkerFrame::Final {
                 protocol_version,
                 operation_id,
@@ -1072,7 +1113,11 @@ fn exchange_frames(
                 if reader.read(&mut trailing)? != 0 {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "worker emitted trailing data"));
                 }
-                return Ok(response);
+                return Ok(WorkerExchange {
+                    response,
+                    result_bytes,
+                    result_chunk_count: expected_result_sequence,
+                });
             }
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "worker frame order")),
         }
@@ -1123,19 +1168,46 @@ fn write_parent_worker_frame(writer: &mut File, frame: &ParentWorkerFrame) -> io
 }
 
 fn validate_response(
-    response: WorkerResponse,
+    exchange: WorkerExchange,
     envelope: &RemoteOperationEnvelope,
-) -> Result<Result<(), BridgeFailure>, BridgeFailure> {
+) -> Result<Option<RemoteSvnAnonymousOutput>, BridgeFailure> {
+    let WorkerExchange {
+        response,
+        result_bytes,
+        result_chunk_count,
+    } = exchange;
     if response.protocol_version != PRIVATE_WORKER_PROTOCOL_VERSION
         || response.request_id != envelope.operation_id
         || response.operation_id != envelope.operation_id
     {
         return Err(worker_protocol_failure());
     }
-    Ok(match response.result {
-        WorkerResult::Success => Ok(()),
-        WorkerResult::Failure { failure } => Err(validate_wire_failure(failure)?),
-    })
+    match response.result {
+        WorkerResult::Success {
+            operation_result: None,
+        } if result_bytes.is_empty() && result_chunk_count == 0 => Ok(None),
+        WorkerResult::Success {
+            operation_result: Some(descriptor),
+        } => {
+            if descriptor.byte_count as usize != result_bytes.len()
+                || descriptor.chunk_count != result_chunk_count
+                || descriptor.chunk_count == 0
+                || !is_lowercase_sha256(&descriptor.sha256)
+                || format!("{:x}", Sha256::digest(&result_bytes)) != descriptor.sha256
+            {
+                return Err(worker_protocol_failure());
+            }
+            serde_json::from_slice::<RemoteSvnAnonymousOutput>(&result_bytes)
+                .map(Some)
+                .map_err(|_| worker_protocol_failure())
+        }
+        WorkerResult::Failure { failure }
+            if result_bytes.is_empty() && result_chunk_count == 0 =>
+        {
+            Err(validate_wire_failure(failure)?)
+        }
+        _ => Err(worker_protocol_failure()),
+    }
 }
 
 fn validate_wire_failure(failure: WireFailure) -> Result<BridgeFailure, BridgeFailure> {
@@ -1152,6 +1224,28 @@ fn validate_wire_failure(failure: WireFailure) -> Result<BridgeFailure, BridgeFa
     }
     if failure.retryable {
         return Err(worker_protocol_failure());
+    }
+    if let Some((category, key, args_kind, diagnostics_allowed)) =
+        svn_anonymous_failure_contract(&failure.code)
+    {
+        if failure.category != category
+            || failure.message_key != key
+            || !validate_svn_anonymous_failure_args(&failure.args, args_kind)
+            || !validate_wire_diagnostics(failure.diagnostics.as_ref(), diagnostics_allowed)
+        {
+            return Err(worker_protocol_failure());
+        }
+        let mut validated = BridgeFailure::new(
+            failure.code,
+            category,
+            key,
+            failure.args,
+            false,
+        );
+        if let Some(diagnostics) = failure.diagnostics {
+            validated = validated.with_diagnostics(diagnostics);
+        }
+        return Ok(validated);
     }
     let (category, key, permits_status) = match failure.code.as_str() {
         "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED" => {
@@ -1173,6 +1267,7 @@ fn validate_wire_failure(failure: WireFailure) -> Result<BridgeFailure, BridgeFa
     };
     if failure.category != category
         || failure.message_key != key
+        || failure.diagnostics.is_some()
         || (permits_status
             && !failure.args.as_object().is_some_and(|args| {
                 args.len() == 1 && args.get("status").is_some_and(Value::is_i64)
@@ -1188,6 +1283,381 @@ fn validate_wire_failure(failure: WireFailure) -> Result<BridgeFailure, BridgeFa
         failure.args,
         false,
     ))
+}
+
+#[derive(Clone, Copy)]
+enum WireFailureArgsKind {
+    Empty,
+    PathStatus,
+    PathStatusMutation,
+    PathStatusOptionalMutation,
+    AnonymousAuth,
+}
+
+fn svn_anonymous_failure_contract(
+    code: &str,
+) -> Option<(&'static str, &'static str, WireFailureArgsKind, bool)> {
+    use WireFailureArgsKind::*;
+    let contract = match code {
+        "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID" => (
+            "protocol",
+            "error.remote.workerProtocolInvalid",
+            Empty,
+            false,
+        ),
+        "SUBVERSIONR_REMOTE_CONTRACT_INVALID" => (
+            "configuration",
+            "error.remote.contractInvalid",
+            Empty,
+            false,
+        ),
+        "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH" => (
+            "configuration",
+            "error.remote.originMismatch",
+            Empty,
+            true,
+        ),
+        "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED" => (
+            "unsupported",
+            "error.remote.authUnsupported",
+            AnonymousAuth,
+            false,
+        ),
+        "SVN_BRIDGE_INVALID_ARGUMENT" => (
+            "native",
+            "error.native.bridgeInvalidArgument",
+            PathStatus,
+            true,
+        ),
+        "SVN_BRIDGE_UNHANDLED_STATUS" => (
+            "native",
+            "error.native.bridgeUnhandledStatus",
+            PathStatus,
+            true,
+        ),
+        "SVN_REMOTE_STATUS_FAILED" => (
+            "network",
+            "error.native.remoteStatusFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_REMOTE_STATUS_CANCEL_CALLBACK_FAILED" => (
+            "native",
+            "error.native.remoteStatusCancelCallbackFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_REMOTE_STATUS_CANCELLED" => (
+            "cancelled",
+            "error.native.remoteStatusCancelled",
+            PathStatus,
+            true,
+        ),
+        "SVN_REMOTE_STATUS_AUTH_FAILED" => (
+            "auth",
+            "error.native.remoteStatusAuthFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_CONTENT_FAILED" => (
+            "native",
+            "error.native.contentFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_CONTENT_REVISION_UNSUPPORTED" => (
+            "native",
+            "error.native.contentRevisionUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_HISTORY_LOG_FAILED" => (
+            "native",
+            "error.native.historyLogFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_HISTORY_BLAME_FAILED" => (
+            "native",
+            "error.native.historyBlameFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_HISTORY_REVISION_UNSUPPORTED" => (
+            "native",
+            "error.native.historyRevisionUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_HISTORY_BLAME_BINARY_FILE" => (
+            "native",
+            "error.native.historyBlameBinaryFile",
+            PathStatus,
+            true,
+        ),
+        "SVN_REPOSITORY_CHECKOUT_FAILED" => (
+            "native",
+            "error.native.repositoryCheckoutFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_REPOSITORY_CHECKOUT_DEPTH_UNSUPPORTED" => (
+            "native",
+            "error.native.repositoryCheckoutDepthUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_REPOSITORY_CHECKOUT_REVISION_UNSUPPORTED" => (
+            "native",
+            "error.native.repositoryCheckoutRevisionUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_REPOSITORY_CHECKOUT_EXTERNALS_POLICY_UNSUPPORTED" => (
+            "native",
+            "error.native.repositoryCheckoutExternalsPolicyUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_UPDATE_FAILED" => (
+            "native",
+            "error.native.operationUpdateFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_DEPTH_UNSUPPORTED" => (
+            "native",
+            "error.native.operationDepthUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_UPDATE_REVISION_UNSUPPORTED" => (
+            "native",
+            "error.native.operationUpdateRevisionUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_UPDATE_STICKY_DEPTH_UNSUPPORTED" => (
+            "native",
+            "error.native.operationUpdateStickyDepthUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_UPDATE_EXTERNALS_POLICY_UNSUPPORTED" => (
+            "native",
+            "error.native.operationUpdateExternalsPolicyUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_LOCK_FAILED" => (
+            "native",
+            "error.native.operationLockFailed",
+            PathStatusMutation,
+            true,
+        ),
+        "SVN_OPERATION_UNLOCK_FAILED" => (
+            "native",
+            "error.native.operationUnlockFailed",
+            PathStatusMutation,
+            true,
+        ),
+        "SVN_OPERATION_BRANCH_CREATE_FAILED" => (
+            "native",
+            "error.native.operationBranchCreateFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_BRANCH_CREATE_MESSAGE_INVALID" => (
+            "native",
+            "error.native.operationBranchCreateMessageInvalid",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_BRANCH_CREATE_REVISION_UNSUPPORTED" => (
+            "native",
+            "error.native.operationBranchCreateRevisionUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_BRANCH_CREATE_PARENTS_POLICY_UNSUPPORTED" => (
+            "native",
+            "error.native.operationBranchCreateParentsPolicyUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_BRANCH_CREATE_EXTERNALS_POLICY_UNSUPPORTED" => (
+            "native",
+            "error.native.operationBranchCreateExternalsPolicyUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_BRANCH_CREATE_REVISION_MISSING" => (
+            "native",
+            "error.native.operationBranchCreateRevisionMissing",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_SWITCH_FAILED" => (
+            "native",
+            "error.native.operationSwitchFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_SWITCH_REVISION_UNSUPPORTED" => (
+            "native",
+            "error.native.operationSwitchRevisionUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_SWITCH_STICKY_DEPTH_UNSUPPORTED" => (
+            "native",
+            "error.native.operationSwitchStickyDepthUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_SWITCH_EXTERNALS_POLICY_UNSUPPORTED" => (
+            "native",
+            "error.native.operationSwitchExternalsPolicyUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_SWITCH_REVISION_MISSING" => (
+            "native",
+            "error.native.operationSwitchRevisionMissing",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_SWITCH_ANCESTRY_POLICY_UNSUPPORTED" => (
+            "native",
+            "error.native.operationSwitchAncestryPolicyUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_COMMIT_FAILED" => (
+            "native",
+            "error.native.operationCommitFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_COMMIT_CHANGELISTS_INVALID" => (
+            "native",
+            "error.native.operationCommitChangelistsInvalid",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_COMMIT_OPTIONS_UNSUPPORTED" => (
+            "native",
+            "error.native.operationCommitOptionsUnsupported",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_COMMIT_MESSAGE_INVALID" => (
+            "native",
+            "error.native.operationCommitMessageInvalid",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_COMMIT_NO_CHANGES" => (
+            "native",
+            "error.native.operationCommitNoChanges",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_COMMIT_TARGET_NOT_FILE" => (
+            "native",
+            "error.native.operationCommitTargetNotFile",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_AUTH_CALLBACK_FAILED" => (
+            "native",
+            "error.native.operationAuthCallbackFailed",
+            PathStatus,
+            true,
+        ),
+        "SVN_OPERATION_CANCEL_CALLBACK_FAILED" => (
+            "native",
+            "error.native.operationCancelCallbackFailed",
+            PathStatusOptionalMutation,
+            true,
+        ),
+        "SVN_OPERATION_CANCELLED" => (
+            "cancelled",
+            "error.native.operationCancelled",
+            PathStatusOptionalMutation,
+            true,
+        ),
+        _ => return None,
+    };
+    Some(contract)
+}
+
+fn validate_svn_anonymous_failure_args(args: &Value, kind: WireFailureArgsKind) -> bool {
+    let Some(object) = args.as_object() else {
+        return false;
+    };
+    match kind {
+        WireFailureArgsKind::Empty => object.is_empty(),
+        WireFailureArgsKind::AnonymousAuth => {
+            object.len() == 2
+                && object.get("scheme").and_then(Value::as_str) == Some("svn")
+                && object.get("auth").and_then(Value::as_str) == Some("anonymous")
+        }
+        WireFailureArgsKind::PathStatus => validate_path_status_args(object, false, false),
+        WireFailureArgsKind::PathStatusMutation => validate_path_status_args(object, true, false),
+        WireFailureArgsKind::PathStatusOptionalMutation => {
+            validate_path_status_args(object, false, true)
+        }
+    }
+}
+
+fn validate_path_status_args(
+    object: &serde_json::Map<String, Value>,
+    requires_mutation: bool,
+    permits_mutation: bool,
+) -> bool {
+    let Some(path) = object.get("path").and_then(Value::as_str) else {
+        return false;
+    };
+    if path.is_empty() || path.len() > 32 * 1024 {
+        return false;
+    }
+    let Some(status) = object.get("status").and_then(Value::as_i64) else {
+        return false;
+    };
+    if i32::try_from(status).is_err() {
+        return false;
+    }
+    let mutation = object.get("mayHaveMutated");
+    if requires_mutation {
+        object.len() == 3 && mutation.is_some_and(Value::is_boolean)
+    } else if permits_mutation {
+        (object.len() == 2 && mutation.is_none())
+            || (object.len() == 3 && mutation.and_then(Value::as_bool) == Some(true))
+    } else {
+        object.len() == 2 && mutation.is_none()
+    }
+}
+
+fn validate_wire_diagnostics(
+    diagnostics: Option<&OperationFailureDiagnostics>,
+    allowed: bool,
+) -> bool {
+    let Some(diagnostics) = diagnostics else {
+        return true;
+    };
+    allowed
+        && !diagnostics.svn.entries.is_empty()
+        && diagnostics.svn.entries.len() <= 8
+        && diagnostics.svn.entries.iter().all(|entry| {
+            !entry.name.is_empty()
+                && entry.name.len() <= 128
+                && entry.name.bytes().all(|byte| {
+                    byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                })
+                && (entry.name.starts_with("SVN_ERR_")
+                    || entry.name == "SUBVERSIONR_ERR_REMOTE_ORIGIN_MISMATCH")
+        })
 }
 
 fn create_pipe() -> io::Result<PipeEnds> {
@@ -1530,6 +2000,7 @@ mod tests {
             message_key: "error.remote.configCreateFailed".to_string(),
             args: json!({ "status": 17 }),
             retryable: false,
+            diagnostics: None,
         };
         assert_eq!(
             validate_wire_failure(accepted)
@@ -1544,6 +2015,7 @@ mod tests {
             message_key: "C:\\Users\\secret".to_string(),
             args: json!({ "url": "https://user:password@example.invalid" }),
             retryable: false,
+            diagnostics: None,
         };
         assert_eq!(
             validate_wire_failure(rejected)
@@ -1562,6 +2034,7 @@ mod tests {
                 "outcome": "accepted"
             }),
             retryable: false,
+            diagnostics: None,
         };
         assert_eq!(
             validate_wire_failure(settlement)
@@ -1581,6 +2054,7 @@ mod tests {
                 "realm": "must-not-cross-worker-boundary"
             }),
             retryable: false,
+            diagnostics: None,
         };
         assert_eq!(
             validate_wire_failure(settlement_with_extra_args)

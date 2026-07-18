@@ -8,6 +8,7 @@ import {
   type HistoryBlameDocumentRequest,
 } from "../src/history/historyBlameDocument";
 import type { HistoryBlame, HistoryBlameClient, HistoryBlameRequest } from "../src/history/historyBlameRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("history blame document helpers", () => {
   it("encodes blame request identity into a custom URI with generation-based invalidation", () => {
@@ -40,14 +41,18 @@ describe("history blame document helpers", () => {
     const blameClient = fakeBlameClient({ ...blameResponse(), includeMergedRevisions: true });
     const provider = new HistoryBlameDocumentProvider({
       blameClient,
+      createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
       workspaceTrusted: () => true,
       localize: localizeForTest,
     });
 
     expect(parseBlameDocumentUri(uri)).toEqual(request);
-    await provider.provideTextDocumentContent(uri);
+    await provider.provideTextDocumentContent(uri, cancellationToken());
 
-    expect(blameClient.getBlame).toHaveBeenCalledWith(blameRpcRequest({ includeMergedRevisions: true }));
+    expect(blameClient.getBlame).toHaveBeenCalledWith(
+      blameRpcRequest({ includeMergedRevisions: true }),
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("rejects malformed blame document URIs and duplicate query keys", () => {
@@ -105,13 +110,20 @@ describe("HistoryBlameDocumentProvider", () => {
     const blameClient = fakeBlameClient(blameResponse());
     const provider = new HistoryBlameDocumentProvider({
       blameClient,
+      createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
       workspaceTrusted: () => true,
       localize: localizeForTest,
     });
 
-    const text = await provider.provideTextDocumentContent(createBlameDocumentUriComponents(blameDocumentRequest()));
+    const text = await provider.provideTextDocumentContent(
+      createBlameDocumentUriComponents(blameDocumentRequest()),
+      cancellationToken(),
+    );
 
-    expect(blameClient.getBlame).toHaveBeenCalledWith(blameRpcRequest());
+    expect(blameClient.getBlame).toHaveBeenCalledWith(
+      blameRpcRequest(),
+      { signal: expect.any(AbortSignal) },
+    );
     expect(text).toBe(
       [
         "l10n:SVN Blame: src/main.c",
@@ -146,11 +158,15 @@ describe("HistoryBlameDocumentProvider", () => {
     });
     const provider = new HistoryBlameDocumentProvider({
       blameClient,
+      createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
       workspaceTrusted: () => true,
       localize: localizeForTest,
     });
 
-    const text = await provider.provideTextDocumentContent(createBlameDocumentUriComponents(blameDocumentRequest()));
+    const text = await provider.provideTextDocumentContent(
+      createBlameDocumentUriComponents(blameDocumentRequest()),
+      cancellationToken(),
+    );
 
     expect(text).toContain("1 | l10n:Unknown | l10n:Unknown author | l10n:Unknown date | legacy line");
   });
@@ -159,11 +175,15 @@ describe("HistoryBlameDocumentProvider", () => {
     const blameClient = fakeBlameClient(blameResponse());
     const provider = new HistoryBlameDocumentProvider({
       blameClient,
+      createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
       workspaceTrusted: () => false,
       localize: localizeForTest,
     });
 
-    await expect(provider.provideTextDocumentContent(createBlameDocumentUriComponents(blameDocumentRequest()))).rejects.toMatchObject({
+    await expect(provider.provideTextDocumentContent(
+      createBlameDocumentUriComponents(blameDocumentRequest()),
+      cancellationToken(),
+    )).rejects.toMatchObject({
       code: "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
     });
     expect(blameClient.getBlame).not.toHaveBeenCalled();
@@ -189,10 +209,18 @@ function blameDocumentRequest(overrides: Partial<HistoryBlameDocumentRequest> = 
   };
 }
 
+function cancellationToken() {
+  return {
+    isCancellationRequested: false,
+    onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })),
+  };
+}
+
 function blameRpcRequest(overrides: Partial<HistoryBlameRequest> = {}): HistoryBlameRequest {
   const { generation: _generation, ...request } = blameDocumentRequest();
   return {
     ...request,
+    remote: anonymousSvnRemoteEnvelope(),
     ...overrides,
   };
 }

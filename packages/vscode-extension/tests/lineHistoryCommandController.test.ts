@@ -13,6 +13,7 @@ import type {
   ScmRepositoryProjection,
 } from "../src/scm/sourceControlResourceStore";
 import type { StatusEntry } from "../src/status/statusSnapshotRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("LineHistoryCommandController", () => {
   it("opens preloaded line history for a safe active editor selection", async () => {
@@ -51,7 +52,8 @@ describe("LineHistoryCommandController", () => {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(historyClient.getLog).toHaveBeenNthCalledWith(1, {
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -62,7 +64,8 @@ describe("LineHistoryCommandController", () => {
       discoverChangedPaths: false,
       strictNodeHistory: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(historyClient.getLog).toHaveBeenNthCalledWith(2, {
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -73,7 +76,8 @@ describe("LineHistoryCommandController", () => {
       discoverChangedPaths: false,
       strictNodeHistory: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(ui.showLineHistory).toHaveBeenCalledWith(
       {
         kind: "line",
@@ -167,7 +171,8 @@ describe("LineHistoryCommandController", () => {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(historyClient.getLog).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -178,7 +183,8 @@ describe("LineHistoryCommandController", () => {
       discoverChangedPaths: false,
       strictNodeHistory: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(ui.showLineHistory).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "line",
@@ -245,7 +251,10 @@ describe("LineHistoryCommandController", () => {
 
     await controller.showLineHistory();
 
-    expect(historyClient.getBlame).toHaveBeenCalledWith(expect.objectContaining({ lineStart: 5, lineLimit: 4 }));
+    expect(historyClient.getBlame).toHaveBeenCalledWith(
+      expect.objectContaining({ lineStart: 5, lineLimit: 4 }),
+      { signal: expect.any(AbortSignal) },
+    );
     expect(historyClient.getLog.mock.calls.map(([request]) => request.startRevision)).toEqual(["r8", "r7", "r5"]);
     expect(ui.showLineHistory).toHaveBeenCalledWith(
       expect.objectContaining({ label: "src/main.c:5-8", lineStart: 5, lineEnd: 8 }),
@@ -268,9 +277,11 @@ describe("LineHistoryCommandController", () => {
 
     expect(historyClient.getBlame).toHaveBeenCalledWith(
       expect.objectContaining({ includeMergedRevisions: true }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(historyClient.getLog).toHaveBeenCalledWith(
       expect.objectContaining({ includeMergedRevisions: true }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -517,6 +528,7 @@ function lineHistoryController(options: {
     settings: () => options.settings ?? lensSettings(),
     includeMergedRevisions: () => options.includeMergedRevisions ?? false,
     historyClient: options.historyClient ?? fakeHistoryClient(blameResponse({ lineStart: 1, lineLimit: 1 }), logResponse(4)),
+    createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
     sessionService: fakeSessionService(options.sessions ?? [repositorySession()]),
     sourceControlProjection: options.sourceControlProjection ?? fakeSourceControlProjection(projections),
     workspaceTrusted: () => options.workspaceTrusted ?? true,

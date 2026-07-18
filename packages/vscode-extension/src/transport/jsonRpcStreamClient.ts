@@ -295,7 +295,7 @@ interface StructuredRpcError {
 }
 
 export interface RpcErrorDiagnostics {
-  cause: "outOfDate" | "conflictPresent" | "authenticationFailed" | "notWorkingCopy" | "unknownNative";
+  cause: "outOfDate" | "conflictPresent" | "authenticationFailed" | "authorizationDenied" | "authorizationConfigurationInvalid" | "notWorkingCopy" | "unknownNative";
   svn: {
     entries: Array<{ code: number; name: string }>;
     truncated: boolean;
@@ -340,7 +340,7 @@ function requireRpcErrorDiagnostics(value: unknown): RpcErrorDiagnostics | null 
     throw new Error("JSON-RPC error diagnostics must be an object or null");
   }
   const diagnostics = value as Record<string, unknown>;
-  const causes = new Set(["outOfDate", "conflictPresent", "authenticationFailed", "notWorkingCopy", "unknownNative"]);
+  const causes = new Set(["outOfDate", "conflictPresent", "authenticationFailed", "authorizationDenied", "authorizationConfigurationInvalid", "notWorkingCopy", "unknownNative"]);
   if (typeof diagnostics.cause !== "string" || !causes.has(diagnostics.cause)) {
     throw new Error("JSON-RPC error diagnostics cause is invalid");
   }

@@ -63,7 +63,7 @@ function fakeConnection(): BackendConnection {
 
 function initializeResult(): InitializeResult {
   return {
-    protocol: { major: 1, minor: 34 },
+    protocol: { major: 1, minor: 35 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -119,6 +119,7 @@ function initializeResult(): InitializeResult {
       remoteWorkerIsolation: true,
       credentialLeaseSettlement: true,
       remoteConnectionState: true,
+      remoteSvnAnonymous: true,
     },
     acknowledgedTrustEpoch: 1,
   };

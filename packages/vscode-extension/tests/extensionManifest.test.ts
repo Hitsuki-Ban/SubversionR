@@ -61,6 +61,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.initialize",
       "onCommand:subversionr.diagnostics.collect",
       "onCommand:subversionr.diagnostics.versionReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousReport",
       "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
       "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
       "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
@@ -90,6 +91,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.refreshRepository",
       "onCommand:subversionr.checkRemoteChanges",
       "onCommand:subversionr.retryRemoteRecovery",
+      "onCommand:subversionr.resolveCheckoutTargetRecovery",
       "onCommand:subversionr.refreshResource",
       "onCommand:subversionr.openConflictArtifact",
       "onCommand:subversionr.addResource",
@@ -260,6 +262,10 @@ describe("extension manifest", () => {
       {
         command: "subversionr.retryRemoteRecovery",
         title: "%command.retryRemoteRecovery.title%",
+      },
+      {
+        command: "subversionr.resolveCheckoutTargetRecovery",
+        title: "%command.resolveCheckoutTargetRecovery.title%",
       },
       {
         command: "subversionr.refreshResource",
@@ -2214,6 +2220,16 @@ function collectStringValues(value: unknown): string[] {
 
 function runtimeLocalizationKeys(): string[] {
   return [
+    "A possibly changed SVN checkout target is blocked until you review its disposition.",
+    "Confirm that you reviewed and resolved the possibly changed SVN checkout target before releasing its safety block: {0}",
+    "No blocked SVN checkout target requires review.",
+    "Release checkout target block",
+    "Review blocked SVN checkout target",
+    "Review checkout target",
+    "Select the checkout target whose disposition you reviewed",
+    "SubversionR released the reviewed SVN checkout target: {0}",
+    "SVN {0} failed because the server denied authorization for this operation.",
+    "SVN {0} failed because the server authorization configuration is invalid.",
     "Revert",
     "Remove",
     "Delete",

@@ -53,6 +53,7 @@
     "onCommand:subversionr.initialize",
     "onCommand:subversionr.diagnostics.collect",
     "onCommand:subversionr.diagnostics.versionReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousReport",
     "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
     "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
     "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
@@ -82,6 +83,7 @@
     "onCommand:subversionr.refreshRepository",
     "onCommand:subversionr.checkRemoteChanges",
     "onCommand:subversionr.retryRemoteRecovery",
+    "onCommand:subversionr.resolveCheckoutTargetRecovery",
     "onCommand:subversionr.refreshResource",
     "onCommand:subversionr.openConflictArtifact",
     "onCommand:subversionr.addResource",
@@ -253,6 +255,10 @@
       {
         "command": "subversionr.retryRemoteRecovery",
         "title": "%command.retryRemoteRecovery.title%"
+      },
+      {
+        "command": "subversionr.resolveCheckoutTargetRecovery",
+        "title": "%command.resolveCheckoutTargetRecovery.title%"
       },
       {
         "command": "subversionr.refreshResource",

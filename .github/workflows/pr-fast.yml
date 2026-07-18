@@ -51,6 +51,9 @@ jobs:
       - name: Live GitHub attestation script tests
         shell: pwsh
         run: pnpm release:test-live-attestation-scripts
+      - name: M8 I6 svn anonymous evidence contract tests
+        shell: pwsh
+        run: pnpm release:test-m8-i6-svn-anonymous-evidence-scripts
       - name: Marketplace publication script tests
         shell: pwsh
         run: pnpm release:test-marketplace-publication-scripts

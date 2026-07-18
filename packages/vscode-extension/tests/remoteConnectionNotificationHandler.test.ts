@@ -16,6 +16,15 @@ describe("remote connection notifications", () => {
       .toThrowError(expect.objectContaining({ code: "SUBVERSIONR_REMOTE_CONNECTION_NOTIFICATION_INVALID" }));
   });
 
+  it("preserves authorization denial as distinct attention state", () => {
+    const notification = {
+      repositoryId: "repo",
+      epoch: 1,
+      state: { kind: "attention", reason: "authorizationDenied" },
+    } as const;
+    expect(parseRemoteConnectionStateNotification(notification)).toEqual(notification);
+  });
+
   it("schedules pending recovery once and does not recurse while recovery is checking", async () => {
     const store = registeredStore();
     const scheduleRecovery = vi.fn().mockResolvedValue(undefined);

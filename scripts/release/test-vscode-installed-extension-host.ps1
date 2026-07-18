@@ -398,7 +398,7 @@ async function run() {
     installedRemoteWorkerReport.schemaVersion !== 3 ||
     installedRemoteWorkerReport.kind !== "subversionr.installedRemoteWorkerReport" ||
     installedRemoteWorkerReport.protocol?.major !== 1 ||
-    installedRemoteWorkerReport.protocol?.minor !== 34 ||
+    installedRemoteWorkerReport.protocol?.minor !== 35 ||
     installedRemoteWorkerReport.remoteWorkerIsolation !== true ||
     installedRemoteWorkerReport.credentialLeaseSettlement !== true ||
     JSON.stringify(installedRemoteWorkerReport.remoteConnectionState?.stateUnion) !== JSON.stringify(["unchecked", "checking", "online", "attention", "unreachable", "indeterminate"]) ||
@@ -429,7 +429,7 @@ async function run() {
     installedRemoteWorkerReport.credentialLeaseReport?.reloadDiscardedPendingLease !== true ||
     installedRemoteWorkerReport.credentialLeaseReport?.storageCleanup !== true
   ) {
-    throw new Error("Installed remote worker report did not prove the v1.34 isolated worker, remote connection state, credential lease lifecycle, same-lane recovery, and follow-up request.");
+    throw new Error("Installed remote worker report did not prove the v1.35 isolated worker, remote connection state, credential lease lifecycle, same-lane recovery, and follow-up request.");
   }
   const credentialEvidenceText = JSON.stringify(installedRemoteWorkerReport.credentialLeaseReport);
   for (const forbidden of ["alice", "bob", "charlie", "installed-evidence-secret", "svn.example.invalid", "SubversionR installed credential evidence"]) {
@@ -536,7 +536,7 @@ function Assert-HarnessResult(
     $Result.installedRemoteWorkerReport.schemaVersion -ne 3 -or
     $Result.installedRemoteWorkerReport.kind -ne "subversionr.installedRemoteWorkerReport" -or
     $Result.installedRemoteWorkerReport.protocol.major -ne 1 -or
-    $Result.installedRemoteWorkerReport.protocol.minor -ne 34 -or
+    $Result.installedRemoteWorkerReport.protocol.minor -ne 35 -or
     $Result.installedRemoteWorkerReport.remoteWorkerIsolation -ne $true -or
     $Result.installedRemoteWorkerReport.credentialLeaseSettlement -ne $true -or
     $Result.installedRemoteWorkerReport.remoteConnectionState.staleIncomingPreserved -ne $true -or
@@ -565,7 +565,7 @@ function Assert-HarnessResult(
     $Result.installedRemoteWorkerReport.credentialLeaseReport.reloadDiscardedPendingLease -ne $true -or
     $Result.installedRemoteWorkerReport.credentialLeaseReport.storageCleanup -ne $true
   ) {
-    throw "Installed-host result must prove the v1.34 isolated remote worker, remote connection state, credential lease lifecycle, same-lane recovery, and a subsequent diagnostics request."
+    throw "Installed-host result must prove the v1.35 isolated remote worker, remote connection state, credential lease lifecycle, same-lane recovery, and a subsequent diagnostics request."
   }
   $remoteStateUnion = @($Result.installedRemoteWorkerReport.remoteConnectionState.stateUnion)
   if (($remoteStateUnion -join ",") -ne "unchecked,checking,online,attention,unreachable,indeterminate") {
@@ -754,7 +754,7 @@ $report = [pscustomobject]@{
     "SubversionR became active inside a real VS Code Extension Host",
     "SubversionR version report command executed and opened a readonly report document",
     "SubversionR installed redaction report command executed and returned a redacted diagnostics bundle",
-    "SubversionR installed remote worker report proved protocol v1.34 isolation, remote connection state, credential settlement, transport boundary, same-lane recovery, and subsequent diagnostics",
+    "SubversionR installed remote worker report proved protocol v1.35 isolation, remote connection state, credential settlement, transport boundary, same-lane recovery, and subsequent diagnostics",
     "working-copy sentinel .svn tree hash was unchanged",
     "publicReadinessClaim remains false"
   )

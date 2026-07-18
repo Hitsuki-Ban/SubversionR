@@ -3832,7 +3832,7 @@ fn stdio_remote_worker_keeps_diagnostics_and_other_working_copies_responsive() {
     ]
     .concat();
     let shutdown = frame(r#"{"jsonrpc":"2.0","id":8,"method":"shutdown","params":{}}"#);
-    let reader = DelayedSecondChunkReader::new(first, shutdown, Duration::from_millis(180));
+    let reader = DelayedSecondChunkReader::new(first, shutdown, Duration::from_millis(500));
     let mut output = Vec::new();
 
     run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
@@ -3848,7 +3848,7 @@ fn stdio_remote_worker_keeps_diagnostics_and_other_working_copies_responsive() {
         responses[0]["result"]["capabilities"]["remoteWorkerIsolation"],
         true
     );
-    assert_eq!(responses[1]["result"]["protocol"]["minor"], 34);
+    assert_eq!(responses[1]["result"]["protocol"]["minor"], 35);
     assert_eq!(
         responses[2]["error"]["code"],
         "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY"
@@ -4212,7 +4212,7 @@ fn stdio_recovery_blocked_lane_rejects_child_and_discovery_paths_but_keeps_diagn
         frame(r#"{"jsonrpc":"2.0","id":6,"method":"shutdown","params":{}}"#),
     ]
     .concat();
-    let reader = DelayedSecondChunkReader::new(first, second, Duration::from_millis(40));
+    let reader = DelayedSecondChunkReader::new(first, second, Duration::from_millis(100));
     let mut output = Vec::new();
 
     run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker)
@@ -4236,7 +4236,7 @@ fn stdio_recovery_blocked_lane_rejects_child_and_discovery_paths_but_keeps_diagn
         responses[3]["error"]["code"],
         "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
     );
-    assert_eq!(responses[4]["result"]["protocol"]["minor"], 34);
+    assert_eq!(responses[4]["result"]["protocol"]["minor"], 35);
     assert_eq!(responses[5]["result"]["accepted"], true);
 }
 
@@ -4405,7 +4405,7 @@ fn stdio_backend_reconnect_rebuilds_recovery_lane_before_full_reconcile() {
     let reader = DelayedSecondChunkReader::new(
         recovery_input,
         frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#),
-        Duration::from_millis(40),
+        Duration::from_millis(100),
     );
     let mut output = Vec::new();
 
@@ -4677,6 +4677,7 @@ fn worker_settlement(
     });
     RemoteWorkerSettlement {
         result,
+        operation_output: None,
         remote_failure,
         effect,
         worker_was_resumed,
@@ -4848,6 +4849,35 @@ fn remote_checkout_frame_with_timeout(
 }
 
 fn frame(payload: &str) -> Vec<u8> {
+    static NEXT_REMOTE_STATE_ROOT: AtomicUsize = AtomicUsize::new(1);
+    let mut value: serde_json::Value = serde_json::from_str(payload).expect("test frame JSON");
+    if value.get("method").and_then(serde_json::Value::as_str) == Some("initialize")
+        && value
+            .get("params")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|params| !params.contains_key("remoteStateRoot"))
+    {
+        let root = std::env::temp_dir().join(format!(
+            "subversionr-stdio-remote-state-{}-{}",
+            std::process::id(),
+            NEXT_REMOTE_STATE_ROOT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&root).expect("test remote state root");
+        value
+            .get_mut("params")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("initialize params object")
+            .insert(
+                "remoteStateRoot".to_string(),
+                serde_json::Value::String(
+                    root.canonicalize()
+                        .expect("canonical test remote state root")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            );
+    }
+    let payload = value.to_string();
     format!("Content-Length: {}\r\n\r\n{payload}", payload.len()).into_bytes()
 }
 

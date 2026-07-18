@@ -6,11 +6,13 @@ import type { ScmProjectedResource, ScmProjectedResourceLookup } from "../scm/so
 import type { PathCasePolicy } from "../status/types";
 import type { LensSettings } from "./lensSettings";
 import { isChangelistResourceGroupId } from "../scm/resourceStateClassifier";
+import type { RemoteOperationEnvelope } from "../security/remoteAccessProfile";
 
 export interface SymbolHistoryCodeLensProviderOptions<TCodeLens extends SymbolHistoryCodeLens> {
   settings(): LensSettings;
   includeMergedRevisions(): boolean;
   historyClient: HistoryBlameClient;
+  createRemoteEnvelope(input: { repositoryId: string; epoch: number }): Promise<RemoteOperationEnvelope | undefined>;
   sessionService: Pick<RepositorySessionService, "listOpenSessions">;
   sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource">;
   workspaceTrusted(): boolean;
@@ -49,6 +51,7 @@ export interface SymbolHistoryUri {
 
 export interface SymbolHistoryCancellationToken {
   isCancellationRequested: boolean;
+  onCancellationRequested(listener: () => void): { dispose(): void };
 }
 
 export interface SymbolHistoryRange {
@@ -171,12 +174,17 @@ export class SymbolHistoryCodeLensProvider<TCodeLens extends SymbolHistoryCodeLe
       return lens;
     }
 
-    const aggregate = await this.resolveAggregate(data, token);
-    if (!aggregate || token.isCancellationRequested) {
+    const cancellation = cancellationFromToken(token);
+    try {
+      const aggregate = await this.resolveAggregate(data, token, cancellation.signal);
+      if (!aggregate || token.isCancellationRequested) {
+        return lens;
+      }
+      lens.command = commandForAggregate(data, aggregate, this.options.api.localize);
       return lens;
+    } finally {
+      cancellation.dispose();
     }
-    lens.command = commandForAggregate(data, aggregate, this.options.api.localize);
-    return lens;
   }
 
   public refresh(): void {
@@ -190,23 +198,35 @@ export class SymbolHistoryCodeLensProvider<TCodeLens extends SymbolHistoryCodeLe
   private async resolveAggregate(
     data: SymbolHistoryLensData,
     token: SymbolHistoryCancellationToken,
+    signal: AbortSignal,
   ): Promise<SymbolHistoryAggregate | undefined> {
     let blame;
     try {
-      blame = await this.options.historyClient.getBlame({
+      const remote = await this.options.createRemoteEnvelope({
         repositoryId: data.target.repositoryId,
         epoch: data.target.epoch,
-        path: data.target.path,
-        pegRevision: "base",
-        startRevision: "r0",
-        endRevision: "base",
-        lineStart: data.symbol.lineStart,
-        lineLimit: data.symbol.lineLimit,
-        ignoreWhitespace: "none",
-        ignoreEolStyle: false,
-        ignoreMimeType: false,
-        includeMergedRevisions: this.options.includeMergedRevisions(),
       });
+      if (signal.aborted) {
+        return undefined;
+      }
+      blame = await this.options.historyClient.getBlame(
+        {
+          repositoryId: data.target.repositoryId,
+          epoch: data.target.epoch,
+          path: data.target.path,
+          pegRevision: "base",
+          startRevision: "r0",
+          endRevision: "base",
+          lineStart: data.symbol.lineStart,
+          lineLimit: data.symbol.lineLimit,
+          ignoreWhitespace: "none",
+          ignoreEolStyle: false,
+          ignoreMimeType: false,
+          includeMergedRevisions: this.options.includeMergedRevisions(),
+          ...(remote === undefined ? {} : { remote }),
+        },
+        { signal },
+      );
     } catch (_error) {
       return undefined;
     }
@@ -268,6 +288,18 @@ export class SymbolHistoryCodeLensProvider<TCodeLens extends SymbolHistoryCodeLe
           left.session.repositoryId.localeCompare(right.session.repositoryId),
       )[0];
   }
+}
+
+function cancellationFromToken(token: SymbolHistoryCancellationToken): {
+  signal: AbortSignal;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const subscription = token.onCancellationRequested(() => controller.abort());
+  if (token.isCancellationRequested) {
+    controller.abort();
+  }
+  return { signal: controller.signal, dispose: () => subscription.dispose() };
 }
 
 interface SymbolHistoryAggregate {

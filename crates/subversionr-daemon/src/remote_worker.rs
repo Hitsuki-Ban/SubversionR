@@ -5,24 +5,30 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use subversionr_protocol::{
     CertificateTrustRequest, CertificateTrustResponse, Credential, CredentialAttempt,
     CredentialPersistenceIntent, CredentialRequest, CredentialResponse, CredentialSettlementAck,
-    CredentialSettlementOutcome, CredentialSettlementRequest, RemoteFailure,
-    RemoteOperationEnvelope,
+    CredentialSettlementOutcome, CredentialSettlementRequest, OperationFailureDiagnostics,
+    RemoteFailure, RemoteOperationEnvelope,
 };
 
+use crate::remote_operation::{RemoteSvnAnonymousOutput, RemoteSvnAnonymousRequest};
 use crate::{
-    AuthRequestBroker, BridgeApi, BridgeCancellationToken, BridgeFailure, NeverCancelled,
-    RemoteConfigPlan, RemoteConfigScheme, RemoteConfigServerAuth, RemoteNativeBridge,
+    AuthRequestBroker, BridgeApi, BridgeCancellationToken, BridgeFailure, NativeBridge,
+    NeverCancelled, RemoteConfigPlan, RemoteConfigScheme, RemoteConfigServerAuth,
+    RemoteNativeBridge, UnavailableAuthRequestBroker,
 };
 
-const PRIVATE_WORKER_PROTOCOL_VERSION: u16 = 2;
+const PRIVATE_WORKER_PROTOCOL_VERSION: u16 = 3;
 const PRIVATE_REMOTE_WORKER_MODE: &str = "--subversionr-private-remote-worker-v1";
 const MAX_REQUEST_FRAME_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE_FRAME_BYTES: usize = 64 * 1024;
+const MAX_OPERATION_RESULT_BYTES: usize = 32 * 1024 * 1024;
+const OPERATION_RESULT_CHUNK_BYTES: usize = 32 * 1024;
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const SUPERVISION_POLL: Duration = Duration::from_millis(5);
 const WORKER_TERMINATION_CODE: u32 = 0x5356_5201;
@@ -40,6 +46,19 @@ pub trait RemoteWorkerSupervisor: Send + Sync {
         deadline: Instant,
     ) -> RemoteWorkerSettlement;
 
+    fn execute_svn_anonymous(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        effect: RemoteOperationEffect,
+        _request: RemoteSvnAnonymousRequest,
+        _cancellation: &dyn BridgeCancellationToken,
+        _deadline: Instant,
+    ) -> RemoteWorkerSettlement {
+        RemoteWorkerSettlement::pre_launch(effect, Err(svn_anonymous_unavailable()))
+    }
+
     fn terminate_active(&self) -> Result<(), BridgeFailure>;
 
     fn update_workspace_trust(&self, _trusted: bool) -> Result<(), BridgeFailure> {
@@ -51,6 +70,10 @@ pub trait RemoteWorkerSupervisor: Send + Sync {
     fn capability_available(&self) -> bool;
 
     fn credential_lease_settlement_available(&self) -> bool {
+        false
+    }
+
+    fn svn_anonymous_available(&self) -> bool {
         false
     }
 
@@ -75,6 +98,7 @@ pub enum WorkerTerminationDisposition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteWorkerSettlement {
     pub result: Result<(), BridgeFailure>,
+    pub operation_output: Option<RemoteSvnAnonymousOutput>,
     pub remote_failure: Option<RemoteFailure>,
     pub effect: RemoteOperationEffect,
     pub worker_was_resumed: bool,
@@ -95,6 +119,7 @@ impl RemoteWorkerSettlement {
             .map(crate::remote::classify_remote_failure);
         Self {
             result,
+            operation_output: None,
             remote_failure,
             effect,
             worker_was_resumed: false,
@@ -179,6 +204,7 @@ pub struct ProcessRemoteWorkerSupervisor {
     temp_base: PathBuf,
     disconnected: AtomicBool,
     credential_contract_available: bool,
+    svn_anonymous_contract_available: bool,
     active: platform::ActiveWorkerRegistry,
 }
 
@@ -192,6 +218,7 @@ impl ProcessRemoteWorkerSupervisor {
         let bridge_path = verified_file(&bridge_path, "bridgePath")?;
         let credential_contract_available =
             RemoteNativeBridge::load_foundation(&bridge_path).is_ok();
+        let svn_anonymous_contract_available = NativeBridge::load(&bridge_path).is_ok();
         if !temp_base.is_absolute() {
             return Err(invalid_worker_field("tempBase"));
         }
@@ -203,6 +230,7 @@ impl ProcessRemoteWorkerSupervisor {
             temp_base,
             disconnected: AtomicBool::new(false),
             credential_contract_available,
+            svn_anonymous_contract_available,
             active: platform::ActiveWorkerRegistry::default(),
         })
     }
@@ -317,6 +345,49 @@ impl RemoteWorkerSupervisor for ProcessRemoteWorkerSupervisor {
         )
     }
 
+    fn execute_svn_anonymous(
+        &self,
+        envelope: &RemoteOperationEnvelope,
+        plan: RemoteConfigPlan,
+        lane_key: &str,
+        effect: RemoteOperationEffect,
+        request: RemoteSvnAnonymousRequest,
+        cancellation: &dyn BridgeCancellationToken,
+        deadline: Instant,
+    ) -> RemoteWorkerSettlement {
+        if !self.svn_anonymous_contract_available
+            || plan.scheme != RemoteConfigScheme::Svn
+            || plan.server_auth != RemoteConfigServerAuth::Anonymous
+        {
+            return RemoteWorkerSettlement::pre_launch(effect, Err(svn_anonymous_unavailable()));
+        }
+        let mut unavailable_auth = UnavailableAuthRequestBroker;
+        if self.disconnected.load(Ordering::Acquire)
+            || plan.timeout_ms != envelope.timeout_ms
+            || Instant::now() >= deadline
+        {
+            return RemoteWorkerSettlement::pre_launch(effect, Err(worker_protocol_failure()));
+        }
+        if let Err(failure) = validate_request_parts(envelope, plan, lane_key) {
+            return RemoteWorkerSettlement::pre_launch(effect, Err(failure));
+        }
+        platform::execute_worker(
+            &self.worker_executable,
+            &self.bridge_path,
+            &self.temp_base,
+            envelope,
+            plan,
+            cancellation,
+            &mut unavailable_auth,
+            &self.disconnected,
+            &self.disconnected,
+            &self.active,
+            deadline,
+            WorkerExecution::SvnAnonymous { request },
+            effect,
+        )
+    }
+
     fn disconnect(&self) -> Result<(), BridgeFailure> {
         self.disconnected.store(true, Ordering::Release);
         self.terminate_active()
@@ -343,6 +414,10 @@ impl RemoteWorkerSupervisor for ProcessRemoteWorkerSupervisor {
         self.capability_available() && self.credential_contract_available
     }
 
+    fn svn_anonymous_available(&self) -> bool {
+        self.capability_available() && self.svn_anonymous_contract_available
+    }
+
     fn auth_wait_cancelled(&self) -> bool {
         self.disconnected.load(Ordering::Acquire) || !self.active.launches_allowed()
     }
@@ -360,12 +435,15 @@ struct WorkerRequest {
     execution: WorkerExecution,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 enum WorkerExecution {
     Foundation,
     CredentialProbe {
         scenario: RemoteCredentialProbeScenario,
+    },
+    SvnAnonymous {
+        request: RemoteSvnAnonymousRequest,
     },
 }
 
@@ -411,6 +489,12 @@ enum ChildWorkerFrame {
         sequence: u32,
         request: CredentialSettlementRequest,
     },
+    ResultChunk {
+        protocol_version: u16,
+        operation_id: String,
+        sequence: u32,
+        data_base64: String,
+    },
     Final {
         protocol_version: u16,
         operation_id: String,
@@ -430,8 +514,20 @@ struct WorkerResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "camelCase", deny_unknown_fields)]
 enum WorkerResult {
-    Success,
-    Failure { failure: WireFailure },
+    Success {
+        operation_result: Option<WorkerOperationResultDescriptor>,
+    },
+    Failure {
+        failure: WireFailure,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WorkerOperationResultDescriptor {
+    byte_count: u32,
+    chunk_count: u32,
+    sha256: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -442,6 +538,7 @@ struct WireFailure {
     message_key: String,
     args: Value,
     retryable: bool,
+    diagnostics: Option<OperationFailureDiagnostics>,
 }
 
 impl WireFailure {
@@ -452,6 +549,7 @@ impl WireFailure {
             message_key: failure.message_key,
             args: failure.args,
             retryable: failure.retryable,
+            diagnostics: failure.diagnostics.map(|diagnostics| *diagnostics),
         }
     }
 }
@@ -459,7 +557,7 @@ impl WireFailure {
 fn validate_credential_settlement_wire_failure(
     failure: WireFailure,
 ) -> Result<BridgeFailure, BridgeFailure> {
-    if failure.retryable {
+    if failure.retryable || failure.diagnostics.is_some() {
         return Err(worker_protocol_failure());
     }
     let (category, message_key, includes_outcome) = match failure.code.as_str() {
@@ -557,12 +655,30 @@ pub fn run_remote_worker(mut reader: impl Read, mut writer: impl Write) -> ExitC
         reader: &mut reader,
         writer: &mut writer,
     };
-    let response = execute_worker_request(request, &mut auth);
+    let executed = execute_worker_request(request, &mut auth);
     drop(auth);
+    for (sequence, data_base64) in executed.result_chunks.into_iter().enumerate() {
+        let Ok(sequence) = u32::try_from(sequence) else {
+            return ExitCode::from(4);
+        };
+        let chunk_frame = ChildWorkerFrame::ResultChunk {
+            protocol_version: PRIVATE_WORKER_PROTOCOL_VERSION,
+            operation_id: operation_id.clone(),
+            sequence,
+            data_base64,
+        };
+        if encode_child_frame(&chunk_frame)
+            .and_then(|bytes| write_frame(&mut writer, &bytes, MAX_RESPONSE_FRAME_BYTES))
+            .and_then(|()| writer.flush())
+            .is_err()
+        {
+            return ExitCode::from(4);
+        }
+    }
     let final_frame = ChildWorkerFrame::Final {
         protocol_version: PRIVATE_WORKER_PROTOCOL_VERSION,
         operation_id,
-        response,
+        response: executed.response,
     };
     match encode_child_frame(&final_frame)
         .and_then(|bytes| write_frame(&mut writer, &bytes, MAX_RESPONSE_FRAME_BYTES))
@@ -780,39 +896,101 @@ fn private_probe_envelope(operation_id: &str) -> Result<RemoteOperationEnvelope,
     .map_err(|_| worker_protocol_failure())
 }
 
+struct ExecutedWorkerRequest {
+    response: WorkerResponse,
+    result_chunks: Vec<String>,
+}
+
 fn execute_worker_request(
     request: WorkerRequest,
     auth: &mut dyn AuthRequestBroker,
-) -> WorkerResponse {
+) -> ExecutedWorkerRequest {
     let request_id = request.request_id.clone();
     let operation_id = request.envelope.operation_id.clone();
-    let result = validate_worker_request(&request).and_then(|bridge_path| {
-        let bridge = RemoteNativeBridge::load_foundation(&bridge_path)
-            .map_err(|_| worker_start_failure())?;
-        let deadline = worker_deadline(&request)?;
-        match request.execution {
-            WorkerExecution::Foundation => bridge.create_remote_context_foundation(
-                request.plan,
-                &request.envelope,
-                auth,
-                deadline,
-            ),
-            WorkerExecution::CredentialProbe { scenario } => {
-                bridge.probe_remote_credentials(&request.envelope, auth, deadline, scenario.raw())
+    let result: Result<Option<RemoteSvnAnonymousOutput>, BridgeFailure> =
+        validate_worker_request(&request).and_then(|bridge_path| {
+            let deadline = worker_deadline(&request)?;
+            match request.execution {
+                WorkerExecution::Foundation => {
+                    let bridge = RemoteNativeBridge::load_foundation(&bridge_path)
+                        .map_err(|_| worker_start_failure())?;
+                    bridge
+                        .create_remote_context_foundation(
+                            request.plan,
+                            &request.envelope,
+                            auth,
+                            deadline,
+                        )
+                        .map(|()| None)
+                }
+                WorkerExecution::CredentialProbe { scenario } => {
+                    let bridge = RemoteNativeBridge::load_foundation(&bridge_path)
+                        .map_err(|_| worker_start_failure())?;
+                    bridge
+                        .probe_remote_credentials(&request.envelope, auth, deadline, scenario.raw())
+                        .map(|()| None)
+                }
+                WorkerExecution::SvnAnonymous { request: operation } => {
+                    let bridge =
+                        NativeBridge::load(&bridge_path).map_err(|_| worker_start_failure())?;
+                    operation
+                        .execute(&bridge, &request.envelope.expected_origin, &NeverCancelled)
+                        .map(Some)
+                }
             }
-        }
-    });
-    WorkerResponse {
-        protocol_version: PRIVATE_WORKER_PROTOCOL_VERSION,
-        request_id,
-        operation_id,
-        result: match result {
-            Ok(()) => WorkerResult::Success,
+        });
+    let mut result_chunks = Vec::new();
+    let result = match result {
+        Ok(None) => WorkerResult::Success {
+            operation_result: None,
+        },
+        Ok(Some(output)) => match encode_operation_result(output) {
+            Ok((descriptor, chunks)) => {
+                result_chunks = chunks;
+                WorkerResult::Success {
+                    operation_result: Some(descriptor),
+                }
+            }
             Err(failure) => WorkerResult::Failure {
                 failure: WireFailure::from_bridge(failure),
             },
         },
+        Err(failure) => WorkerResult::Failure {
+            failure: WireFailure::from_bridge(failure),
+        },
+    };
+    ExecutedWorkerRequest {
+        response: WorkerResponse {
+            protocol_version: PRIVATE_WORKER_PROTOCOL_VERSION,
+            request_id,
+            operation_id,
+            result,
+        },
+        result_chunks,
     }
+}
+
+fn encode_operation_result(
+    output: RemoteSvnAnonymousOutput,
+) -> Result<(WorkerOperationResultDescriptor, Vec<String>), BridgeFailure> {
+    let bytes = serde_json::to_vec(&output).map_err(|_| worker_protocol_failure())?;
+    if bytes.is_empty() || bytes.len() > MAX_OPERATION_RESULT_BYTES {
+        return Err(worker_protocol_failure());
+    }
+    let byte_count = u32::try_from(bytes.len()).map_err(|_| worker_protocol_failure())?;
+    let chunks = bytes
+        .chunks(OPERATION_RESULT_CHUNK_BYTES)
+        .map(|chunk| STANDARD.encode(chunk))
+        .collect::<Vec<_>>();
+    let chunk_count = u32::try_from(chunks.len()).map_err(|_| worker_protocol_failure())?;
+    Ok((
+        WorkerOperationResultDescriptor {
+            byte_count,
+            chunk_count,
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+        },
+        chunks,
+    ))
 }
 
 fn worker_deadline(request: &WorkerRequest) -> Result<Instant, BridgeFailure> {
@@ -1027,6 +1205,16 @@ fn worker_protocol_failure() -> BridgeFailure {
         "protocol",
         "error.remote.workerProtocolInvalid",
         json!({}),
+        false,
+    )
+}
+
+fn svn_anonymous_unavailable() -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",
+        "unsupported",
+        "error.remote.transportUnsupported",
+        json!({ "scheme": "svn" }),
         false,
     )
 }
@@ -1257,6 +1445,7 @@ mod tests {
                     message_key: message_key.to_string(),
                     args: args.clone(),
                     retryable: false,
+                    diagnostics: None,
                 },
             };
             let parent_bytes = serde_json::to_vec(&parent).expect("parent frame must serialize");
@@ -1315,6 +1504,7 @@ mod tests {
             message_key: "error.auth.credentialUnknown".to_string(),
             args: safe_args.clone(),
             retryable: false,
+            diagnostics: None,
         };
         assert_eq!(
             validate_credential_settlement_wire_failure(unknown)
@@ -1331,6 +1521,7 @@ mod tests {
             message_key: "error.auth.credentialTimeout".to_string(),
             args: extra_args,
             retryable: false,
+            diagnostics: None,
         };
         assert_eq!(
             validate_credential_settlement_wire_failure(extra)

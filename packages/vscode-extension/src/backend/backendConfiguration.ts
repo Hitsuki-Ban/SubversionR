@@ -6,6 +6,7 @@ export interface BackendConfigurationContext {
   clientVersion: string;
   locale: string;
   cacheRoot: string;
+  remoteStateRoot: string;
   workspaceTrusted: boolean;
   baseEnv: NodeJS.ProcessEnv;
 }
@@ -18,6 +19,7 @@ export function backendLaunchConfigFromPackageResources(
     executablePath: resources.executablePath,
     bridgeDllPath: resources.bridgeDllPath,
     cacheRoot: requiredContext(context.cacheRoot, "cacheRoot"),
+    remoteStateRoot: requiredContext(context.remoteStateRoot, "remoteStateRoot"),
     clientName: requiredContext(context.clientName, "clientName"),
     clientVersion: requiredContext(context.clientVersion, "clientVersion"),
     locale: requiredContext(context.locale, "locale"),

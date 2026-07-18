@@ -5,7 +5,7 @@ export type DaemonRemoteConnectionState =
   | { kind: "unchecked" }
   | { kind: "checking"; operationId: string; startedAt: string }
   | { kind: "online"; transport: "http" | "https" | "svn" | "svn+ssh"; checkedAt: string }
-  | { kind: "attention"; reason: "authRequired" | "certificateRequired" | "hostKeyRequired" | "configurationInvalid" | "unsupportedCapability" }
+  | { kind: "attention"; reason: "authRequired" | "authorizationDenied" | "certificateRequired" | "hostKeyRequired" | "configurationInvalid" | "unsupportedCapability" }
   | { kind: "unreachable"; reason: "dns" | "refused" | "proxy" | "timeout" | "tunnel" }
   | {
       kind: "indeterminate";
@@ -75,7 +75,7 @@ function parseState(raw: unknown): DaemonRemoteConnectionState {
   }
   if (state.kind === "attention") {
     exact(state, ["kind", "reason"], "state");
-    return { kind: "attention", reason: enumValue(state.reason, ["authRequired", "certificateRequired", "hostKeyRequired", "configurationInvalid", "unsupportedCapability"], "reason") };
+    return { kind: "attention", reason: enumValue(state.reason, ["authRequired", "authorizationDenied", "certificateRequired", "hostKeyRequired", "configurationInvalid", "unsupportedCapability"], "reason") };
   }
   if (state.kind === "unreachable") {
     exact(state, ["kind", "reason"], "state");
@@ -118,7 +118,11 @@ function enumValue<const T extends readonly string[]>(value: unknown, allowed: T
   return value as T[number];
 }
 function uuid(value: unknown, field: string): string {
-  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)) return invalid(field);
+  if (
+    typeof value !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    || value === "00000000-0000-0000-0000-000000000000"
+  ) return invalid(field);
   return value;
 }
 function timestamp(value: unknown, field: string): string {

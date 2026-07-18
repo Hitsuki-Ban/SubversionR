@@ -627,5 +627,15 @@
   "SubversionR remote recovery remains indeterminate: {0}": "SubversionR 远端恢复状态仍无法确定：{0}",
   "Remote Access": "远端访问",
   "Configure Remote Access": "配置远端访问",
-  "SubversionR remote access failed ({0}).": "SubversionR 远端访问失败（{0}）。"
+  "SubversionR remote access failed ({0}).": "SubversionR 远端访问失败（{0}）。",
+  "No blocked SVN checkout target requires review.": "没有需要检查的被阻塞 SVN 检出目标。",
+  "Review blocked SVN checkout target": "检查被阻塞的 SVN 检出目标",
+  "Select the checkout target whose disposition you reviewed": "选择已检查处置状态的检出目标",
+  "Release checkout target block": "解除检出目标阻塞",
+  "Confirm that you reviewed and resolved the possibly changed SVN checkout target before releasing its safety block: {0}": "解除安全阻塞前，请确认你已检查并处理这个可能发生变更的 SVN 检出目标：{0}",
+  "SubversionR released the reviewed SVN checkout target: {0}": "SubversionR 已解除经检查的 SVN 检出目标：{0}",
+  "Review checkout target": "检查检出目标",
+  "A possibly changed SVN checkout target is blocked until you review its disposition.": "一个可能发生变更的 SVN 检出目标已被阻塞，需检查其处置状态后才能解除。",
+  "SVN {0} failed because the server denied authorization for this operation.": "服务器拒绝授权此操作，因此 SVN {0} 失败。",
+  "SVN {0} failed because the server authorization configuration is invalid.": "服务器授权配置无效，因此 SVN {0} 失败。"
 }

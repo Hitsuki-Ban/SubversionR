@@ -12,6 +12,7 @@ describe("backendLaunchConfigFromPackageResources", () => {
       executablePath: "C:\\SubversionR\\extension\\resources\\backend\\win32-x64\\subversionr-daemon.exe",
       bridgeDllPath: "C:\\SubversionR\\extension\\resources\\backend\\win32-x64\\subversionr_svn_bridge.dll",
       cacheRoot: "C:\\Users\\Alice\\AppData\\Roaming\\Code\\User\\globalStorage\\subversionr\\cache",
+      remoteStateRoot: "C:\\Users\\Alice\\AppData\\Roaming\\Code\\User\\globalStorage\\subversionr\\remote-state",
       clientName: "SubversionR",
       clientVersion: "0.1.0",
       locale: "en",
@@ -69,6 +70,22 @@ describe("backendLaunchConfigFromPackageResources", () => {
       }),
     );
   });
+
+  it("requires an explicit remote state root", () => {
+    expect(() =>
+      backendLaunchConfigFromPackageResources(packagedResources(), {
+        ...trustedContext(),
+        remoteStateRoot: "",
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "SUBVERSIONR_BACKEND_CONFIG_REQUIRED",
+        category: "configuration",
+        messageKey: "error.backend.configRequired",
+        safeArgs: { field: "remoteStateRoot" },
+      }),
+    );
+  });
 });
 
 function packagedResources() {
@@ -85,6 +102,7 @@ function trustedContext() {
     clientVersion: "0.1.0",
     locale: "en",
     cacheRoot: "C:\\Users\\Alice\\AppData\\Roaming\\Code\\User\\globalStorage\\subversionr\\cache",
+    remoteStateRoot: "C:\\Users\\Alice\\AppData\\Roaming\\Code\\User\\globalStorage\\subversionr\\remote-state",
     workspaceTrusted: true,
     baseEnv: {
       Path: "C:\\Windows\\System32",

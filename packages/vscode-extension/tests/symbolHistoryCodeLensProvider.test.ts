@@ -11,6 +11,7 @@ import type {
   ScmRepositoryProjection,
 } from "../src/scm/sourceControlResourceStore";
 import type { StatusEntry } from "../src/status/statusSnapshotRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("SymbolHistoryCodeLensProvider", () => {
   it("provides unresolved symbol lenses for projected text-stable SVN files without requesting blame", async () => {
@@ -74,7 +75,8 @@ describe("SymbolHistoryCodeLensProvider", () => {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(resolved.command).toEqual({
       command: "subversionr.showBlame",
       title: "SVN r7 - Authors 2, Revisions 2",
@@ -109,6 +111,7 @@ describe("SymbolHistoryCodeLensProvider", () => {
       expect.objectContaining({
         includeMergedRevisions: true,
       }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -172,7 +175,8 @@ describe("SymbolHistoryCodeLensProvider", () => {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(resolved.command).toEqual({
       command: "subversionr.showBlame",
       title: "SVN r9 - Authors 2, Revisions 2",
@@ -437,6 +441,7 @@ function symbolHistoryProvider(options: {
     settings: () => options.settings ?? lensSettings({ symbols: true }),
     includeMergedRevisions: () => options.includeMergedRevisions ?? false,
     historyClient: options.historyClient ?? fakeHistoryClient(blameResponse({ lineStart: 2, lineLimit: 1 })),
+    createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
     sessionService: fakeSessionService(options.sessions ?? [repositorySession()]),
     sourceControlProjection: options.sourceControlProjection ?? fakeSourceControlProjection(projections),
     workspaceTrusted: options.workspaceTrusted ?? (() => true),
@@ -662,7 +667,10 @@ function range(startLine: number, startCharacter: number, endLine: number, endCh
 }
 
 function cancellation(isCancellationRequested = false) {
-  return { isCancellationRequested };
+  return {
+    isCancellationRequested,
+    onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })),
+  };
 }
 
 function blameResponse(options: {

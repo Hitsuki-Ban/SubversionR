@@ -74,6 +74,7 @@ describe("RemoteConnectionStateStore", () => {
 
   it.each([
     [failure("attention", "authenticationRequired"), "attention", "authRequired"],
+    [failure("attention", "authorizationDenied"), "attention", "authorizationDenied"],
     [failure("attention", "tlsUntrusted"), "attention", "certificateRequired"],
     [failure("attention", "sshHostKeyRequired"), "attention", "hostKeyRequired"],
     [failure("attention", "remoteConfigurationInvalid"), "attention", "configurationInvalid"],

@@ -3434,8 +3434,7 @@ describe("RepositoryCommandController", () => {
     });
 
     const first = controller.updateRepository();
-    await flushMicrotasks();
-    expect(events).toEqual(["update:1"]);
+    await vi.waitFor(() => expect(events).toEqual(["update:1"]));
 
     firstUpdate.resolve(
       operationResponse({
@@ -3445,9 +3444,7 @@ describe("RepositoryCommandController", () => {
         reconcile: { targets: [], requiresFullReconcile: true },
       }),
     );
-    await flushMicrotasks();
-    await flushMicrotasks();
-    expect(events).toEqual(["update:1", "reconcile:1"]);
+    await vi.waitFor(() => expect(events).toEqual(["update:1", "reconcile:1"]));
 
     const second = controller.updateRepository();
     await flushMicrotasks();
@@ -11819,6 +11816,7 @@ function commandController(
     commandCancellation?: RepositoryCommandControllerOptions["commandCancellation"];
     commitMessageHistory?: Pick<RepositoryCommitMessageHistory, "messages" | "record">;
     includeMergedRevisions?: () => boolean;
+    createRemoteEnvelope?: RepositoryCommandControllerOptions["createRemoteEnvelope"];
     createRequestId?: () => string;
     now?: () => string;
     monotonicNowMs?: () => number;
@@ -11847,6 +11845,7 @@ function commandController(
     },
     commitMessageHistory: deps.commitMessageHistory ?? new RepositoryCommitMessageHistory(),
     includeMergedRevisions: deps.includeMergedRevisions ?? (() => false),
+    createRemoteEnvelope: deps.createRemoteEnvelope ?? (async () => undefined),
     createRequestId: deps.createRequestId ?? (() => "11111111-1111-4111-8111-111111111111"),
     now: deps.now ?? (() => "2026-06-25T00:00:00.000Z"),
     monotonicNowMs: deps.monotonicNowMs ?? (() => 0),

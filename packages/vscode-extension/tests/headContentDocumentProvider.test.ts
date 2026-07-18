@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { HeadContentDocumentProvider } from "../src/content/headContentDocumentProvider";
 import { HEAD_CONTENT_URI_SCHEME } from "../src/content/headContentUri";
 import type { ContentBlob, ContentClient } from "../src/content/contentGetRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("HeadContentDocumentProvider", () => {
   it("loads HEAD content through content/get and returns readonly text", async () => {
@@ -18,19 +19,21 @@ describe("HeadContentDocumentProvider", () => {
     });
     const provider = new HeadContentDocumentProvider({
       contentClient: client,
+      createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
       workspaceTrusted: () => true,
       localize: (message, ...args) =>
         `l10n:${args.reduce<string>((current, arg, index) => current.replace(`{${index}}`, String(arg)), message)}`,
     });
 
-    const text = await provider.provideTextDocumentContent(headUri());
+    const text = await provider.provideTextDocumentContent(headUri(), cancellationToken());
 
     expect(client.getContent).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
       path: "src/main.c",
       revision: "head",
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(text).toBe("head\n");
   });
 
@@ -48,6 +51,7 @@ describe("HeadContentDocumentProvider", () => {
     });
     const provider = new HeadContentDocumentProvider({
       contentClient: client,
+      createRemoteEnvelope: async () => undefined,
       workspaceTrusted: () => true,
       localize: (message, ...args) =>
         `l10n:${args.reduce<string>((current, arg, index) => current.replace(`{${index}}`, String(arg)), message)}`,
@@ -59,8 +63,17 @@ describe("HeadContentDocumentProvider", () => {
       path: "/",
       query:
         "repositoryId=repo-uuid%3AC%3A%2Fwc&epoch=7&generation=11&path=image.bin&revision=head&requestId=11111111-1111-4111-8111-111111111111",
-    });
+    }, cancellationToken());
 
+    expect(client.getContent).toHaveBeenCalledWith(
+      {
+        repositoryId: "repo-uuid:C:/wc",
+        epoch: 7,
+        path: "image.bin",
+        revision: "head",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(text).toBe("l10n:Binary SVN HEAD content is not displayed in the text editor: image.bin");
   });
 
@@ -78,12 +91,13 @@ describe("HeadContentDocumentProvider", () => {
     });
     const provider = new HeadContentDocumentProvider({
       contentClient: client,
+      createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
       workspaceTrusted: () => false,
       localize: (message, ...args) =>
         `l10n:${args.reduce<string>((current, arg, index) => current.replace(`{${index}}`, String(arg)), message)}`,
     });
 
-    await expect(provider.provideTextDocumentContent(headUri())).rejects.toMatchObject({
+    await expect(provider.provideTextDocumentContent(headUri(), cancellationToken())).rejects.toMatchObject({
       code: "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
     });
     expect(client.getContent).not.toHaveBeenCalled();
@@ -105,5 +119,12 @@ function headUri() {
     path: "/",
     query:
       "repositoryId=repo-uuid%3AC%3A%2Fwc&epoch=7&generation=11&path=src%2Fmain.c&revision=head&requestId=11111111-1111-4111-8111-111111111111",
+  };
+}
+
+function cancellationToken() {
+  return {
+    isCancellationRequested: false,
+    onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })),
   };
 }

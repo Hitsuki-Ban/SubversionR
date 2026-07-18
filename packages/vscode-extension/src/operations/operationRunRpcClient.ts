@@ -1,4 +1,9 @@
 import type { JsonRpcSender, StatusRefreshDepth, StatusRefreshTarget } from "../status/types";
+import {
+  canonicalEndpointFromRepositoryUrl,
+  validateAnonymousSvnRemoteOperationEnvelope,
+  type RemoteOperationEnvelope,
+} from "../security/remoteAccessProfile";
 
 export type OperationRunErrorCategory = "input" | "protocol";
 
@@ -86,6 +91,7 @@ export interface UpdateOperationRequest {
   depth: UpdateOperationDepth;
   depthIsSticky: boolean;
   ignoreExternals: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface BranchCreateOperationRequest {
@@ -97,6 +103,7 @@ export interface BranchCreateOperationRequest {
   message: string;
   makeParents: boolean;
   ignoreExternals: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface SwitchOperationRequest {
@@ -109,6 +116,7 @@ export interface SwitchOperationRequest {
   depthIsSticky: boolean;
   ignoreExternals: boolean;
   ignoreAncestry: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface RelocateOperationRequest {
@@ -173,6 +181,7 @@ export interface LockOperationRequest {
   paths: string[];
   comment: string | null;
   stealLock: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface UnlockOperationRequest {
@@ -180,6 +189,7 @@ export interface UnlockOperationRequest {
   epoch: number;
   paths: string[];
   breakLock: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface CommitOperationRequest {
@@ -194,6 +204,7 @@ export interface CommitOperationRequest {
   commitAsOperations: false;
   includeFileExternals: false;
   includeDirExternals: false;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface OperationWarning {
@@ -370,6 +381,7 @@ export class OperationRunRpcClient implements OperationClient {
     const rawResponse = await sendOperationRunRequest(this.sender, {
       repositoryId: validatedRequest.repositoryId,
       epoch: validatedRequest.epoch,
+      ...(validatedRequest.remote === undefined ? {} : { remote: validatedRequest.remote }),
       kind: "update",
       options: {
         version: 1,
@@ -399,6 +411,7 @@ export class OperationRunRpcClient implements OperationClient {
     const rawResponse = await sendOperationRunRequest(this.sender, {
       repositoryId: validatedRequest.repositoryId,
       epoch: validatedRequest.epoch,
+      ...(validatedRequest.remote === undefined ? {} : { remote: validatedRequest.remote }),
       kind: "branchCreate",
       options: {
         version: 1,
@@ -434,6 +447,7 @@ export class OperationRunRpcClient implements OperationClient {
     const rawResponse = await sendOperationRunRequest(this.sender, {
       repositoryId: validatedRequest.repositoryId,
       epoch: validatedRequest.epoch,
+      ...(validatedRequest.remote === undefined ? {} : { remote: validatedRequest.remote }),
       kind: "switch",
       options: {
         version: 1,
@@ -593,6 +607,7 @@ export class OperationRunRpcClient implements OperationClient {
     const rawResponse = await sendOperationRunRequest(this.sender, {
       repositoryId: validatedRequest.repositoryId,
       epoch: validatedRequest.epoch,
+      ...(validatedRequest.remote === undefined ? {} : { remote: validatedRequest.remote }),
       kind: "lock",
       options: {
         version: 1,
@@ -611,6 +626,7 @@ export class OperationRunRpcClient implements OperationClient {
     const rawResponse = await sendOperationRunRequest(this.sender, {
       repositoryId: validatedRequest.repositoryId,
       epoch: validatedRequest.epoch,
+      ...(validatedRequest.remote === undefined ? {} : { remote: validatedRequest.remote }),
       kind: "unlock",
       options: {
         version: 1,
@@ -628,6 +644,7 @@ export class OperationRunRpcClient implements OperationClient {
     const rawResponse = await sendOperationRunRequest(this.sender, {
       repositoryId: validatedRequest.repositoryId,
       epoch: validatedRequest.epoch,
+      ...(validatedRequest.remote === undefined ? {} : { remote: validatedRequest.remote }),
       kind: "commit",
       options: {
         version: 1,
@@ -780,13 +797,16 @@ function validateLockRequest(request: LockOperationRequest): LockOperationReques
     "paths",
     "comment",
     "stealLock",
+    "remote",
   ]);
+  const remote = validateOptionalRemoteOperationEnvelope(request);
   return {
     repositoryId: requireRequestString(request.repositoryId, "repositoryId"),
     epoch: requireNonNegativeInteger(request.epoch, "epoch", "request"),
     paths: requireLockPathArray(request.paths, "paths"),
     comment: requireLockComment(request.comment, "comment"),
     stealLock: requireBoolean(request.stealLock, "stealLock", "request"),
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -799,12 +819,15 @@ function validateUnlockRequest(request: UnlockOperationRequest): UnlockOperation
     "epoch",
     "paths",
     "breakLock",
+    "remote",
   ]);
+  const remote = validateOptionalRemoteOperationEnvelope(request);
   return {
     repositoryId: requireRequestString(request.repositoryId, "repositoryId"),
     epoch: requireNonNegativeInteger(request.epoch, "epoch", "request"),
     paths: requireLockPathArray(request.paths, "paths"),
     breakLock: requireBoolean(request.breakLock, "breakLock", "request"),
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -824,8 +847,10 @@ function validateCommitRequest(request: CommitOperationRequest): CommitOperation
     "commitAsOperations",
     "includeFileExternals",
     "includeDirExternals",
+    "remote",
   ]);
   const changelists = requireChangelistArray(request.changelists, "changelists", true);
+  const remote = validateOptionalRemoteOperationEnvelope(request);
   return {
     repositoryId: requireRequestString(request.repositoryId, "repositoryId"),
     epoch: requireNonNegativeInteger(request.epoch, "epoch", "request"),
@@ -838,6 +863,7 @@ function validateCommitRequest(request: CommitOperationRequest): CommitOperation
     commitAsOperations: requireFalse(request.commitAsOperations, "commitAsOperations"),
     includeFileExternals: requireFalse(request.includeFileExternals, "includeFileExternals"),
     includeDirExternals: requireFalse(request.includeDirExternals, "includeDirExternals"),
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -853,12 +879,14 @@ function validateUpdateRequest(request: UpdateOperationRequest): UpdateOperation
     "depth",
     "depthIsSticky",
     "ignoreExternals",
+    "remote",
   ]);
   const depth = requireUpdateDepth(request.depth, "depth");
   const depthIsSticky = requireBoolean(request.depthIsSticky, "depthIsSticky", "request");
   if (depth === "workingCopy" && depthIsSticky) {
     throw invalidOperationRequest("depthIsSticky");
   }
+  const remote = validateOptionalRemoteOperationEnvelope(request);
   return {
     repositoryId: requireRequestString(request.repositoryId, "repositoryId"),
     epoch: requireNonNegativeInteger(request.epoch, "epoch", "request"),
@@ -867,6 +895,7 @@ function validateUpdateRequest(request: UpdateOperationRequest): UpdateOperation
     depth,
     depthIsSticky,
     ignoreExternals: requireBoolean(request.ignoreExternals, "ignoreExternals", "request"),
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -883,21 +912,33 @@ function validateBranchCreateRequest(request: BranchCreateOperationRequest): Bra
     "message",
     "makeParents",
     "ignoreExternals",
+    "remote",
   ]);
-  const sourceUrl = requireRepositoryUrl(request.sourceUrl, "sourceUrl");
-  const destinationUrl = requireRepositoryUrl(request.destinationUrl, "destinationUrl");
+  const repositoryId = requireRequestString(request.repositoryId, "repositoryId");
+  const epoch = requireNonNegativeInteger(request.epoch, "epoch", "request");
+  const sourceUrl = requireLocalOrSvnRepositoryUrl(request.sourceUrl, "sourceUrl");
+  const destinationUrl = requireLocalOrSvnRepositoryUrl(request.destinationUrl, "destinationUrl");
   if (destinationUrl === sourceUrl) {
     throw invalidOperationRequest("destinationUrl");
   }
+  const revision = requireUpdateRevision(request.revision, "revision");
+  const message = requireCommitMessage(request.message, "message");
+  const makeParents = requireBoolean(request.makeParents, "makeParents", "request");
+  const ignoreExternals = requireBoolean(request.ignoreExternals, "ignoreExternals", "request");
+  const remote = requireRemoteForRepositoryUrls(
+    [[sourceUrl, "sourceUrl"], [destinationUrl, "destinationUrl"]],
+    request,
+  );
   return {
-    repositoryId: requireRequestString(request.repositoryId, "repositoryId"),
-    epoch: requireNonNegativeInteger(request.epoch, "epoch", "request"),
+    repositoryId,
+    epoch,
     sourceUrl,
     destinationUrl,
-    revision: requireUpdateRevision(request.revision, "revision"),
-    message: requireCommitMessage(request.message, "message"),
-    makeParents: requireBoolean(request.makeParents, "makeParents", "request"),
-    ignoreExternals: requireBoolean(request.ignoreExternals, "ignoreExternals", "request"),
+    revision,
+    message,
+    makeParents,
+    ignoreExternals,
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -915,22 +956,32 @@ function validateSwitchRequest(request: SwitchOperationRequest): SwitchOperation
     "depthIsSticky",
     "ignoreExternals",
     "ignoreAncestry",
+    "remote",
   ]);
   const depth = requireUpdateDepth(request.depth, "depth");
   const depthIsSticky = requireBoolean(request.depthIsSticky, "depthIsSticky", "request");
   if (depth === "workingCopy" && depthIsSticky) {
     throw invalidOperationRequest("depthIsSticky");
   }
+  const repositoryId = requireRequestString(request.repositoryId, "repositoryId");
+  const epoch = requireNonNegativeInteger(request.epoch, "epoch", "request");
+  const path = requireRequestPath(request.path, "path");
+  const url = requireLocalOrSvnRepositoryUrl(request.url, "url");
+  const revision = requireUpdateRevision(request.revision, "revision");
+  const ignoreExternals = requireBoolean(request.ignoreExternals, "ignoreExternals", "request");
+  const ignoreAncestry = requireBoolean(request.ignoreAncestry, "ignoreAncestry", "request");
+  const remote = requireRemoteForRepositoryUrls([[url, "url"]], request);
   return {
-    repositoryId: requireRequestString(request.repositoryId, "repositoryId"),
-    epoch: requireNonNegativeInteger(request.epoch, "epoch", "request"),
-    path: requireRequestPath(request.path, "path"),
-    url: requireRepositoryUrl(request.url, "url"),
-    revision: requireUpdateRevision(request.revision, "revision"),
+    repositoryId,
+    epoch,
+    path,
+    url,
+    revision,
     depth,
     depthIsSticky,
-    ignoreExternals: requireBoolean(request.ignoreExternals, "ignoreExternals", "request"),
-    ignoreAncestry: requireBoolean(request.ignoreAncestry, "ignoreAncestry", "request"),
+    ignoreExternals,
+    ignoreAncestry,
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -1517,6 +1568,90 @@ function requireCommitMessage(value: unknown, field: string): string {
 function requireRepositoryUrl(value: unknown, field: string): string {
   const url = requireRequestString(value, field);
   if (url.includes("\0") || url.includes("\r") || url.includes("\n")) {
+    throw invalidOperationRequest(field);
+  }
+  return url;
+}
+
+function validateOptionalRemoteOperationEnvelope(
+  request: Record<string, unknown>,
+): RemoteOperationEnvelope | undefined {
+  return "remote" in request
+    ? validateAnonymousSvnRemoteOperationEnvelope(request.remote)
+    : undefined;
+}
+
+function requireLocalOrSvnRepositoryUrl(value: unknown, field: string): string {
+  const url = requireRepositoryUrl(value, field);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalidOperationRequest(field);
+  }
+  if (parsed.protocol !== "file:" && parsed.protocol !== "svn:") {
+    throw invalidOperationRequest(field);
+  }
+  if (parsed.protocol === "svn:") {
+    try {
+      canonicalEndpointFromRepositoryUrl(url);
+    } catch {
+      throw invalidOperationRequest(field);
+    }
+  }
+  return url;
+}
+
+function requireRemoteForRepositoryUrls(
+  entries: ReadonlyArray<readonly [url: string, field: string]>,
+  request: Record<string, unknown>,
+): RemoteOperationEnvelope | undefined {
+  const protocols = entries.map(([url, field]) => {
+    try {
+      return new URL(url).protocol;
+    } catch {
+      throw invalidOperationRequest(field);
+    }
+  });
+  const firstProtocol = protocols[0];
+  const mismatchedIndex = protocols.findIndex((protocol) => protocol !== firstProtocol);
+  if (mismatchedIndex >= 0) {
+    throw invalidOperationRequest(entries[mismatchedIndex][1]);
+  }
+  if (firstProtocol === "file:") {
+    if ("remote" in request) {
+      throw invalidOperationRequest("remote");
+    }
+    return undefined;
+  }
+  if (!("remote" in request)) {
+    throw invalidOperationRequest("remote");
+  }
+  const remote = validateAnonymousSvnRemoteOperationEnvelope(request.remote);
+  for (const [url, field] of entries) {
+    requireRemoteRepositoryUrl(url, field, remote);
+  }
+  return remote;
+}
+
+function requireRemoteRepositoryUrl(
+  value: unknown,
+  field: string,
+  remote: RemoteOperationEnvelope,
+): string {
+  const url = requireRepositoryUrl(value, field);
+  let endpoint;
+  try {
+    endpoint = canonicalEndpointFromRepositoryUrl(url);
+  } catch {
+    throw invalidOperationRequest(field);
+  }
+  if (
+    endpoint.scheme !== "svn" ||
+    endpoint.scheme !== remote.expectedOrigin.scheme ||
+    endpoint.canonicalHost !== remote.expectedOrigin.canonicalHost ||
+    endpoint.effectivePort !== remote.expectedOrigin.effectivePort
+  ) {
     throw invalidOperationRequest(field);
   }
   return url;

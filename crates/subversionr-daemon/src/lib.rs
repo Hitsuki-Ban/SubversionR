@@ -5,6 +5,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 mod bridge;
 mod native;
 mod remote;
+mod remote_checkout_journal;
+mod remote_operation;
 mod remote_worker;
 mod state;
 mod stdio;
@@ -24,6 +26,7 @@ pub use bridge::{
     UnlockOperationRequest, UpdateOperationRequest, UpdateOperationResult, UpgradeOperationRequest,
 };
 pub use native::{NativeBridge, NativeBridgeLoadError, RemoteNativeBridge};
+pub use remote_operation::{RemoteSvnAnonymousOutput, RemoteSvnAnonymousRequest};
 pub use remote_worker::{
     InlineRemoteWorkerSupervisor, ProcessRemoteWorkerSupervisor, RemoteCredentialProbeScenario,
     RemoteOperationEffect, RemoteWorkerSettlement, RemoteWorkerSupervisor,

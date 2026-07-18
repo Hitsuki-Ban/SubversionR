@@ -1,0 +1,622 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Hitsuki-Ban/SubversionR/blob/main/docs/release/m8-i6-svn-anonymous-evidence.v1.schema.json",
+  "title": "SubversionR M8 I6 direct svn anonymous evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schemaVersion",
+    "contract",
+    "target",
+    "productVersion",
+    "publicClaimEligible",
+    "artifactBindings",
+    "fixture",
+    "surfaces",
+    "negativeCells",
+    "recoverySettlements",
+    "stress",
+    "privacy",
+    "verdict"
+  ],
+  "properties": {
+    "schema": {
+      "const": "subversionr.release.m8-i6-svn-anonymous.win32-x64.v1"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "const": "docs/release/m8-i6-svn-anonymous-evidence.v1.schema.json"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "target": {
+      "const": "win32-x64"
+    },
+    "productVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "publicClaimEligible": {
+      "const": true
+    },
+    "artifactBindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vsix",
+        "daemon",
+        "bridge",
+        "stageManifest",
+        "probeDriver",
+        "packagedNativeProbe",
+        "installedVsixProbe",
+        "packagedCompatibilityProbe",
+        "installedExtensionHostProbe",
+        "raSvnOriginPatch",
+        "raSvnOriginContract",
+        "nativeSourceLock",
+        "svn",
+        "svnadmin",
+        "svnserve"
+      ],
+      "properties": {
+        "vsix": {
+          "$ref": "#/$defs/artifact"
+        },
+        "daemon": {
+          "$ref": "#/$defs/artifact"
+        },
+        "bridge": {
+          "$ref": "#/$defs/artifact"
+        },
+        "stageManifest": {
+          "$ref": "#/$defs/artifact"
+        },
+        "probeDriver": {
+          "$ref": "#/$defs/artifact"
+        },
+        "packagedNativeProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedVsixProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "packagedCompatibilityProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedExtensionHostProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "raSvnOriginPatch": {
+          "$ref": "#/$defs/artifact"
+        },
+        "raSvnOriginContract": {
+          "$ref": "#/$defs/artifact"
+        },
+        "nativeSourceLock": {
+          "$ref": "#/$defs/artifact"
+        },
+        "svn": {
+          "$ref": "#/$defs/artifact"
+        },
+        "svnadmin": {
+          "$ref": "#/$defs/artifact"
+        },
+        "svnserve": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "serverKind",
+        "serverVersion",
+        "listenHost",
+        "configurationSha256",
+        "authzSha256",
+        "sourceBuilt",
+        "fixtureCliOnly",
+        "ambientConfigExcluded",
+        "saslEnabled"
+      ],
+      "properties": {
+        "transport": {
+          "const": "direct-svn"
+        },
+        "serverKind": {
+          "const": "svnserve"
+        },
+        "serverVersion": {
+          "const": "1.14.5"
+        },
+        "listenHost": {
+          "const": "127.0.0.1"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authzSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceBuilt": {
+          "const": true
+        },
+        "fixtureCliOnly": {
+          "const": true
+        },
+        "ambientConfigExcluded": {
+          "const": true
+        },
+        "saslEnabled": {
+          "const": false
+        }
+      }
+    },
+    "surfaces": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/packagedSurface"
+        },
+        {
+          "$ref": "#/$defs/installedSurface"
+        }
+      ],
+      "items": false
+    },
+    "negativeCells": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "prefixItems": [
+        { "$ref": "#/$defs/negativeMaliciousRoot" },
+        { "$ref": "#/$defs/negativeSaslOnly" },
+        { "$ref": "#/$defs/negativeAuthzDenied" },
+        { "$ref": "#/$defs/negativeBlackholeConnect" },
+        { "$ref": "#/$defs/negativeStalledMidRead" },
+        { "$ref": "#/$defs/negativeDeadline" },
+        { "$ref": "#/$defs/negativeCancellation" },
+        { "$ref": "#/$defs/negativeWorkerCrash" },
+        { "$ref": "#/$defs/negativeDaemonDisconnect" },
+        { "$ref": "#/$defs/negativeTrustRevoked" },
+        { "$ref": "#/$defs/negativeRecoverySafe" },
+        { "$ref": "#/$defs/negativeRecoveryIndeterminate" },
+        { "$ref": "#/$defs/negativeRecoveryBlocked" },
+        { "$ref": "#/$defs/negativeUnrelatedRepository" },
+        { "$ref": "#/$defs/negativeLocalEventZeroNetwork" },
+        { "$ref": "#/$defs/negativeRedaction" }
+      ],
+      "items": false
+    },
+    "recoverySettlements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surfaces", "safe", "indeterminate", "blocked"],
+      "properties": {
+        "surfaces": {
+          "const": ["packaged-native", "installed-vsix-extension-host"]
+        },
+        "safe": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "freshReconcile", "nativeLaneReleased", "subsequentRequestPassed"],
+          "properties": {
+            "outcome": { "const": "Safe" },
+            "freshReconcile": { "const": true },
+            "nativeLaneReleased": { "const": true },
+            "subsequentRequestPassed": { "const": true }
+          }
+        },
+        "indeterminate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "stableCode", "reason", "nativeLaneBlocked", "explicitRecoveryRequired"],
+          "properties": {
+            "outcome": { "const": "Indeterminate" },
+            "stableCode": { "const": "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" },
+            "reason": { "const": "remoteOperationIndeterminate" },
+            "nativeLaneBlocked": { "const": true },
+            "explicitRecoveryRequired": { "const": true }
+          }
+        },
+        "blocked": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "stableCode", "reason", "restartRestoredBlocked", "automaticClear", "requiredConfirmation", "exactTargetPathHashMatched", "exactOriginMatched", "confirmedEntryRemoved", "subsequentCheckoutPassed"],
+          "properties": {
+            "outcome": { "const": "Blocked" },
+            "stableCode": { "const": "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" },
+            "reason": { "const": "remoteRecoveryBlocked" },
+            "restartRestoredBlocked": { "const": true },
+            "automaticClear": { "const": false },
+            "requiredConfirmation": { "const": "reviewedAndResolved" },
+            "exactTargetPathHashMatched": { "const": true },
+            "exactOriginMatched": { "const": true },
+            "confirmedEntryRemoved": { "const": true },
+            "subsequentCheckoutPassed": { "const": true }
+          }
+        }
+      }
+    },
+    "stress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surface",
+        "cycles",
+        "status",
+        "maxWorkerDescendantsAfterCycle",
+        "maxTemporaryRootsAfterCycle",
+        "maxFixtureServerChildrenAfterCycle",
+        "subsequentRequestPassed"
+      ],
+      "properties": {
+        "surface": {
+          "const": "installed-vsix-extension-host"
+        },
+        "cycles": {
+          "const": 100
+        },
+        "status": {
+          "const": "passed"
+        },
+        "maxWorkerDescendantsAfterCycle": {
+          "const": 0
+        },
+        "maxTemporaryRootsAfterCycle": {
+          "const": 0
+        },
+        "maxFixtureServerChildrenAfterCycle": {
+          "const": 0
+        },
+        "subsequentRequestPassed": {
+          "const": true
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rawUrlCount", "rawPathCount", "secretTokenCount", "maxDiagnosticBytes", "boundedDiagnostics"],
+      "properties": {
+        "rawUrlCount": {
+          "const": 0
+        },
+        "rawPathCount": {
+          "const": 0
+        },
+        "secretTokenCount": {
+          "const": 0
+        },
+        "maxDiagnosticBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32768
+        },
+        "boundedDiagnostics": {
+          "const": true
+        }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "claim",
+        "allOperationCellsPassed",
+        "allNegativeCellsPassed",
+        "artifactHashesMatched",
+        "installedProductProved",
+        "sourceBuiltFixtureProved"
+      ],
+      "properties": {
+        "status": {
+          "const": "verified"
+        },
+        "claim": {
+          "const": "win32-x64-direct-svn-anonymous"
+        },
+        "allOperationCellsPassed": {
+          "const": true
+        },
+        "allNegativeCellsPassed": {
+          "const": true
+        },
+        "artifactHashesMatched": {
+          "const": true
+        },
+        "installedProductProved": {
+          "const": true
+        },
+        "sourceBuiltFixtureProved": {
+          "const": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sha256", "sizeBytes"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "const": 35
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "status",
+        "serverAuth",
+        "promptCount",
+        "credentialSettlement",
+        "reconcile",
+        "workerDescendantsAfter",
+        "temporaryRootsAfter",
+        "nativeLaneReleased",
+        "diagnosticsRedacted"
+      ],
+      "properties": {
+        "operation": {
+          "enum": ["checkoutOpen", "remoteStatus", "content", "historyLog", "historyBlame", "update", "commit", "branchCopy", "switch", "lock", "unlock"]
+        },
+        "status": {
+          "const": "passed"
+        },
+        "serverAuth": {
+          "const": "anonymous"
+        },
+        "promptCount": {
+          "const": 0
+        },
+        "credentialSettlement": {
+          "const": "none"
+        },
+        "reconcile": {
+          "const": "fresh"
+        },
+        "workerDescendantsAfter": {
+          "const": 0
+        },
+        "temporaryRootsAfter": {
+          "const": 0
+        },
+        "nativeLaneReleased": {
+          "const": true
+        },
+        "diagnosticsRedacted": {
+          "const": true
+        }
+      }
+    },
+    "surfaceBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "artifactSha256", "protocol", "remoteSvnAnonymous", "fixtureCliInvocations", "operations"],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "artifactSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "remoteSvnAnonymous": {
+          "const": true
+        },
+        "fixtureCliInvocations": {
+          "const": 0
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 11,
+          "maxItems": 11,
+          "items": {
+            "$ref": "#/$defs/operation"
+          }
+        }
+      }
+    },
+    "packagedSurface": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/surfaceBase"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "packaged-native"
+            }
+          }
+        }
+      ]
+    },
+    "installedSurface": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/surfaceBase"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "installed-vsix-extension-host"
+            }
+          }
+        }
+      ]
+    },
+    "negativeCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cell",
+        "status",
+        "stableCode",
+        "reason",
+        "surfaces",
+        "followupNetworkContacts",
+        "workerDescendantsAfter",
+        "temporaryRootsAfter",
+        "diagnosticsRedacted"
+      ],
+      "properties": {
+        "cell": {
+          "enum": [
+            "maliciousRoot",
+            "saslOnly",
+            "authzDenied",
+            "blackholeConnect",
+            "stalledMidRead",
+            "deadline",
+            "cancellation",
+            "workerCrash",
+            "daemonDisconnect",
+            "trustRevoked",
+            "recoverySafe",
+            "recoveryIndeterminate",
+            "recoveryBlocked",
+            "unrelatedRepository",
+            "localEventZeroNetwork",
+            "redaction"
+          ]
+        },
+        "status": {
+          "const": "passed"
+        },
+        "stableCode": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "surfaces": {
+          "const": ["packaged-native", "installed-vsix-extension-host"]
+        },
+        "followupNetworkContacts": {
+          "const": 0
+        },
+        "workerDescendantsAfter": {
+          "const": 0
+        },
+        "temporaryRootsAfter": {
+          "const": 0
+        },
+        "diagnosticsRedacted": {
+          "const": true
+        }
+      }
+    },
+    "negativeMaliciousRoot": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "maliciousRoot" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH" }, "reason": { "const": "crossAuthorityRejected" } }
+    },
+    "negativeSaslOnly": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "saslOnly" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED" }, "reason": { "const": "remoteCapabilityUnsupported" } }
+    },
+    "negativeAuthzDenied": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "authzDenied" }, "stableCode": { "const": "SVN_REMOTE_STATUS_AUTH_FAILED" }, "reason": { "const": "authorizationDenied" } }
+    },
+    "negativeBlackholeConnect": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "blackholeConnect" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" }, "reason": { "const": "operationDeadlineExceeded" } }
+    },
+    "negativeStalledMidRead": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "stalledMidRead" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" }, "reason": { "const": "operationDeadlineExceeded" } }
+    },
+    "negativeDeadline": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "deadline" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" }, "reason": { "const": "operationDeadlineExceeded" } }
+    },
+    "negativeCancellation": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "cancellation" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_CANCELLED" }, "reason": { "const": "operationCancelled" } }
+    },
+    "negativeWorkerCrash": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "workerCrash" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_CRASHED" }, "reason": { "const": "workerContainmentFailed" } }
+    },
+    "negativeDaemonDisconnect": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "daemonDisconnect" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED" }, "reason": { "const": "workerContainmentFailed" } }
+    },
+    "negativeTrustRevoked": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "trustRevoked" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" }, "reason": { "const": "remoteConfigurationInvalid" } }
+    },
+    "negativeRecoverySafe": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "recoverySafe" }, "stableCode": { "const": "none" }, "reason": { "const": "none" } }
+    },
+    "negativeRecoveryIndeterminate": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "recoveryIndeterminate" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" }, "reason": { "const": "remoteOperationIndeterminate" } }
+    },
+    "negativeRecoveryBlocked": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "recoveryBlocked" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" }, "reason": { "const": "remoteRecoveryBlocked" } }
+    },
+    "negativeUnrelatedRepository": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "unrelatedRepository" }, "stableCode": { "const": "none" }, "reason": { "const": "none" } }
+    },
+    "negativeLocalEventZeroNetwork": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "localEventZeroNetwork" }, "stableCode": { "const": "none" }, "reason": { "const": "none" } }
+    },
+    "negativeRedaction": {
+      "$ref": "#/$defs/negativeCell",
+      "properties": { "cell": { "const": "redaction" }, "stableCode": { "const": "none" }, "reason": { "const": "none" } }
+    }
+  }
+}

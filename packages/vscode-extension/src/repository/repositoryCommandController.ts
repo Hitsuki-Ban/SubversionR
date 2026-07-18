@@ -63,6 +63,7 @@ import {
 } from "../content/headContentUri";
 import type { RevisionContentUriComponents } from "../content/revisionContentUri";
 import { requireTrustedWorkspace as requireTrustedWorkspaceState } from "../security/workspaceTrust";
+import type { RemoteOperationEnvelope } from "../security/remoteAccessProfile";
 
 export interface RepositoryCommandUi {
   workspaceRoots(): string[];
@@ -277,6 +278,7 @@ export interface RepositoryCommandControllerOptions {
   commandCancellation: RepositoryCommandCancellationToken;
   commitMessageHistory: Pick<RepositoryCommitMessageHistory, "messages" | "record">;
   includeMergedRevisions(): boolean;
+  createRemoteEnvelope(repositoryRootUrl: string): Promise<RemoteOperationEnvelope | undefined>;
   createRequestId(): string;
   now(): string;
   monotonicNowMs(): number;
@@ -472,6 +474,13 @@ export class RepositoryCommandController {
 
   public constructor(private readonly options: RepositoryCommandControllerOptions) {}
 
+  private async remoteRequestField(
+    repositoryRootUrl: string,
+  ): Promise<{ remote: RemoteOperationEnvelope } | Record<string, never>> {
+    const remote = await this.options.createRemoteEnvelope(repositoryRootUrl);
+    return remote === undefined ? {} : { remote };
+  }
+
   public async openRepository(): Promise<void> {
     try {
       const workspaceRoots = this.options.ui.workspaceRoots();
@@ -556,7 +565,11 @@ export class RepositoryCommandController {
         this.options.localize("Checking out SVN working copy"),
         async (signal) => {
           const options = checkoutRunOptions(signal);
-          const request = validateRepositoryCheckoutOptions(checkoutOptions);
+          const validated = validateRepositoryCheckoutOptions(checkoutOptions);
+          const request = {
+            ...validated,
+            ...(await this.remoteRequestField(validated.url)),
+          };
           return options
             ? await this.options.checkoutClient.checkout(request, options)
             : await this.options.checkoutClient.checkout(request);
@@ -746,7 +759,7 @@ export class RepositoryCommandController {
           this.options.localize("Cleaning up SVN working copy"),
           session.repositoryId,
           1,
-          (operationOptions) => {
+          async (operationOptions) => {
             const request = {
               repositoryId: session.repositoryId,
               epoch: session.epoch,
@@ -788,7 +801,7 @@ export class RepositoryCommandController {
           this.options.localize("Upgrading SVN working copy"),
           session.repositoryId,
           1,
-          (operationOptions) => {
+          async (operationOptions) => {
             const request = {
               repositoryId: session.repositoryId,
               epoch: session.epoch,
@@ -899,15 +912,16 @@ export class RepositoryCommandController {
           this.options.localize("Creating SVN branch or tag"),
           session.repositoryId,
           0,
-          (operationOptions) => {
+          async (operationOptions) => {
             const request = {
               repositoryId: session.repositoryId,
               epoch: session.epoch,
               ...branchRequestOptions,
+              ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
             };
             return operationOptions
-              ? this.options.operationClient.branchCreate(request, operationOptions)
-              : this.options.operationClient.branchCreate(request);
+              ? await this.options.operationClient.branchCreate(request, operationOptions)
+              : await this.options.operationClient.branchCreate(request);
           },
         );
         if (!switchAfterCreate) {
@@ -918,7 +932,7 @@ export class RepositoryCommandController {
           this.options.localize("Switching SVN working copy"),
           session.repositoryId,
           1,
-          (operationOptions) => {
+          async (operationOptions) => {
             const request = {
               repositoryId: session.repositoryId,
               epoch: session.epoch,
@@ -929,10 +943,11 @@ export class RepositoryCommandController {
               depthIsSticky: false,
               ignoreExternals: validatedOptions.ignoreExternals,
               ignoreAncestry: false,
+              ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
             };
             return operationOptions
-              ? this.options.operationClient.switch(request, operationOptions)
-              : this.options.operationClient.switch(request);
+              ? await this.options.operationClient.switch(request, operationOptions)
+              : await this.options.operationClient.switch(request);
           },
         );
         await this.options.refreshService.fullReconcileRepository({
@@ -986,16 +1001,17 @@ export class RepositoryCommandController {
           this.options.localize("Switching SVN working copy"),
           session.repositoryId,
           1,
-          (operationOptions) => {
+          async (operationOptions) => {
             const request = {
               repositoryId: session.repositoryId,
               epoch: session.epoch,
               path: ".",
               ...validatedOptions,
+              ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
             };
             return operationOptions
-              ? this.options.operationClient.switch(request, operationOptions)
-              : this.options.operationClient.switch(request);
+              ? await this.options.operationClient.switch(request, operationOptions)
+              : await this.options.operationClient.switch(request);
           },
         );
         await this.options.refreshService.fullReconcileRepository({
@@ -1829,7 +1845,7 @@ export class RepositoryCommandController {
           this.options.localize("Updating SVN resource"),
           target.repositoryId,
           1,
-          (operationOptions) => {
+          async (operationOptions) => {
             const request = {
               repositoryId: target.repositoryId,
               epoch: target.epoch,
@@ -1838,10 +1854,11 @@ export class RepositoryCommandController {
               depth: "workingCopy" as const,
               depthIsSticky: false as const,
               ignoreExternals: true as const,
+              ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
             };
             return operationOptions
-              ? this.options.operationClient.update(request, operationOptions)
-              : this.options.operationClient.update(request);
+              ? await this.options.operationClient.update(request, operationOptions)
+              : await this.options.operationClient.update(request);
           },
         );
         await this.options.refreshService.fullReconcileRepository({
@@ -1902,7 +1919,7 @@ export class RepositoryCommandController {
             this.options.localize("Updating SVN resource"),
             session.repositoryId,
             1,
-            (operationOptions) => {
+            async (operationOptions) => {
               const request = {
                 repositoryId: session.repositoryId,
                 epoch: session.epoch,
@@ -1911,10 +1928,11 @@ export class RepositoryCommandController {
                 depth: "workingCopy" as const,
                 depthIsSticky: false as const,
                 ignoreExternals: true as const,
+                ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
               };
               return operationOptions
-                ? this.options.operationClient.update(request, operationOptions)
-                : this.options.operationClient.update(request);
+                ? await this.options.operationClient.update(request, operationOptions)
+                : await this.options.operationClient.update(request);
             },
           );
         }
@@ -1949,7 +1967,7 @@ export class RepositoryCommandController {
         progressTitle,
         session.repositoryId,
         1,
-        (operationOptions) => {
+        async (operationOptions) => {
           const request = {
             repositoryId: session.repositoryId,
             epoch: session.epoch,
@@ -1958,10 +1976,11 @@ export class RepositoryCommandController {
             depth: updateOptions.depth,
             depthIsSticky: updateOptions.depthIsSticky,
             ignoreExternals: updateOptions.ignoreExternals,
+            ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
           };
           return operationOptions
-            ? this.options.operationClient.update(request, operationOptions)
-            : this.options.operationClient.update(request);
+            ? await this.options.operationClient.update(request, operationOptions)
+            : await this.options.operationClient.update(request);
         },
       );
       await this.options.refreshService.fullReconcileRepository({
@@ -2236,6 +2255,12 @@ export class RepositoryCommandController {
       }
 
       const path = resource.path;
+      const session = this.options.sessionService
+        .listOpenSessions()
+        .find((candidate) => candidate.repositoryId === target.repositoryId && candidate.epoch === target.epoch);
+      if (!session) {
+        throw diffPreviousStateUnavailable(target.repositoryId);
+      }
       const log = await this.options.historyClient.getLog({
         repositoryId: target.repositoryId,
         epoch: target.epoch,
@@ -2246,6 +2271,7 @@ export class RepositoryCommandController {
         discoverChangedPaths: false,
         strictNodeHistory: false,
         includeMergedRevisions: false,
+        ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
       });
       const currentEntry = log.entries[0];
       const previousEntry = log.entries[1];
@@ -2823,6 +2849,12 @@ export class RepositoryCommandController {
         invalidResourceLockTarget,
         isLockableProjectedResource,
       );
+      const session = this.options.sessionService
+        .listOpenSessions()
+        .find((candidate) => candidate.repositoryId === target.repositoryId && candidate.epoch === target.epoch);
+      if (!session) {
+        throw invalidResourceLockTarget();
+      }
       const pathSummary = commitPathSummary(paths);
       if (this.options.commandCancellation.isCancellationRequested) {
         return;
@@ -2841,17 +2873,18 @@ export class RepositoryCommandController {
               this.options.localize("Locking SVN resource"),
               target.repositoryId,
               paths.length,
-              (operationOptions) => {
+              async (operationOptions) => {
                 const request = {
                   repositoryId: target.repositoryId,
                   epoch: target.epoch,
                   paths,
                   comment: lockOptions.comment,
                   stealLock: lockOptions.stealLock,
+                  ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
                 };
                 return operationOptions
-                  ? this.options.operationClient.lock(request, operationOptions)
-                  : this.options.operationClient.lock(request);
+                  ? await this.options.operationClient.lock(request, operationOptions)
+                  : await this.options.operationClient.lock(request);
               },
               this.options.commandCancellation,
             );
@@ -2893,6 +2926,12 @@ export class RepositoryCommandController {
         invalidResourceUnlockTarget,
         isUnlockableProjectedResource,
       );
+      const session = this.options.sessionService
+        .listOpenSessions()
+        .find((candidate) => candidate.repositoryId === target.repositoryId && candidate.epoch === target.epoch);
+      if (!session) {
+        throw invalidResourceUnlockTarget();
+      }
       const pathSummary = commitPathSummary(paths);
       if (this.options.commandCancellation.isCancellationRequested) {
         return;
@@ -2911,16 +2950,17 @@ export class RepositoryCommandController {
               this.options.localize("Unlocking SVN resource"),
               target.repositoryId,
               paths.length,
-              (operationOptions) => {
+              async (operationOptions) => {
                 const request = {
                   repositoryId: target.repositoryId,
                   epoch: target.epoch,
                   paths,
                   breakLock: unlockOptions.breakLock,
+                  ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
                 };
                 return operationOptions
-                  ? this.options.operationClient.unlock(request, operationOptions)
-                  : this.options.operationClient.unlock(request);
+                  ? await this.options.operationClient.unlock(request, operationOptions)
+                  : await this.options.operationClient.unlock(request);
               },
               this.options.commandCancellation,
             );
@@ -4360,8 +4400,14 @@ export class RepositoryCommandController {
         this.options.localize("Committing SVN changes"),
         target.repositoryId,
         paths.length,
-        (operationOptions) => {
+        async (operationOptions) => {
           this.assertCommitSelectionCurrent(selection);
+          const session = this.options.sessionService
+            .listOpenSessions()
+            .find((candidate) => candidate.repositoryId === target.repositoryId && candidate.epoch === target.epoch);
+          if (!session) {
+            throw commitSelectionStale(selection.repositoryId);
+          }
           const request = {
             repositoryId: target.repositoryId,
             epoch: target.epoch,
@@ -4374,10 +4420,11 @@ export class RepositoryCommandController {
             commitAsOperations: false as const,
             includeFileExternals: false as const,
             includeDirExternals: false as const,
+            ...(await this.remoteRequestField(session.identity.repositoryRootUrl)),
           };
           return operationOptions
-            ? this.options.operationClient.commit(request, operationOptions)
-            : this.options.operationClient.commit(request);
+            ? await this.options.operationClient.commit(request, operationOptions)
+            : await this.options.operationClient.commit(request);
         },
       );
       if (result.revision === null) {
@@ -4655,6 +4702,10 @@ function repositoryFailureMessage(
       return localize("SVN {0} failed because unresolved conflicts are present. Resolve them and retry.", operation);
     case "authenticationFailed":
       return localize("SVN {0} failed because authentication was rejected. Check the credentials and retry.", operation);
+    case "authorizationDenied":
+      return localize("SVN {0} failed because the server denied authorization for this operation.", operation);
+    case "authorizationConfigurationInvalid":
+      return localize("SVN {0} failed because the server authorization configuration is invalid.", operation);
     case "notWorkingCopy":
       return localize("SVN {0} failed because the selected target is not a working copy.", operation);
     default:

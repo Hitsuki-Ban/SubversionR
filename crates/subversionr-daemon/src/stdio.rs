@@ -306,6 +306,9 @@ struct RemoteWorkerCompletion {
     operation_id: String,
     lane_key: String,
     endpoint: subversionr_protocol::CanonicalEndpoint,
+    repository_id: Option<String>,
+    epoch: Option<u64>,
+    svn_anonymous_request: Option<crate::RemoteSvnAnonymousRequest>,
     settlement: RemoteWorkerSettlement,
 }
 
@@ -332,6 +335,9 @@ fn spawn_remote_worker(
     let operation_id = launch.operation.envelope.operation_id.clone();
     let lane_key = launch.lane_key.clone();
     let endpoint = launch.operation.endpoint.clone();
+    let repository_id = launch.repository_id.clone();
+    let epoch = launch.epoch;
+    let svn_anonymous_request = launch.svn_anonymous_request.clone();
     let spawn_error = RemoteWorkerSpawnError {
         request_id: request_id.clone(),
         operation_id: operation_id.clone(),
@@ -349,43 +355,60 @@ fn spawn_remote_worker(
                 Arc::clone(&remote_worker),
                 launch.operation.deadline,
             );
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                remote_worker.execute(
-                    &launch.operation.envelope,
-                    launch.operation.config,
-                    &lane_key,
-                    launch.effect,
-                    &cancellation,
-                    &mut auth,
-                    &unavailable_bridge,
-                    launch.operation.deadline,
-                )
-            }))
-            .unwrap_or_else(|_| RemoteWorkerSettlement {
-                result: Err(BridgeFailure::new(
-                    "SUBVERSIONR_REMOTE_WORKER_CRASHED",
-                    "process",
-                    "error.remote.workerCrashed",
-                    json!({ "stage": "supervisor" }),
-                    false,
-                )),
-                remote_failure: Some(RemoteFailure {
-                    category: RemoteFailureCategory::Process,
-                    reason: RemoteFailureClass::WorkerContainmentFailed,
-                    cleanup_appropriate: false,
-                }),
-                effect: launch.effect,
-                worker_was_resumed: false,
-                execution_origin_known: false,
-                termination: WorkerTerminationDisposition::Blocked,
-                job_descendants_zero: false,
-                temp_root_removed: false,
-            });
+            let completion_request = svn_anonymous_request.clone();
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || match svn_anonymous_request {
+                        Some(operation) => remote_worker.execute_svn_anonymous(
+                            &launch.operation.envelope,
+                            launch.operation.config,
+                            &lane_key,
+                            launch.effect,
+                            operation,
+                            &cancellation,
+                            launch.operation.deadline,
+                        ),
+                        None => remote_worker.execute(
+                            &launch.operation.envelope,
+                            launch.operation.config,
+                            &lane_key,
+                            launch.effect,
+                            &cancellation,
+                            &mut auth,
+                            &unavailable_bridge,
+                            launch.operation.deadline,
+                        ),
+                    },
+                ))
+                .unwrap_or_else(|_| RemoteWorkerSettlement {
+                    result: Err(BridgeFailure::new(
+                        "SUBVERSIONR_REMOTE_WORKER_CRASHED",
+                        "process",
+                        "error.remote.workerCrashed",
+                        json!({ "stage": "supervisor" }),
+                        false,
+                    )),
+                    operation_output: None,
+                    remote_failure: Some(RemoteFailure {
+                        category: RemoteFailureCategory::Process,
+                        reason: RemoteFailureClass::WorkerContainmentFailed,
+                        cleanup_appropriate: false,
+                    }),
+                    effect: launch.effect,
+                    worker_was_resumed: false,
+                    execution_origin_known: false,
+                    termination: WorkerTerminationDisposition::Blocked,
+                    job_descendants_zero: false,
+                    temp_root_removed: false,
+                });
             let _ = sender.send(AsyncRemoteCompletion::Worker(RemoteWorkerCompletion {
                 request_id,
                 operation_id,
                 lane_key,
                 endpoint,
+                repository_id,
+                epoch,
+                svn_anonymous_request: completion_request,
                 settlement: result,
             }));
         })
@@ -795,7 +818,7 @@ fn settle_remote_completion<W: Write>(
         &completion.operation_id,
         &completion.settlement,
     );
-    let settlement_notifications = state.take_pending_notifications();
+    let mut settlement_notifications = state.take_pending_notifications();
     fail_operation_remote_broker_calls(
         frames,
         pending_broker,
@@ -812,20 +835,53 @@ fn settle_remote_completion<W: Write>(
     }
     let result = match settlement_override {
         Some(failure) => Err(failure),
-        None => completion.settlement.result,
+        None => completion.settlement.result.clone(),
     };
     let response = match result {
-        Ok(()) => json!({
-            "jsonrpc": "2.0",
-            "id": completion.request_id,
-            "error": bridge_error(unsupported_transport(&completion.endpoint)),
-        }),
+        Ok(()) => match (
+            completion.svn_anonymous_request,
+            completion.settlement.operation_output,
+        ) {
+            (Some(request), Some(output)) => match state.complete_remote_svn_anonymous(
+                completion.request_id.clone(),
+                &completion.lane_key,
+                &completion.operation_id,
+                completion.repository_id.as_deref(),
+                completion.epoch,
+                request,
+                output,
+            ) {
+                Ok(response) => response,
+                Err(failure) => json!({
+                    "jsonrpc": "2.0",
+                    "id": completion.request_id,
+                    "error": bridge_error(crate::remote::attach_remote_failure(failure)),
+                }),
+            },
+            (None, None) => json!({
+                "jsonrpc": "2.0",
+                "id": completion.request_id,
+                "error": bridge_error(unsupported_transport(&completion.endpoint)),
+            }),
+            _ => json!({
+                "jsonrpc": "2.0",
+                "id": completion.request_id,
+                "error": bridge_error(crate::remote::attach_remote_failure(BridgeFailure::new(
+                    "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID",
+                    "protocol",
+                    "error.remote.workerProtocolInvalid",
+                    json!({}),
+                    false,
+                ))),
+            }),
+        },
         Err(failure) => json!({
             "jsonrpc": "2.0",
             "id": completion.request_id,
             "error": bridge_error(crate::remote::attach_remote_failure(failure)),
         }),
     };
+    settlement_notifications.extend(state.take_pending_notifications());
     write_content_length_frame(writer, &response)?;
     for notification in settlement_notifications {
         write_content_length_frame(writer, &notification)?;

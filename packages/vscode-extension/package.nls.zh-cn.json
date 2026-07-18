@@ -19,6 +19,7 @@
   "command.refreshRepository.title": "SubversionR: 刷新",
   "command.checkRemoteChanges.title": "SubversionR: 检查远端变更",
   "command.retryRemoteRecovery.title": "SubversionR: 重试远端恢复",
+  "command.resolveCheckoutTargetRecovery.title": "SubversionR: 检查被阻塞的检出目标",
   "command.refreshResource.title": "SubversionR: 刷新资源",
   "command.openConflictArtifact.title": "SubversionR: 打开冲突产物",
   "command.addResource.title": "SubversionR: 添加资源",

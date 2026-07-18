@@ -213,6 +213,9 @@ jobs:
       - name: Release evidence script tests
         shell: pwsh
         run: pnpm release:test-evidence-scripts
+      - name: M8 I6 svn anonymous evidence contract tests
+        shell: pwsh
+        run: pnpm release:test-m8-i6-svn-anonymous-evidence-scripts
       - name: Generate source SBOM
         shell: pwsh
         run: pnpm release:generate-source-sbom

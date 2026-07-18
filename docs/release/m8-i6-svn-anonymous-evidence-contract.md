@@ -1,0 +1,153 @@
+# M8 I6 direct `svn://` anonymous evidence contract
+
+This gate is the first transport-capability gate in M8. It is eligible to support
+only the exact **Windows `win32-x64`, direct `svn://`, anonymous** claim. It does
+not establish CRAM-MD5, SASL, SSH, HTTP(S), proxy, externals, or cross-platform
+support.
+
+`docs/release/m8-i6-svn-anonymous-evidence.v1.schema.json` defines the strict
+machine-readable shape, and the report binds its exact SHA-256.
+`scripts/release/verify-m8-i6-svn-anonymous-evidence.ps1` is the executable
+semantic contract. The verifier accepts one evidence JSON document and the exact VSIX,
+daemon, bridge, Subversion stage manifest and fixture tools, probe driver,
+reviewed ra_svn origin patch and contract, native source lock, fixture
+configuration, and fixture authz files. Every input is mandatory and absolute;
+missing inputs, extra JSON fields, a hash mismatch, a partial matrix, or a
+provisional verdict fails the gate. There is no historical-schema alias,
+inferred version, skipped cell, or compatibility fallback.
+
+## Authority and fixture boundary
+
+The positive fixture is a loopback-only, source-built Apache Subversion 1.14.5
+`svnserve` with SASL disabled and explicit anonymous authz. Source-built
+`svnadmin` and `svn` may create and mutate fixture repositories as test oracles.
+The packaged daemon and installed VSIX operation surfaces must record zero SVN
+CLI invocations; product behavior continues to use the packaged Rust sidecar,
+bridge, and libsvn.
+
+The evidence binds the exact bytes of:
+
+- the installed VSIX;
+- the packaged daemon and native bridge;
+- `subversionr-stage-manifest.json`;
+- `native/sources.lock.json`;
+- the reviewed Apache Subversion 1.14.5 ra_svn origin patch and its adjacent
+  contract;
+- the source-controlled I6 probe driver;
+- the exact source-built `svn.exe`, `svnadmin.exe`, and `svnserve.exe`; and
+- the positive fixture `svnserve.conf` and `authz` files.
+
+The report contains no raw repository URL, working-copy path, username, realm,
+credential, log message, source content, or unbounded diagnostic. Repository and
+profile identities used by a driver are ephemeral and may be retained only as
+bounded hashes.
+
+## Probe-driver boundary
+
+`scripts/release/run-m8-i6-svn-anonymous-evidence.ps1` imports the
+source-controlled Native module and requires
+`Assert-SubversionStageForBridge` to validate the stage against
+`native/sources.lock.json`, architecture `x64`, configuration `Release`, all
+required headers/libraries/runtime files, the exact dependency manifest, and
+forbidden dynamic-Serf artifacts. It then creates the positive
+repository, starts the source-built loopback `svnserve`, and then invokes one
+mandatory PowerShell probe driver. `ProbeDriverPath` must be exactly
+`scripts/release/probe-m8-i6-svn-anonymous.ps1`; an arbitrary external driver is
+rejected even if it emits schema-valid JSON. The driver receives the repository URL,
+fixture root, fixture config/authz files, exact source-built fixture-tool paths,
+candidate VSIX/daemon/bridge paths, Code CLI path, stage-manifest path, ra_svn
+patch/contract paths, native source-lock path, expected product version, and
+output path. It owns the packaged and
+installed product actions and the additional malicious-root, SASL-only, authz,
+blackhole-connect, stalled-mid-read, deadline, cancellation, worker-crash,
+daemon-disconnect, trust-revoke, recovery, unrelated-repository, local-event,
+redaction, and stress fixture controls.
+
+The report binds the exact bytes of the main driver and every source-controlled
+helper it executes: the I6 packaged-native probe, the I6 installed-VSIX probe,
+the packaged-native compatibility probe, and the installed Extension Host
+harness. The verifier resolves those helpers only from their reviewed repository
+paths and rejects any hash drift, so changing any executable probe invalidates
+previous evidence.
+
+There is deliberately no bundled synthetic driver. Until a driver executes the
+real candidate product and emits the complete hash-bound report, the runner
+fails on a missing `ProbeDriverPath` or on verifier rejection. Source-built
+`svn`/`svnadmin` observations may seed or inspect fixtures only and cannot be
+copied into either product surface's operation results.
+
+## Required positive matrix
+
+Both `packaged-native` and `installed-vsix-extension-host` surfaces must execute
+these cells in this exact order:
+
+1. checkout/open;
+2. remote status;
+3. repository content;
+4. log history;
+5. blame history;
+6. update;
+7. commit;
+8. repository copy for branch/tag creation;
+9. switch;
+10. lock; and
+11. unlock.
+
+Every cell proves anonymous access with zero prompts and no credential
+settlement, a fresh reconcile result, zero remaining worker descendants and
+operation temporary roots, native-lane release after cleanup, and redacted
+diagnostics. Fixture startup or a direct bridge/unit probe does not satisfy the
+installed surface.
+
+## Required negative and recovery matrix
+
+The report must contain all of the following controlled cells in exact order:
+
+- malicious repository-root response rejected as
+  `SUBVERSIONR_REMOTE_ORIGIN_MISMATCH` / `crossAuthorityRejected`, with zero
+  follow-up contact to the supplied authority;
+- SASL-only server rejected as `SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED` /
+  `remoteCapabilityUnsupported`, without credential prompting;
+- controlled remote-status authz denial classified as
+  `SVN_REMOTE_STATUS_AUTH_FAILED` / `authorizationDenied`;
+- a blackhole connect that reaches its owned absolute deadline and leaves zero
+  worker/process/temp-root residue;
+- a server that accepts a connection and stalls mid-read, independently proving
+  the same deadline and cleanup properties after network progress;
+- absolute deadline and explicit cancellation terminated through their owned
+  worker outcomes;
+- worker crash contained with zero residue;
+- daemon/client disconnect supervised as
+  `SUBVERSIONR_REMOTE_WORKER_DISCONNECTED` / `workerContainmentFailed`, with no
+  surviving operation worker;
+- trust revocation rejected before any subsequent network contact;
+- recovery Safe settlement that releases only after fresh reconcile;
+- recovery Indeterminate settlement that records
+  `SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE` / `remoteOperationIndeterminate`;
+- recovery Blocked settlement, including restart after an armed checkout target,
+  that records `SUBVERSIONR_REMOTE_RECOVERY_BLOCKED` /
+  `remoteRecoveryBlocked` and clears only through the exact explicit disposition
+  confirmation contract;
+- unrelated repository state unchanged;
+- local filesystem events causing zero remote network attempts; and
+- bounded redaction with no forbidden token disclosure.
+
+Each failure cell must pass on both packaged-native and installed-VSIX surfaces
+and records zero forbidden follow-up contacts, worker descendants, and operation
+temporary roots. The separate stress record runs exactly 100 installed-VSIX
+cycles and proves per-cycle worker, temporary-root, and fixture-child cleanup
+plus a subsequent successful request.
+
+## Current execution blocker
+
+The source branch contains real candidate drivers for the packaged-native and
+installed Extension Host positive operation matrix. Both drivers execute the
+eleven direct-`svn://` operations and keep the evidence report absent when any
+candidate observation fails.
+
+This contract intentionally remains fail-closed until the sixteen cross-surface negative/recovery cells
+and the installed 100-cycle residue stress contract are
+automated and executed against the same candidate artifacts. Missing controlled
+observations may not be represented as `verified` by synthetic evidence. The I6
+readiness/public-claim aggregation must be wired only after a real report passes
+the executable verifier against the candidate artifacts.

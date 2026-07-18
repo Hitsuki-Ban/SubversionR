@@ -21,7 +21,7 @@ import { StatusSnapshotStore } from "../status/statusSnapshotStore";
 import type { JsonRpcSender } from "../status/types";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const EXPECTED_PROTOCOL_MINOR = 34;
+const EXPECTED_PROTOCOL_MINOR = 35;
 
 export interface InstalledRemoteWorkerReportOptions {
   expectedToken: string | undefined;
@@ -450,7 +450,8 @@ function isAbsolutePath(value: string): boolean {
 }
 
 function isCanonicalOperationId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-9a-f][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    && value !== "00000000-0000-0000-0000-000000000000";
 }
 
 export class InstalledRemoteWorkerReportError extends Error {

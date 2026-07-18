@@ -498,7 +498,7 @@ function New-BetaCandidateFixture([string]$Root) {
       libsvnVersion = "1.14.5"
       protocol = [pscustomobject]@{
         major = 1
-        minor = 34
+        minor = 35
       }
       capabilities = [pscustomobject]@{
         remoteWorkerIsolation = $true
@@ -539,7 +539,7 @@ function New-BetaCandidateFixture([string]$Root) {
           source = "subversionr-daemon"
           protocol = [pscustomobject]@{
             major = 1
-            minor = 34
+            minor = 35
           }
         }
       }

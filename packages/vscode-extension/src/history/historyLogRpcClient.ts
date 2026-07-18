@@ -1,4 +1,8 @@
-import type { JsonRpcSender } from "../status/types";
+import {
+  validateAnonymousSvnRemoteOperationEnvelope,
+  type RemoteOperationEnvelope,
+} from "../security/remoteAccessProfile";
+import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 declare const historyRevisionBrand: unique symbol;
 declare const historyNumberedRevisionBrand: unique symbol;
@@ -25,6 +29,7 @@ export interface HistoryLogRequest {
   discoverChangedPaths: boolean;
   strictNodeHistory: boolean;
   includeMergedRevisions: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface ValidatedHistoryLogRequest {
@@ -37,6 +42,7 @@ export interface ValidatedHistoryLogRequest {
   discoverChangedPaths: boolean;
   strictNodeHistory: boolean;
   includeMergedRevisions: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface HistoryChangedPath {
@@ -72,8 +78,10 @@ export interface HistoryLog {
 }
 
 export interface HistoryClient {
-  getLog(request: HistoryLogRequest): Promise<HistoryLog>;
+  getLog(request: HistoryLogRequest, options?: HistoryClientOptions): Promise<HistoryLog>;
 }
+
+export type HistoryClientOptions = JsonRpcRequestOptions;
 
 export class HistoryLogResponseError extends Error {
   public constructor(
@@ -90,9 +98,11 @@ export class HistoryLogResponseError extends Error {
 export class HistoryLogRpcClient implements HistoryClient {
   public constructor(private readonly sender: JsonRpcSender) {}
 
-  public async getLog(request: HistoryLogRequest): Promise<HistoryLog> {
+  public async getLog(request: HistoryLogRequest, options?: HistoryClientOptions): Promise<HistoryLog> {
     const validatedRequest = validateHistoryLogRequest(request);
-    const rawResponse = await this.sender.sendRequest<unknown>("history/log", validatedRequest);
+    const rawResponse = options === undefined
+      ? await this.sender.sendRequest<unknown>("history/log", validatedRequest)
+      : await this.sender.sendRequest<unknown>("history/log", validatedRequest, options);
     const log = parseHistoryLogResponse(rawResponse);
     requireHistoryLogMatchesRequest(log, validatedRequest);
     return log;
@@ -113,7 +123,7 @@ function validateHistoryLogRequest(request: HistoryLogRequest): ValidatedHistory
     "discoverChangedPaths",
     "strictNodeHistory",
     "includeMergedRevisions",
-  ]);
+  ], ["remote"]);
   if (typeof request.repositoryId !== "string" || request.repositoryId.trim().length === 0) {
     throw invalidHistoryRequest("repositoryId");
   }
@@ -147,6 +157,9 @@ function validateHistoryLogRequest(request: HistoryLogRequest): ValidatedHistory
     throw invalidHistoryRequest("includeMergedRevisions");
   }
 
+  const remote = "remote" in request
+    ? validateAnonymousSvnRemoteOperationEnvelope(request.remote)
+    : undefined;
   return {
     repositoryId: request.repositoryId,
     epoch: request.epoch,
@@ -157,6 +170,7 @@ function validateHistoryLogRequest(request: HistoryLogRequest): ValidatedHistory
     discoverChangedPaths: request.discoverChangedPaths,
     strictNodeHistory: request.strictNodeHistory,
     includeMergedRevisions: request.includeMergedRevisions,
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -292,6 +306,11 @@ function requireRecord(value: unknown, field: string): Record<string, unknown> {
 
 function requireExactKeys(value: Record<string, unknown>, field: string, expectedKeys: readonly string[]): void {
   const expected = new Set(expectedKeys);
+  for (const key of expected) {
+    if (!(key in value)) {
+      throw invalidHistoryResponse(key);
+    }
+  }
   for (const key of Object.keys(value)) {
     if (!expected.has(key)) {
       throw invalidHistoryResponse(field === "result" ? key : `${field}.${key}`);
@@ -303,10 +322,17 @@ function requireExactRequestKeys(
   value: Record<string, unknown>,
   field: string,
   expectedKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
 ): void {
   const expected = new Set(expectedKeys);
+  const allowed = new Set([...expectedKeys, ...optionalKeys]);
+  for (const key of expected) {
+    if (!(key in value)) {
+      throw invalidHistoryRequest(key);
+    }
+  }
   for (const key of Object.keys(value)) {
-    if (!expected.has(key)) {
+    if (!allowed.has(key)) {
       throw invalidHistoryRequest(field === "request" ? key : `${field}.${key}`);
     }
   }

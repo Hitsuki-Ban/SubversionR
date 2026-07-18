@@ -33,6 +33,7 @@ pub struct InitializeParams {
     pub workspace_trust: WorkspaceTrustState,
     pub trust_epoch: u64,
     pub cache_root: String,
+    pub remote_state_root: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +50,7 @@ pub struct WorkspaceTrustUpdateResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Capabilities {
     pub content_length_framing: bool,
     pub real_libsvn_bridge: bool,
@@ -96,6 +97,7 @@ pub struct Capabilities {
     pub trusted_config_snapshot: bool,
     pub remote_worker_isolation: bool,
     pub remote_connection_state: bool,
+    pub remote_svn_anonymous: bool,
     pub credential_lease_settlement: bool,
 }
 
@@ -163,6 +165,7 @@ pub struct RemoteFailure {
 #[serde(rename_all = "camelCase")]
 pub enum RemoteAttentionReason {
     AuthRequired,
+    AuthorizationDenied,
     CertificateRequired,
     HostKeyRequired,
     ConfigurationInvalid,
@@ -519,13 +522,15 @@ pub struct RepositoryOpenResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RepositoryCheckoutParams {
     pub url: String,
     pub target_path: String,
     pub revision: RepositoryCheckoutRevision,
     pub depth: String,
     pub ignore_externals: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteOperationEnvelope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -909,6 +914,8 @@ pub enum OperationFailureCause {
     OutOfDate,
     ConflictPresent,
     AuthenticationFailed,
+    AuthorizationDenied,
+    AuthorizationConfigurationInvalid,
     NotWorkingCopy,
     UnknownNative,
 }
@@ -1098,7 +1105,7 @@ impl InitializeResponse {
         Self {
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 34,
+                minor: 35,
             },
             backend_version,
             bridge_version,
@@ -1166,6 +1173,7 @@ pub fn default_capabilities() -> Capabilities {
         trusted_config_snapshot: true,
         remote_worker_isolation: false,
         remote_connection_state: false,
+        remote_svn_anonymous: false,
         credential_lease_settlement: false,
     }
 }

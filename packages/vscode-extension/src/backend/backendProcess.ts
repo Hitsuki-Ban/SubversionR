@@ -11,7 +11,7 @@ import {
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const MINIMUM_PROTOCOL_MINOR = 34;
+const MINIMUM_PROTOCOL_MINOR = 35;
 const EXPECTED_CACHE_SCHEMA_ID = "subversionr.cache.v1";
 const EXPECTED_CACHE_SCHEMA_VERSION = 1;
 const EXPECTED_CACHE_SCHEMA_ROLLBACK = "delete-and-reconcile";
@@ -63,6 +63,7 @@ const REQUIRED_CAPABILITIES: Array<keyof InitializeResult["capabilities"]> = [
   "remoteWorkerIsolation",
   "credentialLeaseSettlement",
   "remoteConnectionState",
+  "remoteSvnAnonymous",
 ];
 
 export type WorkspaceTrustState = "trusted" | "untrusted";
@@ -72,6 +73,7 @@ export interface BackendLaunchConfig {
   executablePath: string;
   bridgeDllPath: string;
   cacheRoot: string;
+  remoteStateRoot: string;
   clientName: string;
   clientVersion: string;
   locale: string;
@@ -105,6 +107,7 @@ export interface InitializeParams {
   workspaceTrust: WorkspaceTrustState;
   trustEpoch: number;
   cacheRoot: string;
+  remoteStateRoot: string;
 }
 
 export interface ProtocolVersion {
@@ -174,6 +177,7 @@ export interface InitializeResult {
     remoteWorkerIsolation: boolean;
     credentialLeaseSettlement: boolean;
     remoteConnectionState: boolean;
+    remoteSvnAnonymous: boolean;
   };
   acknowledgedTrustEpoch: number;
 }
@@ -466,6 +470,7 @@ function initializeParams(config: BackendLaunchConfig): InitializeParams {
     workspaceTrust: config.workspaceTrust,
     trustEpoch: 1,
     cacheRoot: config.cacheRoot,
+    remoteStateRoot: config.remoteStateRoot,
   };
 }
 
@@ -477,6 +482,7 @@ function validateLaunchConfig(config: BackendLaunchConfig): void {
   );
   requireAbsolutePath(config.bridgeDllPath, "error.backend.bridgeDllPathNotAbsolute", "bridgeDllPath");
   requireAbsolutePath(config.cacheRoot, "error.backend.cacheRootNotAbsolute", "cacheRoot");
+  requireAbsolutePath(config.remoteStateRoot, "error.backend.remoteStateRootNotAbsolute", "remoteStateRoot");
   requireNonEmpty(config.clientName, "clientName");
   requireNonEmpty(config.clientVersion, "clientVersion");
   requireNonEmpty(config.locale, "locale");
@@ -511,7 +517,8 @@ function requireNonEmpty(value: string, field: string): void {
 }
 
 function isAbsolutePath(value: string): boolean {
-  return path.isAbsolute(value) || path.win32.isAbsolute(value) || path.posix.isAbsolute(value);
+  return typeof value === "string" &&
+    (path.isAbsolute(value) || path.win32.isAbsolute(value) || path.posix.isAbsolute(value));
 }
 
 function parseInitializeResult(rawResult: unknown): InitializeResult {
@@ -645,6 +652,10 @@ function parseInitializeResult(rawResult: unknown): InitializeResult {
       remoteConnectionState: requireBoolean(
         capabilities.remoteConnectionState,
         "capabilities.remoteConnectionState",
+      ),
+      remoteSvnAnonymous: requireBoolean(
+        capabilities.remoteSvnAnonymous,
+        "capabilities.remoteSvnAnonymous",
       ),
     },
   };

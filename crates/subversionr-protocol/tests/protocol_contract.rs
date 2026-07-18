@@ -18,6 +18,46 @@ use subversionr_protocol::{
 };
 
 #[test]
+fn initialize_params_require_exact_remote_state_root() {
+    let valid = serde_json::json!({
+        "clientName": "SubversionR",
+        "clientVersion": "0.2.4",
+        "locale": "en",
+        "workspaceTrust": "trusted",
+        "trustEpoch": 1,
+        "cacheRoot": "C:/SubversionR/cache",
+        "remoteStateRoot": "C:/SubversionR/remote-state"
+    });
+    serde_json::from_value::<subversionr_protocol::InitializeParams>(valid.clone())
+        .expect("remoteStateRoot is required");
+
+    let mut missing = valid.clone();
+    missing.as_object_mut().unwrap().remove("remoteStateRoot");
+    assert!(serde_json::from_value::<subversionr_protocol::InitializeParams>(missing).is_err());
+
+    let mut unknown = valid;
+    unknown["remoteStateDirectory"] = serde_json::json!("C:/SubversionR/remote-state");
+    assert!(serde_json::from_value::<subversionr_protocol::InitializeParams>(unknown).is_err());
+}
+
+#[test]
+fn capabilities_require_the_exact_remote_svn_anonymous_key() {
+    let valid = serde_json::to_value(default_capabilities()).expect("capabilities must serialize");
+    assert_eq!(valid["remoteSvnAnonymous"], false);
+
+    let mut missing = valid.clone();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("remoteSvnAnonymous");
+    assert!(serde_json::from_value::<subversionr_protocol::Capabilities>(missing).is_err());
+
+    let mut unknown = valid;
+    unknown["remoteSvn"] = serde_json::json!(false);
+    assert!(serde_json::from_value::<subversionr_protocol::Capabilities>(unknown).is_err());
+}
+
+#[test]
 fn remote_operation_envelope_rejects_unknown_fields_versions_and_enums() {
     let valid = serde_json::json!({
         "version": 1,
@@ -151,6 +191,20 @@ fn operation_failure_diagnostics_serialize_strict_safe_shape() {
 }
 
 #[test]
+fn authorization_attention_and_configuration_causes_serialize_distinctly() {
+    assert_eq!(
+        serde_json::to_value(RemoteAttentionReason::AuthorizationDenied)
+            .expect("authorization attention must serialize"),
+        "authorizationDenied"
+    );
+    assert_eq!(
+        serde_json::to_value(OperationFailureCause::AuthorizationConfigurationInvalid)
+            .expect("authorization configuration cause must serialize"),
+        "authorizationConfigurationInvalid"
+    );
+}
+
+#[test]
 fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
     let response = InitializeResponse::new(
         "0.1.0".to_string(),
@@ -165,7 +219,7 @@ fn initialize_response_uses_protocol_v1_and_declares_required_capabilities() {
         response.protocol,
         ProtocolVersion {
             major: 1,
-            minor: 34
+            minor: 35
         }
     );
     assert_eq!(response.cache_schema, default_cache_schema());
@@ -229,7 +283,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     let json = serde_json::to_value(response).expect("initialize response must serialize");
 
     assert_eq!(json["protocol"]["major"], 1);
-    assert_eq!(json["protocol"]["minor"], 34);
+    assert_eq!(json["protocol"]["minor"], 35);
     assert_eq!(json["cacheSchema"]["schemaId"], "subversionr.cache.v1");
     assert_eq!(json["cacheSchema"]["version"], 1);
     assert_eq!(json["cacheSchema"]["rollback"], "delete-and-reconcile");
@@ -281,6 +335,7 @@ fn initialize_response_serializes_stable_wire_field_names() {
     assert_eq!(json["capabilities"]["trustedConfigSnapshot"], true);
     assert_eq!(json["capabilities"]["remoteWorkerIsolation"], false);
     assert_eq!(json["capabilities"]["remoteConnectionState"], false);
+    assert_eq!(json["capabilities"]["remoteSvnAnonymous"], false);
     assert_eq!(json["capabilities"]["credentialLeaseSettlement"], false);
     assert_eq!(json["acknowledgedTrustEpoch"], 1);
     assert!(json["capabilities"].get("authCallbacks").is_none());
@@ -289,29 +344,53 @@ fn initialize_response_serializes_stable_wire_field_names() {
 #[test]
 fn repository_checkout_params_serialize_revision_as_head_or_number() {
     let head = RepositoryCheckoutParams {
-        url: "https://svn.example.invalid/project/trunk".to_string(),
+        url: "file:///C:/fixtures/project/trunk".to_string(),
         target_path: "C:/workspace/project".to_string(),
         revision: RepositoryCheckoutRevision::Head,
         depth: "infinity".to_string(),
         ignore_externals: false,
+        remote: None,
     };
     let json = serde_json::to_value(head).expect("checkout params must serialize");
 
     assert_eq!(json["revision"], "head");
+    assert!(json.get("remote").is_none());
 
     let number = serde_json::from_value::<RepositoryCheckoutParams>(serde_json::json!({
-        "url": "https://svn.example.invalid/project/trunk",
+        "url": "svn://svn.example.invalid/project/trunk",
         "targetPath": "C:/workspace/project",
         "revision": 42,
         "depth": "files",
-        "ignoreExternals": true
+        "ignoreExternals": true,
+        "remote": {
+            "version": 1,
+            "operationId": "01234567-89ab-4def-8123-456789abcdef",
+            "intent": "foreground",
+            "interaction": "allowed",
+            "timeoutMs": 30000,
+            "workspaceTrust": "trusted",
+            "trustEpoch": 1,
+            "profile": {
+                "schema": "subversionr.remote-profile.v1",
+                "profileId": "anonymous-svn",
+                "authority": { "scheme": "svn", "canonicalHost": "svn.example.invalid", "effectivePort": 3690 },
+                "serverAuth": "anonymous",
+                "serverAccount": "none",
+                "serverCredentialPersistence": "secretStorage",
+                "proxy": "none",
+                "ssh": "none",
+                "redirectPolicy": "rejectAll"
+            },
+            "expectedOrigin": { "scheme": "svn", "canonicalHost": "svn.example.invalid", "effectivePort": 3690 }
+        }
     }))
     .expect("numbered checkout revision must deserialize");
 
     assert_eq!(number.revision, RepositoryCheckoutRevision::Number(42));
+    assert!(number.remote.is_some());
     assert!(
         serde_json::from_value::<RepositoryCheckoutParams>(serde_json::json!({
-            "url": "https://svn.example.invalid/project/trunk",
+            "url": "file:///C:/fixtures/project/trunk",
             "targetPath": "C:/workspace/project",
             "revision": "42",
             "depth": "files",

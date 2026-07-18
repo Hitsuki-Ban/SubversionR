@@ -89,7 +89,8 @@ pub struct BridgeFailure {
     pub(crate) diagnostics: Option<Box<OperationFailureDiagnostics>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ContentBlob {
     pub data: Vec<u8>,
     pub mime_type: Option<String>,
@@ -110,7 +111,8 @@ pub struct PropertiesListResult {
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HistoryLogRequest {
     pub path: String,
     pub start_revision: String,
@@ -121,13 +123,15 @@ pub struct HistoryLogRequest {
     pub include_merged_revisions: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HistoryLogResult {
     pub entries: Vec<HistoryLogEntry>,
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HistoryBlameRequest {
     pub path: String,
     pub peg_revision: String,
@@ -141,7 +145,8 @@ pub struct HistoryBlameRequest {
     pub include_merged_revisions: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HistoryBlameResult {
     pub resolved_start_revision: i64,
     pub resolved_end_revision: i64,
@@ -156,7 +161,8 @@ pub struct HistoryBlameResult {
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RepositoryCheckoutRequest {
     pub url: String,
     pub target_path: String,
@@ -165,7 +171,8 @@ pub struct RepositoryCheckoutRequest {
     pub ignore_externals: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RepositoryCheckoutResult {
     pub working_copy_path: String,
     pub revision: i64,
@@ -227,7 +234,8 @@ pub struct UpgradeOperationRequest {
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateOperationRequest {
     pub path: String,
     pub revision: String,
@@ -264,20 +272,23 @@ pub struct ChangelistClearOperationRequest {
     pub changelists: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LockOperationRequest {
     pub paths: Vec<String>,
     pub comment: Option<String>,
     pub steal_lock: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UnlockOperationRequest {
     pub paths: Vec<String>,
     pub break_lock: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BranchCreateOperationRequest {
     pub source_url: String,
     pub destination_url: String,
@@ -287,13 +298,15 @@ pub struct BranchCreateOperationRequest {
     pub ignore_externals: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BranchCreateOperationResult {
     pub result: OperationResult,
     pub revision: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SwitchOperationRequest {
     pub path: String,
     pub url: String,
@@ -304,7 +317,8 @@ pub struct SwitchOperationRequest {
     pub ignore_ancestry: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SwitchOperationResult {
     pub result: OperationResult,
     pub revision: i64,
@@ -332,7 +346,8 @@ pub struct MergeOperationRequest {
     pub allow_mixed_revisions: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CommitOperationRequest {
     pub paths: Vec<String>,
     pub message: String,
@@ -345,19 +360,22 @@ pub struct CommitOperationRequest {
     pub include_dir_externals: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct OperationResult {
     pub touched_paths: Vec<String>,
     pub skipped_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateOperationResult {
     pub result: OperationResult,
     pub revision: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CommitOperationResult {
     pub result: OperationResult,
     pub revision: i64,

@@ -3,6 +3,7 @@ import { BackendOperationClient } from "../src/operations/backendOperationClient
 import type { BackendConnection, InitializeResult } from "../src/backend/backendProcess";
 import type { BackendService } from "../src/backend/backendService";
 import type { OperationRunResponse } from "../src/operations/operationRunRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("BackendOperationClient", () => {
   it("initializes the backend and sends revert operation/run through the active connection", async () => {
@@ -253,12 +254,14 @@ describe("BackendOperationClient", () => {
       depth: "workingCopy",
       depthIsSticky: false,
       ignoreExternals: true,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(service.initialize).toHaveBeenCalledTimes(1);
     expect(connection.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "update",
       options: {
         version: 1,
@@ -298,6 +301,7 @@ describe("BackendOperationClient", () => {
         depth: "workingCopy",
         depthIsSticky: false,
         ignoreExternals: true,
+        remote: anonymousSvnRemoteEnvelope(),
       },
       { signal: cancellation.signal },
     );
@@ -307,6 +311,7 @@ describe("BackendOperationClient", () => {
       {
         repositoryId: "repo-uuid:C:/wc",
         epoch: 7,
+        remote: anonymousSvnRemoteEnvelope(),
         kind: "update",
         options: {
           version: 1,
@@ -345,11 +350,13 @@ describe("BackendOperationClient", () => {
       depth: "files",
       depthIsSticky: true,
       ignoreExternals: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(connection.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "update",
       options: {
         version: 1,
@@ -387,12 +394,14 @@ describe("BackendOperationClient", () => {
       depth: "workingCopy",
       depthIsSticky: false,
       ignoreExternals: true,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(service.initialize).toHaveBeenCalledTimes(1);
     expect(connection.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "update",
       options: {
         version: 1,
@@ -426,23 +435,25 @@ describe("BackendOperationClient", () => {
     const result = await client.branchCreate({
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
-      sourceUrl: "file:///repo/trunk",
-      destinationUrl: "file:///repo/branches/feature",
+      sourceUrl: "svn://svn.example.invalid/repo/trunk",
+      destinationUrl: "svn://svn.example.invalid/repo/branches/feature",
       revision: "head",
       message: "Create feature branch",
       makeParents: true,
       ignoreExternals: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(service.initialize).toHaveBeenCalledTimes(1);
     expect(connection.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "branchCreate",
       options: {
         version: 1,
-        sourceUrl: "file:///repo/trunk",
-        destinationUrl: "file:///repo/branches/feature",
+        sourceUrl: "svn://svn.example.invalid/repo/trunk",
+        destinationUrl: "svn://svn.example.invalid/repo/branches/feature",
         revision: "head",
         message: "Create feature branch",
         makeParents: true,
@@ -472,23 +483,25 @@ describe("BackendOperationClient", () => {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
       path: "src",
-      url: "file:///repo/branches/feature/src",
+      url: "svn://svn.example.invalid/repo/branches/feature/src",
       revision: 55,
       depth: "infinity",
       depthIsSticky: true,
       ignoreExternals: true,
       ignoreAncestry: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(service.initialize).toHaveBeenCalledTimes(1);
     expect(connection.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "switch",
       options: {
         version: 1,
         path: "src",
-        url: "file:///repo/branches/feature/src",
+        url: "svn://svn.example.invalid/repo/branches/feature/src",
         revision: 55,
         depth: "infinity",
         depthIsSticky: true,
@@ -560,12 +573,13 @@ describe("BackendOperationClient", () => {
         repositoryId: "repo-uuid:C:/wc",
         epoch: 7,
         path: "src",
-        url: "file:///repo/branches/feature/src",
+        url: "svn://svn.example.invalid/repo/branches/feature/src",
         revision: 55,
         depth: "infinity",
         depthIsSticky: true,
         ignoreExternals: true,
         ignoreAncestry: false,
+        remote: anonymousSvnRemoteEnvelope(),
       },
       { signal: cancellation.signal },
     );
@@ -575,11 +589,12 @@ describe("BackendOperationClient", () => {
       {
         repositoryId: "repo-uuid:C:/wc",
         epoch: 7,
+        remote: anonymousSvnRemoteEnvelope(),
         kind: "switch",
         options: {
           version: 1,
           path: "src",
-          url: "file:///repo/branches/feature/src",
+          url: "svn://svn.example.invalid/repo/branches/feature/src",
           revision: 55,
           depth: "infinity",
           depthIsSticky: true,
@@ -749,12 +764,14 @@ describe("BackendOperationClient", () => {
       paths: ["src/main.c"],
       comment: null,
       stealLock: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(service.initialize).toHaveBeenCalledTimes(1);
     expect(connection.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "lock",
       options: {
         version: 1,
@@ -783,12 +800,14 @@ describe("BackendOperationClient", () => {
       epoch: 7,
       paths: ["src/main.c"],
       breakLock: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(service.initialize).toHaveBeenCalledTimes(1);
     expect(connection.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "unlock",
       options: {
         version: 1,
@@ -824,12 +843,14 @@ describe("BackendOperationClient", () => {
       commitAsOperations: false,
       includeFileExternals: false,
       includeDirExternals: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(service.initialize).toHaveBeenCalledTimes(1);
     expect(connection.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "commit",
       options: {
         version: 1,
@@ -962,7 +983,7 @@ function operationResponse(
 
 function initializeResult(): InitializeResult {
   return {
-    protocol: { major: 1, minor: 34 },
+    protocol: { major: 1, minor: 35 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -1018,6 +1039,7 @@ function initializeResult(): InitializeResult {
       remoteWorkerIsolation: true,
       credentialLeaseSettlement: true,
       remoteConnectionState: true,
+      remoteSvnAnonymous: true,
     },
     acknowledgedTrustEpoch: 1,
   };

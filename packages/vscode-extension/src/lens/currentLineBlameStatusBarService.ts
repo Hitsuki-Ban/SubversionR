@@ -5,11 +5,13 @@ import type { ScmProjectedResource, ScmProjectedResourceLookup } from "../scm/so
 import type { PathCasePolicy } from "../status/types";
 import type { LensSettings } from "./lensSettings";
 import { isChangelistResourceGroupId } from "../scm/resourceStateClassifier";
+import type { RemoteOperationEnvelope } from "../security/remoteAccessProfile";
 
 export interface CurrentLineBlameStatusBarServiceOptions {
   settings(): LensSettings;
   includeMergedRevisions(): boolean;
   historyClient: HistoryBlameClient;
+  createRemoteEnvelope(input: { repositoryId: string; epoch: number }): Promise<RemoteOperationEnvelope | undefined>;
   sessionService: Pick<RepositorySessionService, "listOpenSessions">;
   sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource">;
   workspaceTrusted(): boolean;
@@ -83,6 +85,7 @@ export class CurrentLineBlameStatusBarService {
   private pendingResolve: (() => void) | undefined;
   private refreshSerial = 0;
   private disposed = false;
+  private activeRequest: AbortController | undefined;
 
   public constructor(private readonly options: CurrentLineBlameStatusBarServiceOptions) {
     this.statusItem = options.api.createStatusBarItem();
@@ -90,6 +93,8 @@ export class CurrentLineBlameStatusBarService {
 
   public refresh(): Promise<void> {
     const serial = ++this.refreshSerial;
+    this.activeRequest?.abort();
+    this.activeRequest = undefined;
     if (this.pendingTimer !== undefined) {
       this.options.api.clearTimeout(this.pendingTimer);
       this.pendingTimer = undefined;
@@ -133,6 +138,8 @@ export class CurrentLineBlameStatusBarService {
 
   public dispose(): void {
     this.disposed = true;
+    this.activeRequest?.abort();
+    this.activeRequest = undefined;
     if (this.pendingTimer !== undefined) {
       this.options.api.clearTimeout(this.pendingTimer);
       this.pendingTimer = undefined;
@@ -152,7 +159,12 @@ export class CurrentLineBlameStatusBarService {
     this.statusItem.command = undefined;
     this.statusItem.show();
 
-    const blame = await this.getCurrentLineBlame(target, serial);
+    const controller = new AbortController();
+    this.activeRequest = controller;
+    const blame = await this.getCurrentLineBlame(target, serial, controller.signal);
+    if (this.activeRequest === controller) {
+      this.activeRequest = undefined;
+    }
     if (!blame) {
       return;
     }
@@ -171,22 +183,32 @@ export class CurrentLineBlameStatusBarService {
   private async getCurrentLineBlame(
     target: CurrentLineBlameTarget,
     serial: number,
+    signal: AbortSignal,
   ): Promise<Awaited<ReturnType<HistoryBlameClient["getBlame"]>> | undefined> {
     try {
-      return await this.options.historyClient.getBlame({
+      const remote = await this.options.createRemoteEnvelope({
         repositoryId: target.repositoryId,
         epoch: target.epoch,
-        path: target.path,
-        pegRevision: "base",
-        startRevision: "r0",
-        endRevision: "base",
-        lineStart: target.lineStart,
-        lineLimit: 1,
-        ignoreWhitespace: "none",
-        ignoreEolStyle: false,
-        ignoreMimeType: false,
-        includeMergedRevisions: this.options.includeMergedRevisions(),
       });
+      signal.throwIfAborted();
+      return await this.options.historyClient.getBlame(
+        {
+          repositoryId: target.repositoryId,
+          epoch: target.epoch,
+          path: target.path,
+          pegRevision: "base",
+          startRevision: "r0",
+          endRevision: "base",
+          lineStart: target.lineStart,
+          lineLimit: 1,
+          ignoreWhitespace: "none",
+          ignoreEolStyle: false,
+          ignoreMimeType: false,
+          includeMergedRevisions: this.options.includeMergedRevisions(),
+          ...(remote === undefined ? {} : { remote }),
+        },
+        { signal },
+      );
     } catch (_error) {
       if (!this.disposed && serial === this.refreshSerial) {
         this.hide();

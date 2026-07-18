@@ -289,10 +289,10 @@ fn native_bridge_remote_context_foundation_accepts_the_exact_allowlist() {
 
     bridge
         .create_remote_context_foundation(RemoteConfigPlan {
-            scheme: RemoteConfigScheme::Https,
-            server_auth: RemoteConfigServerAuth::Basic,
+            scheme: RemoteConfigScheme::Svn,
+            server_auth: RemoteConfigServerAuth::Anonymous,
             timeout_ms: 1_234,
-            trust_windows_roots: true,
+            trust_windows_roots: false,
         })
         .expect("real DLL create/inspect/destroy should accept the exact remote allowlist");
 }

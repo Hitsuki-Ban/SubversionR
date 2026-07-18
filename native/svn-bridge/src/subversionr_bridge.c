@@ -5,6 +5,8 @@
 #include <string.h>
 
 #ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <wchar.h>
 #endif
@@ -13,6 +15,7 @@
 #include <apr_pools.h>
 #include <apr_strings.h>
 #include <apr_tables.h>
+#include <apr_uri.h>
 #include <svn_client.h>
 #include <svn_auth.h>
 #include <svn_config.h>
@@ -48,6 +51,9 @@
 #define BRIDGE_CREDENTIAL_USERNAME_BYTE_LIMIT 256
 #define BRIDGE_CREDENTIAL_LEASE_ID_BYTE_LIMIT 128
 #define BRIDGE_CREDENTIAL_SECRET_BYTE_LIMIT 32768
+#define SUBVERSIONR_EXPECTED_SVN_ORIGIN_AUTH_PARAM "subversionr:expected-svn-origin-v1"
+#define SUBVERSIONR_REPOSITORY_ROOT_AUTHORITY_MISMATCH "SubversionR repository root authority mismatch"
+#define SUBVERSIONR_REMOTE_ORIGIN_MISMATCH_DIAGNOSTIC "SUBVERSIONR_ERR_REMOTE_ORIGIN_MISMATCH"
 
 typedef struct bridge_remote_credential_baton bridge_remote_credential_baton;
 
@@ -58,6 +64,7 @@ struct subversionr_bridge_runtime {
   subversionr_bridge_error_entry last_error_entries[SUBVERSIONR_BRIDGE_ERROR_ENTRY_LIMIT];
   size_t last_error_entry_count;
   int last_error_truncated;
+  const char *expected_svn_origin;
 };
 
 struct subversionr_bridge_remote_context {
@@ -82,8 +89,16 @@ static void bridge_capture_error(subversionr_bridge_runtime *runtime, const svn_
     subversionr_bridge_error_entry *entry =
       &runtime->last_error_entries[runtime->last_error_entry_count++];
     entry->code = (int)current->apr_err;
-    const char *name = svn_error_symbolic_name(current->apr_err);
-    entry->name = name != NULL ? name : "SVN_ERR_UNKNOWN";
+    if (
+      current->apr_err == SVN_ERR_RA_ILLEGAL_URL &&
+      current->message != NULL &&
+      strcmp(current->message, SUBVERSIONR_REPOSITORY_ROOT_AUTHORITY_MISMATCH) == 0
+    ) {
+      entry->name = SUBVERSIONR_REMOTE_ORIGIN_MISMATCH_DIAGNOSTIC;
+    } else {
+      const char *name = svn_error_symbolic_name(current->apr_err);
+      entry->name = name != NULL ? name : "SVN_ERR_UNKNOWN";
+    }
   }
 }
 
@@ -156,6 +171,7 @@ typedef struct bridge_auth_prompt_baton {
   const char *default_username;
   int default_username_required;
   int callback_failed;
+  const char *expected_svn_origin;
 } bridge_auth_prompt_baton;
 
 typedef struct bridge_credential_lease bridge_credential_lease;
@@ -1931,6 +1947,13 @@ static svn_error_t *bridge_create_auth_baton(
   APR_ARRAY_PUSH(providers, svn_auth_provider_object_t *) = provider;
 
   svn_auth_open(auth_baton, providers, pool);
+  if (prompt_baton->expected_svn_origin != NULL) {
+    svn_auth_set_parameter(
+      *auth_baton,
+      SUBVERSIONR_EXPECTED_SVN_ORIGIN_AUTH_PARAM,
+      prompt_baton->expected_svn_origin
+    );
+  }
   return SVN_NO_ERROR;
 }
 
@@ -2395,6 +2418,53 @@ void subversionr_bridge_runtime_destroy(subversionr_bridge_runtime *runtime) {
   apr_pool_destroy(pool);
 }
 
+int subversionr_bridge_runtime_configure_svn_anonymous(
+  subversionr_bridge_runtime *runtime,
+  const char *expected_origin
+) {
+  if (runtime == NULL || expected_origin == NULL || expected_origin[0] == '\0') {
+    return 1;
+  }
+
+  bridge_prepare_call(runtime);
+  const char *canonical_origin = NULL;
+  const char *non_canonical = NULL;
+  svn_error_t *err = svn_uri_canonicalize_safe(
+    &canonical_origin,
+    &non_canonical,
+    expected_origin,
+    runtime->result_pool,
+    runtime->result_pool
+  );
+  if (err != NULL) {
+    bridge_capture_error(runtime, err);
+    svn_error_clear(err);
+    return 2;
+  }
+
+  apr_uri_t uri = { 0 };
+  if (
+    canonical_origin == NULL ||
+    non_canonical != NULL ||
+    strcmp(canonical_origin, expected_origin) != 0 ||
+    apr_uri_parse(runtime->result_pool, canonical_origin, &uri) != APR_SUCCESS ||
+    uri.scheme == NULL ||
+    strcmp(uri.scheme, "svn") != 0 ||
+    uri.hostname == NULL ||
+    uri.hostname[0] == '\0' ||
+    uri.user != NULL ||
+    uri.password != NULL ||
+    (uri.path != NULL && uri.path[0] != '\0') ||
+    uri.query != NULL ||
+    uri.fragment != NULL
+  ) {
+    return 2;
+  }
+
+  runtime->expected_svn_origin = apr_pstrdup(runtime->pool, canonical_origin);
+  return runtime->expected_svn_origin != NULL ? 0 : 3;
+}
+
 int subversionr_bridge_last_error_diagnostics(
   subversionr_bridge_runtime *runtime,
   subversionr_bridge_error_diagnostics *diagnostics
@@ -2516,6 +2586,7 @@ int subversionr_bridge_open_working_copy_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, path);
   prompt_baton->callback_failed = 0;
 
@@ -2611,6 +2682,7 @@ int subversionr_bridge_probe_remote_url_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = NULL;
   prompt_baton->callback_failed = 0;
 
@@ -2899,6 +2971,7 @@ int subversionr_bridge_status_remote_scan_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *auth_callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, path);
   prompt_baton->callback_failed = 0;
 
@@ -3181,6 +3254,7 @@ int subversionr_bridge_content_get_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, path);
   prompt_baton->callback_failed = 0;
 
@@ -3411,6 +3485,7 @@ int subversionr_bridge_history_log_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, path);
   prompt_baton->callback_failed = 0;
 
@@ -3605,6 +3680,7 @@ int subversionr_bridge_history_blame_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, path);
   prompt_baton->callback_failed = 0;
 
@@ -4457,6 +4533,7 @@ int subversionr_bridge_operation_update(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, path);
   prompt_baton->callback_failed = 0;
 
@@ -4625,6 +4702,7 @@ int subversionr_bridge_repository_checkout_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, target_path);
   prompt_baton->callback_failed = 0;
 
@@ -5092,6 +5170,7 @@ int subversionr_bridge_operation_lock_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = paths[0] != NULL ? apr_pstrdup(auth_pool, paths[0]) : NULL;
   prompt_baton->callback_failed = 0;
 
@@ -5265,6 +5344,7 @@ int subversionr_bridge_operation_unlock_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = paths[0] != NULL ? apr_pstrdup(auth_pool, paths[0]) : NULL;
   prompt_baton->callback_failed = 0;
 
@@ -5466,6 +5546,7 @@ int subversionr_bridge_operation_branch_create_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, working_copy_root);
   prompt_baton->callback_failed = 0;
 
@@ -5680,6 +5761,7 @@ int subversionr_bridge_operation_switch_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, path);
   prompt_baton->callback_failed = 0;
 
@@ -5853,6 +5935,7 @@ int subversionr_bridge_operation_relocate_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, working_copy_root);
   prompt_baton->callback_failed = 0;
 
@@ -6077,6 +6160,7 @@ int subversionr_bridge_operation_merge_range_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = apr_pstrdup(auth_pool, target_path);
   prompt_baton->callback_failed = 0;
 
@@ -6388,6 +6472,7 @@ int subversionr_bridge_operation_commit_with_auth(
   bridge_auth_prompt_baton *prompt_baton =
     apr_pcalloc(auth_pool, sizeof(*prompt_baton));
   prompt_baton->callbacks = *callbacks;
+  prompt_baton->expected_svn_origin = runtime->expected_svn_origin;
   prompt_baton->working_copy_root = paths[0] != NULL ? apr_pstrdup(auth_pool, paths[0]) : NULL;
   prompt_baton->callback_failed = 0;
 
