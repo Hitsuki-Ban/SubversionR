@@ -213,7 +213,8 @@ duplicate, or reordered cycles, and requires an independent successful cycle
 
 The source branch contains real candidate drivers for the packaged-native and
 installed Extension Host positive operation matrix, malicious-root, SASL-only,
-authz-denied, stalled-mid-read, and installed local-event zero-network cells.
+authz-denied, stalled-mid-read, absolute-deadline, and installed local-event
+zero-network cells.
 The authz-denied cell additionally binds the exact svnserve command log and
 requires atomic deny/restore controls. The stalled-mid-read cell reuses two
 pre-existing working copies, replaces the exact original svnserve port with a
@@ -226,7 +227,13 @@ when any candidate observation fails.
 This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
 `saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`, and
-`stalledMidRead` product probes, but the remaining controlled negative/recovery cells
+`stalledMidRead` product probes. The separate `deadline` probes use independent
+operation IDs and a reviewed 500 ms envelope timeout, measure request settlement
+with a monotonic clock, and require the owned timeout plus cleanup to settle no
+later than the 5,000 ms cleanup slack before proving the same-session local lane
+is available. The evidence schema requires those timing values only for the
+`deadline` cell, so an existing stalled-mid-read observation cannot be
+relabelled. The remaining controlled negative/recovery cells
 are incomplete and no complete candidate report has passed the executable
 verifier. Missing controlled observations may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
@@ -256,3 +263,10 @@ original svnserve process identity before the one-way handoff, binds each
 surface's greeting-stall fixture to the original port, then removes the short
 root in `finally` and rejects residue. Because the driver still terminates at
 the incomplete-matrix blocker, it does not start an unowned replacement server.
+
+The absolute-deadline product probes use a separate bounded disposable work root
+under repository `target/i6d`. They reuse the preserved read-only working-copy
+identities only after the stalled-mid-read cell has settled, bind a fresh
+single-connection greeting-stall fixture to the original controlled port for
+each surface, and record independent monotonic deadline timing. The driver
+removes the short root in `finally` and rejects any residue.

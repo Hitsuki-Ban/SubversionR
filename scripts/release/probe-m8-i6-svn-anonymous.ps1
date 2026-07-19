@@ -41,6 +41,8 @@ $packagedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScri
 $installedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-authz-denied.ps1"))
 $packagedStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-stalled-read.mjs"))
 $installedStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-stalled-read.ps1"))
+$packagedDeadlineProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-deadline.mjs"))
+$installedDeadlineProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-deadline.ps1"))
 $installedLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-local-event-zero-network.ps1"))
 $countingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-counting-proxy.mjs"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
@@ -870,6 +872,8 @@ $packagedAuthzDeniedProbeResolved = Resolve-RequiredFile $packagedAuthzDeniedPro
 $installedAuthzDeniedProbeResolved = Resolve-RequiredFile $installedAuthzDeniedProbePath "installed VSIX I6 authz-denied probe"
 $packagedStalledReadProbeResolved = Resolve-RequiredFile $packagedStalledReadProbePath "packaged-native I6 stalled-mid-read probe"
 $installedStalledReadProbeResolved = Resolve-RequiredFile $installedStalledReadProbePath "installed VSIX I6 stalled-mid-read probe"
+$packagedDeadlineProbeResolved = Resolve-RequiredFile $packagedDeadlineProbePath "packaged-native I6 deadline probe"
+$installedDeadlineProbeResolved = Resolve-RequiredFile $installedDeadlineProbePath "installed VSIX I6 deadline probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $installedLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $countingProxyResolved = Resolve-RequiredFile $countingProxyPath "I6 transparent counting proxy"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
@@ -2037,5 +2041,196 @@ finally {
 }
 Assert-True ($stalledReadObservations.Count -eq 2) "The packaged-native and installed VSIX stalled-mid-read observation set was incomplete."
 
+$deadlineWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6d\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $deadlineWorkRoot $repoTargetRoot) "The absolute-deadline short work root escaped repo target."
+Assert-True ($deadlineWorkRoot.Length -le 120) "The absolute-deadline short work root exceeds the reviewed 120-character budget."
+Assert-True (-not (Test-Path -LiteralPath $deadlineWorkRoot)) "The absolute-deadline short work root already exists."
+New-Item -ItemType Directory -Path $deadlineWorkRoot | Out-Null
+$deadlineObservations = @()
+try {
+  $deadlineContracts = @(
+    [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
+    [pscustomobject]@{ Surface = "installed-vsix-extension-host"; WorkRoot = "i"; WorkingCopy = $installedAuthzWorkingCopyResolved }
+  )
+  foreach ($contract in $deadlineContracts) {
+    $surfaceName = [string]$contract.Surface
+    $surfaceRoot = Join-Path $probeRoot "absolute-deadline-$surfaceName"
+    $surfaceWorkRoot = Join-Path $deadlineWorkRoot ([string]$contract.WorkRoot)
+    $fixtureStatePath = Join-Path $surfaceRoot "fixture-state.json"
+    $operationId = [Guid]::NewGuid().ToString("D")
+    New-Item -ItemType Directory -Force -Path $surfaceRoot, $surfaceWorkRoot | Out-Null
+    Assert-CandidateProcessAbsent $daemonResolved "The $surfaceName absolute-deadline preflight"
+    $faultFixture = $null
+    $processStartSourceIdentifier = "subversionr-m8-i6-deadline-$([Guid]::NewGuid().ToString('N'))"
+    $processStartSubscriber = $null
+    $processStartEvents = [System.Collections.Generic.List[object]]::new()
+    $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    try {
+      $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "greeting-stall" $fixtureStatePath $repositoryUri.Port
+      try {
+        Register-CimIndicationEvent `
+          -ClassName Win32_ProcessStartTrace `
+          -SourceIdentifier $processStartSourceIdentifier `
+          -ErrorAction Stop | Out-Null
+      }
+      catch {
+        throw "Win32_ProcessStartTrace is required for the $surfaceName absolute-deadline process observation: $($_.Exception.Message)"
+      }
+      $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
+      Assert-True ($matchingSubscribers.Count -eq 1) "The $surfaceName absolute-deadline process-start subscription was not created exactly once."
+      $processStartSubscriber = $matchingSubscribers[0]
+      Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+
+      if ($surfaceName -ceq "packaged-native") {
+        $probeResult = Invoke-BoundedProcess $nodeHost @(
+          $packagedDeadlineProbeResolved,
+          "--backend-module", $backendModulePath,
+          "--daemon", $daemonResolved,
+          "--bridge", $bridgeResolved,
+          "--profile-root", $surfaceWorkRoot,
+          "--working-copy-path", ([string]$contract.WorkingCopy),
+          "--repository-url", $deniedRepositoryUrl,
+          "--operation-id", $operationId,
+          "--timeout-ms", "500"
+        ) 90 @{ ELECTRON_RUN_AS_NODE = "1" }
+        $probeFailure = $probeResult.Stderr.Trim()
+        Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The packaged-native absolute-deadline probe failed: $probeFailure"
+        $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "packaged-native absolute-deadline probe stdout"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-packaged-native-deadline.v1" -and
+          [string]$probeReport.status -ceq "passed" -and [string]$probeReport.cell -ceq "deadline" -and
+          [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" -and
+          [string]$probeReport.reason -ceq "operationDeadlineExceeded" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          $probeReport.remoteSvnAnonymous -eq $true -and
+          $probeReport.nativeLaneReleased -eq $true -and $probeReport.localSnapshotAfterTimeout -eq $true -and
+          $probeReport.workingCopyPreserved -eq $true -and [int]$probeReport.temporaryRootsAfter -eq 0 -and
+          [int]$probeReport.credentialRequests -eq 0 -and [int]$probeReport.credentialSettlements -eq 0 -and
+          $probeReport.diagnosticsRedacted -eq $true -and [int]$probeReport.fixtureCliInvocations -eq 0
+        ) "The packaged-native absolute-deadline report was incomplete."
+      }
+      else {
+        $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
+        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", $installedDeadlineProbeResolved,
+          "-VsixPath", $vsixResolved,
+          "-CodeCliPath", $codeCliResolved,
+          "-FixtureRoot", $installedFixtureRoot,
+          "-WorkingCopyPath", ([string]$contract.WorkingCopy),
+          "-RepositoryUrl", $deniedRepositoryUrl,
+          "-OperationId", $operationId,
+          "-OperationTimeoutMilliseconds", "500",
+          "-ExpectedProductVersion", $ExpectedProductVersion,
+          "-DaemonPath", $daemonResolved,
+          "-BridgePath", $bridgeResolved,
+          "-TimeoutSeconds", "180"
+        ) 240
+        $probeFailure = $probeResult.Stderr.Trim()
+        Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX absolute-deadline probe failed: $probeFailure"
+        $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX absolute-deadline probe stdout"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-deadline.v1" -and
+          [string]$probeReport.status -ceq "passed" -and
+          [string]$probeReport.surface -ceq "installed-vsix-extension-host" -and [string]$probeReport.cell -ceq "deadline" -and
+          [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" -and
+          [string]$probeReport.reason -ceq "operationDeadlineExceeded" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          [int]$probeReport.authActivity.credentialRequests -eq 0 -and
+          [int]$probeReport.authActivity.credentialSettlements -eq 0 -and
+          [int]$probeReport.authActivity.certificateRequests -eq 0 -and
+          $probeReport.nativeLaneReleased -eq $true -and $probeReport.localSnapshotAfterTimeout -eq $true -and
+          $probeReport.workingCopyPreserved -eq $true -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and [int]$probeReport.checkoutJournalEntriesAfter -eq 0 -and
+          $probeReport.diagnosticsRedacted -eq $true -and $probeReport.candidateDaemonExitedAfter -eq $true
+        ) "The installed VSIX absolute-deadline report was incomplete."
+      }
+
+      Assert-ExactProperties $probeReport.timing @("clock", "timeoutMs", "elapsedMs", "cleanupSlackMs") "$surfaceName absolute-deadline timing"
+      $elapsedMs = [double]$probeReport.timing.elapsedMs
+      Assert-True (
+        [string]$probeReport.timing.clock -ceq "monotonic" -and
+        [int]$probeReport.timing.timeoutMs -eq 500 -and [int]$probeReport.timing.cleanupSlackMs -eq 5000 -and
+        -not [double]::IsNaN($elapsedMs) -and -not [double]::IsInfinity($elapsedMs) -and
+        $elapsedMs -ge 500 -and $elapsedMs -le 5500
+      ) "The $surfaceName absolute-deadline timing escaped the reviewed owned timeout and cleanup bound."
+
+      $faultState = Get-Content -Raw -LiteralPath $fixtureStatePath | ConvertFrom-Json -Depth 16
+      Assert-True (
+        [int]$faultState.port -eq $repositoryUri.Port -and [int]$faultState.connections -eq 1 -and
+        [int]$faultState.greetingSent -eq 1 -and [int]$faultState.clientResponseReceived -eq 1 -and
+        [int]$faultState.authRequestSent -eq 0 -and [int]$faultState.reposInfoSent -eq 0 -and
+        [int]$faultState.commandsReceived -eq 0 -and [int]$faultState.followupContacts -eq 0 -and
+        [int]$faultState.suppliedAuthorityConnections -eq 0
+      ) "The $surfaceName absolute-deadline network-stage observation was invalid."
+      Complete-ProcessStartEventDrain $processStartSourceIdentifier $processStartEvents $processStartEventKeys $ProcessStartEventSettlementMilliseconds
+      if ($surfaceName -ceq "packaged-native") {
+        $processObservation = Get-PackagedNegativeProcessObservation `
+          @($processStartEvents) ([long]$probeResult.ProcessId) `
+          ([System.IO.Path]::GetFileName($nodeHost)) ([System.IO.Path]::GetFileName($daemonResolved)) `
+          (Get-CimProcessSnapshot) @(
+            [System.IO.Path]::GetFileName($svnResolved),
+            [System.IO.Path]::GetFileName($svnadminResolved),
+            [System.IO.Path]::GetFileName($svnserveResolved)
+          )
+      }
+      else {
+        $processObservation = Get-InstalledNegativeProcessObservation `
+          -AllEvents @($processStartEvents) `
+          -ProbePid ([long]$probeResult.ProcessId) `
+          -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+          -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+          -ForbiddenFixtureProcessNames @(
+            [System.IO.Path]::GetFileName($svnResolved),
+            [System.IO.Path]::GetFileName($svnadminResolved),
+            [System.IO.Path]::GetFileName($svnserveResolved)
+          ) `
+          -SettlementSnapshot (Get-CimProcessSnapshot)
+      }
+      Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName absolute-deadline product surface invoked a fixture CLI."
+      $deadlineObservations += [pscustomobject]@{
+        surface = $surfaceName
+        stableCode = [string]$probeReport.stableCode
+        reason = [string]$probeReport.reason
+        originCode = [string]$probeReport.stableCode
+        originReason = [string]$probeReport.reason
+        settlementCode = [string]$probeReport.stableCode
+        settlementReason = [string]$probeReport.reason
+        networkProgress = "greeting"
+        networkAttempts = [int]$faultState.connections
+        networkConnections = [int]$faultState.connections
+        fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+        credentialRequests = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialRequests } else { [int]$probeReport.authActivity.credentialRequests }
+        credentialSettlements = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialSettlements } else { [int]$probeReport.authActivity.credentialSettlements }
+        followupNetworkContacts = [int]$faultState.followupContacts
+        workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+        temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        diagnosticsRedacted = [bool]$probeReport.diagnosticsRedacted
+        deadlineTiming = [pscustomobject]@{
+          clock = [string]$probeReport.timing.clock
+          timeoutMs = [int]$probeReport.timing.timeoutMs
+          elapsedMs = $elapsedMs
+          cleanupSlackMs = [int]$probeReport.timing.cleanupSlackMs
+        }
+      }
+    }
+    finally {
+      if ($null -ne $processStartSubscriber) {
+        Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+      }
+      Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+      if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "greeting-stall" }
+    }
+  }
+}
+finally {
+  if (Test-Path -LiteralPath $deadlineWorkRoot) {
+    Assert-True (Test-PathWithin $deadlineWorkRoot $repoTargetRoot) "The absolute-deadline cleanup root escaped repo target."
+    Remove-Item -LiteralPath $deadlineWorkRoot -Recurse -Force
+  }
+  Assert-True (-not (Test-Path -LiteralPath $deadlineWorkRoot)) "The absolute-deadline short work root remained after cleanup."
+}
+Assert-True ($deadlineObservations.Count -eq 2) "The packaged-native and installed VSIX absolute-deadline observation set was incomplete."
+
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied and stalled-mid-read remote-status cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, and absolute-deadline remote-status cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."

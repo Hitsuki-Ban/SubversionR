@@ -94,12 +94,14 @@ $expectedPackagedNativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $rep
 $expectedPackagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"))
 $expectedPackagedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-authz-denied.mjs"))
 $expectedPackagedStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-stalled-read.mjs"))
+$expectedPackagedDeadlineProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-deadline.mjs"))
 $expectedRaSvnFaultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $expectedCountingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"))
 $expectedInstalledStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"))
 $expectedInstalledNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"))
 $expectedInstalledAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-authz-denied.ps1"))
 $expectedInstalledStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stalled-read.ps1"))
+$expectedInstalledDeadlineProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-deadline.ps1"))
 $expectedInstalledLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"))
 $expectedInstalledVsixProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"))
 $expectedPackagedCompatibilityProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"))
@@ -222,9 +224,10 @@ function Assert-NegativeSurfaceObservation(
   [string]$ExpectedNetworkProgress,
   [int]$ExpectedNetworkAttempts,
   [int]$ExpectedNetworkConnections,
+  [bool]$ExpectDeadlineTiming,
   [string]$Context
 ) {
-  Assert-ExactProperties $Observation @(
+  $expectedProperties = @(
     "surface",
     "originCode",
     "originReason",
@@ -240,7 +243,11 @@ function Assert-NegativeSurfaceObservation(
     "workerDescendantsAfter",
     "temporaryRootsAfter",
     "diagnosticsRedacted"
-  ) $Context
+  )
+  if ($ExpectDeadlineTiming) {
+    $expectedProperties += "deadlineTiming"
+  }
+  Assert-ExactProperties $Observation $expectedProperties $Context
   Assert-Equal $ExpectedSurface ([string]$Observation.surface) "$Context surface must match."
   Assert-Equal $ExpectedOriginCode ([string]$Observation.originCode) "$Context origin code must match the controlled cell origin."
   Assert-Equal $ExpectedOriginReason ([string]$Observation.originReason) "$Context origin reason must match the controlled cell origin."
@@ -262,6 +269,15 @@ function Assert-NegativeSurfaceObservation(
     Assert-Equal 0 ([int]$Observation.$field) "$Context.$field must be zero."
   }
   Assert-Equal $true ([bool]$Observation.diagnosticsRedacted) "$Context diagnostics must be redacted."
+  if ($ExpectDeadlineTiming) {
+    Assert-ExactProperties $Observation.deadlineTiming @("clock", "timeoutMs", "elapsedMs", "cleanupSlackMs") "$Context.deadlineTiming"
+    Assert-Equal "monotonic" ([string]$Observation.deadlineTiming.clock) "$Context deadline timing must use a monotonic clock."
+    Assert-Equal 500 ([int]$Observation.deadlineTiming.timeoutMs) "$Context deadline timing must use the reviewed 500 ms timeout."
+    Assert-Equal 5000 ([int]$Observation.deadlineTiming.cleanupSlackMs) "$Context deadline timing must use the reviewed 5000 ms cleanup slack."
+    $elapsedMs = [double]$Observation.deadlineTiming.elapsedMs
+    Assert-True (-not [double]::IsNaN($elapsedMs) -and -not [double]::IsInfinity($elapsedMs)) "$Context deadline elapsed time must be finite."
+    Assert-True ($elapsedMs -ge 500 -and $elapsedMs -le 5500) "$Context deadline elapsed time must remain inside the reviewed timeout and cleanup bound."
+  }
 }
 
 function Assert-NegativeCell(
@@ -289,14 +305,15 @@ function Assert-NegativeCell(
   Assert-Equal $ExpectedOriginCode ([string]$Cell.stableCode) "$Context stable code must define the controlled origin."
   Assert-Equal $ExpectedOriginReason ([string]$Cell.reason) "$Context reason must define the controlled origin."
   $observations = @($Cell.surfaceObservations)
+  $expectDeadlineTiming = $ExpectedCell -ceq "deadline"
   if ($InstalledOnly) {
     Assert-Equal 1 $observations.Count "$Context must contain the installed product observation exactly once."
-    Assert-NegativeSurfaceObservation $observations[0] "installed-vsix-extension-host" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[0]"
+    Assert-NegativeSurfaceObservation $observations[0] "installed-vsix-extension-host" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections $expectDeadlineTiming "$Context.surfaceObservations[0]"
   }
   else {
     Assert-Equal 2 $observations.Count "$Context must contain packaged and installed product observations exactly once."
-    Assert-NegativeSurfaceObservation $observations[0] "packaged-native" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[0]"
-    Assert-NegativeSurfaceObservation $observations[1] "installed-vsix-extension-host" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections "$Context.surfaceObservations[1]"
+    Assert-NegativeSurfaceObservation $observations[0] "packaged-native" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections $expectDeadlineTiming "$Context.surfaceObservations[0]"
+    Assert-NegativeSurfaceObservation $observations[1] "installed-vsix-extension-host" $ExpectedOriginCode $ExpectedOriginReason $ExpectedSettlementCode $ExpectedSettlementReason $ExpectedNetworkProgress $ExpectedNetworkAttempts $ExpectedNetworkConnections $expectDeadlineTiming "$Context.surfaceObservations[1]"
   }
 }
 
@@ -374,12 +391,14 @@ $packagedNativeProbeResolved = Resolve-RequiredFile $expectedPackagedNativeProbe
 $packagedNegativeProbeResolved = Resolve-RequiredFile $expectedPackagedNegativeProbePath "packaged-native I6 negative probe"
 $packagedAuthzDeniedProbeResolved = Resolve-RequiredFile $expectedPackagedAuthzDeniedProbePath "packaged-native I6 authz-denied probe"
 $packagedStalledReadProbeResolved = Resolve-RequiredFile $expectedPackagedStalledReadProbePath "packaged-native I6 stalled-mid-read probe"
+$packagedDeadlineProbeResolved = Resolve-RequiredFile $expectedPackagedDeadlineProbePath "packaged-native I6 deadline probe"
 $raSvnFaultFixtureResolved = Resolve-RequiredFile $expectedRaSvnFaultFixturePath "I6 ra_svn fault fixture"
 $countingProxyResolved = Resolve-RequiredFile $expectedCountingProxyPath "I6 transparent counting proxy"
 $installedStressProbeResolved = Resolve-RequiredFile $expectedInstalledStressProbePath "installed VSIX I6 stress probe"
 $installedNegativeProbeResolved = Resolve-RequiredFile $expectedInstalledNegativeProbePath "installed VSIX I6 negative probe"
 $installedAuthzDeniedProbeResolved = Resolve-RequiredFile $expectedInstalledAuthzDeniedProbePath "installed VSIX I6 authz-denied probe"
 $installedStalledReadProbeResolved = Resolve-RequiredFile $expectedInstalledStalledReadProbePath "installed VSIX I6 stalled-mid-read probe"
+$installedDeadlineProbeResolved = Resolve-RequiredFile $expectedInstalledDeadlineProbePath "installed VSIX I6 deadline probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $expectedInstalledLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $installedVsixProbeResolved = Resolve-RequiredFile $expectedInstalledVsixProbePath "installed VSIX I6 probe"
 $packagedCompatibilityProbeResolved = Resolve-RequiredFile $expectedPackagedCompatibilityProbePath "packaged-native compatibility probe"
@@ -448,12 +467,14 @@ Assert-ExactProperties $report.artifactBindings @(
   "packagedNegativeProbe",
   "packagedAuthzDeniedProbe",
   "packagedStalledReadProbe",
+  "packagedDeadlineProbe",
   "raSvnFaultFixture",
   "countingProxy",
   "installedStressProbe",
   "installedNegativeProbe",
   "installedAuthzDeniedProbe",
   "installedStalledReadProbe",
+  "installedDeadlineProbe",
   "installedLocalEventProbe",
   "installedVsixProbe",
   "packagedCompatibilityProbe",
@@ -482,12 +503,14 @@ Assert-ArtifactBinding $report.artifactBindings.packagedNativeProbe "i6-packaged
 Assert-ArtifactBinding $report.artifactBindings.packagedNegativeProbe "i6-packaged-negative-probe" $packagedNegativeProbeResolved "I6 evidence.artifactBindings.packagedNegativeProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedAuthzDeniedProbe "i6-packaged-authz-denied-probe" $packagedAuthzDeniedProbeResolved "I6 evidence.artifactBindings.packagedAuthzDeniedProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedStalledReadProbe "i6-packaged-stalled-read-probe" $packagedStalledReadProbeResolved "I6 evidence.artifactBindings.packagedStalledReadProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedDeadlineProbe "i6-packaged-deadline-probe" $packagedDeadlineProbeResolved "I6 evidence.artifactBindings.packagedDeadlineProbe"
 Assert-ArtifactBinding $report.artifactBindings.raSvnFaultFixture "i6-ra-svn-fault-fixture" $raSvnFaultFixtureResolved "I6 evidence.artifactBindings.raSvnFaultFixture"
 Assert-ArtifactBinding $report.artifactBindings.countingProxy "i6-counting-proxy" $countingProxyResolved "I6 evidence.artifactBindings.countingProxy"
 Assert-ArtifactBinding $report.artifactBindings.installedStressProbe "i6-installed-stress-probe" $installedStressProbeResolved "I6 evidence.artifactBindings.installedStressProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedNegativeProbe "i6-installed-negative-probe" $installedNegativeProbeResolved "I6 evidence.artifactBindings.installedNegativeProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedAuthzDeniedProbe "i6-installed-authz-denied-probe" $installedAuthzDeniedProbeResolved "I6 evidence.artifactBindings.installedAuthzDeniedProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedStalledReadProbe "i6-installed-stalled-read-probe" $installedStalledReadProbeResolved "I6 evidence.artifactBindings.installedStalledReadProbe"
+Assert-ArtifactBinding $report.artifactBindings.installedDeadlineProbe "i6-installed-deadline-probe" $installedDeadlineProbeResolved "I6 evidence.artifactBindings.installedDeadlineProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedLocalEventProbe "i6-installed-local-event-zero-network-probe" $installedLocalEventProbeResolved "I6 evidence.artifactBindings.installedLocalEventProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedVsixProbe "i6-installed-vsix-probe" $installedVsixProbeResolved "I6 evidence.artifactBindings.installedVsixProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedCompatibilityProbe "packaged-native-compatibility-probe" $packagedCompatibilityProbeResolved "I6 evidence.artifactBindings.packagedCompatibilityProbe"

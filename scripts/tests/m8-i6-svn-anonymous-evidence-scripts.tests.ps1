@@ -11,12 +11,14 @@ $packagedNativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-pack
 $packagedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"
 $packagedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-authz-denied.mjs"
 $packagedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-stalled-read.mjs"
+$packagedDeadlineProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-deadline.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
 $countingProxyPath = Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"
 $installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
 $installedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"
 $installedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-authz-denied.ps1"
 $installedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stalled-read.ps1"
+$installedDeadlineProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-deadline.ps1"
 $installedLocalEventProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
 $packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
@@ -169,6 +171,16 @@ function New-NegativeCell(
       (New-NegativeSurfaceObservation "installed-vsix-extension-host" $OriginCode $OriginReason $NetworkProgress $NetworkAttempts $NetworkConnections $SettlementCode $SettlementReason)
     )
   }
+  if ($Cell -ceq "deadline") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["deadlineTiming"] = [ordered]@{
+        clock = "monotonic"
+        timeoutMs = 500
+        elapsedMs = 500
+        cleanupSlackMs = 5000
+      }
+    }
+  }
   return [ordered]@{
     cell = $Cell
     status = "passed"
@@ -308,7 +320,7 @@ function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [stri
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
     Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
   }
 
@@ -347,12 +359,14 @@ try {
     packagedNegativeProbe = New-ArtifactBinding "i6-packaged-negative-probe" $packagedNegativeProbePath
     packagedAuthzDeniedProbe = New-ArtifactBinding "i6-packaged-authz-denied-probe" $packagedAuthzDeniedProbePath
     packagedStalledReadProbe = New-ArtifactBinding "i6-packaged-stalled-read-probe" $packagedStalledReadProbePath
+    packagedDeadlineProbe = New-ArtifactBinding "i6-packaged-deadline-probe" $packagedDeadlineProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
     countingProxy = New-ArtifactBinding "i6-counting-proxy" $countingProxyPath
     installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
     installedNegativeProbe = New-ArtifactBinding "i6-installed-negative-probe" $installedNegativeProbePath
     installedAuthzDeniedProbe = New-ArtifactBinding "i6-installed-authz-denied-probe" $installedAuthzDeniedProbePath
     installedStalledReadProbe = New-ArtifactBinding "i6-installed-stalled-read-probe" $installedStalledReadProbePath
+    installedDeadlineProbe = New-ArtifactBinding "i6-installed-deadline-probe" $installedDeadlineProbePath
     installedLocalEventProbe = New-ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
     packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
@@ -506,6 +520,26 @@ try {
   $tampered.negativeCells[2].reason = "authenticationRequired"
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "authorizationDenied" "I6 verification must reject generic authentication classification for authz denial."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[5].surfaceObservations[0].deadlineTiming.elapsedMs = 499
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a deadline observation that settled before its owned timeout."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[5].surfaceObservations[1].deadlineTiming.elapsedMs = 5501
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject deadline cleanup outside the reviewed slack."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[5].surfaceObservations[0].PSObject.Properties.Remove("deadlineTiming")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject deadline evidence without an independent monotonic timing observation."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[4].surfaceObservations[0] | Add-Member -NotePropertyName deadlineTiming -NotePropertyValue ([pscustomobject]@{ clock = "monotonic"; timeoutMs = 500; elapsedMs = 500; cleanupSlackMs = 5000 })
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "must contain exactly the required fields" "I6 verification must not relabel stalled-mid-read evidence as the independent deadline cell."
 
   $tampered = Copy-Report $report
   $tampered.negativeCells[2].surfaceObservations[1].originCode = "SUBVERSIONR_REMOTE_WORKER_CRASHED"
@@ -813,12 +847,14 @@ try {
       'probe-m8-i6-packaged-negative.mjs',
       'probe-m8-i6-packaged-authz-denied.mjs',
       'probe-m8-i6-packaged-stalled-read.mjs',
+      'probe-m8-i6-packaged-deadline.mjs',
       'serve-m8-i6-ra-svn-fault-fixture.mjs',
       'serve-m8-i6-counting-proxy.mjs',
       'probe-m8-i6-installed-stress.ps1',
       'probe-m8-i6-installed-negative.ps1',
       'probe-m8-i6-installed-authz-denied.ps1',
       'probe-m8-i6-installed-stalled-read.ps1',
+      'probe-m8-i6-installed-deadline.ps1',
       'probe-m8-i6-installed-local-event-zero-network.ps1',
       'probe-m8-i6-installed-vsix.ps1',
       'test-vscode-installed-extension-host.ps1',
@@ -827,7 +863,7 @@ try {
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied and stalled-mid-read remote-status cells',
+      'packaged/installed authz-denied, stalled-mid-read, and absolute-deadline remote-status cells',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface negative/recovery cells',
@@ -1137,6 +1173,8 @@ try {
       "They do not satisfy the",
       "same-session local snapshot",
       "target/i6r",
+      "monotonic clock",
+      "target/i6d",
       "may not be represented as"
     )) {
     Assert-True ($contractText.Contains($requiredText)) "I6 evidence contract must retain fail-closed boundary '$requiredText'."
@@ -1150,9 +1188,11 @@ try {
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-negative.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native negative probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-authz-denied.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native authz-denied probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-stalled-read.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native stalled-mid-read probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-deadline.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native deadline probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stress-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed 100+1 stress probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-authz-denied-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed authz-denied probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stalled-read-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed stalled-mid-read probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-deadline-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed deadline probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-local-event-zero-network-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed local-event zero-network probe contract tests."
 
   Write-Host "M8 I6 svn anonymous evidence script tests passed."

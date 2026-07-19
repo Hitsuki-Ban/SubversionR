@@ -63,12 +63,14 @@
         "packagedNegativeProbe",
         "packagedAuthzDeniedProbe",
         "packagedStalledReadProbe",
+        "packagedDeadlineProbe",
         "raSvnFaultFixture",
         "countingProxy",
         "installedStressProbe",
         "installedNegativeProbe",
         "installedAuthzDeniedProbe",
         "installedStalledReadProbe",
+        "installedDeadlineProbe",
         "installedLocalEventProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
@@ -109,6 +111,9 @@
         "packagedStalledReadProbe": {
           "$ref": "#/$defs/artifact"
         },
+        "packagedDeadlineProbe": {
+          "$ref": "#/$defs/artifact"
+        },
         "raSvnFaultFixture": {
           "$ref": "#/$defs/artifact"
         },
@@ -125,6 +130,9 @@
           "$ref": "#/$defs/artifact"
         },
         "installedStalledReadProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedDeadlineProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedLocalEventProbe": {
@@ -489,6 +497,17 @@
         }
       }
     },
+    "deadlineTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clock", "timeoutMs", "elapsedMs", "cleanupSlackMs"],
+      "properties": {
+        "clock": { "const": "monotonic" },
+        "timeoutMs": { "const": 500 },
+        "elapsedMs": { "type": "number", "minimum": 500, "maximum": 5500 },
+        "cleanupSlackMs": { "const": 5000 }
+      }
+    },
     "stressCycleObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -696,6 +715,9 @@
         },
         "diagnosticsRedacted": {
           "const": true
+        },
+        "deadlineTiming": {
+          "$ref": "#/$defs/deadlineTiming"
         }
       }
     },
@@ -823,7 +845,22 @@
     },
     "negativeDeadline": {
       "$ref": "#/$defs/negativeCell",
-      "properties": { "cell": { "const": "deadline" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" }, "reason": { "const": "operationDeadlineExceeded" } }
+      "properties": {
+        "cell": { "const": "deadline" },
+        "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" },
+        "reason": { "const": "operationDeadlineExceeded" },
+        "surfaceObservations": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/negativeSurfaceObservation" },
+              { "required": ["deadlineTiming"] }
+            ]
+          }
+        }
+      }
     },
     "negativeCancellation": {
       "$ref": "#/$defs/negativeCell",

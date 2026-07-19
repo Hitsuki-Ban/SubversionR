@@ -62,6 +62,7 @@ import {
 import { collectInstalledSvnAnonymousNegativeReport } from "./diagnostics/installedSvnAnonymousNegativeReport";
 import { collectInstalledSvnAnonymousAuthzDeniedReport } from "./diagnostics/installedSvnAnonymousAuthzDeniedReport";
 import { collectInstalledSvnAnonymousStalledReadReport } from "./diagnostics/installedSvnAnonymousStalledReadReport";
+import { collectInstalledSvnAnonymousDeadlineReport } from "./diagnostics/installedSvnAnonymousDeadlineReport";
 import { InstalledSvnAnonymousLocalEventZeroNetworkObserver } from "./diagnostics/installedSvnAnonymousLocalEventZeroNetwork";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
@@ -315,6 +316,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const installedSvnAnonymousNegativeReportToken = consumeInstalledSvnAnonymousNegativeReportToken();
   const installedSvnAnonymousAuthzDeniedReportToken = consumeInstalledSvnAnonymousAuthzDeniedReportToken();
   const installedSvnAnonymousStalledReadReportToken = consumeInstalledSvnAnonymousStalledReadReportToken();
+  const installedSvnAnonymousDeadlineReportToken = consumeInstalledSvnAnonymousDeadlineReportToken();
   const installedSvnAnonymousLocalEventZeroNetworkToken =
     consumeInstalledSvnAnonymousLocalEventZeroNetworkToken();
   const installedSvnAnonymousStressCheckoutContext =
@@ -392,6 +394,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       installedSvnAnonymousNegativeReportToken !== undefined ||
       installedSvnAnonymousAuthzDeniedReportToken !== undefined ||
       installedSvnAnonymousStalledReadReportToken !== undefined ||
+      installedSvnAnonymousDeadlineReportToken !== undefined ||
       installedSvnAnonymousLocalEventZeroNetworkToken !== undefined
     ) {
       if (method === "credentials/request") {
@@ -1490,6 +1493,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
             }),
         );
+  const installedSvnAnonymousDeadlineReportCommand =
+    installedSvnAnonymousDeadlineReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousDeadlineReport({
+              expectedToken: installedSvnAnonymousDeadlineReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              monotonicNowMs: () => performance.now(),
+            }),
+        );
   const installedSvnAnonymousLocalEventZeroNetworkObserver =
     installedSvnAnonymousLocalEventZeroNetworkToken === undefined
       ? undefined
@@ -2304,6 +2323,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   if (installedSvnAnonymousStalledReadReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousStalledReadReportCommand);
+  }
+  if (installedSvnAnonymousDeadlineReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousDeadlineReportCommand);
   }
   if (
     installedSvnAnonymousLocalEventZeroNetworkObserver !== undefined &&
@@ -4294,6 +4316,12 @@ function consumeInstalledSvnAnonymousAuthzDeniedReportToken(): string | undefine
 function consumeInstalledSvnAnonymousStalledReadReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_STALLED_READ_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_STALLED_READ_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousDeadlineReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DEADLINE_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DEADLINE_REPORT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 
