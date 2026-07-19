@@ -68,6 +68,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
       "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
@@ -186,6 +187,7 @@ describe("extension manifest", () => {
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousStalledReadReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousDeadlineReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousCancellationReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport");
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
@@ -202,6 +204,9 @@ describe("extension manifest", () => {
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",

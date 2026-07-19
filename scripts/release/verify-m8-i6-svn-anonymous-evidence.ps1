@@ -96,6 +96,7 @@ $expectedPackagedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path
 $expectedPackagedStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-stalled-read.mjs"))
 $expectedPackagedDeadlineProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-deadline.mjs"))
 $expectedPackagedCancellationProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-cancellation.mjs"))
+$expectedPackagedTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-trust-revoked.mjs"))
 $expectedRaSvnFaultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $expectedCountingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"))
 $expectedInstalledStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"))
@@ -104,6 +105,7 @@ $expectedInstalledAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Pat
 $expectedInstalledStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stalled-read.ps1"))
 $expectedInstalledDeadlineProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-deadline.ps1"))
 $expectedInstalledCancellationProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-cancellation.ps1"))
+$expectedInstalledTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-trust-revoked.ps1"))
 $expectedInstalledLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"))
 $expectedInstalledVsixProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"))
 $expectedPackagedCompatibilityProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"))
@@ -253,6 +255,10 @@ function Assert-NegativeSurfaceObservation(
   if ($expectCancellationSettlement) {
     $expectedProperties += "cancellationSettlement"
   }
+  $expectTrustTransition = $ExpectedOriginCode -ceq "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" -and $ExpectedOriginReason -ceq "remoteConfigurationInvalid"
+  if ($expectTrustTransition) {
+    $expectedProperties += "trustTransition"
+  }
   Assert-ExactProperties $Observation $expectedProperties $Context
   Assert-Equal $ExpectedSurface ([string]$Observation.surface) "$Context surface must match."
   Assert-Equal $ExpectedOriginCode ([string]$Observation.originCode) "$Context origin code must match the controlled cell origin."
@@ -291,6 +297,13 @@ function Assert-NegativeSurfaceObservation(
     Assert-Equal "SUBVERSIONR_REMOTE_WORKER_CANCELLED" ([string]$Observation.cancellationSettlement.wireCode) "$Context must observe the daemon's exact wire settlement."
     Assert-Equal "operationCancelled" ([string]$Observation.cancellationSettlement.wireReason) "$Context wire cancellation reason must be exact."
     Assert-Equal $true ([bool]$Observation.cancellationSettlement.wireSettlementObserved) "$Context must prove the daemon wire settlement was observed."
+  }
+  if ($expectTrustTransition) {
+    Assert-ExactProperties $Observation.trustTransition @("fromEpoch", "toEpoch", "staleEnvelopeEpoch", "remoteSubmissionEnabledAfter") "$Context.trustTransition"
+    Assert-Equal 1 ([int]$Observation.trustTransition.fromEpoch) "$Context trust transition must begin at epoch 1."
+    Assert-Equal 2 ([int]$Observation.trustTransition.toEpoch) "$Context trust transition must acknowledge epoch 2."
+    Assert-Equal 1 ([int]$Observation.trustTransition.staleEnvelopeEpoch) "$Context rejected envelope must retain stale epoch 1."
+    Assert-Equal $false ([bool]$Observation.trustTransition.remoteSubmissionEnabledAfter) "$Context remote submission must remain disabled after revocation."
   }
 }
 
@@ -407,6 +420,7 @@ $packagedAuthzDeniedProbeResolved = Resolve-RequiredFile $expectedPackagedAuthzD
 $packagedStalledReadProbeResolved = Resolve-RequiredFile $expectedPackagedStalledReadProbePath "packaged-native I6 stalled-mid-read probe"
 $packagedDeadlineProbeResolved = Resolve-RequiredFile $expectedPackagedDeadlineProbePath "packaged-native I6 deadline probe"
 $packagedCancellationProbeResolved = Resolve-RequiredFile $expectedPackagedCancellationProbePath "packaged-native I6 cancellation probe"
+$packagedTrustRevokedProbeResolved = Resolve-RequiredFile $expectedPackagedTrustRevokedProbePath "packaged-native I6 trust-revoked probe"
 $raSvnFaultFixtureResolved = Resolve-RequiredFile $expectedRaSvnFaultFixturePath "I6 ra_svn fault fixture"
 $countingProxyResolved = Resolve-RequiredFile $expectedCountingProxyPath "I6 transparent counting proxy"
 $installedStressProbeResolved = Resolve-RequiredFile $expectedInstalledStressProbePath "installed VSIX I6 stress probe"
@@ -415,6 +429,7 @@ $installedAuthzDeniedProbeResolved = Resolve-RequiredFile $expectedInstalledAuth
 $installedStalledReadProbeResolved = Resolve-RequiredFile $expectedInstalledStalledReadProbePath "installed VSIX I6 stalled-mid-read probe"
 $installedDeadlineProbeResolved = Resolve-RequiredFile $expectedInstalledDeadlineProbePath "installed VSIX I6 deadline probe"
 $installedCancellationProbeResolved = Resolve-RequiredFile $expectedInstalledCancellationProbePath "installed VSIX I6 cancellation probe"
+$installedTrustRevokedProbeResolved = Resolve-RequiredFile $expectedInstalledTrustRevokedProbePath "installed VSIX I6 trust-revoked probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $expectedInstalledLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $installedVsixProbeResolved = Resolve-RequiredFile $expectedInstalledVsixProbePath "installed VSIX I6 probe"
 $packagedCompatibilityProbeResolved = Resolve-RequiredFile $expectedPackagedCompatibilityProbePath "packaged-native compatibility probe"
@@ -485,6 +500,7 @@ Assert-ExactProperties $report.artifactBindings @(
   "packagedStalledReadProbe",
   "packagedDeadlineProbe",
   "packagedCancellationProbe",
+  "packagedTrustRevokedProbe",
   "raSvnFaultFixture",
   "countingProxy",
   "installedStressProbe",
@@ -493,6 +509,7 @@ Assert-ExactProperties $report.artifactBindings @(
   "installedStalledReadProbe",
   "installedDeadlineProbe",
   "installedCancellationProbe",
+  "installedTrustRevokedProbe",
   "installedLocalEventProbe",
   "installedVsixProbe",
   "packagedCompatibilityProbe",
@@ -523,6 +540,7 @@ Assert-ArtifactBinding $report.artifactBindings.packagedAuthzDeniedProbe "i6-pac
 Assert-ArtifactBinding $report.artifactBindings.packagedStalledReadProbe "i6-packaged-stalled-read-probe" $packagedStalledReadProbeResolved "I6 evidence.artifactBindings.packagedStalledReadProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedDeadlineProbe "i6-packaged-deadline-probe" $packagedDeadlineProbeResolved "I6 evidence.artifactBindings.packagedDeadlineProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedCancellationProbe "i6-packaged-cancellation-probe" $packagedCancellationProbeResolved "I6 evidence.artifactBindings.packagedCancellationProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedTrustRevokedProbe "i6-packaged-trust-revoked-probe" $packagedTrustRevokedProbeResolved "I6 evidence.artifactBindings.packagedTrustRevokedProbe"
 Assert-ArtifactBinding $report.artifactBindings.raSvnFaultFixture "i6-ra-svn-fault-fixture" $raSvnFaultFixtureResolved "I6 evidence.artifactBindings.raSvnFaultFixture"
 Assert-ArtifactBinding $report.artifactBindings.countingProxy "i6-counting-proxy" $countingProxyResolved "I6 evidence.artifactBindings.countingProxy"
 Assert-ArtifactBinding $report.artifactBindings.installedStressProbe "i6-installed-stress-probe" $installedStressProbeResolved "I6 evidence.artifactBindings.installedStressProbe"
@@ -531,6 +549,7 @@ Assert-ArtifactBinding $report.artifactBindings.installedAuthzDeniedProbe "i6-in
 Assert-ArtifactBinding $report.artifactBindings.installedStalledReadProbe "i6-installed-stalled-read-probe" $installedStalledReadProbeResolved "I6 evidence.artifactBindings.installedStalledReadProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedDeadlineProbe "i6-installed-deadline-probe" $installedDeadlineProbeResolved "I6 evidence.artifactBindings.installedDeadlineProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedCancellationProbe "i6-installed-cancellation-probe" $installedCancellationProbeResolved "I6 evidence.artifactBindings.installedCancellationProbe"
+Assert-ArtifactBinding $report.artifactBindings.installedTrustRevokedProbe "i6-installed-trust-revoked-probe" $installedTrustRevokedProbeResolved "I6 evidence.artifactBindings.installedTrustRevokedProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedLocalEventProbe "i6-installed-local-event-zero-network-probe" $installedLocalEventProbeResolved "I6 evidence.artifactBindings.installedLocalEventProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedVsixProbe "i6-installed-vsix-probe" $installedVsixProbeResolved "I6 evidence.artifactBindings.installedVsixProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedCompatibilityProbe "packaged-native-compatibility-probe" $packagedCompatibilityProbeResolved "I6 evidence.artifactBindings.packagedCompatibilityProbe"

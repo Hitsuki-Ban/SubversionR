@@ -13,6 +13,7 @@ $packagedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6
 $packagedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-stalled-read.mjs"
 $packagedDeadlineProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-deadline.mjs"
 $packagedCancellationProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-cancellation.mjs"
+$packagedTrustRevokedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-trust-revoked.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
 $countingProxyPath = Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"
 $installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
@@ -21,6 +22,7 @@ $installedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i
 $installedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stalled-read.ps1"
 $installedDeadlineProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-deadline.ps1"
 $installedCancellationProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-cancellation.ps1"
+$installedTrustRevokedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-trust-revoked.ps1"
 $installedLocalEventProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
 $packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
@@ -194,6 +196,16 @@ function New-NegativeCell(
       }
     }
   }
+  if ($Cell -ceq "trustRevoked") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["trustTransition"] = [ordered]@{
+        fromEpoch = 1
+        toEpoch = 2
+        staleEnvelopeEpoch = 1
+        remoteSubmissionEnabledAfter = $false
+      }
+    }
+  }
   return [ordered]@{
     cell = $Cell
     status = "passed"
@@ -333,7 +345,7 @@ function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [stri
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
     Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
   }
 
@@ -374,6 +386,7 @@ try {
     packagedStalledReadProbe = New-ArtifactBinding "i6-packaged-stalled-read-probe" $packagedStalledReadProbePath
     packagedDeadlineProbe = New-ArtifactBinding "i6-packaged-deadline-probe" $packagedDeadlineProbePath
     packagedCancellationProbe = New-ArtifactBinding "i6-packaged-cancellation-probe" $packagedCancellationProbePath
+    packagedTrustRevokedProbe = New-ArtifactBinding "i6-packaged-trust-revoked-probe" $packagedTrustRevokedProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
     countingProxy = New-ArtifactBinding "i6-counting-proxy" $countingProxyPath
     installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
@@ -382,6 +395,7 @@ try {
     installedStalledReadProbe = New-ArtifactBinding "i6-installed-stalled-read-probe" $installedStalledReadProbePath
     installedDeadlineProbe = New-ArtifactBinding "i6-installed-deadline-probe" $installedDeadlineProbePath
     installedCancellationProbe = New-ArtifactBinding "i6-installed-cancellation-probe" $installedCancellationProbePath
+    installedTrustRevokedProbe = New-ArtifactBinding "i6-installed-trust-revoked-probe" $installedTrustRevokedProbePath
     installedLocalEventProbe = New-ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
     packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
@@ -577,6 +591,28 @@ try {
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "must contain exactly the required fields" "I6 verification must not relabel deadline evidence as the independent cancellation cell."
 
   $tampered = Copy-Report $report
+  $tampered.negativeCells[9].surfaceObservations[0].PSObject.Properties.Remove("trustTransition")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject trust-revoked evidence without the exact epoch transition."
+
+  foreach ($trustTamper in @(
+      @("fromEpoch", 2),
+      @("toEpoch", 3),
+      @("staleEnvelopeEpoch", 2),
+      @("remoteSubmissionEnabledAfter", $true)
+    )) {
+    $tampered = Copy-Report $report
+    $tampered.negativeCells[9].surfaceObservations[1].trustTransition.($trustTamper[0]) = $trustTamper[1]
+    Write-Report $tampered $evidencePath
+    Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a non-exact trust transition field $($trustTamper[0])."
+  }
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[8].surfaceObservations[0] | Add-Member -NotePropertyName trustTransition -NotePropertyValue ([pscustomobject]@{ fromEpoch = 1; toEpoch = 2; staleEnvelopeEpoch = 1; remoteSubmissionEnabledAfter = $false })
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "must contain exactly the required fields" "I6 verification must reject trust-transition evidence injected into daemon-disconnect."
+
+  $tampered = Copy-Report $report
   $tampered.negativeCells[2].surfaceObservations[1].originCode = "SUBVERSIONR_REMOTE_WORKER_CRASHED"
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "origin code must match" "I6 verification must reject an observation origin that diverges from its cell."
@@ -733,11 +769,13 @@ try {
       @("packagedNativeProbe", $packagedNativeProbePath),
       @("packagedNegativeProbe", $packagedNegativeProbePath),
       @("packagedAuthzDeniedProbe", $packagedAuthzDeniedProbePath),
+      @("packagedTrustRevokedProbe", $packagedTrustRevokedProbePath),
       @("raSvnFaultFixture", $raSvnFaultFixturePath),
       @("countingProxy", $countingProxyPath),
       @("installedStressProbe", $installedStressProbePath),
       @("installedNegativeProbe", $installedNegativeProbePath),
       @("installedAuthzDeniedProbe", $installedAuthzDeniedProbePath),
+      @("installedTrustRevokedProbe", $installedTrustRevokedProbePath),
       @("installedLocalEventProbe", $installedLocalEventProbePath),
       @("installedVsixProbe", $installedVsixProbePath),
       @("packagedCompatibilityProbe", $packagedCompatibilityProbePath),
@@ -900,7 +938,7 @@ try {
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, and explicit-cancellation remote-status cells',
+      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, and trust-revoked remote-status cells',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface negative/recovery cells',
@@ -932,7 +970,7 @@ try {
       'The cancellation short work root remained after cleanup.',
       'abort-signal-after-greeting',
       'wireSettlementObserved',
-      'Get-InstalledLocalEventProcessObservation',
+      'Get-ZeroWorkerProcessObservation',
       'Start-CountingProxy',
       '$proxyFinalState = Stop-CountingProxy $countingProxy',
       'The stopped installed local-event counting proxy changed final counter',
@@ -1231,11 +1269,13 @@ try {
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-stalled-read.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native stalled-mid-read probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-deadline.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native deadline probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-cancellation.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native cancellation probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-trust-revoked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native trust-revoked probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stress-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed 100+1 stress probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-authz-denied-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed authz-denied probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stalled-read-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed stalled-mid-read probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-deadline-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed deadline probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-cancellation-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed cancellation probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-trust-revoked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed trust-revoked probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-local-event-zero-network-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed local-event zero-network probe contract tests."
 
   Write-Host "M8 I6 svn anonymous evidence script tests passed."

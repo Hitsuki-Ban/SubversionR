@@ -143,6 +143,11 @@ The report must contain all of the following controlled cells in exact order:
   `SUBVERSIONR_REMOTE_WORKER_DISCONNECTED` / `workerContainmentFailed`, with no
   surviving operation worker;
 - trust revocation rejected before any subsequent network contact;
+  this cell uses the reviewed defensive and testable
+  `workspaceTrust/update { trusted: false, trustEpoch: N + 1 }` production path,
+  then submits an envelope captured at epoch N and requires the daemon's exact
+  stale-epoch rejection. VS Code exposes no live revocation event, so this cell
+  does not claim to replace the primary Extension Host stop/restart boundary;
 - recovery Safe settlement that releases only after fresh reconcile;
 - recovery Indeterminate settlement that records
   `SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE` / `remoteOperationIndeterminate`;
@@ -231,7 +236,8 @@ when any candidate observation fails.
 This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
 `saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`, and
-`stalledMidRead` product probes. The separate `deadline` probes use independent
+`stalledMidRead`, `deadline`, `cancellation`, and `trustRevoked` product probes.
+The separate `deadline` probes use independent
 operation IDs and a reviewed 500 ms envelope timeout, measure request settlement
 with a monotonic clock, and require the owned timeout plus cleanup to settle no
 later than the 5,000 ms cleanup slack before proving the same-session local lane

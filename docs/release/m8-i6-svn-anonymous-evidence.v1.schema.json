@@ -65,6 +65,7 @@
         "packagedStalledReadProbe",
         "packagedDeadlineProbe",
         "packagedCancellationProbe",
+        "packagedTrustRevokedProbe",
         "raSvnFaultFixture",
         "countingProxy",
         "installedStressProbe",
@@ -73,6 +74,7 @@
         "installedStalledReadProbe",
         "installedDeadlineProbe",
         "installedCancellationProbe",
+        "installedTrustRevokedProbe",
         "installedLocalEventProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
@@ -119,6 +121,9 @@
         "packagedCancellationProbe": {
           "$ref": "#/$defs/artifact"
         },
+        "packagedTrustRevokedProbe": {
+          "$ref": "#/$defs/artifact"
+        },
         "raSvnFaultFixture": {
           "$ref": "#/$defs/artifact"
         },
@@ -141,6 +146,9 @@
           "$ref": "#/$defs/artifact"
         },
         "installedCancellationProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedTrustRevokedProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedLocalEventProbe": {
@@ -528,6 +536,17 @@
         "wireSettlementObserved": { "const": true }
       }
     },
+    "trustTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fromEpoch", "toEpoch", "staleEnvelopeEpoch", "remoteSubmissionEnabledAfter"],
+      "properties": {
+        "fromEpoch": { "const": 1 },
+        "toEpoch": { "const": 2 },
+        "staleEnvelopeEpoch": { "const": 1 },
+        "remoteSubmissionEnabledAfter": { "const": false }
+      }
+    },
     "stressCycleObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -741,6 +760,9 @@
         },
         "cancellationSettlement": {
           "$ref": "#/$defs/cancellationSettlement"
+        },
+        "trustTransition": {
+          "$ref": "#/$defs/trustTransition"
         }
       }
     },
@@ -914,7 +936,22 @@
     },
     "negativeTrustRevoked": {
       "$ref": "#/$defs/negativeCell",
-      "properties": { "cell": { "const": "trustRevoked" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" }, "reason": { "const": "remoteConfigurationInvalid" } }
+      "properties": {
+        "cell": { "const": "trustRevoked" },
+        "stableCode": { "const": "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" },
+        "reason": { "const": "remoteConfigurationInvalid" },
+        "surfaceObservations": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/negativeSurfaceObservation" },
+              { "required": ["trustTransition"] }
+            ]
+          }
+        }
+      }
     },
     "negativeRecoverySafe": {
       "$ref": "#/$defs/negativeCell",

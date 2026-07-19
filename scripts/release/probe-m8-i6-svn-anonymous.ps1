@@ -45,6 +45,8 @@ $packagedDeadlineProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptR
 $installedDeadlineProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-deadline.ps1"))
 $packagedCancellationProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-cancellation.mjs"))
 $installedCancellationProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-cancellation.ps1"))
+$packagedTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-trust-revoked.mjs"))
+$installedTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-trust-revoked.ps1"))
 $installedLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-local-event-zero-network.ps1"))
 $countingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-counting-proxy.mjs"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
@@ -487,49 +489,50 @@ function Get-InstalledNegativeProcessObservation(
   }
 }
 
-function Get-InstalledLocalEventProcessObservation(
+function Get-ZeroWorkerProcessObservation(
   [object[]]$AllEvents,
   [long]$ProbePid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
   [string[]]$ForbiddenFixtureProcessNames,
-  [object[]]$SettlementSnapshot
+  [object[]]$SettlementSnapshot,
+  [string]$Context
 ) {
   $probeStarts = @($AllEvents | Where-Object {
       [long]$_.processId -eq $ProbePid -and
       ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     })
-  Assert-True ($probeStarts.Count -eq 1) "The installed local-event probe PID must have exactly one subscribed start identity."
+  Assert-True ($probeStarts.Count -eq 1) "The $Context probe PID must have exactly one subscribed start identity."
   Assert-True (
     @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
-  ) "The installed local-event probe PID was reused during its subscribed observation."
+  ) "The $Context probe PID was reused during its subscribed observation."
 
   $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
   $candidateStarts = @($recordedDescendants | Where-Object {
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     })
-  Assert-True ($candidateStarts.Count -eq 1) "The installed local-event surface must start exactly one candidate daemon and no remote worker."
+  Assert-True ($candidateStarts.Count -eq 1) "The $Context surface must start exactly one candidate daemon and no remote worker."
   $daemonStart = $candidateStarts[0]
   Assert-True (
     [long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime -and
     @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1
-  ) "The installed local-event candidate daemon start identity was invalid or reused."
+  ) "The $Context candidate daemon start identity was invalid or reused."
   $daemonDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$daemonStart.processId))
-  Assert-True ($daemonDescendantStarts.Count -eq 0) "The installed local-event status refresh started a remote worker or another daemon descendant."
+  Assert-True ($daemonDescendantStarts.Count -eq 0) "The $Context surface started a remote worker or another daemon descendant."
 
   $forbiddenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($processName in $ForbiddenFixtureProcessNames) {
-    Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "An installed local-event forbidden fixture process name was invalid."
+    Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "A $Context forbidden fixture process name was invalid."
     $null = $forbiddenNames.Add($processName)
   }
-  Assert-True ($forbiddenNames.Count -eq $ForbiddenFixtureProcessNames.Count) "Installed local-event forbidden fixture process names must be unique."
+  Assert-True ($forbiddenNames.Count -eq $ForbiddenFixtureProcessNames.Count) "$Context forbidden fixture process names must be unique."
   $fixtureCliStarts = @($recordedDescendants | Where-Object { $forbiddenNames.Contains([string]$_.processName) })
 
   $liveDaemon = @($SettlementSnapshot | Where-Object {
       [long]$_.ProcessId -eq [long]$daemonStart.processId -and
       (Get-ProcessSnapshotStartFileTime $_) -le [long]$daemonStart.eventFileTime
     })
-  Assert-True ($liveDaemon.Count -eq 0) "The installed local-event candidate daemon remained alive at settlement."
+  Assert-True ($liveDaemon.Count -eq 0) "The $Context candidate daemon remained alive at settlement."
   return [pscustomobject]@{
     daemonProcessId = [long]$daemonStart.processId
     workerStarts = $daemonDescendantStarts.Count
@@ -878,6 +881,8 @@ $packagedDeadlineProbeResolved = Resolve-RequiredFile $packagedDeadlineProbePath
 $installedDeadlineProbeResolved = Resolve-RequiredFile $installedDeadlineProbePath "installed VSIX I6 deadline probe"
 $packagedCancellationProbeResolved = Resolve-RequiredFile $packagedCancellationProbePath "packaged-native I6 cancellation probe"
 $installedCancellationProbeResolved = Resolve-RequiredFile $installedCancellationProbePath "installed VSIX I6 cancellation probe"
+$packagedTrustRevokedProbeResolved = Resolve-RequiredFile $packagedTrustRevokedProbePath "packaged-native I6 trust-revoked probe"
+$installedTrustRevokedProbeResolved = Resolve-RequiredFile $installedTrustRevokedProbePath "installed VSIX I6 trust-revoked probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $installedLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $countingProxyResolved = Resolve-RequiredFile $countingProxyPath "I6 transparent counting proxy"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
@@ -1628,7 +1633,7 @@ try {
       $localEventProcessEvents `
       $localEventProcessEventKeys `
       $ProcessStartEventSettlementMilliseconds
-    $localEventProcessObservation = Get-InstalledLocalEventProcessObservation `
+    $localEventProcessObservation = Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProcessEvents) `
       -ProbePid ([long]$installedLocalEventResult.ProcessId) `
       -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
@@ -1638,7 +1643,8 @@ try {
         [System.IO.Path]::GetFileName($svnadminResolved),
         [System.IO.Path]::GetFileName($svnserveResolved)
       ) `
-      -SettlementSnapshot (Get-CimProcessSnapshot)
+      -SettlementSnapshot (Get-CimProcessSnapshot) `
+      -Context "installed local-event"
     Assert-True ([int]$localEventProcessObservation.fixtureCliInvocations -eq 0) "The installed local-event product surface invoked a fixture CLI."
     Assert-True ([int]$localEventProcessObservation.workerStarts -eq 0) "The installed local-event product surface started a remote worker."
 
@@ -2428,5 +2434,197 @@ finally {
 }
 Assert-True ($cancellationObservations.Count -eq 2) "The packaged-native and installed VSIX cancellation observation set was incomplete."
 
+$trustRevokedWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6t\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $trustRevokedWorkRoot $repoTargetRoot) "The trust-revoked short work root escaped repo target."
+Assert-True ($trustRevokedWorkRoot.Length -le 120) "The trust-revoked short work root exceeds the reviewed 120-character budget."
+Assert-True (-not (Test-Path -LiteralPath $trustRevokedWorkRoot)) "The trust-revoked short work root already exists."
+New-Item -ItemType Directory -Path $trustRevokedWorkRoot | Out-Null
+$trustRevokedObservations = @()
+try {
+  $trustRevokedContracts = @(
+    [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
+    [pscustomobject]@{ Surface = "installed-vsix-extension-host"; WorkRoot = "i"; WorkingCopy = $installedAuthzWorkingCopyResolved }
+  )
+  foreach ($contract in $trustRevokedContracts) {
+    $surfaceName = [string]$contract.Surface
+    $surfaceRoot = Join-Path $probeRoot "trust-revoked-$surfaceName"
+    $surfaceWorkRoot = Join-Path $trustRevokedWorkRoot ([string]$contract.WorkRoot)
+    $fixtureStatePath = Join-Path $surfaceRoot "fixture-state.json"
+    $operationId = [Guid]::NewGuid().ToString("D")
+    New-Item -ItemType Directory -Force -Path $surfaceRoot, $surfaceWorkRoot | Out-Null
+    Assert-CandidateProcessAbsent $daemonResolved "The $surfaceName trust-revoked preflight"
+    $faultFixture = $null
+    $processStartSourceIdentifier = "subversionr-m8-i6-trust-revoked-$([Guid]::NewGuid().ToString('N'))"
+    $processStartSubscriber = $null
+    $processStartEvents = [System.Collections.Generic.List[object]]::new()
+    $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    try {
+      $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "greeting-stall" $fixtureStatePath $repositoryUri.Port
+      try {
+        Register-CimIndicationEvent `
+          -ClassName Win32_ProcessStartTrace `
+          -SourceIdentifier $processStartSourceIdentifier `
+          -ErrorAction Stop | Out-Null
+      }
+      catch {
+        throw "Win32_ProcessStartTrace is required for the $surfaceName trust-revoked process observation: $($_.Exception.Message)"
+      }
+      $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
+      Assert-True ($matchingSubscribers.Count -eq 1) "The $surfaceName trust-revoked process-start subscription was not created exactly once."
+      $processStartSubscriber = $matchingSubscribers[0]
+      Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+
+      if ($surfaceName -ceq "packaged-native") {
+        $probeResult = Invoke-BoundedProcess $nodeHost @(
+          $packagedTrustRevokedProbeResolved,
+          "--backend-module", $backendModulePath,
+          "--daemon", $daemonResolved,
+          "--bridge", $bridgeResolved,
+          "--profile-root", $surfaceWorkRoot,
+          "--working-copy-path", ([string]$contract.WorkingCopy),
+          "--repository-url", $deniedRepositoryUrl,
+          "--operation-id", $operationId,
+          "--fixture-state-path", $fixtureStatePath
+        ) 90 @{ ELECTRON_RUN_AS_NODE = "1" }
+        $probeFailure = $probeResult.Stderr.Trim()
+        Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The packaged-native trust-revoked probe failed: $probeFailure"
+        $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "packaged-native trust-revoked probe stdout"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-packaged-native-trust-revoked.v1" -and
+          [string]$probeReport.status -ceq "passed" -and [string]$probeReport.cell -ceq "trustRevoked" -and
+          [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" -and
+          [string]$probeReport.reason -ceq "remoteConfigurationInvalid" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          $probeReport.remoteSvnAnonymous -eq $true -and
+          $probeReport.nativeLaneReleased -eq $true -and $probeReport.localSnapshotAfterTrustRevocation -eq $true -and
+          $probeReport.workingCopyPreserved -eq $true -and [int]$probeReport.networkAttempts -eq 0 -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and [int]$probeReport.credentialRootsAfter -eq 0 -and
+          [int]$probeReport.credentialRequests -eq 0 -and [int]$probeReport.credentialSettlements -eq 0 -and
+          $probeReport.diagnosticsRedacted -eq $true -and [int]$probeReport.fixtureCliInvocations -eq 0
+        ) "The packaged-native trust-revoked report was incomplete."
+      }
+      else {
+        $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
+        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", $installedTrustRevokedProbeResolved,
+          "-VsixPath", $vsixResolved,
+          "-CodeCliPath", $codeCliResolved,
+          "-FixtureRoot", $installedFixtureRoot,
+          "-WorkingCopyPath", ([string]$contract.WorkingCopy),
+          "-RepositoryUrl", $deniedRepositoryUrl,
+          "-OperationId", $operationId,
+          "-FixtureStatePath", $fixtureStatePath,
+          "-ExpectedProductVersion", $ExpectedProductVersion,
+          "-DaemonPath", $daemonResolved,
+          "-BridgePath", $bridgeResolved,
+          "-TimeoutSeconds", "180"
+        ) 240
+        $probeFailure = $probeResult.Stderr.Trim()
+        Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX trust-revoked probe failed: $probeFailure"
+        $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX trust-revoked probe stdout"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-trust-revoked.v1" -and
+          [string]$probeReport.status -ceq "passed" -and
+          [string]$probeReport.surface -ceq "installed-vsix-extension-host" -and [string]$probeReport.cell -ceq "trustRevoked" -and
+          [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" -and
+          [string]$probeReport.reason -ceq "remoteConfigurationInvalid" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          [int]$probeReport.authActivity.credentialRequests -eq 0 -and
+          [int]$probeReport.authActivity.credentialSettlements -eq 0 -and
+          [int]$probeReport.authActivity.certificateRequests -eq 0 -and
+          $probeReport.remoteSubmissionDisabled -eq $true -and $probeReport.localSnapshotAfterTrustRevocation -eq $true -and
+          $probeReport.workingCopyPreserved -eq $true -and [int]$probeReport.fixtureContactsAfter -eq 0 -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and [int]$probeReport.checkoutJournalEntriesAfter -eq 0 -and
+          $probeReport.diagnosticsRedacted -eq $true -and $probeReport.candidateDaemonExitedAfter -eq $true
+        ) "The installed VSIX trust-revoked report was incomplete."
+      }
+
+      $trustTransition = if ($surfaceName -ceq "packaged-native") {
+        $probeReport.trustTransition
+      }
+      else {
+        [pscustomobject]@{
+          fromEpoch = [int]$probeReport.trust.initialAcknowledgedEpoch
+          toEpoch = [int]$probeReport.trust.revokedAcknowledgedEpoch
+          staleEnvelopeEpoch = [int]$probeReport.trust.initialAcknowledgedEpoch
+          remoteSubmissionEnabledAfter = [bool]$probeReport.trust.submissionEnabled
+        }
+      }
+      Assert-ExactProperties $trustTransition @("fromEpoch", "toEpoch", "staleEnvelopeEpoch", "remoteSubmissionEnabledAfter") "$surfaceName trust transition"
+      Assert-True (
+        [int]$trustTransition.fromEpoch -eq 1 -and
+        [int]$trustTransition.toEpoch -eq 2 -and
+        [int]$trustTransition.staleEnvelopeEpoch -eq 1 -and
+        $trustTransition.remoteSubmissionEnabledAfter -eq $false
+      ) "The $surfaceName trust-revoked observation did not bind the exact defensive trust transition."
+
+      $faultState = Get-Content -Raw -LiteralPath $fixtureStatePath | ConvertFrom-Json -Depth 16
+      Assert-True (
+        [int]$faultState.port -eq $repositoryUri.Port -and [string]$faultState.scenario -ceq "greeting-stall" -and
+        [int]$faultState.connections -eq 0 -and [int]$faultState.greetingSent -eq 0 -and
+        [int]$faultState.clientResponseReceived -eq 0 -and [int]$faultState.authRequestSent -eq 0 -and
+        [int]$faultState.reposInfoSent -eq 0 -and [int]$faultState.commandsReceived -eq 0 -and
+        [int]$faultState.followupContacts -eq 0 -and [int]$faultState.suppliedAuthorityConnections -eq 0
+      ) "The $surfaceName trust-revoked network observation was not exactly zero."
+      Complete-ProcessStartEventDrain $processStartSourceIdentifier $processStartEvents $processStartEventKeys $ProcessStartEventSettlementMilliseconds
+      $processObservation = Get-ZeroWorkerProcessObservation `
+        -AllEvents @($processStartEvents) `
+        -ProbePid ([long]$probeResult.ProcessId) `
+        -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
+        -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+        -ForbiddenFixtureProcessNames @(
+          [System.IO.Path]::GetFileName($svnResolved),
+          [System.IO.Path]::GetFileName($svnadminResolved),
+          [System.IO.Path]::GetFileName($svnserveResolved)
+        ) `
+        -SettlementSnapshot (Get-CimProcessSnapshot) `
+        -Context "$surfaceName trust-revoked"
+      Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName trust-revoked product surface invoked a fixture CLI."
+      Assert-True ([int]$processObservation.workerStarts -eq 0) "The $surfaceName trust-revoked product surface started a remote worker."
+      $trustRevokedObservations += [pscustomobject]@{
+        surface = $surfaceName
+        stableCode = [string]$probeReport.stableCode
+        reason = [string]$probeReport.reason
+        originCode = [string]$probeReport.stableCode
+        originReason = [string]$probeReport.reason
+        settlementCode = [string]$probeReport.stableCode
+        settlementReason = [string]$probeReport.reason
+        networkProgress = "none"
+        networkAttempts = 0
+        networkConnections = 0
+        fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+        credentialRequests = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialRequests } else { [int]$probeReport.authActivity.credentialRequests }
+        credentialSettlements = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialSettlements } else { [int]$probeReport.authActivity.credentialSettlements }
+        followupNetworkContacts = 0
+        workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+        temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        diagnosticsRedacted = [bool]$probeReport.diagnosticsRedacted
+        trustTransition = [pscustomobject]@{
+          fromEpoch = [int]$trustTransition.fromEpoch
+          toEpoch = [int]$trustTransition.toEpoch
+          staleEnvelopeEpoch = [int]$trustTransition.staleEnvelopeEpoch
+          remoteSubmissionEnabledAfter = [bool]$trustTransition.remoteSubmissionEnabledAfter
+        }
+      }
+    }
+    finally {
+      if ($null -ne $processStartSubscriber) {
+        Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+      }
+      Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+      if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "greeting-stall" }
+    }
+  }
+}
+finally {
+  if (Test-Path -LiteralPath $trustRevokedWorkRoot) {
+    Assert-True (Test-PathWithin $trustRevokedWorkRoot $repoTargetRoot) "The trust-revoked cleanup root escaped repo target."
+    Remove-Item -LiteralPath $trustRevokedWorkRoot -Recurse -Force
+  }
+  Assert-True (-not (Test-Path -LiteralPath $trustRevokedWorkRoot)) "The trust-revoked short work root remained after cleanup."
+}
+Assert-True ($trustRevokedObservations.Count -eq 2) "The packaged-native and installed VSIX trust-revoked observation set was incomplete."
+
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, and explicit-cancellation remote-status cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, and trust-revoked remote-status cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
