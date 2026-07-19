@@ -10,11 +10,13 @@ $probeDriverPath = Join-Path $repoRoot "scripts\release\probe-m8-i6-svn-anonymou
 $packagedNativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-native.mjs"
 $packagedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"
 $packagedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-authz-denied.mjs"
+$packagedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-stalled-read.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
 $countingProxyPath = Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"
 $installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
 $installedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"
 $installedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-authz-denied.ps1"
+$installedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stalled-read.ps1"
 $installedLocalEventProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
 $packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
@@ -344,11 +346,13 @@ try {
     packagedNativeProbe = New-ArtifactBinding "i6-packaged-native-probe" $packagedNativeProbePath
     packagedNegativeProbe = New-ArtifactBinding "i6-packaged-negative-probe" $packagedNegativeProbePath
     packagedAuthzDeniedProbe = New-ArtifactBinding "i6-packaged-authz-denied-probe" $packagedAuthzDeniedProbePath
+    packagedStalledReadProbe = New-ArtifactBinding "i6-packaged-stalled-read-probe" $packagedStalledReadProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
     countingProxy = New-ArtifactBinding "i6-counting-proxy" $countingProxyPath
     installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
     installedNegativeProbe = New-ArtifactBinding "i6-installed-negative-probe" $installedNegativeProbePath
     installedAuthzDeniedProbe = New-ArtifactBinding "i6-installed-authz-denied-probe" $installedAuthzDeniedProbePath
+    installedStalledReadProbe = New-ArtifactBinding "i6-installed-stalled-read-probe" $installedStalledReadProbePath
     installedLocalEventProbe = New-ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
     packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
@@ -808,11 +812,13 @@ try {
       'probe-m8-i6-packaged-native.mjs',
       'probe-m8-i6-packaged-negative.mjs',
       'probe-m8-i6-packaged-authz-denied.mjs',
+      'probe-m8-i6-packaged-stalled-read.mjs',
       'serve-m8-i6-ra-svn-fault-fixture.mjs',
       'serve-m8-i6-counting-proxy.mjs',
       'probe-m8-i6-installed-stress.ps1',
       'probe-m8-i6-installed-negative.ps1',
       'probe-m8-i6-installed-authz-denied.ps1',
+      'probe-m8-i6-installed-stalled-read.ps1',
       'probe-m8-i6-installed-local-event-zero-network.ps1',
       'probe-m8-i6-installed-vsix.ps1',
       'test-vscode-installed-extension-host.ps1',
@@ -821,7 +827,7 @@ try {
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied remote-status cell',
+      'packaged/installed authz-denied and stalled-mid-read remote-status cells',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface negative/recovery cells',
@@ -844,6 +850,11 @@ try {
       '"-FixtureRoot", $scenarioWorkRoot',
       '"-CheckoutPath", (Join-Path $scenarioWorkRoot "checkout")',
       'The installed-negative short work root remained after cleanup.',
+      'Stop-ControlledSvnserve',
+      'The controlled svnserve identity changed before the stalled-mid-read phase.',
+      'ra_svn fault fixture did not bind the required port.',
+      'The packaged-native and installed VSIX stalled-mid-read observation set was incomplete.',
+      'The stalled-mid-read short work root remained after cleanup.',
       'Get-InstalledLocalEventProcessObservation',
       'Start-CountingProxy',
       '$proxyFinalState = Stop-CountingProxy $countingProxy',
@@ -1124,6 +1135,8 @@ try {
       "100 checkout cycles",
       "checkout-stall probes establish only",
       "They do not satisfy the",
+      "same-session local snapshot",
+      "target/i6r",
       "may not be represented as"
     )) {
     Assert-True ($contractText.Contains($requiredText)) "I6 evidence contract must retain fail-closed boundary '$requiredText'."
@@ -1136,8 +1149,10 @@ try {
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-counting-proxy.tests.mjs")) "PR Fast I6 script tests must execute the transparent counting proxy tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-negative.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native negative probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-authz-denied.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native authz-denied probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-stalled-read.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native stalled-mid-read probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stress-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed 100+1 stress probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-authz-denied-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed authz-denied probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stalled-read-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed stalled-mid-read probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-local-event-zero-network-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed local-event zero-network probe contract tests."
 
   Write-Host "M8 I6 svn anonymous evidence script tests passed."

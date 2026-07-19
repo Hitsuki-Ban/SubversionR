@@ -213,16 +213,20 @@ duplicate, or reordered cycles, and requires an independent successful cycle
 
 The source branch contains real candidate drivers for the packaged-native and
 installed Extension Host positive operation matrix, malicious-root, SASL-only,
-authz-denied, and installed local-event zero-network cells. The authz-denied
-cell additionally binds the exact svnserve command log and requires atomic
-deny/restore controls. The local-event cell binds a transparent byte-counting
-proxy and a real VS Code watcher observer. All drivers keep the evidence report
-absent when any candidate observation fails.
+authz-denied, stalled-mid-read, and installed local-event zero-network cells.
+The authz-denied cell additionally binds the exact svnserve command log and
+requires atomic deny/restore controls. The stalled-mid-read cell reuses two
+pre-existing working copies, replaces the exact original svnserve port with a
+single-connection greeting-stall fixture for each product surface, and requires
+the original timeout plus a same-session local snapshot proving the native lane
+was released. The local-event cell binds a transparent byte-counting proxy and
+a real VS Code watcher observer. All drivers keep the evidence report absent
+when any candidate observation fails.
 
 This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
-`saslOnly`, `greetingStall`, `connectedStall`, and `authzDenied` product probes,
-but the remaining controlled negative/recovery cells
+`saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`, and
+`stalledMidRead` product probes, but the remaining controlled negative/recovery cells
 are incomplete and no complete candidate report has passed the executable
 verifier. Missing controlled observations may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
@@ -232,10 +236,11 @@ artifacts.
 The two checkout-stall probes establish only the installed surface's exact
 timeout origin, recovery-blocked settlement, and one durable blocked entry bound
 to the checkout target and origin operation. They do not satisfy the
-`stalledMidRead` cell, whose read-only remote-status operation must settle as
-timeout rather than checkout recovery, or the complete `recoveryBlocked` cell,
-which additionally requires restart, explicit disposition confirmation, journal
-clearance, and a subsequent successful checkout.
+`stalledMidRead` cell; that cell is established separately by a read-only
+remote-status operation whose origin and settlement both remain timeout. The
+checkout-stall probes also do not satisfy the complete `recoveryBlocked` cell,
+which additionally requires restart, explicit disposition confirmation,
+journal clearance, and a subsequent successful checkout.
 
 The installed-negative VSIX/user-data environment uses a bounded disposable
 work root under repository `target/i6n`, separate from the evidence fixture
@@ -243,3 +248,11 @@ tree, so the staged native bridge remains within the reviewed Windows path
 budget. Scenario fixture state and all reportable observations remain under the
 I6 fixture root. The driver verifies the disposable root stays below repository
 `target`, removes it in `finally`, and rejects any cleanup residue.
+
+The stalled-mid-read packaged profile and installed VSIX/user-data environment
+similarly use a bounded disposable work root under repository `target/i6r`.
+The fault fixture state remains in the evidence tree. The driver verifies the
+original svnserve process identity before the one-way handoff, binds each
+surface's greeting-stall fixture to the original port, then removes the short
+root in `finally` and rejects residue. Because the driver still terminates at
+the incomplete-matrix blocker, it does not start an unowned replacement server.

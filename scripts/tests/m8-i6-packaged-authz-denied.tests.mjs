@@ -55,6 +55,7 @@ test("rejects wrong authz taxonomy, native status, residue, and redaction leaks"
     [{ status: 2 }, "SUBVERSIONR_I6_PACKAGED_AUTHZ_ERROR_INVALID"],
     [{ residue: true }, "SUBVERSIONR_I6_PACKAGED_AUTHZ_WORKER_TEMP_RESIDUE"],
     [{ diagnosticsLeak: true }, "SUBVERSIONR_I6_PACKAGED_AUTHZ_DIAGNOSTICS_LEAK"],
+    [{ closeFalse: true }, "SUBVERSIONR_I6_PACKAGED_AUTHZ_CLOSE_INVALID"],
   ];
   for (const [behavior, expectedCode] of cases) {
     const fixture = await createFixture(behavior);
@@ -180,7 +181,7 @@ exports.startBackendProcess = async function startBackendProcess(config) {
         source: "subversionr-daemon", entries: [],
         ...(behavior.diagnosticsLeak === true ? { leaked: repositoryUrl } : {}),
       };
-      if (method === "repository/close") return { repositoryId: "repo-id", epoch: 7 };
+      if (method === "repository/close") return { repositoryId: "repo-id", epoch: 7, closed: behavior.closeFalse !== true };
       throw new Error("UNEXPECTED_METHOD");
     },
     async shutdown() { capture.shutdown = true; save(); },

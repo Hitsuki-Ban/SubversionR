@@ -93,11 +93,13 @@ $expectedProbeDriverPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "s
 $expectedPackagedNativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-native.mjs"))
 $expectedPackagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"))
 $expectedPackagedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-authz-denied.mjs"))
+$expectedPackagedStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-stalled-read.mjs"))
 $expectedRaSvnFaultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $expectedCountingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"))
 $expectedInstalledStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"))
 $expectedInstalledNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"))
 $expectedInstalledAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-authz-denied.ps1"))
+$expectedInstalledStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stalled-read.ps1"))
 $expectedInstalledLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"))
 $expectedInstalledVsixProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"))
 $expectedPackagedCompatibilityProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"))
@@ -371,11 +373,13 @@ $probeDriverSourcePath = Assert-ExactSourcePath $ProbeDriverPath $expectedProbeD
 $packagedNativeProbeResolved = Resolve-RequiredFile $expectedPackagedNativeProbePath "packaged-native I6 probe"
 $packagedNegativeProbeResolved = Resolve-RequiredFile $expectedPackagedNegativeProbePath "packaged-native I6 negative probe"
 $packagedAuthzDeniedProbeResolved = Resolve-RequiredFile $expectedPackagedAuthzDeniedProbePath "packaged-native I6 authz-denied probe"
+$packagedStalledReadProbeResolved = Resolve-RequiredFile $expectedPackagedStalledReadProbePath "packaged-native I6 stalled-mid-read probe"
 $raSvnFaultFixtureResolved = Resolve-RequiredFile $expectedRaSvnFaultFixturePath "I6 ra_svn fault fixture"
 $countingProxyResolved = Resolve-RequiredFile $expectedCountingProxyPath "I6 transparent counting proxy"
 $installedStressProbeResolved = Resolve-RequiredFile $expectedInstalledStressProbePath "installed VSIX I6 stress probe"
 $installedNegativeProbeResolved = Resolve-RequiredFile $expectedInstalledNegativeProbePath "installed VSIX I6 negative probe"
 $installedAuthzDeniedProbeResolved = Resolve-RequiredFile $expectedInstalledAuthzDeniedProbePath "installed VSIX I6 authz-denied probe"
+$installedStalledReadProbeResolved = Resolve-RequiredFile $expectedInstalledStalledReadProbePath "installed VSIX I6 stalled-mid-read probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $expectedInstalledLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $installedVsixProbeResolved = Resolve-RequiredFile $expectedInstalledVsixProbePath "installed VSIX I6 probe"
 $packagedCompatibilityProbeResolved = Resolve-RequiredFile $expectedPackagedCompatibilityProbePath "packaged-native compatibility probe"
@@ -443,11 +447,13 @@ Assert-ExactProperties $report.artifactBindings @(
   "packagedNativeProbe",
   "packagedNegativeProbe",
   "packagedAuthzDeniedProbe",
+  "packagedStalledReadProbe",
   "raSvnFaultFixture",
   "countingProxy",
   "installedStressProbe",
   "installedNegativeProbe",
   "installedAuthzDeniedProbe",
+  "installedStalledReadProbe",
   "installedLocalEventProbe",
   "installedVsixProbe",
   "packagedCompatibilityProbe",
@@ -475,11 +481,13 @@ Assert-ArtifactBinding $report.artifactBindings.probeDriver "i6-probe-driver" $p
 Assert-ArtifactBinding $report.artifactBindings.packagedNativeProbe "i6-packaged-native-probe" $packagedNativeProbeResolved "I6 evidence.artifactBindings.packagedNativeProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedNegativeProbe "i6-packaged-negative-probe" $packagedNegativeProbeResolved "I6 evidence.artifactBindings.packagedNegativeProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedAuthzDeniedProbe "i6-packaged-authz-denied-probe" $packagedAuthzDeniedProbeResolved "I6 evidence.artifactBindings.packagedAuthzDeniedProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedStalledReadProbe "i6-packaged-stalled-read-probe" $packagedStalledReadProbeResolved "I6 evidence.artifactBindings.packagedStalledReadProbe"
 Assert-ArtifactBinding $report.artifactBindings.raSvnFaultFixture "i6-ra-svn-fault-fixture" $raSvnFaultFixtureResolved "I6 evidence.artifactBindings.raSvnFaultFixture"
 Assert-ArtifactBinding $report.artifactBindings.countingProxy "i6-counting-proxy" $countingProxyResolved "I6 evidence.artifactBindings.countingProxy"
 Assert-ArtifactBinding $report.artifactBindings.installedStressProbe "i6-installed-stress-probe" $installedStressProbeResolved "I6 evidence.artifactBindings.installedStressProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedNegativeProbe "i6-installed-negative-probe" $installedNegativeProbeResolved "I6 evidence.artifactBindings.installedNegativeProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedAuthzDeniedProbe "i6-installed-authz-denied-probe" $installedAuthzDeniedProbeResolved "I6 evidence.artifactBindings.installedAuthzDeniedProbe"
+Assert-ArtifactBinding $report.artifactBindings.installedStalledReadProbe "i6-installed-stalled-read-probe" $installedStalledReadProbeResolved "I6 evidence.artifactBindings.installedStalledReadProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedLocalEventProbe "i6-installed-local-event-zero-network-probe" $installedLocalEventProbeResolved "I6 evidence.artifactBindings.installedLocalEventProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedVsixProbe "i6-installed-vsix-probe" $installedVsixProbeResolved "I6 evidence.artifactBindings.installedVsixProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedCompatibilityProbe "packaged-native-compatibility-probe" $packagedCompatibilityProbeResolved "I6 evidence.artifactBindings.packagedCompatibilityProbe"

@@ -253,9 +253,10 @@ function requireOpenResponse(value, workingCopyPath, endpoint) {
 function requireCloseResponse(value, session) {
   if (
     !isRecord(value) ||
-    Object.keys(value).sort().join(",") !== "epoch,repositoryId" ||
+    Object.keys(value).sort().join(",") !== "closed,epoch,repositoryId" ||
     value.repositoryId !== session.repositoryId ||
-    value.epoch !== session.epoch
+    value.epoch !== session.epoch ||
+    value.closed !== true
   ) {
     throw new Error("SUBVERSIONR_I6_PACKAGED_AUTHZ_CLOSE_INVALID");
   }

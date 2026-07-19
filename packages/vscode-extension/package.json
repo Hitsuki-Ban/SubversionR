@@ -57,6 +57,7 @@
     "onCommand:subversionr.diagnostics.installedSvnAnonymousStressCheckout",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousNegativeReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
     "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",

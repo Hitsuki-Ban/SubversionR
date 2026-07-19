@@ -39,6 +39,8 @@ $installedStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRo
 $installedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-negative.ps1"))
 $packagedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-authz-denied.mjs"))
 $installedAuthzDeniedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-authz-denied.ps1"))
+$packagedStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-stalled-read.mjs"))
+$installedStalledReadProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-stalled-read.ps1"))
 $installedLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-local-event-zero-network.ps1"))
 $countingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-counting-proxy.mjs"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
@@ -563,6 +565,24 @@ function Assert-CandidateProcessAbsent([string]$ExecutablePath, [string]$Context
   } while ($true)
 }
 
+function Stop-ControlledSvnserve(
+  [string]$ExecutablePath,
+  [long]$ProcessId,
+  [string]$ExpectedStartTimeUtc
+) {
+  $candidateProcessIds = @(Get-CandidateProcessIds $ExecutablePath)
+  Assert-True (
+    $candidateProcessIds.Count -eq 1 -and [long]$candidateProcessIds[0] -eq $ProcessId
+  ) "The controlled svnserve identity changed before the stalled-mid-read phase."
+  $process = Get-Process -Id $ProcessId -ErrorAction Stop
+  Assert-True (
+    $process.StartTime.ToUniversalTime().ToString("O", [Globalization.CultureInfo]::InvariantCulture) -ceq $ExpectedStartTimeUtc
+  ) "The controlled svnserve start time changed before the stalled-mid-read phase."
+  Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+  $process.WaitForExit()
+  Assert-CandidateProcessAbsent $ExecutablePath "The stalled-mid-read svnserve handoff" 10000
+}
+
 function Read-FaultFixtureState([string]$StatePath, [string]$Scenario, [System.Diagnostics.Process]$Process) {
   $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
   while ([DateTimeOffset]::UtcNow -lt $deadline) {
@@ -601,8 +621,10 @@ function Start-FaultFixture(
   [string]$NodeHost,
   [string]$FixtureScript,
   [string]$Scenario,
-  [string]$StatePath
+  [string]$StatePath,
+  [int]$Port = 0
 ) {
+  Assert-True ($Port -ge 0 -and $Port -le 65535) "The $Scenario ra_svn fault fixture port was invalid."
   $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
   $startInfo.FileName = $NodeHost
   $startInfo.UseShellExecute = $false
@@ -615,7 +637,7 @@ function Start-FaultFixture(
       $FixtureScript,
       "--scenario", $Scenario,
       "--listen-host", "127.0.0.1",
-      "--port", "0",
+      "--port", ([string]$Port),
       "--state-path", $StatePath
     )) {
     $startInfo.ArgumentList.Add($argument)
@@ -627,6 +649,9 @@ function Start-FaultFixture(
   $stderrTask = $process.StandardError.ReadToEndAsync()
   try {
     $state = Read-FaultFixtureState $StatePath $Scenario $process
+    if ($Port -ne 0) {
+      Assert-True ([int]$state.port -eq $Port) "The $Scenario ra_svn fault fixture did not bind the required port."
+    }
     return [pscustomobject]@{
       Process = $process
       State = $state
@@ -843,6 +868,8 @@ $installedStressProbeResolved = Resolve-RequiredFile $installedStressProbePath "
 $installedNegativeProbeResolved = Resolve-RequiredFile $installedNegativeProbePath "installed I6 negative Extension Host probe"
 $packagedAuthzDeniedProbeResolved = Resolve-RequiredFile $packagedAuthzDeniedProbePath "packaged-native I6 authz-denied probe"
 $installedAuthzDeniedProbeResolved = Resolve-RequiredFile $installedAuthzDeniedProbePath "installed VSIX I6 authz-denied probe"
+$packagedStalledReadProbeResolved = Resolve-RequiredFile $packagedStalledReadProbePath "packaged-native I6 stalled-mid-read probe"
+$installedStalledReadProbeResolved = Resolve-RequiredFile $installedStalledReadProbePath "installed VSIX I6 stalled-mid-read probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $installedLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $countingProxyResolved = Resolve-RequiredFile $countingProxyPath "I6 transparent counting proxy"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
@@ -1801,5 +1828,214 @@ finally {
   }
 }
 
+$stalledReadWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6r\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $stalledReadWorkRoot $repoTargetRoot) "The stalled-mid-read short work root escaped repo target."
+Assert-True ($stalledReadWorkRoot.Length -le 120) "The stalled-mid-read short work root exceeds the reviewed 120-character budget."
+Assert-True (-not (Test-Path -LiteralPath $stalledReadWorkRoot)) "The stalled-mid-read short work root already exists."
+New-Item -ItemType Directory -Path $stalledReadWorkRoot | Out-Null
+$stalledReadObservations = @()
+try {
+  Stop-ControlledSvnserve $svnserveResolved $SvnservePid $SvnserveStartTimeUtc
+  $stalledReadContracts = @(
+    [pscustomobject]@{
+      Surface = "packaged-native"
+      WorkRoot = "p"
+      WorkingCopy = $packagedAuthzWorkingCopyResolved
+    },
+    [pscustomobject]@{
+      Surface = "installed-vsix-extension-host"
+      WorkRoot = "i"
+      WorkingCopy = $installedAuthzWorkingCopyResolved
+    }
+  )
+  foreach ($contract in $stalledReadContracts) {
+    $surfaceName = [string]$contract.Surface
+    $surfaceRoot = Join-Path $probeRoot "stalled-mid-read-$surfaceName"
+    $surfaceWorkRoot = Join-Path $stalledReadWorkRoot ([string]$contract.WorkRoot)
+    $fixtureStatePath = Join-Path $surfaceRoot "fixture-state.json"
+    New-Item -ItemType Directory -Force -Path $surfaceRoot, $surfaceWorkRoot | Out-Null
+    Assert-CandidateProcessAbsent $daemonResolved "The $surfaceName stalled-mid-read preflight"
+    $faultFixture = $null
+    $processStartSourceIdentifier = "subversionr-m8-i6-stalled-read-$([Guid]::NewGuid().ToString('N'))"
+    $processStartSubscriber = $null
+    $processStartEvents = [System.Collections.Generic.List[object]]::new()
+    $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    try {
+      $faultFixture = Start-FaultFixture `
+        $nodeHost `
+        $faultFixtureResolved `
+        "greeting-stall" `
+        $fixtureStatePath `
+        $repositoryUri.Port
+      try {
+        Register-CimIndicationEvent `
+          -ClassName Win32_ProcessStartTrace `
+          -SourceIdentifier $processStartSourceIdentifier `
+          -ErrorAction Stop | Out-Null
+      }
+      catch {
+        throw "Win32_ProcessStartTrace is required for the $surfaceName stalled-mid-read process observation: $($_.Exception.Message)"
+      }
+      $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
+      Assert-True ($matchingSubscribers.Count -eq 1) "The $surfaceName stalled-mid-read process-start subscription was not created exactly once."
+      $processStartSubscriber = $matchingSubscribers[0]
+      Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+
+      if ($surfaceName -ceq "packaged-native") {
+        $probeResult = Invoke-BoundedProcess $nodeHost @(
+          $packagedStalledReadProbeResolved,
+          "--backend-module", $backendModulePath,
+          "--daemon", $daemonResolved,
+          "--bridge", $bridgeResolved,
+          "--profile-root", $surfaceWorkRoot,
+          "--working-copy-path", ([string]$contract.WorkingCopy),
+          "--repository-url", $deniedRepositoryUrl,
+          "--operation-id", ([Guid]::NewGuid().ToString("D")),
+          "--timeout-ms", "1500"
+        ) 90 @{ ELECTRON_RUN_AS_NODE = "1" }
+        $probeFailure = $probeResult.Stderr.Trim()
+        Assert-True (
+          $probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0
+        ) "The packaged-native stalled-mid-read probe failed: $probeFailure"
+        $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "packaged-native stalled-mid-read probe stdout"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-packaged-native-stalled-read.v1" -and
+          [string]$probeReport.status -ceq "passed" -and
+          [string]$probeReport.cell -ceq "stalledMidRead" -and
+          [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" -and
+          [string]$probeReport.reason -ceq "operationDeadlineExceeded" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          $probeReport.remoteSvnAnonymous -eq $true -and
+          $probeReport.nativeLaneReleased -eq $true -and $probeReport.localSnapshotAfterTimeout -eq $true -and
+          $probeReport.workingCopyPreserved -eq $true -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and
+          [int]$probeReport.credentialRequests -eq 0 -and [int]$probeReport.credentialSettlements -eq 0 -and
+          $probeReport.diagnosticsRedacted -eq $true -and [int]$probeReport.fixtureCliInvocations -eq 0
+        ) "The packaged-native stalled-mid-read report was incomplete."
+      }
+      else {
+        $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
+        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", $installedStalledReadProbeResolved,
+          "-VsixPath", $vsixResolved,
+          "-CodeCliPath", $codeCliResolved,
+          "-FixtureRoot", $installedFixtureRoot,
+          "-WorkingCopyPath", ([string]$contract.WorkingCopy),
+          "-RepositoryUrl", $deniedRepositoryUrl,
+          "-OperationTimeoutMilliseconds", "1500",
+          "-ExpectedProductVersion", $ExpectedProductVersion,
+          "-DaemonPath", $daemonResolved,
+          "-BridgePath", $bridgeResolved,
+          "-TimeoutSeconds", "180"
+        ) 240
+        $probeFailure = $probeResult.Stderr.Trim()
+        Assert-True (
+          $probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0
+        ) "The installed VSIX stalled-mid-read probe failed: $probeFailure"
+        $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX stalled-mid-read probe stdout"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-stalled-read.v1" -and
+          [string]$probeReport.status -ceq "passed" -and
+          [string]$probeReport.surface -ceq "installed-vsix-extension-host" -and
+          [string]$probeReport.cell -ceq "stalledMidRead" -and
+          [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" -and
+          [string]$probeReport.reason -ceq "operationDeadlineExceeded" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          [int]$probeReport.authActivity.credentialRequests -eq 0 -and
+          [int]$probeReport.authActivity.credentialSettlements -eq 0 -and
+          [int]$probeReport.authActivity.certificateRequests -eq 0 -and
+          $probeReport.nativeLaneReleased -eq $true -and $probeReport.localSnapshotAfterTimeout -eq $true -and
+          $probeReport.workingCopyPreserved -eq $true -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and [int]$probeReport.checkoutJournalEntriesAfter -eq 0 -and
+          $probeReport.diagnosticsRedacted -eq $true -and $probeReport.candidateDaemonExitedAfter -eq $true
+        ) "The installed VSIX stalled-mid-read report was incomplete."
+      }
+
+      $faultState = Get-Content -Raw -LiteralPath $fixtureStatePath | ConvertFrom-Json -Depth 16
+      Assert-True (
+        [int]$faultState.port -eq $repositoryUri.Port -and
+        [int]$faultState.connections -eq 1 -and
+        [int]$faultState.greetingSent -eq 1 -and
+        [int]$faultState.clientResponseReceived -eq 1 -and
+        [int]$faultState.authRequestSent -eq 0 -and
+        [int]$faultState.reposInfoSent -eq 0 -and
+        [int]$faultState.commandsReceived -eq 0 -and
+        [int]$faultState.followupContacts -eq 0 -and
+        [int]$faultState.suppliedAuthorityConnections -eq 0
+      ) "The $surfaceName stalled-mid-read network-stage observation was invalid."
+      Complete-ProcessStartEventDrain `
+        $processStartSourceIdentifier `
+        $processStartEvents `
+        $processStartEventKeys `
+        $ProcessStartEventSettlementMilliseconds
+      if ($surfaceName -ceq "packaged-native") {
+        $processObservation = Get-PackagedNegativeProcessObservation `
+          @($processStartEvents) `
+          ([long]$probeResult.ProcessId) `
+          ([System.IO.Path]::GetFileName($nodeHost)) `
+          ([System.IO.Path]::GetFileName($daemonResolved)) `
+          (Get-CimProcessSnapshot) `
+          @(
+            [System.IO.Path]::GetFileName($svnResolved),
+            [System.IO.Path]::GetFileName($svnadminResolved),
+            [System.IO.Path]::GetFileName($svnserveResolved)
+          )
+      }
+      else {
+        $processObservation = Get-InstalledNegativeProcessObservation `
+          -AllEvents @($processStartEvents) `
+          -ProbePid ([long]$probeResult.ProcessId) `
+          -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+          -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+          -ForbiddenFixtureProcessNames @(
+            [System.IO.Path]::GetFileName($svnResolved),
+            [System.IO.Path]::GetFileName($svnadminResolved),
+            [System.IO.Path]::GetFileName($svnserveResolved)
+          ) `
+          -SettlementSnapshot (Get-CimProcessSnapshot)
+      }
+      Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName stalled-mid-read product surface invoked a fixture CLI."
+      $stalledReadObservations += [pscustomobject]@{
+        surface = $surfaceName
+        stableCode = [string]$probeReport.stableCode
+        reason = [string]$probeReport.reason
+        originCode = [string]$probeReport.stableCode
+        originReason = [string]$probeReport.reason
+        settlementCode = [string]$probeReport.stableCode
+        settlementReason = [string]$probeReport.reason
+        networkProgress = "greeting"
+        networkAttempts = [int]$faultState.connections
+        networkConnections = [int]$faultState.connections
+        fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+        credentialRequests = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialRequests } else { [int]$probeReport.authActivity.credentialRequests }
+        credentialSettlements = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialSettlements } else { [int]$probeReport.authActivity.credentialSettlements }
+        followupNetworkContacts = [int]$faultState.followupContacts
+        workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+        temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        diagnosticsRedacted = [bool]$probeReport.diagnosticsRedacted
+      }
+    }
+    finally {
+      if ($null -ne $processStartSubscriber) {
+        Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+      }
+      Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue |
+        Remove-Event -ErrorAction SilentlyContinue
+      if ($null -ne $faultFixture) {
+        Stop-FaultFixture $faultFixture "greeting-stall"
+      }
+    }
+  }
+}
+finally {
+  if (Test-Path -LiteralPath $stalledReadWorkRoot) {
+    Assert-True (Test-PathWithin $stalledReadWorkRoot $repoTargetRoot) "The stalled-mid-read cleanup root escaped repo target."
+    Remove-Item -LiteralPath $stalledReadWorkRoot -Recurse -Force
+  }
+  Assert-True (-not (Test-Path -LiteralPath $stalledReadWorkRoot)) "The stalled-mid-read short work root remained after cleanup."
+}
+Assert-True ($stalledReadObservations.Count -eq 2) "The packaged-native and installed VSIX stalled-mid-read observation set was incomplete."
+
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied remote-status cell, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied and stalled-mid-read remote-status cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
