@@ -50,6 +50,8 @@ $packagedTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScr
 $installedTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-trust-revoked.ps1"))
 $packagedRecoveryBlockedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-recovery-blocked.mjs"))
 $installedRecoveryBlockedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-recovery-blocked.ps1"))
+$packagedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-redaction.mjs"))
+$installedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-redaction.ps1"))
 $installedLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-local-event-zero-network.ps1"))
 $countingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-counting-proxy.mjs"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
@@ -94,6 +96,17 @@ function Resolve-FixtureFile([string]$Path, [string]$Name, [string]$Root) {
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-TextSha256([string]$Value) {
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    return [Convert]::ToHexString($sha.ComputeHash($bytes)).ToLowerInvariant()
+  }
+  finally {
+    $sha.Dispose()
+  }
 }
 
 function Get-ZipEntry([System.IO.Compression.ZipArchive]$Archive, [string]$Name) {
@@ -977,6 +990,8 @@ $packagedTrustRevokedProbeResolved = Resolve-RequiredFile $packagedTrustRevokedP
 $installedTrustRevokedProbeResolved = Resolve-RequiredFile $installedTrustRevokedProbePath "installed VSIX I6 trust-revoked probe"
 $packagedRecoveryBlockedProbeResolved = Resolve-RequiredFile $packagedRecoveryBlockedProbePath "packaged-native I6 recovery-blocked probe"
 $installedRecoveryBlockedProbeResolved = Resolve-RequiredFile $installedRecoveryBlockedProbePath "installed VSIX I6 recovery-blocked probe"
+$packagedRedactionProbeResolved = Resolve-RequiredFile $packagedRedactionProbePath "packaged-native I6 redaction probe"
+$installedRedactionProbeResolved = Resolve-RequiredFile $installedRedactionProbePath "installed VSIX I6 redaction probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $installedLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $countingProxyResolved = Resolve-RequiredFile $countingProxyPath "I6 transparent counting proxy"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
@@ -1073,6 +1088,10 @@ foreach ($path in @(
 }
 [System.IO.Compression.ZipFile]::ExtractToDirectory($vsixResolved, $extractedVsixRoot)
 $backendModulePath = Resolve-RequiredFile (Join-Path $extractedVsixRoot "extension\dist\backend\backendProcess.js") "packaged VSIX backend module"
+$packagedVsixDaemonPath = Resolve-RequiredFile (Join-Path $extractedVsixRoot "extension\resources\backend\win32-x64\subversionr-daemon.exe") "packaged VSIX daemon"
+$packagedVsixBridgePath = Resolve-RequiredFile (Join-Path $extractedVsixRoot "extension\resources\backend\win32-x64\subversionr_svn_bridge.dll") "packaged VSIX bridge"
+Assert-True ((Get-Sha256 $packagedVsixDaemonPath) -ceq (Get-Sha256 $daemonResolved)) "The extracted packaged VSIX daemon must match DaemonPath."
+Assert-True ((Get-Sha256 $packagedVsixBridgePath) -ceq (Get-Sha256 $bridgeResolved)) "The extracted packaged VSIX bridge must match BridgePath."
 $nodeHost = Resolve-CodeNodeHost $codeCliResolved
 Assert-True ($null -ne (Get-Command Get-CimInstance -CommandType Cmdlet -ErrorAction Stop)) "Get-CimInstance is required."
 Assert-True ($null -ne (Get-Command Register-CimIndicationEvent -CommandType Cmdlet -ErrorAction Stop)) "Register-CimIndicationEvent is required."
@@ -2242,6 +2261,266 @@ Assert-True ($recoveryBlockedObservations.Count -eq 2) "The packaged-native and 
 Assert-True ($recoveryBlockedSettlementObservations.Count -eq 2) "The packaged-native and installed VSIX blocked settlement set was incomplete."
 Assert-True ($unrelatedRepositoryObservations.Count -eq 2) "The packaged-native and installed VSIX unrelated-repository observation set was incomplete."
 
+$redactionWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6x\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $redactionWorkRoot $repoTargetRoot) "The redaction short work root escaped repo target."
+Assert-True ($redactionWorkRoot.Length -le 120) "The redaction short work root exceeds the reviewed 120-character budget."
+Assert-True (-not (Test-Path -LiteralPath $redactionWorkRoot)) "The redaction short work root already exists."
+New-Item -ItemType Directory -Path $redactionWorkRoot | Out-Null
+$redactionObservations = @()
+$redactionPrivacyObservations = @()
+try {
+  $redactionContracts = @(
+    [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p" },
+    [pscustomobject]@{ Surface = "installed-vsix-extension-host"; WorkRoot = "i" }
+  )
+  foreach ($contract in $redactionContracts) {
+    $surfaceName = [string]$contract.Surface
+    $surfaceWorkRoot = Join-Path $redactionWorkRoot ([string]$contract.WorkRoot)
+    $surfaceProbeRoot = Join-Path $probeRoot "redaction-$surfaceName"
+    $profileRoot = Join-Path $surfaceWorkRoot "profile"
+    $checkoutTarget = Join-Path $surfaceWorkRoot "checkout"
+    $proxyStatePath = Join-Path $surfaceProbeRoot "proxy-state.json"
+    New-Item -ItemType Directory -Force -Path $surfaceWorkRoot, $surfaceProbeRoot | Out-Null
+    Assert-True ($checkoutTarget.Length -le 120) "The $surfaceName redaction checkout target exceeds the reviewed 120-character budget."
+    Assert-True (-not (Test-Path -LiteralPath $profileRoot)) "The $surfaceName redaction profile root already existed."
+    Assert-True (-not (Test-Path -LiteralPath $checkoutTarget)) "The $surfaceName redaction checkout target already existed."
+    $proxy = $null
+    $proxyAfter = $null
+    $processStartSourceIdentifier = "subversionr-m8-i6-redaction-$([Guid]::NewGuid().ToString('N'))"
+    $processStartSubscriber = $null
+    $processStartEvents = [System.Collections.Generic.List[object]]::new()
+    $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    try {
+      $surfaceDaemonPath = if ($surfaceName -ceq "packaged-native") { $packagedVsixDaemonPath } else { $daemonResolved }
+      $surfaceBridgePath = if ($surfaceName -ceq "packaged-native") { $packagedVsixBridgePath } else { $bridgeResolved }
+      Assert-CandidateProcessAbsent $surfaceDaemonPath "The $surfaceName redaction preflight"
+      $proxy = Start-CountingProxy $nodeHost $countingProxyResolved $repositoryUri.Port $proxyStatePath
+      $proxyBaseline = Read-CountingProxyState $proxyStatePath $proxy.Process $true
+      foreach ($counterName in @(
+          "acceptedConnections", "upstreamAttempts", "upstreamConnections",
+          "clientToUpstreamBytes", "upstreamToClientBytes", "activeConnections", "upstreamConnectFailures"
+        )) {
+        Assert-True ([int64]$proxyBaseline.$counterName -eq 0) "The $surfaceName redaction counting proxy did not begin at zero for '$counterName'."
+      }
+      $proxyUriBuilder = [System.UriBuilder]::new($repositoryUri)
+      $proxyUriBuilder.Port = [int]$proxy.State.port
+      $proxiedRepositoryUrl = $proxyUriBuilder.Uri.AbsoluteUri
+      try {
+        Register-CimIndicationEvent `
+          -ClassName Win32_ProcessStartTrace `
+          -SourceIdentifier $processStartSourceIdentifier `
+          -ErrorAction Stop | Out-Null
+      }
+      catch {
+        throw "Win32_ProcessStartTrace is required for the $surfaceName redaction process observation: $($_.Exception.Message)"
+      }
+      $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
+      Assert-True ($matchingSubscribers.Count -eq 1) "The $surfaceName redaction process-start subscription was not created exactly once."
+      $processStartSubscriber = $matchingSubscribers[0]
+      Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+
+      if ($surfaceName -ceq "packaged-native") {
+        $diagnosticToken = [Guid]::NewGuid().ToString("D")
+        $probeResult = Invoke-BoundedProcess $nodeHost @(
+          $packagedRedactionProbeResolved,
+          "--daemon-path", $surfaceDaemonPath,
+          "--bridge-path", $surfaceBridgePath,
+          "--profile-root", $profileRoot,
+          "--repository-url", $proxiedRepositoryUrl,
+          "--checkout-target", $checkoutTarget,
+          "--diagnostic-token", $diagnosticToken,
+          "--expected-revision", "3",
+          "--expected-product-version", $ExpectedProductVersion
+        ) 360 @{ ELECTRON_RUN_AS_NODE = "1" }
+      }
+      else {
+        $diagnosticToken = Get-TextSha256 ([Guid]::NewGuid().ToString("D"))
+        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", $installedRedactionProbeResolved,
+          "-VsixPath", $vsixResolved,
+          "-CodeCliPath", $codeCliResolved,
+          "-FixtureRoot", $profileRoot,
+          "-RepositoryUrl", $proxiedRepositoryUrl,
+          "-CheckoutTarget", $checkoutTarget,
+          "-DiagnosticToken", $diagnosticToken,
+          "-ExpectedRevision", "3",
+          "-ExpectedProductVersion", $ExpectedProductVersion,
+          "-DaemonPath", $daemonResolved,
+          "-BridgePath", $bridgeResolved,
+          "-TimeoutSeconds", "300"
+        ) 420
+      }
+      $probeFailure = $probeResult.Stderr.Trim()
+      Assert-True (
+        $probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0
+      ) "The $surfaceName redaction probe failed: $probeFailure"
+      $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "$surfaceName redaction probe stdout"
+      if ($surfaceName -ceq "packaged-native") {
+        $cellReport = $probeReport
+        $credentialRequests = [int]$cellReport.credentialRequests
+        $credentialSettlements = [int]$cellReport.credentialSettlements
+        $temporaryRootsAfter = [int]$cellReport.temporaryRootsAfter
+        Assert-True (
+          [string]$cellReport.schema -ceq "subversionr.release.m8-i6-packaged-redaction.v1" -and
+          [string]$cellReport.surface -ceq $surfaceName -and
+          $cellReport.remoteSvnAnonymous -eq $true -and
+          [int]$cellReport.certificateRequests -eq 0
+        ) "The packaged-native redaction report identity was invalid."
+      }
+      else {
+        Assert-ExactProperties $probeReport @(
+          "schema", "status", "report", "workingCopyDatabaseBytes", "candidateProcessesAfter",
+          "temporaryRootsAfter", "checkoutJournalEntriesAfter", "journalTemporaryFilesAfter",
+          "extensionInstalledAfterCleanup", "fixtureRemovedAfterCleanup", "diagnosticsRedacted"
+        ) "installed VSIX redaction wrapper report"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-redaction-wrapper.v1" -and
+          [string]$probeReport.status -ceq "passed" -and
+          [int64]$probeReport.workingCopyDatabaseBytes -gt 0 -and
+          [int]$probeReport.candidateProcessesAfter -eq 0 -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and
+          [int]$probeReport.checkoutJournalEntriesAfter -eq 0 -and
+          [int]$probeReport.journalTemporaryFilesAfter -eq 0 -and
+          $probeReport.extensionInstalledAfterCleanup -eq $false -and
+          $probeReport.fixtureRemovedAfterCleanup -eq $true -and
+          $probeReport.diagnosticsRedacted -eq $true
+        ) "The installed VSIX redaction wrapper report was invalid."
+        $cellReport = $probeReport.report
+        $credentialRequests = [int]$cellReport.authActivity.credentialRequests
+        $credentialSettlements = [int]$cellReport.authActivity.credentialSettlements
+        $temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        Assert-True (
+          [string]$cellReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-redaction.v1" -and
+          [int]$cellReport.schemaVersion -eq 1 -and
+          [string]$cellReport.kind -ceq "subversionr.installedSvnAnonymousRedactionReport" -and
+          [string]$cellReport.surface -ceq $surfaceName -and
+          [int]$cellReport.authActivity.certificateRequests -eq 0 -and
+          [string]$cellReport.redaction.paths -ceq "redacted" -and
+          [string]$cellReport.redaction.urls -ceq "redacted" -and
+          [string]$cellReport.redaction.secrets -ceq "redacted"
+        ) "The installed VSIX redaction product report identity was invalid."
+      }
+      Assert-True (
+        [string]$cellReport.status -ceq "passed" -and
+        [string]$cellReport.cell -ceq "redaction" -and
+        [int]$cellReport.protocol.major -eq 1 -and [int]$cellReport.protocol.minor -eq 35 -and
+        [int]$cellReport.checkoutRevision -eq 3 -and
+        [string]$cellReport.targetPathSha256 -ceq (Get-TextSha256 $checkoutTarget) -and
+        $cellReport.inputContainedRawUrl -eq $true -and
+        $cellReport.inputContainedRawPath -eq $true -and
+        $cellReport.inputContainedRawToken -eq $true -and
+        [int]$cellReport.rawUrlCount -eq 0 -and
+        [int]$cellReport.rawPathCount -eq 0 -and
+        [int]$cellReport.secretTokenCount -eq 0 -and
+        [int]$cellReport.urlMarkerCount -ge 1 -and
+        [int]$cellReport.pathMarkerCount -ge 1 -and
+        [int]$cellReport.secretMarkerCount -ge 1 -and
+        [int]$cellReport.maxDiagnosticBytes -gt 0 -and
+        [int]$cellReport.maxDiagnosticBytes -le 32768 -and
+        $cellReport.boundedDiagnostics -eq $true -and
+        $cellReport.diagnosticsRedacted -eq $true -and
+        $credentialRequests -eq 0 -and $credentialSettlements -eq 0 -and
+        $temporaryRootsAfter -eq 0
+      ) "The $surfaceName redaction report was incomplete."
+      $wcDbPath = Join-Path $checkoutTarget ".svn\wc.db"
+      Assert-True (Test-Path -LiteralPath $wcDbPath -PathType Leaf) "The $surfaceName redaction checkout did not create a working-copy database."
+      Assert-True ((Get-Item -LiteralPath $wcDbPath).Length -gt 0) "The $surfaceName redaction working-copy database was empty."
+
+      $proxyAfter = Read-CountingProxyState $proxyStatePath $proxy.Process $true
+      Assert-True (
+        [int64]$proxyAfter.acceptedConnections -eq 1 -and
+        [int64]$proxyAfter.upstreamAttempts -eq 1 -and
+        [int64]$proxyAfter.upstreamConnections -eq 1 -and
+        [int64]$proxyAfter.clientToUpstreamBytes -gt 0 -and
+        [int64]$proxyAfter.upstreamToClientBytes -gt 0 -and
+        [int]$proxyAfter.activeConnections -eq 0 -and
+        [int]$proxyAfter.upstreamConnectFailures -eq 0
+      ) "The $surfaceName redaction counting proxy observation was invalid."
+      Complete-ProcessStartEventDrain $processStartSourceIdentifier $processStartEvents $processStartEventKeys $ProcessStartEventSettlementMilliseconds
+      if ($surfaceName -ceq "packaged-native") {
+        $processObservation = Get-PackagedNegativeProcessObservation `
+          -AllEvents @($processStartEvents) `
+          -ProbePid ([long]$probeResult.ProcessId) `
+          -ExpectedProbeProcessName ([System.IO.Path]::GetFileName($nodeHost)) `
+          -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($surfaceDaemonPath)) `
+          -ForbiddenFixtureProcessNames @(
+            [System.IO.Path]::GetFileName($svnResolved),
+            [System.IO.Path]::GetFileName($svnadminResolved),
+            [System.IO.Path]::GetFileName($svnserveResolved)
+          ) `
+          -SettlementSnapshot (Get-CimProcessSnapshot)
+      }
+      else {
+        $processObservation = Get-InstalledNegativeProcessObservation `
+          -AllEvents @($processStartEvents) `
+          -ProbePid ([long]$probeResult.ProcessId) `
+          -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+          -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($surfaceDaemonPath)) `
+          -ForbiddenFixtureProcessNames @(
+            [System.IO.Path]::GetFileName($svnResolved),
+            [System.IO.Path]::GetFileName($svnadminResolved),
+            [System.IO.Path]::GetFileName($svnserveResolved)
+          ) `
+          -SettlementSnapshot (Get-CimProcessSnapshot)
+      }
+      Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName redaction product surface invoked a fixture CLI."
+      $redactionObservations += [pscustomobject]@{
+        surface = $surfaceName
+        originCode = "none"
+        originReason = "none"
+        settlementCode = "none"
+        settlementReason = "none"
+        networkProgress = "command"
+        networkAttempts = [int]$proxyAfter.upstreamAttempts
+        networkConnections = [int]$proxyAfter.upstreamConnections
+        fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+        credentialRequests = $credentialRequests
+        credentialSettlements = $credentialSettlements
+        followupNetworkContacts = 0
+        workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+        temporaryRootsAfter = $temporaryRootsAfter
+        diagnosticsRedacted = [bool]$cellReport.diagnosticsRedacted
+      }
+      $redactionPrivacyObservations += [pscustomobject]@{
+        surface = $surfaceName
+        rawUrlCount = [int]$cellReport.rawUrlCount
+        rawPathCount = [int]$cellReport.rawPathCount
+        secretTokenCount = [int]$cellReport.secretTokenCount
+        maxDiagnosticBytes = [int]$cellReport.maxDiagnosticBytes
+        boundedDiagnostics = [bool]$cellReport.boundedDiagnostics
+      }
+    }
+    finally {
+      if ($null -ne $processStartSubscriber) {
+        Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+      }
+      Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+      if ($null -ne $proxy) {
+        $proxyFinal = Stop-CountingProxy $proxy
+        if ($null -ne $proxyAfter) {
+          foreach ($counterName in @(
+              "acceptedConnections", "upstreamAttempts", "upstreamConnections",
+              "clientToUpstreamBytes", "upstreamToClientBytes", "upstreamConnectFailures"
+            )) {
+            Assert-True ([int64]$proxyFinal.$counterName -eq [int64]$proxyAfter.$counterName) "The stopped $surfaceName redaction counting proxy changed final counter '$counterName'."
+          }
+        }
+        Assert-True ([int]$proxyFinal.activeConnections -eq 0) "The stopped $surfaceName redaction counting proxy retained an active connection."
+      }
+    }
+  }
+}
+finally {
+  if (Test-Path -LiteralPath $redactionWorkRoot) {
+    Assert-True (Test-PathWithin $redactionWorkRoot $repoTargetRoot) "The redaction cleanup root escaped repo target."
+    Remove-Item -LiteralPath $redactionWorkRoot -Recurse -Force
+  }
+  Assert-True (-not (Test-Path -LiteralPath $redactionWorkRoot)) "The redaction short work root remained after cleanup."
+}
+Assert-True ($redactionObservations.Count -eq 2) "The packaged-native and installed VSIX redaction observation set was incomplete."
+Assert-True ($redactionPrivacyObservations.Count -eq 2) "The packaged-native and installed VSIX redaction privacy set was incomplete."
+
 $stalledReadWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6r\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
 Assert-True (Test-PathWithin $stalledReadWorkRoot $repoTargetRoot) "The stalled-mid-read short work root escaped repo target."
 Assert-True ($stalledReadWorkRoot.Length -le 120) "The stalled-mid-read short work root exceeds the reviewed 120-character budget."
@@ -3027,4 +3306,4 @@ finally {
 Assert-True ($trustRevokedObservations.Count -eq 2) "The packaged-native and installed VSIX trust-revoked observation set was incomplete."
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, durable recovery-blocked, and blocked-lane unrelated-repository cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells, including Safe and Indeterminate recovery, and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells, including Safe and Indeterminate recovery, and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."

@@ -70,6 +70,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousRedactionReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
       "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
@@ -190,6 +191,7 @@ describe("extension manifest", () => {
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousCancellationReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRedactionReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport");
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
@@ -214,11 +216,30 @@ describe("extension manifest", () => {
       "subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousRedactionReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
     );
+  });
+
+  it("binds installed redaction evidence to the real diagnostics and redaction functions", () => {
+    const source = readFileSync(join(extensionRoot, "src/extension.ts"), "utf8");
+    const productionClosure = `              collectDiagnosticsComposite: async (diagnosticInput) => ({
+                diagnosticsBundle: await collectDiagnosticsBundle({
+                  context: diagnosticsContext(context),
+                  backendService: service,
+                  operationJournal,
+                  watcherOverflowDiagnostics,
+                }),
+                redactedCanary: redactDiagnosticValue(diagnosticInput),
+              }),`;
+
+    expect(source).toContain(productionClosure);
+    expect(source.match(/collectDiagnosticsComposite: async \(diagnosticInput\)/gu)).toHaveLength(1);
   });
 
   it("declares limited Workspace Trust support for trust-sensitive SVN operations and external tool config paths", () => {

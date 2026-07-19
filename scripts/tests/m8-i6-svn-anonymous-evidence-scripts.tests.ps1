@@ -947,10 +947,19 @@ try {
       'test-vscode-installed-extension-host.ps1',
       'extension/resources/backend/win32-x64/subversionr-daemon.exe',
       'extension/resources/backend/win32-x64/subversionr_svn_bridge.dll',
+      '$packagedVsixDaemonPath = Resolve-RequiredFile',
+      '$packagedVsixBridgePath = Resolve-RequiredFile',
+      '"--daemon-path", $surfaceDaemonPath',
+      '"--bridge-path", $surfaceBridgePath',
+      '"--expected-revision", "3"',
+      '"-ExpectedRevision", "3"',
+      '[int]$cellReport.checkoutRevision -eq 3',
+      'The extracted packaged VSIX daemon must match DaemonPath.',
+      'The extracted packaged VSIX bridge must match BridgePath.',
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, durable recovery-blocked, and blocked-lane unrelated-repository cells',
+      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface negative/recovery cells',
@@ -988,6 +997,14 @@ try {
       'blockedJournalBytesSha256BeforeUnrelated',
       'unrelatedCheckoutRevision -eq 2',
       'The packaged-native and installed VSIX unrelated-repository observation set was incomplete.',
+      'probe-m8-i6-packaged-redaction.mjs',
+      'probe-m8-i6-installed-redaction.ps1',
+      'inputContainedRawUrl',
+      'function Get-TextSha256',
+      'rawUrlCount',
+      'maxDiagnosticBytes',
+      'The packaged-native and installed VSIX redaction observation set was incomplete.',
+      'The packaged-native and installed VSIX redaction privacy set was incomplete.',
       '$proxyFinalState = Stop-CountingProxy $countingProxy',
       'The stopped installed local-event counting proxy changed final counter',
       'Get-CimProcessSnapshot',
@@ -1291,6 +1308,7 @@ try {
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-cancellation.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native cancellation probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-trust-revoked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native trust-revoked probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-recovery-blocked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native recovery-blocked probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-redaction.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native redaction probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stress-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed 100+1 stress probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-authz-denied-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed authz-denied probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stalled-read-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed stalled-mid-read probe contract tests."
@@ -1298,6 +1316,7 @@ try {
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-cancellation-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed cancellation probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-trust-revoked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed trust-revoked probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-recovery-blocked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed recovery-blocked probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-redaction-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed redaction probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-local-event-zero-network-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed local-event zero-network probe contract tests."
 
   Write-Host "M8 I6 svn anonymous evidence script tests passed."

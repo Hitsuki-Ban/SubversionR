@@ -239,8 +239,9 @@ when any candidate observation fails.
 This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
 `saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`,
-`stalledMidRead`, `deadline`, `cancellation`, `trustRevoked`, and
-`recoveryBlocked`, and `unrelatedRepository` product probes. The blocked-recovery probe uses a dedicated
+`stalledMidRead`, `deadline`, `cancellation`, `trustRevoked`,
+`recoveryBlocked`, `unrelatedRepository`, and `redaction` product probes. The
+blocked-recovery probe uses a dedicated
 `command-stall` server that completes greeting, anonymous authentication, and
 repository-info exchange, then stalls after the first real RA command. While
 that request remains pending, each surface captures the exact durable `armed`
@@ -287,6 +288,18 @@ exact revision. The unrelated checkout occurs
 after restart has restored the blocked lane and before same-target retry or
 operator confirmation, so later journal clearance cannot mask cross-repository
 interference.
+
+The dedicated packaged and installed `redaction` probes each perform one real
+checkout of the controlled main repository's exact HEAD `r3` through an
+independently counted loopback proxy. The URL, absolute
+target path, and per-run high-entropy token must be present in the diagnostic
+input derived from that checkout before the candidate production redactor and
+`OperationDiagnostics` paths process it. The installed probe also requires a
+real production diagnostics bundle from the same Extension Host. The safe
+reports contain none of the three raw values, bind the URL and path markers to
+the exact inputs, require the secret marker, and limit every serialized
+diagnostic value to 32 KiB. A hard-coded or pre-redacted fixture cannot satisfy
+this cell.
 
 The installed-negative VSIX/user-data environment uses a bounded disposable
 work root under repository `target/i6n`, separate from the evidence fixture
