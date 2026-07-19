@@ -16,6 +16,7 @@ $packagedCancellationProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i
 $packagedTrustRevokedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-trust-revoked.mjs"
 $packagedRecoveryBlockedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-blocked.mjs"
 $packagedRecoverySafeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-safe.mjs"
+$packagedRecoveryIndeterminateProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-indeterminate.mjs"
 $packagedRedactionProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-redaction.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
 $countingProxyPath = Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"
@@ -28,6 +29,7 @@ $installedCancellationProbePath = Join-Path $repoRoot "scripts\release\probe-m8-
 $installedTrustRevokedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-trust-revoked.ps1"
 $installedRecoveryBlockedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-blocked.ps1"
 $installedRecoverySafeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-safe.ps1"
+$installedRecoveryIndeterminateProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-indeterminate.ps1"
 $installedRedactionProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-redaction.ps1"
 $installedLocalEventProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
@@ -351,7 +353,7 @@ function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [stri
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $packagedRecoveryBlockedProbePath, $packagedRecoverySafeProbePath, $packagedRedactionProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedRecoveryBlockedProbePath, $installedRecoverySafeProbePath, $installedRedactionProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $packagedRecoveryBlockedProbePath, $packagedRecoverySafeProbePath, $packagedRecoveryIndeterminateProbePath, $packagedRedactionProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedRecoveryBlockedProbePath, $installedRecoverySafeProbePath, $installedRecoveryIndeterminateProbePath, $installedRedactionProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
     Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
   }
 
@@ -395,6 +397,7 @@ try {
     packagedTrustRevokedProbe = New-ArtifactBinding "i6-packaged-trust-revoked-probe" $packagedTrustRevokedProbePath
     packagedRecoveryBlockedProbe = New-ArtifactBinding "i6-packaged-recovery-blocked-probe" $packagedRecoveryBlockedProbePath
     packagedRecoverySafeProbe = New-ArtifactBinding "i6-packaged-recovery-safe-probe" $packagedRecoverySafeProbePath
+    packagedRecoveryIndeterminateProbe = New-ArtifactBinding "i6-packaged-recovery-indeterminate-probe" $packagedRecoveryIndeterminateProbePath
     packagedRedactionProbe = New-ArtifactBinding "i6-packaged-redaction-probe" $packagedRedactionProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
     countingProxy = New-ArtifactBinding "i6-counting-proxy" $countingProxyPath
@@ -407,6 +410,7 @@ try {
     installedTrustRevokedProbe = New-ArtifactBinding "i6-installed-trust-revoked-probe" $installedTrustRevokedProbePath
     installedRecoveryBlockedProbe = New-ArtifactBinding "i6-installed-recovery-blocked-probe" $installedRecoveryBlockedProbePath
     installedRecoverySafeProbe = New-ArtifactBinding "i6-installed-recovery-safe-probe" $installedRecoverySafeProbePath
+    installedRecoveryIndeterminateProbe = New-ArtifactBinding "i6-installed-recovery-indeterminate-probe" $installedRecoveryIndeterminateProbePath
     installedRedactionProbe = New-ArtifactBinding "i6-installed-redaction-probe" $installedRedactionProbePath
     installedLocalEventProbe = New-ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
@@ -784,6 +788,7 @@ try {
       @("packagedTrustRevokedProbe", $packagedTrustRevokedProbePath),
       @("packagedRecoveryBlockedProbe", $packagedRecoveryBlockedProbePath),
       @("packagedRecoverySafeProbe", $packagedRecoverySafeProbePath),
+      @("packagedRecoveryIndeterminateProbe", $packagedRecoveryIndeterminateProbePath),
       @("packagedRedactionProbe", $packagedRedactionProbePath),
       @("raSvnFaultFixture", $raSvnFaultFixturePath),
       @("countingProxy", $countingProxyPath),
@@ -793,6 +798,7 @@ try {
       @("installedTrustRevokedProbe", $installedTrustRevokedProbePath),
       @("installedRecoveryBlockedProbe", $installedRecoveryBlockedProbePath),
       @("installedRecoverySafeProbe", $installedRecoverySafeProbePath),
+      @("installedRecoveryIndeterminateProbe", $installedRecoveryIndeterminateProbePath),
       @("installedRedactionProbe", $installedRedactionProbePath),
       @("installedLocalEventProbe", $installedLocalEventProbePath),
       @("installedVsixProbe", $installedVsixProbePath),
@@ -971,10 +977,10 @@ try {
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, Safe recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells',
+      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
-      'remaining cross-surface negative/recovery cells',
+      'remaining cross-surface blackhole-connect, worker-crash, and daemon-disconnect cells',
       'issue #136',
       'Remove-Item -LiteralPath $outputResolved -Force'
     )) {
@@ -1017,6 +1023,18 @@ try {
       'maxDiagnosticBytes',
       'The packaged-native and installed VSIX redaction observation set was incomplete.',
       'The packaged-native and installed VSIX redaction privacy set was incomplete.',
+      'probe-m8-i6-packaged-recovery-indeterminate.mjs',
+      'probe-m8-i6-installed-recovery-indeterminate.ps1',
+      'Invoke-BoundedProcessWithWorkingCopyReadFault',
+      'Get-RecoveryIndeterminateProcessObservation',
+      'SetFileSecurity',
+      'fixture file must be owned by the current Windows identity.',
+      '[System.Security.AccessControl.FileSystemRights]::ReadData',
+      '[System.Security.AccessControl.FileSystemRights]::ReadAttributes',
+      '[System.Security.AccessControl.FileSystemRights]::ReadExtendedAttributes',
+      'working-copy database security descriptor was not restored byte-for-byte.',
+      'The packaged-native and installed VSIX recovery-indeterminate observation set was incomplete.',
+      'The packaged-native and installed VSIX Indeterminate settlement set was incomplete.',
       '$proxyFinalState = Stop-CountingProxy $countingProxy',
       'The stopped installed local-event counting proxy changed final counter',
       'Get-CimProcessSnapshot',
@@ -1083,7 +1101,13 @@ try {
     "Get-PackagedNegativeProcessObservation",
     "Get-InstalledNegativeProcessObservation",
     "Set-ExactAuthzAtomically",
-    "Get-SvnserveAuthzObservation"
+    "Get-SvnserveAuthzObservation",
+    "Get-ExactFileSecurityDescriptor",
+    "Set-ExactCurrentUserReadDeny",
+    "Restore-ExactFileDacl",
+    "Wait-CommandBarrier",
+    "Invoke-BoundedProcessWithWorkingCopyReadFault",
+    "Get-RecoveryIndeterminateProcessObservation"
   )
   $observationHelperSources = foreach ($functionName in $observationHelpers) {
     $matches = @($driverAst.FindAll({
@@ -1094,6 +1118,10 @@ try {
     Assert-True ($matches.Count -eq 1) "I6 probe driver must define exactly one $functionName helper."
     $matches[0].Extent.Text
   }
+  $readFaultHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Invoke-BoundedProcessWithWorkingCopyReadFault")]
+  $faultFlagIndex = $readFaultHelper.IndexOf('$faultApplied = $true', [System.StringComparison]::Ordinal)
+  $faultMutationIndex = $readFaultHelper.IndexOf('Set-ExactCurrentUserReadDeny $descriptor $Context', [System.StringComparison]::Ordinal)
+  Assert-True ($faultFlagIndex -ge 0 -and $faultMutationIndex -gt $faultFlagIndex) "Packaged recovery-indeterminate cleanup flag must be armed before the DACL mutation."
   Invoke-Expression ($observationHelperSources -join "`n`n")
 
   $authzAtomicPath = Join-Path $tempRoot "authz-atomic"

@@ -99,6 +99,7 @@ $expectedPackagedCancellationProbePath = [System.IO.Path]::GetFullPath((Join-Pat
 $expectedPackagedTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-trust-revoked.mjs"))
 $expectedPackagedRecoveryBlockedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-blocked.mjs"))
 $expectedPackagedRecoverySafeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-safe.mjs"))
+$expectedPackagedRecoveryIndeterminateProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-indeterminate.mjs"))
 $expectedPackagedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-redaction.mjs"))
 $expectedRaSvnFaultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $expectedCountingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"))
@@ -111,6 +112,7 @@ $expectedInstalledCancellationProbePath = [System.IO.Path]::GetFullPath((Join-Pa
 $expectedInstalledTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-trust-revoked.ps1"))
 $expectedInstalledRecoveryBlockedProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-blocked.ps1"))
 $expectedInstalledRecoverySafeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-safe.ps1"))
+$expectedInstalledRecoveryIndeterminateProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-indeterminate.ps1"))
 $expectedInstalledRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-redaction.ps1"))
 $expectedInstalledLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"))
 $expectedInstalledVsixProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"))
@@ -429,6 +431,7 @@ $packagedCancellationProbeResolved = Resolve-RequiredFile $expectedPackagedCance
 $packagedTrustRevokedProbeResolved = Resolve-RequiredFile $expectedPackagedTrustRevokedProbePath "packaged-native I6 trust-revoked probe"
 $packagedRecoveryBlockedProbeResolved = Resolve-RequiredFile $expectedPackagedRecoveryBlockedProbePath "packaged-native I6 recovery-blocked probe"
 $packagedRecoverySafeProbeResolved = Resolve-RequiredFile $expectedPackagedRecoverySafeProbePath "packaged-native I6 recovery-safe probe"
+$packagedRecoveryIndeterminateProbeResolved = Resolve-RequiredFile $expectedPackagedRecoveryIndeterminateProbePath "packaged-native I6 recovery-indeterminate probe"
 $packagedRedactionProbeResolved = Resolve-RequiredFile $expectedPackagedRedactionProbePath "packaged-native I6 redaction probe"
 $raSvnFaultFixtureResolved = Resolve-RequiredFile $expectedRaSvnFaultFixturePath "I6 ra_svn fault fixture"
 $countingProxyResolved = Resolve-RequiredFile $expectedCountingProxyPath "I6 transparent counting proxy"
@@ -441,6 +444,7 @@ $installedCancellationProbeResolved = Resolve-RequiredFile $expectedInstalledCan
 $installedTrustRevokedProbeResolved = Resolve-RequiredFile $expectedInstalledTrustRevokedProbePath "installed VSIX I6 trust-revoked probe"
 $installedRecoveryBlockedProbeResolved = Resolve-RequiredFile $expectedInstalledRecoveryBlockedProbePath "installed VSIX I6 recovery-blocked probe"
 $installedRecoverySafeProbeResolved = Resolve-RequiredFile $expectedInstalledRecoverySafeProbePath "installed VSIX I6 recovery-safe probe"
+$installedRecoveryIndeterminateProbeResolved = Resolve-RequiredFile $expectedInstalledRecoveryIndeterminateProbePath "installed VSIX I6 recovery-indeterminate probe"
 $installedRedactionProbeResolved = Resolve-RequiredFile $expectedInstalledRedactionProbePath "installed VSIX I6 redaction probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $expectedInstalledLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $installedVsixProbeResolved = Resolve-RequiredFile $expectedInstalledVsixProbePath "installed VSIX I6 probe"
@@ -515,6 +519,7 @@ Assert-ExactProperties $report.artifactBindings @(
   "packagedTrustRevokedProbe",
   "packagedRecoveryBlockedProbe",
   "packagedRecoverySafeProbe",
+  "packagedRecoveryIndeterminateProbe",
   "packagedRedactionProbe",
   "raSvnFaultFixture",
   "countingProxy",
@@ -527,6 +532,7 @@ Assert-ExactProperties $report.artifactBindings @(
   "installedTrustRevokedProbe",
   "installedRecoveryBlockedProbe",
   "installedRecoverySafeProbe",
+  "installedRecoveryIndeterminateProbe",
   "installedRedactionProbe",
   "installedLocalEventProbe",
   "installedVsixProbe",
@@ -561,6 +567,7 @@ Assert-ArtifactBinding $report.artifactBindings.packagedCancellationProbe "i6-pa
 Assert-ArtifactBinding $report.artifactBindings.packagedTrustRevokedProbe "i6-packaged-trust-revoked-probe" $packagedTrustRevokedProbeResolved "I6 evidence.artifactBindings.packagedTrustRevokedProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedRecoveryBlockedProbe "i6-packaged-recovery-blocked-probe" $packagedRecoveryBlockedProbeResolved "I6 evidence.artifactBindings.packagedRecoveryBlockedProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedRecoverySafeProbe "i6-packaged-recovery-safe-probe" $packagedRecoverySafeProbeResolved "I6 evidence.artifactBindings.packagedRecoverySafeProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedRecoveryIndeterminateProbe "i6-packaged-recovery-indeterminate-probe" $packagedRecoveryIndeterminateProbeResolved "I6 evidence.artifactBindings.packagedRecoveryIndeterminateProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedRedactionProbe "i6-packaged-redaction-probe" $packagedRedactionProbeResolved "I6 evidence.artifactBindings.packagedRedactionProbe"
 Assert-ArtifactBinding $report.artifactBindings.raSvnFaultFixture "i6-ra-svn-fault-fixture" $raSvnFaultFixtureResolved "I6 evidence.artifactBindings.raSvnFaultFixture"
 Assert-ArtifactBinding $report.artifactBindings.countingProxy "i6-counting-proxy" $countingProxyResolved "I6 evidence.artifactBindings.countingProxy"
@@ -573,6 +580,7 @@ Assert-ArtifactBinding $report.artifactBindings.installedCancellationProbe "i6-i
 Assert-ArtifactBinding $report.artifactBindings.installedTrustRevokedProbe "i6-installed-trust-revoked-probe" $installedTrustRevokedProbeResolved "I6 evidence.artifactBindings.installedTrustRevokedProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedRecoveryBlockedProbe "i6-installed-recovery-blocked-probe" $installedRecoveryBlockedProbeResolved "I6 evidence.artifactBindings.installedRecoveryBlockedProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedRecoverySafeProbe "i6-installed-recovery-safe-probe" $installedRecoverySafeProbeResolved "I6 evidence.artifactBindings.installedRecoverySafeProbe"
+Assert-ArtifactBinding $report.artifactBindings.installedRecoveryIndeterminateProbe "i6-installed-recovery-indeterminate-probe" $installedRecoveryIndeterminateProbeResolved "I6 evidence.artifactBindings.installedRecoveryIndeterminateProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedRedactionProbe "i6-installed-redaction-probe" $installedRedactionProbeResolved "I6 evidence.artifactBindings.installedRedactionProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedLocalEventProbe "i6-installed-local-event-zero-network-probe" $installedLocalEventProbeResolved "I6 evidence.artifactBindings.installedLocalEventProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedVsixProbe "i6-installed-vsix-probe" $installedVsixProbeResolved "I6 evidence.artifactBindings.installedVsixProbe"

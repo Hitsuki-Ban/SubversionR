@@ -3921,7 +3921,7 @@ impl DaemonState {
                 {
                     continue;
                 }
-                return Some(match state {
+                return Some(attach_remote_failure(match state {
                     RemoteNativeLaneState::Active { .. } => BridgeFailure::new(
                         "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
                         "state",
@@ -3943,7 +3943,7 @@ impl DaemonState {
                         json!({}),
                         false,
                     ),
-                });
+                }));
             }
         }
         None
@@ -6795,6 +6795,13 @@ mod i5_remote_lane_tests {
                     epoch: Some(1),
                 },
                 "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
+                json!({
+                    "remoteFailure": {
+                        "category": "unknown",
+                        "reason": "unknownRemote",
+                        "cleanupAppropriate": false,
+                    }
+                }),
             ),
             (
                 RemoteNativeLaneState::Recovering {
@@ -6803,6 +6810,13 @@ mod i5_remote_lane_tests {
                     used_recovery_operation_ids: BTreeSet::new(),
                 },
                 "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE",
+                json!({
+                    "remoteFailure": {
+                        "category": "recovery",
+                        "reason": "remoteOperationIndeterminate",
+                        "cleanupAppropriate": false,
+                    }
+                }),
             ),
             (
                 RemoteNativeLaneState::Blocked {
@@ -6811,17 +6825,22 @@ mod i5_remote_lane_tests {
                     cleanup_appropriate: false,
                 },
                 "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+                json!({
+                    "remoteFailure": {
+                        "category": "recovery",
+                        "reason": "remoteRecoveryBlocked",
+                        "cleanupAppropriate": false,
+                    }
+                }),
             ),
         ];
-        for (lane_state, expected) in cases {
+        for (lane_state, expected_code, expected_safe_args) in cases {
             state.remote_native_lanes.insert(lane.clone(), lane_state);
-            assert_eq!(
-                state
-                    .native_lane_failure_for_request(&close)
-                    .expect("close must be lane gated")
-                    .code(),
-                expected
-            );
+            let failure = state
+                .native_lane_failure_for_request(&close)
+                .expect("close must be lane gated");
+            assert_eq!(failure.code(), expected_code);
+            assert_eq!(failure.safe_args(), &expected_safe_args);
         }
     }
 

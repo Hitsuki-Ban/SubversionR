@@ -175,6 +175,25 @@ describe("installed SVN anonymous recovery-blocked report", () => {
     expect(listCalls).toBe(2);
   });
 
+  it("rejects a blocked retry without the reviewed recovery failure", async () => {
+    let checkoutCalls = 0;
+    const sendRequest = vi.fn(async (method: string): Promise<unknown> => {
+      if (method === "remote/listCheckoutTargetRecoveries") return { entries: [blockedEntry()] };
+      if (method === "repository/checkout") {
+        checkoutCalls += 1;
+        if (checkoutCalls === 1) return { workingCopyPath: UNRELATED_TARGET, revision: 2 };
+        throw rpcError({});
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    await expect(
+      collectInstalledSvnAnonymousRecoveryBlockedReport(baseOptions(recoverRequest(), sendRequest)),
+    ).rejects.toMatchObject({
+      code: "SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_RETRY_INVALID",
+    });
+  });
+
   it("fails closed when the blocked entry changes after the unrelated checkout", async () => {
     let listCalls = 0;
     const sendRequest = vi.fn(async (method: string): Promise<unknown> => {
@@ -373,7 +392,7 @@ function blockedOriginError(): JsonRpcStreamError {
 }
 
 function localBlockedError(): JsonRpcStreamError {
-  return rpcError({});
+  return rpcError({ remoteFailure: remoteFailure() });
 }
 
 function rpcError(args: Record<string, unknown>): JsonRpcStreamError {

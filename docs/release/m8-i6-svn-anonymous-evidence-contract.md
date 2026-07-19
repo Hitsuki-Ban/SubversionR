@@ -35,8 +35,9 @@ The evidence binds the exact bytes of:
   contract;
 - the source-controlled I6 probe driver;
 - the packaged-native and installed-VSIX negative probes, the dedicated
-  packaged-native and installed-VSIX authz-denied probes, controlled ra_svn
-  fault fixture, and installed-VSIX 100+1 stress probe;
+  packaged-native and installed-VSIX authz-denied and recovery-indeterminate
+  probes, controlled ra_svn fault fixture, and installed-VSIX 100+1 stress
+  probe;
 - the exact source-built `svn.exe`, `svnadmin.exe`, and `svnserve.exe`; and
 - the positive fixture `svnserve.conf` and restored `authz` files; and
 - the exact svnserve command log used to measure authz-denied command-stage
@@ -192,6 +193,29 @@ libsvn management locks were cleared. The working-copy database must remain
 present and nonempty and user content must be preserved; stronger cleanup
 claims require separate evidence.
 
+The Indeterminate cell starts from an existing working copy and reaches the
+dedicated `command-stall` barrier exactly once. Only after the in-flight worker
+owns that command does the probe add an explicit DENY for the current Windows
+identity on `.svn/wc.db` for `ReadData`, `ReadAttributes`, and
+`ReadExtendedAttributes`. The probe fails fast unless that identity owns the
+database. It proves a newly opened read is denied, retains the captured binary
+security descriptor, and restores and verifies the exact binary DACL in
+`finally`; it does not require administrator elevation. The origin envelope
+uses a reviewed 5,000 ms deadline so the external command-barrier observer can
+apply and verify the DACL before recovery begins. The packaged surface
+invokes recovery explicitly, while the installed Extension Host exercises its
+automatic recovery attempt. In both cases the recovery outcome is
+`Indeterminate` and its raw failure remains `unknown` / `unknownRemote`; the
+subsequent same-lane request is rejected with the exact stable
+`SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE` /
+`remoteOperationIndeterminate` recovery classification. The fixture records
+exactly one attempt, one connection, and zero follow-up contacts. Each surface
+also proves unchanged user content and a present, nonempty `.svn/wc.db` after
+exact DACL restoration. As with Safe, libsvn may update working-copy metadata;
+the cell does not claim byte-identical metadata. It leaves the native lane
+blocked for explicit recovery and makes no automatic SVN Cleanup, rollback, or
+libsvn management-lock-clearing claim.
+
 The `localEventZeroNetwork` cell is installed-only because #135 requires the real
 Extension Host watcher/dirty-path path and the packaged daemon has no filesystem
 event surface. It requires both network-attempt and successful-connection counts
@@ -255,7 +279,8 @@ This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
 `saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`,
 `stalledMidRead`, `deadline`, `cancellation`, `trustRevoked`,
-`recoverySafe`, `recoveryBlocked`, `unrelatedRepository`, and `redaction` product probes. The
+`recoverySafe`, `recoveryIndeterminate`, `recoveryBlocked`,
+`unrelatedRepository`, and `redaction` product probes. The
 blocked-recovery probe uses a dedicated
 `command-stall` server that completes greeting, anonymous authentication, and
 repository-info exchange, then stalls after the first real RA command. While
@@ -276,9 +301,11 @@ with a monotonic clock, and require the owned timeout plus cleanup to settle no
 later than the 5,000 ms cleanup slack before proving the same-session local lane
 is available. The evidence schema requires those timing values only for the
 `deadline` cell, so an existing stalled-mid-read observation cannot be
-relabelled. The remaining controlled negative/recovery cells, including
-Indeterminate recovery, are incomplete and no complete candidate report has passed the executable
-verifier. Missing controlled observations may not be represented as `verified`
+relabelled. The remaining controlled negative/recovery cells are
+`blackholeConnect`, `workerCrash`, and `daemonDisconnect`; the reviewed
+lock/unlock matrix decision also remains open in issue #136. No complete
+candidate report has passed the executable verifier. Missing controlled
+observations or the unresolved matrix decision may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
 only after one real report passes the executable verifier against the candidate
 artifacts.
@@ -330,6 +357,15 @@ fixture binds an ephemeral loopback port while the original source-built
 `svnserve` remains online for the final successful checkout. The blocked retry
 must leave every fixture counter unchanged, so the explicit confirmation is the
 only action that releases the target lane.
+
+The packaged and installed recovery-indeterminate probes use a separate bounded
+work root under repository `target/i6i`. Each surface reuses an existing
+working copy and an isolated `command-stall` fixture. The DACL fault is scoped
+to that working copy's `.svn/wc.db`, is armed only after the fixture command
+barrier, and is restored exactly even when the child probe fails. The packaged
+probe observes explicit manual recovery; the installed probe observes automatic
+Extension Host recovery. Both retain the Indeterminate lane state and perform
+the exact same-lane rejection without another network contact.
 
 The stalled-mid-read packaged profile and installed VSIX/user-data environment
 similarly use a bounded disposable work root under repository `target/i6r`.

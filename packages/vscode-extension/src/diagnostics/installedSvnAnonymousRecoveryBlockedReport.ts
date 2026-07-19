@@ -354,7 +354,17 @@ function requireLocalBlockedRetry(error: unknown): void {
     error.messageKey !== "error.remote.recoveryBlocked" ||
     error.retryable !== false ||
     error.diagnostics !== null ||
-    Object.keys(error.safeArgs).length !== 0
+    Object.keys(error.safeArgs).join(",") !== "remoteFailure"
+  ) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_RETRY_INVALID");
+  }
+  const remoteFailure = error.safeArgs.remoteFailure;
+  if (
+    !isRecord(remoteFailure) ||
+    Object.keys(remoteFailure).sort().join(",") !== "category,cleanupAppropriate,reason" ||
+    remoteFailure.category !== "recovery" ||
+    remoteFailure.reason !== "remoteRecoveryBlocked" ||
+    remoteFailure.cleanupAppropriate !== false
   ) {
     throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_RETRY_INVALID");
   }

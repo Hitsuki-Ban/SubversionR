@@ -248,6 +248,17 @@ test("rejects any fault-fixture state change during the fail-closed retry", asyn
   }
 });
 
+test("rejects a same-target block without the reviewed recovery failure", async () => {
+  const fixture = await createFixture({}, { omitLocalRecoveryFailure: true });
+  try {
+    const result = runProbe(fixture.args);
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.stdout), failed("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_FAIL_CLOSED_INVALID"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("strict CLI rejects aliases, missing values, short origin deadlines, and non-loopback URLs", async () => {
   const fixture = await createFixture();
   try {
@@ -439,7 +450,7 @@ exports.startBackendProcess = async function(config, handlers) {
             faultState.probeMutation = 1;
             fs.writeFileSync(faultStatePath, JSON.stringify(faultState));
           }
-          throw recoveryBlocked(false);
+          throw recoveryBlocked(false, behavior.omitLocalRecoveryFailure === true);
         }
         if (journal.entries.length === 1) {
           const updated = readCapture();
@@ -476,14 +487,16 @@ exports.startBackendProcess = async function(config, handlers) {
   return connection;
 };
 
-function recoveryBlocked(origin) {
+function recoveryBlocked(origin, omitLocalRecoveryFailure = false) {
   return {
     code: "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED", category: "state",
     messageKey: "error.remote.recoveryBlocked", retryable: false, diagnostics: null,
     safeArgs: origin ? {
       originFailureCode: "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT",
       remoteFailure: { category: "recovery", reason: "remoteRecoveryBlocked", cleanupAppropriate: false },
-    } : {},
+    } : omitLocalRecoveryFailure ? {} : {
+      remoteFailure: { category: "recovery", reason: "remoteRecoveryBlocked", cleanupAppropriate: false },
+    },
   };
 }
 `;

@@ -370,7 +370,17 @@ function requireSameTargetBlocked(error) {
     error.retryable !== false ||
     error.diagnostics !== null ||
     !isRecord(error.safeArgs) ||
-    exactKeys(error.safeArgs) !== ""
+    exactKeys(error.safeArgs) !== "remoteFailure"
+  ) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_FAIL_CLOSED_INVALID");
+  }
+  const remoteFailure = error.safeArgs.remoteFailure;
+  if (
+    !isRecord(remoteFailure) ||
+    exactKeys(remoteFailure) !== "category,cleanupAppropriate,reason" ||
+    remoteFailure.category !== "recovery" ||
+    remoteFailure.reason !== "remoteRecoveryBlocked" ||
+    remoteFailure.cleanupAppropriate !== false
   ) {
     throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_FAIL_CLOSED_INVALID");
   }

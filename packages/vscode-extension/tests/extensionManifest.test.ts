@@ -70,6 +70,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoverySafeReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousRedactionReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
@@ -192,6 +193,7 @@ describe("extension manifest", () => {
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousCancellationReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoverySafeReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRedactionReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm");
@@ -216,6 +218,9 @@ describe("extension manifest", () => {
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousRecoverySafeReport",
