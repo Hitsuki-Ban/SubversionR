@@ -50,6 +50,8 @@ $packagedTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScr
 $installedTrustRevokedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-trust-revoked.ps1"))
 $packagedRecoveryBlockedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-recovery-blocked.mjs"))
 $installedRecoveryBlockedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-recovery-blocked.ps1"))
+$packagedRecoverySafeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-recovery-safe.mjs"))
+$installedRecoverySafeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-recovery-safe.ps1"))
 $packagedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-redaction.mjs"))
 $installedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-redaction.ps1"))
 $installedLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-local-event-zero-network.ps1"))
@@ -594,6 +596,75 @@ function Get-RecoveryBlockedProcessObservation(
   }
 }
 
+function Get-RecoverySafeProcessObservation(
+  [object[]]$AllEvents,
+  [long]$ProbePid,
+  [string]$ExpectedProbeProcessName,
+  [string]$ExpectedDaemonProcessName,
+  [string[]]$ForbiddenFixtureProcessNames,
+  [object[]]$SettlementSnapshot,
+  [string]$Context
+) {
+  $probeStarts = @($AllEvents | Where-Object {
+      [long]$_.processId -eq $ProbePid -and
+      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  Assert-True ($probeStarts.Count -eq 1) "The $Context probe PID must have exactly one subscribed start identity."
+  Assert-True (@($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1) "The $Context probe PID was reused."
+
+  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $forbiddenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($processName in $ForbiddenFixtureProcessNames) {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "A $Context forbidden fixture process name was invalid."
+    $null = $forbiddenNames.Add($processName)
+  }
+  Assert-True ($forbiddenNames.Count -eq $ForbiddenFixtureProcessNames.Count) "$Context forbidden fixture process names must be unique."
+  $fixtureCliStarts = @($recordedDescendants | Where-Object { $forbiddenNames.Contains([string]$_.processName) })
+
+  $candidateStarts = @($recordedDescendants | Where-Object {
+      ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    } | Sort-Object -Property eventFileTime)
+  Assert-True ($candidateStarts.Count -eq 4) "The $Context surface must start exactly one candidate daemon and three direct workers."
+  $candidatePids = [System.Collections.Generic.HashSet[long]]::new()
+  foreach ($candidateStart in $candidateStarts) {
+    Assert-True (@($AllEvents | Where-Object { [long]$_.processId -eq [long]$candidateStart.processId }).Count -eq 1) "A $Context candidate PID was reused."
+    $null = $candidatePids.Add([long]$candidateStart.processId)
+  }
+  $daemonStarts = @($candidateStarts | Where-Object { -not $candidatePids.Contains([long]$_.parentProcessId) })
+  Assert-True ($daemonStarts.Count -eq 1) "The $Context candidate daemon ancestry was ambiguous."
+  $daemonStart = $daemonStarts[0]
+  $workerStarts = @($candidateStarts | Where-Object { [long]$_.parentProcessId -eq [long]$daemonStart.processId })
+  Assert-True ($workerStarts.Count -eq 3) "The $Context candidate daemon must start exactly three direct workers."
+  Assert-True ([long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime) "The $Context probe/daemon ordering was invalid."
+  foreach ($workerStart in $workerStarts) {
+    Assert-True ([long]$daemonStart.eventFileTime -lt [long]$workerStart.eventFileTime) "The $Context daemon/worker ordering was invalid."
+  }
+
+  $settledStarts = [System.Collections.Generic.List[object]]::new()
+  foreach ($candidateStart in $candidateStarts) {
+    $settledStarts.Add($candidateStart)
+    foreach ($descendant in @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$candidateStart.processId))) {
+      $settledStarts.Add($descendant)
+    }
+  }
+  $liveSettledIds = [System.Collections.Generic.HashSet[long]]::new()
+  foreach ($settledStart in $settledStarts) {
+    if (@($SettlementSnapshot | Where-Object {
+          [long]$_.ProcessId -eq [long]$settledStart.processId -and
+          (Get-ProcessSnapshotStartFileTime $_) -le [long]$settledStart.eventFileTime
+        }).Count -gt 0) {
+      $null = $liveSettledIds.Add([long]$settledStart.processId)
+    }
+  }
+  Assert-True ($liveSettledIds.Count -eq 0) "The $Context daemon, worker, or descendant remained alive at settlement."
+  return [pscustomobject]@{
+    daemonStarts = $daemonStarts.Count
+    workerStarts = $workerStarts.Count
+    workerDescendantsAfter = $liveSettledIds.Count
+    fixtureCliInvocations = $fixtureCliStarts.Count
+  }
+}
+
 function Get-ZeroWorkerProcessObservation(
   [object[]]$AllEvents,
   [long]$ProbePid,
@@ -990,6 +1061,8 @@ $packagedTrustRevokedProbeResolved = Resolve-RequiredFile $packagedTrustRevokedP
 $installedTrustRevokedProbeResolved = Resolve-RequiredFile $installedTrustRevokedProbePath "installed VSIX I6 trust-revoked probe"
 $packagedRecoveryBlockedProbeResolved = Resolve-RequiredFile $packagedRecoveryBlockedProbePath "packaged-native I6 recovery-blocked probe"
 $installedRecoveryBlockedProbeResolved = Resolve-RequiredFile $installedRecoveryBlockedProbePath "installed VSIX I6 recovery-blocked probe"
+$packagedRecoverySafeProbeResolved = Resolve-RequiredFile $packagedRecoverySafeProbePath "packaged-native I6 recovery-safe probe"
+$installedRecoverySafeProbeResolved = Resolve-RequiredFile $installedRecoverySafeProbePath "installed VSIX I6 recovery-safe probe"
 $packagedRedactionProbeResolved = Resolve-RequiredFile $packagedRedactionProbePath "packaged-native I6 redaction probe"
 $installedRedactionProbeResolved = Resolve-RequiredFile $installedRedactionProbePath "installed VSIX I6 redaction probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $installedLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
@@ -2521,6 +2594,199 @@ finally {
 Assert-True ($redactionObservations.Count -eq 2) "The packaged-native and installed VSIX redaction observation set was incomplete."
 Assert-True ($redactionPrivacyObservations.Count -eq 2) "The packaged-native and installed VSIX redaction privacy set was incomplete."
 
+$recoverySafeWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6s\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $recoverySafeWorkRoot $repoTargetRoot) "The recovery-safe short work root escaped repo target."
+Assert-True ($recoverySafeWorkRoot.Length -le 120) "The recovery-safe short work root exceeds the reviewed 120-character budget."
+Assert-True (-not (Test-Path -LiteralPath $recoverySafeWorkRoot)) "The recovery-safe short work root already exists."
+New-Item -ItemType Directory -Path $recoverySafeWorkRoot | Out-Null
+$recoverySafeObservations = @()
+$recoverySafeSettlementObservations = @()
+try {
+  Stop-ControlledSvnserve $svnserveResolved $SvnservePid $SvnserveStartTimeUtc
+  $recoverySafeContracts = @(
+    [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
+    [pscustomobject]@{ Surface = "installed-vsix-extension-host"; WorkRoot = "i"; WorkingCopy = $installedAuthzWorkingCopyResolved }
+  )
+  foreach ($contract in $recoverySafeContracts) {
+    $surfaceName = [string]$contract.Surface
+    $surfaceRoot = Join-Path $probeRoot "recovery-safe-$surfaceName"
+    $surfaceWorkRoot = Join-Path $recoverySafeWorkRoot ([string]$contract.WorkRoot)
+    $fixtureStatePath = Join-Path $surfaceRoot "fixture-state.json"
+    $originOperationId = [Guid]::NewGuid().ToString("D")
+    $recoveryOperationId = [Guid]::NewGuid().ToString("D")
+    Assert-True (-not $originOperationId.Equals($recoveryOperationId, [System.StringComparison]::Ordinal)) "The $surfaceName recovery-safe operation IDs must be distinct."
+    New-Item -ItemType Directory -Force -Path $surfaceRoot | Out-Null
+    if ($surfaceName -ceq "packaged-native") {
+      New-Item -ItemType Directory -Path $surfaceWorkRoot | Out-Null
+    }
+    else {
+      Assert-True (-not (Test-Path -LiteralPath $surfaceWorkRoot)) "The installed recovery-safe fixture root already existed."
+    }
+    Assert-CandidateProcessAbsent $daemonResolved "The $surfaceName recovery-safe preflight"
+    $faultFixture = $null
+    $processStartSourceIdentifier = "subversionr-m8-i6-recovery-safe-$([Guid]::NewGuid().ToString('N'))"
+    $processStartSubscriber = $null
+    $processStartEvents = [System.Collections.Generic.List[object]]::new()
+    $processStartEventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    try {
+      $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "command-stall" $fixtureStatePath $repositoryUri.Port
+      try {
+        Register-CimIndicationEvent `
+          -ClassName Win32_ProcessStartTrace `
+          -SourceIdentifier $processStartSourceIdentifier `
+          -ErrorAction Stop | Out-Null
+      }
+      catch {
+        throw "Win32_ProcessStartTrace is required for the $surfaceName recovery-safe process observation: $($_.Exception.Message)"
+      }
+      $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $processStartSourceIdentifier -ErrorAction Stop)
+      Assert-True ($matchingSubscribers.Count -eq 1) "The $surfaceName recovery-safe process-start subscription was not created exactly once."
+      $processStartSubscriber = $matchingSubscribers[0]
+      Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
+
+      if ($surfaceName -ceq "packaged-native") {
+        $probeResult = Invoke-BoundedProcess $nodeHost @(
+          $packagedRecoverySafeProbeResolved,
+          "--backend-module", $backendModulePath,
+          "--daemon", $daemonResolved,
+          "--bridge", $bridgeResolved,
+          "--profile-root", $surfaceWorkRoot,
+          "--working-copy-path", ([string]$contract.WorkingCopy),
+          "--repository-url", $RepositoryUrl,
+          "--fixture-state-path", $fixtureStatePath,
+          "--origin-operation-id", $originOperationId,
+          "--recovery-operation-id", $recoveryOperationId,
+          "--origin-timeout-ms", "500",
+          "--recovery-timeout-ms", "300000"
+        ) 360 @{ ELECTRON_RUN_AS_NODE = "1" }
+        $probeFailure = $probeResult.Stderr.Trim()
+        Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The packaged-native recovery-safe probe failed: $probeFailure"
+        $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "packaged-native recovery-safe probe stdout"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-packaged-native-recovery-safe.v1" -and
+          [string]$probeReport.status -ceq "passed" -and [string]$probeReport.cell -ceq "recoverySafe" -and
+          [string]$probeReport.surface -ceq "packaged-native" -and
+          [string]$probeReport.stableCode -ceq "none" -and [string]$probeReport.reason -ceq "none" -and
+          [string]$probeReport.settlementCode -ceq "none" -and [string]$probeReport.settlementReason -ceq "none" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          $probeReport.remoteSvnAnonymous -eq $true -and [int]$probeReport.networkAttempts -eq 1 -and
+          [int]$probeReport.networkConnections -eq 1 -and [int]$probeReport.followupNetworkContacts -eq 0 -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and [int]$probeReport.journalEntriesAfter -eq 0 -and
+          [int]$probeReport.journalTemporaryFilesAfter -eq 0 -and $probeReport.workingCopyContentPreserved -eq $true -and
+          [int64]$probeReport.workingCopyDatabaseBytes -gt 0 -and $probeReport.diagnosticsRedacted -eq $true
+        ) "The packaged-native recovery-safe report was incomplete."
+        Assert-True ((@($probeReport.transitions) -join ",") -ceq "pending,safe,unchecked") "The packaged-native recovery-safe transitions were invalid."
+      }
+      else {
+        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", $installedRecoverySafeProbeResolved,
+          "-VsixPath", $vsixResolved,
+          "-CodeCliPath", $codeCliResolved,
+          "-FixtureRoot", $surfaceWorkRoot,
+          "-WorkingCopyPath", ([string]$contract.WorkingCopy),
+          "-RepositoryUrl", $RepositoryUrl,
+          "-FixtureStatePath", $fixtureStatePath,
+          "-OperationId", $originOperationId,
+          "-OperationTimeoutMilliseconds", "500",
+          "-ExpectedProductVersion", $ExpectedProductVersion,
+          "-DaemonPath", $daemonResolved,
+          "-BridgePath", $bridgeResolved,
+          "-TimeoutSeconds", "300"
+        ) 360
+        $probeFailure = $probeResult.Stderr.Trim()
+        Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX recovery-safe probe failed: $probeFailure"
+        $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX recovery-safe probe stdout"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-recovery-safe-wrapper.v1" -and
+          [string]$probeReport.status -ceq "passed" -and [string]$probeReport.cell -ceq "recoverySafe" -and
+          [string]$probeReport.surface -ceq "installed-vsix-extension-host" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          [int]$probeReport.authActivity.credentialRequests -eq 0 -and [int]$probeReport.authActivity.credentialSettlements -eq 0 -and
+          [int]$probeReport.authActivity.certificateRequests -eq 0 -and [int]$probeReport.temporaryRootsAfter -eq 0 -and
+          [int]$probeReport.checkoutJournalEntriesAfter -eq 0 -and $probeReport.workingCopyContentPreserved -eq $true -and
+          [int64]$probeReport.workingCopyDatabaseBytes -gt 0 -and $probeReport.candidateDaemonExitedAfter -eq $true -and
+          $probeReport.extensionInstalledAfterCleanup -eq $false -and $probeReport.fixtureRemovedAfterCleanup -eq $true -and
+          $probeReport.diagnosticsRedacted -eq $true
+        ) "The installed VSIX recovery-safe report was incomplete."
+        Assert-True ((@($probeReport.transitions) -join ",") -ceq "required,checking,safe") "The installed VSIX recovery-safe store transitions were invalid."
+      }
+
+      Assert-ExactProperties $probeReport.prerequisite @("code", "reason", "recovery") "$surfaceName recovery-safe prerequisite"
+      Assert-True (
+        [string]$probeReport.prerequisite.code -ceq "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" -and
+        [string]$probeReport.prerequisite.reason -ceq "operationDeadlineExceeded" -and
+        [string]$probeReport.prerequisite.recovery -ceq "pending"
+      ) "The $surfaceName recovery-safe prerequisite was invalid."
+      Assert-ExactProperties $probeReport.safe @("outcome", "freshReconcile", "nativeLaneReleased", "subsequentRequestPassed") "$surfaceName recovery-safe settlement"
+      Assert-True (
+        [string]$probeReport.safe.outcome -ceq "Safe" -and $probeReport.safe.freshReconcile -eq $true -and
+        $probeReport.safe.nativeLaneReleased -eq $true -and $probeReport.safe.subsequentRequestPassed -eq $true -and
+        [string]$probeReport.statusStaleReason -ceq "remoteRecoverySafeRequiresFullReconcile"
+      ) "The $surfaceName recovery-safe settlement proof was invalid."
+
+      $faultState = Get-Content -Raw -LiteralPath $fixtureStatePath | ConvertFrom-Json -Depth 16
+      Assert-True (
+        [int]$faultState.port -eq $repositoryUri.Port -and [string]$faultState.scenario -ceq "command-stall" -and
+        [int]$faultState.connections -eq 1 -and [int]$faultState.greetingSent -eq 1 -and
+        [int]$faultState.clientResponseReceived -eq 1 -and [int]$faultState.authRequestSent -eq 1 -and
+        [int]$faultState.reposInfoSent -eq 1 -and [int]$faultState.commandsReceived -eq 1 -and
+        [int]$faultState.followupContacts -eq 0 -and [int]$faultState.suppliedAuthorityConnections -eq 0
+      ) "The $surfaceName recovery-safe command-stage observation was invalid."
+      Complete-ProcessStartEventDrain $processStartSourceIdentifier $processStartEvents $processStartEventKeys $ProcessStartEventSettlementMilliseconds
+      $processObservation = Get-RecoverySafeProcessObservation `
+        -AllEvents @($processStartEvents) `
+        -ProbePid ([long]$probeResult.ProcessId) `
+        -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
+        -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+        -ForbiddenFixtureProcessNames @([System.IO.Path]::GetFileName($svnResolved), [System.IO.Path]::GetFileName($svnadminResolved), [System.IO.Path]::GetFileName($svnserveResolved)) `
+        -SettlementSnapshot (Get-CimProcessSnapshot) `
+        -Context "$surfaceName recovery-safe"
+      Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName recovery-safe product surface invoked a fixture CLI."
+
+      $recoverySafeObservations += [pscustomobject]@{
+        surface = $surfaceName
+        stableCode = "none"
+        reason = "none"
+        originCode = "none"
+        originReason = "none"
+        settlementCode = "none"
+        settlementReason = "none"
+        networkProgress = "command"
+        networkAttempts = [int]$faultState.connections
+        networkConnections = [int]$faultState.connections
+        fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+        credentialRequests = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialRequests } else { [int]$probeReport.authActivity.credentialRequests }
+        credentialSettlements = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialSettlements } else { [int]$probeReport.authActivity.credentialSettlements }
+        followupNetworkContacts = [int]$faultState.followupContacts
+        workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+        temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        diagnosticsRedacted = [bool]$probeReport.diagnosticsRedacted
+      }
+      $recoverySafeSettlementObservations += [pscustomobject]@{
+        surface = $surfaceName
+        safe = $probeReport.safe
+      }
+    }
+    finally {
+      if ($null -ne $processStartSubscriber) {
+        Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
+      }
+      Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+      if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "command-stall" }
+    }
+  }
+}
+finally {
+  if (Test-Path -LiteralPath $recoverySafeWorkRoot) {
+    Assert-True (Test-PathWithin $recoverySafeWorkRoot $repoTargetRoot) "The recovery-safe cleanup root escaped repo target."
+    Remove-Item -LiteralPath $recoverySafeWorkRoot -Recurse -Force
+  }
+  Assert-True (-not (Test-Path -LiteralPath $recoverySafeWorkRoot)) "The recovery-safe short work root remained after cleanup."
+}
+Assert-True ($recoverySafeObservations.Count -eq 2) "The packaged-native and installed VSIX recovery-safe observation set was incomplete."
+Assert-True ($recoverySafeSettlementObservations.Count -eq 2) "The packaged-native and installed VSIX Safe settlement set was incomplete."
+
 $stalledReadWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6r\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
 Assert-True (Test-PathWithin $stalledReadWorkRoot $repoTargetRoot) "The stalled-mid-read short work root escaped repo target."
 Assert-True ($stalledReadWorkRoot.Length -le 120) "The stalled-mid-read short work root exceeds the reviewed 120-character budget."
@@ -2528,7 +2794,6 @@ Assert-True (-not (Test-Path -LiteralPath $stalledReadWorkRoot)) "The stalled-mi
 New-Item -ItemType Directory -Path $stalledReadWorkRoot | Out-Null
 $stalledReadObservations = @()
 try {
-  Stop-ControlledSvnserve $svnserveResolved $SvnservePid $SvnserveStartTimeUtc
   $stalledReadContracts = @(
     [pscustomobject]@{
       Surface = "packaged-native"
@@ -3306,4 +3571,4 @@ finally {
 Assert-True ($trustRevokedObservations.Count -eq 2) "The packaged-native and installed VSIX trust-revoked observation set was incomplete."
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells, including Safe and Indeterminate recovery, and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, Safe recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells, including Indeterminate recovery, and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."

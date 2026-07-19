@@ -67,6 +67,7 @@
         "packagedCancellationProbe",
         "packagedTrustRevokedProbe",
         "packagedRecoveryBlockedProbe",
+        "packagedRecoverySafeProbe",
         "packagedRedactionProbe",
         "raSvnFaultFixture",
         "countingProxy",
@@ -78,6 +79,7 @@
         "installedCancellationProbe",
         "installedTrustRevokedProbe",
         "installedRecoveryBlockedProbe",
+        "installedRecoverySafeProbe",
         "installedRedactionProbe",
         "installedLocalEventProbe",
         "installedVsixProbe",
@@ -131,6 +133,9 @@
         "packagedRecoveryBlockedProbe": {
           "$ref": "#/$defs/artifact"
         },
+        "packagedRecoverySafeProbe": {
+          "$ref": "#/$defs/artifact"
+        },
         "packagedRedactionProbe": {
           "$ref": "#/$defs/artifact"
         },
@@ -162,6 +167,9 @@
           "$ref": "#/$defs/artifact"
         },
         "installedRecoveryBlockedProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedRecoverySafeProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedRedactionProbe": {

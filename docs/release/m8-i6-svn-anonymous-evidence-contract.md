@@ -176,8 +176,23 @@ records the furthest controlled network progress, the measured network-attempt
 and successful-connection counts, zero product-side fixture CLI use, zero credential activity, zero
 forbidden follow-up contacts, zero worker descendants and operation temporary
 roots, and redacted diagnostics. These values must be measured on the real
-surface; a shared aggregate constant is not evidence. The
-`localEventZeroNetwork` cell is installed-only because #135 requires the real
+surface; a shared aggregate constant is not evidence.
+
+The Safe cell's controlled `none` / `none` origin and settlement fields describe
+the successful recovery RPC recorded by the matrix. They do not claim that the
+mutation which required recovery succeeded. Each Safe product probe separately
+retains and validates the prerequisite mutation's exact
+`SUBVERSIONR_REMOTE_WORKER_TIMED_OUT` / `operationDeadlineExceeded` result, the
+`pending` recovery transition bound to that origin operation, and the distinct
+recovery operation ID. The fixture must reach the command barrier exactly once;
+the fresh local reconcile, lane release, and subsequent local request must not
+produce another network contact. Consistent with #135, Safe does not claim
+automatic SVN Cleanup, rollback, byte-identical working-copy metadata, or that
+libsvn management locks were cleared. The working-copy database must remain
+present and nonempty and user content must be preserved; stronger cleanup
+claims require separate evidence.
+
+The `localEventZeroNetwork` cell is installed-only because #135 requires the real
 Extension Host watcher/dirty-path path and the packaged daemon has no filesystem
 event surface. It requires both network-attempt and successful-connection counts
 to remain zero. The installed harness arms a one-shot observer before changing
@@ -240,7 +255,7 @@ This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
 `saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`,
 `stalledMidRead`, `deadline`, `cancellation`, `trustRevoked`,
-`recoveryBlocked`, `unrelatedRepository`, and `redaction` product probes. The
+`recoverySafe`, `recoveryBlocked`, `unrelatedRepository`, and `redaction` product probes. The
 blocked-recovery probe uses a dedicated
 `command-stall` server that completes greeting, anonymous authentication, and
 repository-info exchange, then stalls after the first real RA command. While
@@ -261,8 +276,8 @@ with a monotonic clock, and require the owned timeout plus cleanup to settle no
 later than the 5,000 ms cleanup slack before proving the same-session local lane
 is available. The evidence schema requires those timing values only for the
 `deadline` cell, so an existing stalled-mid-read observation cannot be
-relabelled. The remaining controlled negative/recovery cells, including Safe
-and Indeterminate recovery, are incomplete and no complete candidate report has passed the executable
+relabelled. The remaining controlled negative/recovery cells, including
+Indeterminate recovery, are incomplete and no complete candidate report has passed the executable
 verifier. Missing controlled observations may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
 only after one real report passes the executable verifier against the candidate
