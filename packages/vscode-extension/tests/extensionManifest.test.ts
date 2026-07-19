@@ -68,6 +68,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",
@@ -191,6 +192,7 @@ describe("extension manifest", () => {
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousStalledReadReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousDeadlineReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousCancellationReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport");
@@ -212,6 +214,9 @@ describe("extension manifest", () => {
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",

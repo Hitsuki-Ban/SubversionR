@@ -99,6 +99,7 @@ $expectedPackagedRecoveryBlockedProbePath = [System.IO.Path]::GetFullPath((Join-
 $expectedPackagedRecoverySafeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-safe.mjs"))
 $expectedPackagedRecoveryIndeterminateProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-indeterminate.mjs"))
 $expectedPackagedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-redaction.mjs"))
+$expectedPackagedWorkerCrashProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-worker-crash.mjs"))
 $expectedRaSvnFaultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $expectedCountingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"))
 $expectedInstalledStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"))
@@ -112,6 +113,7 @@ $expectedInstalledRecoveryBlockedProbePath = [System.IO.Path]::GetFullPath((Join
 $expectedInstalledRecoverySafeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-safe.ps1"))
 $expectedInstalledRecoveryIndeterminateProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-indeterminate.ps1"))
 $expectedInstalledRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-redaction.ps1"))
+$expectedInstalledWorkerCrashProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-worker-crash.ps1"))
 $expectedInstalledLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"))
 $expectedInstalledVsixProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"))
 $expectedPackagedCompatibilityProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"))
@@ -330,6 +332,10 @@ function Assert-NegativeSurfaceObservation(
   if ($expectTrustTransition) {
     $expectedProperties += "trustTransition"
   }
+  $expectWorkerCrashSettlement = $ExpectedOriginCode -ceq "SUBVERSIONR_REMOTE_WORKER_CRASHED" -and $ExpectedOriginReason -ceq "workerContainmentFailed"
+  if ($expectWorkerCrashSettlement) {
+    $expectedProperties += @("workerDescendantsAtBarrier", "workerCrashSettlement", "daemonState")
+  }
   Assert-ExactProperties $Observation $expectedProperties $Context
   Assert-Equal $ExpectedSurface ([string]$Observation.surface) "$Context surface must match."
   Assert-Equal $ExpectedOriginCode ([string]$Observation.originCode) "$Context origin code must match the controlled cell origin."
@@ -375,6 +381,38 @@ function Assert-NegativeSurfaceObservation(
     Assert-Equal 2 ([int]$Observation.trustTransition.toEpoch) "$Context trust transition must acknowledge epoch 2."
     Assert-Equal 1 ([int]$Observation.trustTransition.staleEnvelopeEpoch) "$Context rejected envelope must retain stale epoch 1."
     Assert-Equal $false ([bool]$Observation.trustTransition.remoteSubmissionEnabledAfter) "$Context remote submission must remain disabled after revocation."
+  }
+  if ($expectWorkerCrashSettlement) {
+    Assert-True ([int]$Observation.workerDescendantsAtBarrier -ge 0) "$Context.workerDescendantsAtBarrier must be a measured non-negative count."
+    Assert-ExactProperties $Observation.workerCrashSettlement @(
+      "trigger",
+      "terminationExitCode",
+      "workerIdentityBound",
+      "workerTerminationObserved",
+      "wireSettlementObserved",
+      "daemonSurvived",
+      "nativeLaneReleased",
+      "localSnapshotAfterCrash",
+      "workingCopyPreserved"
+    ) "$Context.workerCrashSettlement"
+    Assert-Equal "external-worker-termination-after-greeting" ([string]$Observation.workerCrashSettlement.trigger) "$Context worker crash trigger must follow the controlled greeting barrier."
+    Assert-Equal 1398166083 ([uint32]$Observation.workerCrashSettlement.terminationExitCode) "$Context worker crash termination exit code must be exact."
+    foreach ($field in @(
+        "workerIdentityBound",
+        "workerTerminationObserved",
+        "wireSettlementObserved",
+        "daemonSurvived",
+        "nativeLaneReleased",
+        "localSnapshotAfterCrash",
+        "workingCopyPreserved"
+      )) {
+      Assert-Equal $true ([bool]$Observation.workerCrashSettlement.$field) "$Context.workerCrashSettlement.$field must be true."
+    }
+    Assert-ExactProperties $Observation.daemonState @("kind", "reason", "recovery", "cleanupAppropriate") "$Context.daemonState"
+    Assert-Equal "indeterminate" ([string]$Observation.daemonState.kind) "$Context daemon state must be indeterminate."
+    Assert-Equal "workerTerminated" ([string]$Observation.daemonState.reason) "$Context daemon state reason must identify worker termination."
+    Assert-Equal "notRequired" ([string]$Observation.daemonState.recovery) "$Context worker crash must not require recovery."
+    Assert-Equal $false ([bool]$Observation.daemonState.cleanupAppropriate) "$Context worker crash must not request mutation cleanup."
   }
 }
 
@@ -496,6 +534,7 @@ $packagedRecoveryBlockedProbeResolved = Resolve-RequiredFile $expectedPackagedRe
 $packagedRecoverySafeProbeResolved = Resolve-RequiredFile $expectedPackagedRecoverySafeProbePath "packaged-native I6 recovery-safe probe"
 $packagedRecoveryIndeterminateProbeResolved = Resolve-RequiredFile $expectedPackagedRecoveryIndeterminateProbePath "packaged-native I6 recovery-indeterminate probe"
 $packagedRedactionProbeResolved = Resolve-RequiredFile $expectedPackagedRedactionProbePath "packaged-native I6 redaction probe"
+$packagedWorkerCrashProbeResolved = Resolve-RequiredFile $expectedPackagedWorkerCrashProbePath "packaged-native I6 worker-crash probe"
 $raSvnFaultFixtureResolved = Resolve-RequiredFile $expectedRaSvnFaultFixturePath "I6 ra_svn fault fixture"
 $countingProxyResolved = Resolve-RequiredFile $expectedCountingProxyPath "I6 transparent counting proxy"
 $installedStressProbeResolved = Resolve-RequiredFile $expectedInstalledStressProbePath "installed VSIX I6 stress probe"
@@ -509,6 +548,7 @@ $installedRecoveryBlockedProbeResolved = Resolve-RequiredFile $expectedInstalled
 $installedRecoverySafeProbeResolved = Resolve-RequiredFile $expectedInstalledRecoverySafeProbePath "installed VSIX I6 recovery-safe probe"
 $installedRecoveryIndeterminateProbeResolved = Resolve-RequiredFile $expectedInstalledRecoveryIndeterminateProbePath "installed VSIX I6 recovery-indeterminate probe"
 $installedRedactionProbeResolved = Resolve-RequiredFile $expectedInstalledRedactionProbePath "installed VSIX I6 redaction probe"
+$installedWorkerCrashProbeResolved = Resolve-RequiredFile $expectedInstalledWorkerCrashProbePath "installed VSIX I6 worker-crash probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $expectedInstalledLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $installedVsixProbeResolved = Resolve-RequiredFile $expectedInstalledVsixProbePath "installed VSIX I6 probe"
 $packagedCompatibilityProbeResolved = Resolve-RequiredFile $expectedPackagedCompatibilityProbePath "packaged-native compatibility probe"
@@ -584,6 +624,7 @@ Assert-ExactProperties $report.artifactBindings @(
   "packagedRecoverySafeProbe",
   "packagedRecoveryIndeterminateProbe",
   "packagedRedactionProbe",
+  "packagedWorkerCrashProbe",
   "raSvnFaultFixture",
   "countingProxy",
   "installedStressProbe",
@@ -597,6 +638,7 @@ Assert-ExactProperties $report.artifactBindings @(
   "installedRecoverySafeProbe",
   "installedRecoveryIndeterminateProbe",
   "installedRedactionProbe",
+  "installedWorkerCrashProbe",
   "installedLocalEventProbe",
   "installedVsixProbe",
   "packagedCompatibilityProbe",
@@ -632,6 +674,7 @@ Assert-ArtifactBinding $report.artifactBindings.packagedRecoveryBlockedProbe "i6
 Assert-ArtifactBinding $report.artifactBindings.packagedRecoverySafeProbe "i6-packaged-recovery-safe-probe" $packagedRecoverySafeProbeResolved "I6 evidence.artifactBindings.packagedRecoverySafeProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedRecoveryIndeterminateProbe "i6-packaged-recovery-indeterminate-probe" $packagedRecoveryIndeterminateProbeResolved "I6 evidence.artifactBindings.packagedRecoveryIndeterminateProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedRedactionProbe "i6-packaged-redaction-probe" $packagedRedactionProbeResolved "I6 evidence.artifactBindings.packagedRedactionProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedWorkerCrashProbe "i6-packaged-worker-crash-probe" $packagedWorkerCrashProbeResolved "I6 evidence.artifactBindings.packagedWorkerCrashProbe"
 Assert-ArtifactBinding $report.artifactBindings.raSvnFaultFixture "i6-ra-svn-fault-fixture" $raSvnFaultFixtureResolved "I6 evidence.artifactBindings.raSvnFaultFixture"
 Assert-ArtifactBinding $report.artifactBindings.countingProxy "i6-counting-proxy" $countingProxyResolved "I6 evidence.artifactBindings.countingProxy"
 Assert-ArtifactBinding $report.artifactBindings.installedStressProbe "i6-installed-stress-probe" $installedStressProbeResolved "I6 evidence.artifactBindings.installedStressProbe"
@@ -645,6 +688,7 @@ Assert-ArtifactBinding $report.artifactBindings.installedRecoveryBlockedProbe "i
 Assert-ArtifactBinding $report.artifactBindings.installedRecoverySafeProbe "i6-installed-recovery-safe-probe" $installedRecoverySafeProbeResolved "I6 evidence.artifactBindings.installedRecoverySafeProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedRecoveryIndeterminateProbe "i6-installed-recovery-indeterminate-probe" $installedRecoveryIndeterminateProbeResolved "I6 evidence.artifactBindings.installedRecoveryIndeterminateProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedRedactionProbe "i6-installed-redaction-probe" $installedRedactionProbeResolved "I6 evidence.artifactBindings.installedRedactionProbe"
+Assert-ArtifactBinding $report.artifactBindings.installedWorkerCrashProbe "i6-installed-worker-crash-probe" $installedWorkerCrashProbeResolved "I6 evidence.artifactBindings.installedWorkerCrashProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedLocalEventProbe "i6-installed-local-event-zero-network-probe" $installedLocalEventProbeResolved "I6 evidence.artifactBindings.installedLocalEventProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedVsixProbe "i6-installed-vsix-probe" $installedVsixProbeResolved "I6 evidence.artifactBindings.installedVsixProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedCompatibilityProbe "packaged-native-compatibility-probe" $packagedCompatibilityProbeResolved "I6 evidence.artifactBindings.packagedCompatibilityProbe"

@@ -36,8 +36,8 @@ The evidence binds the exact bytes of:
 - the source-controlled I6 probe driver;
 - the packaged-native and installed-VSIX negative probes, the dedicated
   packaged-native and installed-VSIX authz-denied and recovery-indeterminate
-  probes, controlled ra_svn fault fixture, and installed-VSIX 100+1 stress
-  probe;
+  probes, the dedicated packaged-native and installed-VSIX worker-crash probes,
+  controlled ra_svn fault fixture, and installed-VSIX 100+1 stress probe;
 - the exact source-built `svn.exe`, `svnadmin.exe`, and `svnserve.exe`; and
 - the positive fixture `svnserve.conf` and restored `authz` files; and
 - the exact svnserve command log used to measure authz-denied command-stage
@@ -205,6 +205,14 @@ forbidden follow-up contacts, zero worker descendants and operation temporary
 roots, and redacted diagnostics. These values must be measured on the real
 surface; a shared aggregate constant is not evidence.
 
+The worker-crash cell additionally records the live bound daemon/worker tree's
+descendant count at the greeting barrier. Windows may attach `conhost.exe` to a
+console-subsystem daemon or its contained worker even when no visible console
+is created, so this running baseline is measured rather than required to be
+zero. The retained PID, creation-time, image-path, and ancestry binding must
+still settle to zero descendants after the probe closes; only that measured
+post-settlement zero is the residue invariant.
+
 The Safe cell's controlled `none` / `none` origin and settlement fields describe
 the successful recovery RPC recorded by the matrix. They do not claim that the
 mutation which required recovery succeeded. Each Safe product probe separately
@@ -328,8 +336,33 @@ later than the 5,000 ms cleanup slack before proving the same-session local lane
 is available. The evidence schema requires those timing values only for the
 `deadline` cell, so an existing stalled-mid-read observation cannot be
 relabelled. The remaining controlled negative/recovery cells are
-`blackholeConnect`, `workerCrash`, and `daemonDisconnect`. The reviewed
-lock/unlock boundary is closed as nine positive anonymous operations plus two
+`blackholeConnect` and `daemonDisconnect`. The reviewed `workerCrash` cell runs
+one real packaged-native probe and one real installed-VSIX Extension Host probe
+against separate `greeting-stall` fixtures. The driver starts each probe with
+redirected stdout/stderr and asynchronous drains, waits for exactly one accepted
+connection and one greeting with no follow-up contact, and then binds the only
+candidate daemon parent and its only direct worker child by the exact canonical
+daemon executable path and process creation FILETIME. The binding uses
+Toolhelp32 ancestry plus retained Windows process handles; it does not use WMI
+process-start events or command-line guessing. Before injection the driver
+rechecks the exact path, creation time, and parent/child relationship, then calls
+`TerminateProcess` only for the bound worker with exit code `0x53565243`
+(`1398166083`). It requires that exact exit code after worker settlement while
+the retained daemon handle remains unsignaled.
+
+Each worker-crash surface must report origin and settlement
+`SUBVERSIONR_REMOTE_WORKER_CRASHED` / `workerContainmentFailed`, exact
+`workerCrashSettlement` proof, and daemon state `indeterminate` /
+`workerTerminated` with `recovery: notRequired` and
+`cleanupAppropriate: false`. The same product lifetime must prove a fresh local
+snapshot after the crash, native-lane release, an unchanged working copy,
+redacted diagnostics, zero credential activity, zero follow-up contacts, zero
+temporary roots, and zero surviving daemon/worker candidates. The fixture must
+remain at exactly one connection and one greeting. Any missing candidate,
+ambiguous ancestry, identity drift, unexpected exit code, daemon exit, extra
+network contact, or cleanup residue fails closed.
+
+The lock/unlock boundary is closed as nine positive anonymous operations plus two
 exact authentication-required negative cells. No complete candidate report has
 passed the executable verifier. Missing controlled observations may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired

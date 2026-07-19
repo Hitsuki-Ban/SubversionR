@@ -206,6 +206,7 @@ unsafe extern "system" {
     fn IsProcessInJob(process: Handle, job: Handle, result: *mut Bool) -> Bool;
     fn GetCurrentProcess() -> Handle;
     fn WaitForSingleObject(handle: Handle, milliseconds: Dword) -> Dword;
+    fn GetExitCodeProcess(process: Handle, exit_code: *mut Dword) -> Bool;
 }
 
 #[derive(Debug)]
@@ -818,14 +819,32 @@ fn execute_worker_inner(
         };
         match receiver.recv_timeout(remaining.min(SUPERVISION_POLL)) {
             Ok(WorkerIoEvent::Complete(Ok(response))) => break response,
-            Ok(WorkerIoEvent::Complete(Err(_))) => {
+            Ok(WorkerIoEvent::Complete(Err(error))) => {
+                let failure = if disconnected.load(Ordering::Acquire)
+                    || parent_disconnected.load(Ordering::Acquire)
+                {
+                    disconnected_failure()
+                } else if cancellation.is_cancelled() {
+                    cancelled_failure()
+                } else if Instant::now() >= deadline {
+                    timed_out_failure()
+                } else {
+                    classify_worker_io_failure(
+                        &process,
+                        &error,
+                        disconnected,
+                        parent_disconnected,
+                        cancellation,
+                        deadline,
+                    )
+                };
                 registration.job.terminate();
                 return finish_hard_stop(
                     hard_stopped,
                     job_descendants_zero,
                     registration,
                     operation_temp_root,
-                    worker_protocol_failure(),
+                    failure,
                     Some(io_thread),
                 );
             }
@@ -979,6 +998,67 @@ fn execute_worker_inner(
     job_descendants_zero.store(true, Ordering::Release);
     io_thread.join().map_err(|_| worker_protocol_failure())?;
     Ok(response)
+}
+
+fn classify_worker_io_failure(
+    process: &OwnedHandle,
+    error: &io::Error,
+    disconnected: &AtomicBool,
+    parent_disconnected: &AtomicBool,
+    cancellation: &dyn BridgeCancellationToken,
+    deadline: Instant,
+) -> BridgeFailure {
+    if error.kind() != io::ErrorKind::UnexpectedEof {
+        return worker_protocol_failure();
+    }
+    let exit_observation_deadline = deadline.min(Instant::now() + CLEANUP_TIMEOUT);
+    loop {
+        if disconnected.load(Ordering::Acquire) || parent_disconnected.load(Ordering::Acquire) {
+            return disconnected_failure();
+        }
+        if cancellation.is_cancelled() {
+            return cancelled_failure();
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return timed_out_failure();
+        }
+        if now >= exit_observation_deadline {
+            return worker_protocol_failure();
+        }
+        let wait = deadline
+            .min(exit_observation_deadline)
+            .saturating_duration_since(now)
+            .min(SUPERVISION_POLL);
+        // SAFETY: the supervisor owns a valid process handle until settlement.
+        match unsafe { WaitForSingleObject(process.raw(), duration_ms(wait).max(1)) } {
+            WAIT_OBJECT_0 => break,
+            WAIT_TIMEOUT => continue,
+            _ => return worker_protocol_failure(),
+        }
+    }
+    if disconnected.load(Ordering::Acquire) || parent_disconnected.load(Ordering::Acquire) {
+        return disconnected_failure();
+    }
+    if cancellation.is_cancelled() {
+        return cancelled_failure();
+    }
+    if Instant::now() >= deadline {
+        return timed_out_failure();
+    }
+    let mut exit_code = 0;
+    // SAFETY: the process handle and output pointer are valid.
+    if unsafe { GetExitCodeProcess(process.raw(), &mut exit_code) } == FALSE {
+        return worker_protocol_failure();
+    }
+    classify_worker_exit_code(exit_code)
+}
+
+fn classify_worker_exit_code(exit_code: Dword) -> BridgeFailure {
+    match exit_code {
+        0 | 3 | 4 | WORKER_TERMINATION_CODE => worker_protocol_failure(),
+        _ => worker_crashed_failure(),
+    }
 }
 
 fn finish_hard_stop(
@@ -2030,6 +2110,21 @@ mod tests {
         let remaining = remaining_timeout_ms(deadline, 300_000).expect("deadline remains live");
         assert!(remaining > 0);
         assert!(remaining < 40);
+    }
+
+    #[test]
+    fn only_real_abnormal_worker_exit_codes_are_crashes() {
+        for exit_code in [0, 3, 4, WORKER_TERMINATION_CODE] {
+            assert_eq!(
+                classify_worker_exit_code(exit_code).code(),
+                "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
+            );
+        }
+        for exit_code in [1, 259, 0x5356_5243, 0xC000_0005, Dword::MAX] {
+            let failure = classify_worker_exit_code(exit_code);
+            assert_eq!(failure.code(), "SUBVERSIONR_REMOTE_WORKER_CRASHED");
+            assert_eq!(failure.safe_args(), &json!({ "stage": "workerProcess" }));
+        }
     }
 
     #[test]

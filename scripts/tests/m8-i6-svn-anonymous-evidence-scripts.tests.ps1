@@ -18,6 +18,7 @@ $packagedRecoveryBlockedProbePath = Join-Path $repoRoot "scripts\release\probe-m
 $packagedRecoverySafeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-safe.mjs"
 $packagedRecoveryIndeterminateProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-indeterminate.mjs"
 $packagedRedactionProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-redaction.mjs"
+$packagedWorkerCrashProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-worker-crash.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
 $countingProxyPath = Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"
 $installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
@@ -31,6 +32,7 @@ $installedRecoveryBlockedProbePath = Join-Path $repoRoot "scripts\release\probe-
 $installedRecoverySafeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-safe.ps1"
 $installedRecoveryIndeterminateProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-indeterminate.ps1"
 $installedRedactionProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-redaction.ps1"
+$installedWorkerCrashProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-worker-crash.ps1"
 $installedLocalEventProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
 $packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
@@ -242,6 +244,28 @@ function New-NegativeCell(
       }
     }
   }
+  if ($Cell -ceq "workerCrash") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["workerDescendantsAtBarrier"] = 2
+      $observation["workerCrashSettlement"] = [ordered]@{
+        trigger = "external-worker-termination-after-greeting"
+        terminationExitCode = 1398166083
+        workerIdentityBound = $true
+        workerTerminationObserved = $true
+        wireSettlementObserved = $true
+        daemonSurvived = $true
+        nativeLaneReleased = $true
+        localSnapshotAfterCrash = $true
+        workingCopyPreserved = $true
+      }
+      $observation["daemonState"] = [ordered]@{
+        kind = "indeterminate"
+        reason = "workerTerminated"
+        recovery = "notRequired"
+        cleanupAppropriate = $false
+      }
+    }
+  }
   if ($Cell -ceq "trustRevoked") {
     foreach ($observation in $surfaceObservations) {
       $observation["trustTransition"] = [ordered]@{
@@ -391,7 +415,7 @@ function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [stri
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $packagedRecoveryBlockedProbePath, $packagedRecoverySafeProbePath, $packagedRecoveryIndeterminateProbePath, $packagedRedactionProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedRecoveryBlockedProbePath, $installedRecoverySafeProbePath, $installedRecoveryIndeterminateProbePath, $installedRedactionProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $packagedRecoveryBlockedProbePath, $packagedRecoverySafeProbePath, $packagedRecoveryIndeterminateProbePath, $packagedRedactionProbePath, $packagedWorkerCrashProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedRecoveryBlockedProbePath, $installedRecoverySafeProbePath, $installedRecoveryIndeterminateProbePath, $installedRedactionProbePath, $installedWorkerCrashProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
     Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
   }
 
@@ -437,6 +461,7 @@ try {
     packagedRecoverySafeProbe = New-ArtifactBinding "i6-packaged-recovery-safe-probe" $packagedRecoverySafeProbePath
     packagedRecoveryIndeterminateProbe = New-ArtifactBinding "i6-packaged-recovery-indeterminate-probe" $packagedRecoveryIndeterminateProbePath
     packagedRedactionProbe = New-ArtifactBinding "i6-packaged-redaction-probe" $packagedRedactionProbePath
+    packagedWorkerCrashProbe = New-ArtifactBinding "i6-packaged-worker-crash-probe" $packagedWorkerCrashProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
     countingProxy = New-ArtifactBinding "i6-counting-proxy" $countingProxyPath
     installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
@@ -450,6 +475,7 @@ try {
     installedRecoverySafeProbe = New-ArtifactBinding "i6-installed-recovery-safe-probe" $installedRecoverySafeProbePath
     installedRecoveryIndeterminateProbe = New-ArtifactBinding "i6-installed-recovery-indeterminate-probe" $installedRecoveryIndeterminateProbePath
     installedRedactionProbe = New-ArtifactBinding "i6-installed-redaction-probe" $installedRedactionProbePath
+    installedWorkerCrashProbe = New-ArtifactBinding "i6-installed-worker-crash-probe" $installedWorkerCrashProbePath
     installedLocalEventProbe = New-ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
     packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
@@ -700,6 +726,36 @@ try {
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject cancellation evidence without the explicit settlement hand-off."
 
   $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].workerDescendantsAtBarrier = -1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an invalid worker-crash barrier descendant measurement."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[1].PSObject.Properties.Remove("workerDescendantsAtBarrier")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must require the worker-crash barrier descendant measurement in the independent schema."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].workerCrashSettlement.terminationExitCode = 1398166082
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a worker crash with a non-exact termination exit code."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[1].workerCrashSettlement.daemonSurvived = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a worker crash that did not preserve the daemon."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].daemonState.recovery = "manualRequired"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a worker crash incorrectly promoted to recovery-required."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].PSObject.Properties.Remove("workerCrashSettlement")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject worker-crash evidence without the explicit settlement proof."
+
+  $tampered = Copy-Report $report
   $tampered.negativeCells[5].surfaceObservations[0] | Add-Member -NotePropertyName cancellationSettlement -NotePropertyValue ([pscustomobject]@{ trigger = "abort-signal-after-greeting"; localCode = "JSON_RPC_REQUEST_CANCELLED"; wireCode = "SUBVERSIONR_REMOTE_WORKER_CANCELLED"; wireReason = "operationCancelled"; wireSettlementObserved = $true })
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "must contain exactly the required fields" "I6 verification must not relabel deadline evidence as the independent cancellation cell."
@@ -888,6 +944,7 @@ try {
       @("packagedRecoverySafeProbe", $packagedRecoverySafeProbePath),
       @("packagedRecoveryIndeterminateProbe", $packagedRecoveryIndeterminateProbePath),
       @("packagedRedactionProbe", $packagedRedactionProbePath),
+      @("packagedWorkerCrashProbe", $packagedWorkerCrashProbePath),
       @("raSvnFaultFixture", $raSvnFaultFixturePath),
       @("countingProxy", $countingProxyPath),
       @("installedStressProbe", $installedStressProbePath),
@@ -898,6 +955,7 @@ try {
       @("installedRecoverySafeProbe", $installedRecoverySafeProbePath),
       @("installedRecoveryIndeterminateProbe", $installedRecoveryIndeterminateProbePath),
       @("installedRedactionProbe", $installedRedactionProbePath),
+      @("installedWorkerCrashProbe", $installedWorkerCrashProbePath),
       @("installedLocalEventProbe", $installedLocalEventProbePath),
       @("installedVsixProbe", $installedVsixProbePath),
       @("packagedCompatibilityProbe", $packagedCompatibilityProbePath),
@@ -1049,6 +1107,7 @@ try {
       'probe-m8-i6-packaged-deadline.mjs',
       'probe-m8-i6-packaged-cancellation.mjs',
       'probe-m8-i6-packaged-recovery-blocked.mjs',
+      'probe-m8-i6-packaged-worker-crash.mjs',
       'serve-m8-i6-ra-svn-fault-fixture.mjs',
       'serve-m8-i6-counting-proxy.mjs',
       'probe-m8-i6-installed-stress.ps1',
@@ -1058,6 +1117,7 @@ try {
       'probe-m8-i6-installed-deadline.ps1',
       'probe-m8-i6-installed-cancellation.ps1',
       'probe-m8-i6-installed-recovery-blocked.ps1',
+      'probe-m8-i6-installed-worker-crash.ps1',
       'probe-m8-i6-installed-local-event-zero-network.ps1',
       'probe-m8-i6-installed-vsix.ps1',
       'test-vscode-installed-extension-host.ps1',
@@ -1075,10 +1135,10 @@ try {
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells',
+      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, worker-crash, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
-      'remaining cross-surface blackhole-connect, worker-crash, and daemon-disconnect cells',
+      'remaining cross-surface blackhole-connect and daemon-disconnect cells',
       'nine-operation anonymous svn:// matrices plus exact lock/unlock authenticationRequired boundaries',
       'SVN_OPERATION_LOCK_FAILED',
       'SVN_OPERATION_UNLOCK_FAILED',
@@ -1088,6 +1148,27 @@ try {
     Assert-True ($driverText.Contains($requiredText)) "I6 probe driver must retain real-artifact/fail-closed contract text '$requiredText'."
   }
   Assert-True (-not $driverText.Contains('publicClaimEligible = $true')) "I6 probe driver must not synthesize a passing public claim while the installed operation harness is absent."
+  foreach ($workerCrashContractText in @(
+      'CreateToolhelp32Snapshot',
+      'QueryFullProcessImageNameW',
+      'GetProcessTimes',
+      'PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE | PROCESS_TERMINATE',
+      'TerminateProcess(binding.WorkerHandle, exitCode)',
+      'ReadToEndAsync()',
+      'BindExactParentWorker',
+      'workerDescendantsAtBarrier = [int]$workerDescendantsAtBarrier',
+      '1398166083'
+    )) {
+    Assert-True ($driverText.Contains($workerCrashContractText)) "I6 worker-crash driver must retain exact native observation text '$workerCrashContractText'."
+  }
+  $workerCrashBlockStart = $driverText.IndexOf('$workerCrashWorkRoot =')
+  $workerCrashBlockEnd = $driverText.IndexOf('Assert-True (-not (Test-Path -LiteralPath $outputResolved))', $workerCrashBlockStart)
+  Assert-True ($workerCrashBlockStart -ge 0 -and $workerCrashBlockEnd -gt $workerCrashBlockStart) "I6 worker-crash aggregate block must be uniquely delimited."
+  $workerCrashBlockText = $driverText.Substring($workerCrashBlockStart, $workerCrashBlockEnd - $workerCrashBlockStart)
+  foreach ($forbiddenWorkerCrashText in @('Win32_ProcessStartTrace', 'Get-CimInstance', '.CommandLine')) {
+    Assert-True (-not $workerCrashBlockText.Contains($forbiddenWorkerCrashText)) "I6 worker-crash injection must not use '$forbiddenWorkerCrashText'."
+  }
+  Assert-True (-not $workerCrashBlockText.Contains('$workerDescendantsAtBarrier -eq 0')) "I6 worker-crash injection must record the live bound-tree baseline rather than require a zero-descendant Windows process tree."
 
   $installedVsixProbeText = Get-Content -Raw -LiteralPath $installedVsixProbePath
   foreach ($requiredText in @(
@@ -1450,6 +1531,8 @@ try {
       "target/i6d",
       "command-stall",
       "may not be represented as"
+      "Toolhelp32 ancestry"
+      "1398166083"
     )) {
     Assert-True ($contractText.Contains($requiredText)) "I6 evidence contract must retain fail-closed boundary '$requiredText'."
   }
@@ -1467,6 +1550,7 @@ try {
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-trust-revoked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native trust-revoked probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-recovery-blocked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native recovery-blocked probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-redaction.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native redaction probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-worker-crash.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native worker-crash probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stress-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed 100+1 stress probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-authz-denied-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed authz-denied probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stalled-read-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed stalled-mid-read probe contract tests."
@@ -1475,6 +1559,7 @@ try {
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-trust-revoked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed trust-revoked probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-recovery-blocked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed recovery-blocked probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-redaction-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed redaction probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-worker-crash-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed worker-crash probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-local-event-zero-network-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed local-event zero-network probe contract tests."
 
   Write-Host "M8 I6 svn anonymous evidence script tests passed."

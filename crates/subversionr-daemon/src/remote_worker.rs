@@ -1230,6 +1230,16 @@ fn worker_protocol_failure() -> BridgeFailure {
     )
 }
 
+fn worker_crashed_failure() -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_WORKER_CRASHED",
+        "process",
+        "error.remote.workerCrashed",
+        json!({ "stage": "workerProcess" }),
+        false,
+    )
+}
+
 fn svn_anonymous_unavailable() -> BridgeFailure {
     BridgeFailure::new(
         "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED",

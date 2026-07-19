@@ -70,6 +70,7 @@
         "packagedRecoverySafeProbe",
         "packagedRecoveryIndeterminateProbe",
         "packagedRedactionProbe",
+        "packagedWorkerCrashProbe",
         "raSvnFaultFixture",
         "countingProxy",
         "installedStressProbe",
@@ -83,6 +84,7 @@
         "installedRecoverySafeProbe",
         "installedRecoveryIndeterminateProbe",
         "installedRedactionProbe",
+        "installedWorkerCrashProbe",
         "installedLocalEventProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
@@ -144,6 +146,9 @@
         "packagedRedactionProbe": {
           "$ref": "#/$defs/artifact"
         },
+        "packagedWorkerCrashProbe": {
+          "$ref": "#/$defs/artifact"
+        },
         "raSvnFaultFixture": {
           "$ref": "#/$defs/artifact"
         },
@@ -181,6 +186,9 @@
           "$ref": "#/$defs/artifact"
         },
         "installedRedactionProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedWorkerCrashProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedLocalEventProbe": {
@@ -920,6 +928,10 @@
         "workerDescendantsAfter": {
           "const": 0
         },
+        "workerDescendantsAtBarrier": {
+          "type": "integer",
+          "minimum": 0
+        },
         "temporaryRootsAfter": {
           "const": 0
         },
@@ -934,7 +946,50 @@
         },
         "trustTransition": {
           "$ref": "#/$defs/trustTransition"
+        },
+        "workerCrashSettlement": {
+          "$ref": "#/$defs/workerCrashSettlement"
+        },
+        "daemonState": {
+          "$ref": "#/$defs/workerCrashDaemonState"
         }
+      }
+    },
+    "workerCrashSettlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trigger",
+        "terminationExitCode",
+        "workerIdentityBound",
+        "workerTerminationObserved",
+        "wireSettlementObserved",
+        "daemonSurvived",
+        "nativeLaneReleased",
+        "localSnapshotAfterCrash",
+        "workingCopyPreserved"
+      ],
+      "properties": {
+        "trigger": { "const": "external-worker-termination-after-greeting" },
+        "terminationExitCode": { "const": 1398166083 },
+        "workerIdentityBound": { "const": true },
+        "workerTerminationObserved": { "const": true },
+        "wireSettlementObserved": { "const": true },
+        "daemonSurvived": { "const": true },
+        "nativeLaneReleased": { "const": true },
+        "localSnapshotAfterCrash": { "const": true },
+        "workingCopyPreserved": { "const": true }
+      }
+    },
+    "workerCrashDaemonState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason", "recovery", "cleanupAppropriate"],
+      "properties": {
+        "kind": { "const": "indeterminate" },
+        "reason": { "const": "workerTerminated" },
+        "recovery": { "const": "notRequired" },
+        "cleanupAppropriate": { "const": false }
       }
     },
     "recoverySurfaceObservation": {
@@ -1099,7 +1154,22 @@
     },
     "negativeWorkerCrash": {
       "$ref": "#/$defs/negativeCell",
-      "properties": { "cell": { "const": "workerCrash" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_CRASHED" }, "reason": { "const": "workerContainmentFailed" } }
+      "properties": {
+        "cell": { "const": "workerCrash" },
+        "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_CRASHED" },
+        "reason": { "const": "workerContainmentFailed" },
+        "surfaceObservations": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/negativeSurfaceObservation" },
+              { "required": ["workerDescendantsAtBarrier", "workerCrashSettlement", "daemonState"] }
+            ]
+          }
+        }
+      }
     },
     "negativeDaemonDisconnect": {
       "$ref": "#/$defs/negativeCell",

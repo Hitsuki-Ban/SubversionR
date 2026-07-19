@@ -60,6 +60,7 @@
     "onCommand:subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",

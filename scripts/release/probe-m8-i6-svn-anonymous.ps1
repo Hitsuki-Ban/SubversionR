@@ -44,6 +44,391 @@ public static class SubversionRM8I6FileSecurity {
 }
 '@
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+public sealed class SubversionRM8I6WorkerCrashBinding : IDisposable {
+  internal readonly string ExpectedPath;
+  internal readonly uint ParentPid;
+  internal readonly long ParentCreationFileTime;
+  internal readonly SafeProcessHandle ParentHandle;
+  internal readonly uint WorkerPid;
+  internal readonly long WorkerCreationFileTime;
+  internal readonly SafeProcessHandle WorkerHandle;
+
+  internal SubversionRM8I6WorkerCrashBinding(
+    string expectedPath,
+    uint parentPid,
+    long parentCreationFileTime,
+    SafeProcessHandle parentHandle,
+    uint workerPid,
+    long workerCreationFileTime,
+    SafeProcessHandle workerHandle
+  ) {
+    ExpectedPath = expectedPath;
+    ParentPid = parentPid;
+    ParentCreationFileTime = parentCreationFileTime;
+    ParentHandle = parentHandle;
+    WorkerPid = workerPid;
+    WorkerCreationFileTime = workerCreationFileTime;
+    WorkerHandle = workerHandle;
+  }
+
+  public uint ParentProcessId { get { return ParentPid; } }
+  public long ParentStartFileTime { get { return ParentCreationFileTime; } }
+  public uint WorkerProcessId { get { return WorkerPid; } }
+  public long WorkerStartFileTime { get { return WorkerCreationFileTime; } }
+
+  public void Dispose() {
+    WorkerHandle.Dispose();
+    ParentHandle.Dispose();
+  }
+}
+
+public static class SubversionRM8I6WorkerCrashNative {
+  private const uint TH32CS_SNAPPROCESS = 0x00000002;
+  private const uint PROCESS_TERMINATE = 0x0001;
+  private const uint SYNCHRONIZE = 0x00100000;
+  private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+  private const uint WAIT_OBJECT_0 = 0x00000000;
+  private const uint WAIT_TIMEOUT = 0x00000102;
+  private const uint WAIT_FAILED = 0xFFFFFFFF;
+  private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
+
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  private struct PROCESSENTRY32W {
+    public uint dwSize;
+    public uint cntUsage;
+    public uint th32ProcessID;
+    public IntPtr th32DefaultHeapID;
+    public uint th32ModuleID;
+    public uint cntThreads;
+    public uint th32ParentProcessID;
+    public int pcPriClassBase;
+    public uint dwFlags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+    public string szExeFile;
+  }
+
+  private sealed class Candidate : IDisposable {
+    internal readonly uint ProcessId;
+    internal readonly uint ParentProcessId;
+    internal readonly long CreationFileTime;
+    internal readonly string Path;
+    internal readonly SafeProcessHandle Handle;
+
+    internal Candidate(uint processId, uint parentProcessId, long creationFileTime, string path, SafeProcessHandle handle) {
+      ProcessId = processId;
+      ParentProcessId = parentProcessId;
+      CreationFileTime = creationFileTime;
+      Path = path;
+      Handle = handle;
+    }
+
+    public void Dispose() { Handle.Dispose(); }
+  }
+
+  private sealed class ProcessLink {
+    internal readonly uint ProcessId;
+    internal readonly uint ParentProcessId;
+    internal ProcessLink(uint processId, uint parentProcessId) {
+      ProcessId = processId;
+      ParentProcessId = parentProcessId;
+    }
+  }
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool CloseHandle(IntPtr handle);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern SafeProcessHandle OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool QueryFullProcessImageNameW(SafeProcessHandle process, uint flags, StringBuilder path, ref uint size);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetProcessTimes(
+    SafeProcessHandle process,
+    out long creationTime,
+    out long exitTime,
+    out long kernelTime,
+    out long userTime
+  );
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern uint GetProcessId(SafeProcessHandle process);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetExitCodeProcess(SafeProcessHandle process, out uint exitCode);
+
+  public static int GetExactCandidateCount(string executablePath) {
+    List<Candidate> candidates = EnumerateCandidates(executablePath);
+    try { return candidates.Count; }
+    finally { DisposeCandidates(candidates); }
+  }
+
+  public static int GetBoundDescendantCount(SubversionRM8I6WorkerCrashBinding binding) {
+    if (binding == null) throw new ArgumentNullException("binding");
+    List<ProcessLink> links = EnumerateProcessLinks();
+    HashSet<uint> ancestors = new HashSet<uint>();
+    ancestors.Add(binding.ParentPid);
+    ancestors.Add(binding.WorkerPid);
+    HashSet<uint> descendants = new HashSet<uint>();
+    bool changed;
+    do {
+      changed = false;
+      foreach (ProcessLink link in links) {
+        if (ancestors.Contains(link.ParentProcessId) &&
+            link.ProcessId != binding.ParentPid && link.ProcessId != binding.WorkerPid &&
+            descendants.Add(link.ProcessId)) {
+          ancestors.Add(link.ProcessId);
+          changed = true;
+        }
+      }
+    } while (changed);
+    return descendants.Count;
+  }
+
+  public static SubversionRM8I6WorkerCrashBinding BindExactParentWorker(string executablePath) {
+    string expectedPath = Canonicalize(executablePath);
+    List<Candidate> candidates = EnumerateCandidates(expectedPath);
+    try {
+      if (candidates.Count != 2) {
+        throw new InvalidOperationException("Worker-crash barrier must expose exactly two daemon-path candidates.");
+      }
+      Candidate parent = null;
+      Candidate worker = null;
+      foreach (Candidate possibleWorker in candidates) {
+        foreach (Candidate possibleParent in candidates) {
+          if (possibleWorker.ProcessId != possibleParent.ProcessId && possibleWorker.ParentProcessId == possibleParent.ProcessId) {
+            if (parent != null || worker != null) {
+              throw new InvalidOperationException("Worker-crash candidate ancestry was not unique.");
+            }
+            parent = possibleParent;
+            worker = possibleWorker;
+          }
+        }
+      }
+      if (parent == null || worker == null || parent.ParentProcessId == worker.ProcessId) {
+        throw new InvalidOperationException("Worker-crash candidate ancestry did not contain one unique parent-to-child edge.");
+      }
+
+      SafeProcessHandle retainedParent = OpenRequired(parent.ProcessId, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, "parent");
+      SafeProcessHandle retainedWorker = null;
+      try {
+        retainedWorker = OpenRequired(worker.ProcessId, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE | PROCESS_TERMINATE, "worker");
+        RequireIdentity(retainedParent, parent.ProcessId, expectedPath, parent.CreationFileTime, "parent");
+        RequireIdentity(retainedWorker, worker.ProcessId, expectedPath, worker.CreationFileTime, "worker");
+        return new SubversionRM8I6WorkerCrashBinding(
+          expectedPath,
+          parent.ProcessId,
+          parent.CreationFileTime,
+          retainedParent,
+          worker.ProcessId,
+          worker.CreationFileTime,
+          retainedWorker
+        );
+      } catch {
+        if (retainedWorker != null) retainedWorker.Dispose();
+        retainedParent.Dispose();
+        throw;
+      }
+    } finally {
+      DisposeCandidates(candidates);
+    }
+  }
+
+  public static uint TerminateBoundWorker(SubversionRM8I6WorkerCrashBinding binding, uint exitCode, uint waitMilliseconds) {
+    if (binding == null) throw new ArgumentNullException("binding");
+    List<Candidate> candidates = EnumerateCandidates(binding.ExpectedPath);
+    try {
+      if (candidates.Count != 2) {
+        throw new InvalidOperationException("Worker-crash candidate set changed before termination.");
+      }
+      Candidate parent = FindExact(candidates, binding.ParentPid, binding.ParentCreationFileTime, binding.ExpectedPath, "parent");
+      Candidate worker = FindExact(candidates, binding.WorkerPid, binding.WorkerCreationFileTime, binding.ExpectedPath, "worker");
+      if (worker.ParentProcessId != parent.ProcessId) {
+        throw new InvalidOperationException("Worker-crash parent-to-child relationship changed before termination.");
+      }
+      RequireIdentity(binding.ParentHandle, binding.ParentPid, binding.ExpectedPath, binding.ParentCreationFileTime, "retained parent");
+      RequireIdentity(binding.WorkerHandle, binding.WorkerPid, binding.ExpectedPath, binding.WorkerCreationFileTime, "retained worker");
+      RequireWait(binding.ParentHandle, WAIT_TIMEOUT, "parent must be alive before worker termination");
+      RequireWait(binding.WorkerHandle, WAIT_TIMEOUT, "worker must be alive before worker termination");
+      if (!TerminateProcess(binding.WorkerHandle, exitCode)) ThrowWin32("TerminateProcess(worker) failed");
+      RequireWait(binding.WorkerHandle, WAIT_OBJECT_0, waitMilliseconds, "worker termination did not settle");
+      uint observedExitCode;
+      if (!GetExitCodeProcess(binding.WorkerHandle, out observedExitCode)) ThrowWin32("GetExitCodeProcess(worker) failed");
+      if (observedExitCode != exitCode) {
+        throw new InvalidOperationException("Worker termination exit code was not exact.");
+      }
+      RequireWait(binding.ParentHandle, WAIT_TIMEOUT, "parent exited during worker termination");
+      return observedExitCode;
+    } finally {
+      DisposeCandidates(candidates);
+    }
+  }
+
+  private static Candidate FindExact(List<Candidate> candidates, uint pid, long creationFileTime, string expectedPath, string context) {
+    Candidate match = null;
+    foreach (Candidate candidate in candidates) {
+      if (candidate.ProcessId == pid && candidate.CreationFileTime == creationFileTime && SamePath(candidate.Path, expectedPath)) {
+        if (match != null) throw new InvalidOperationException("Duplicate exact " + context + " candidate identity.");
+        match = candidate;
+      }
+    }
+    if (match == null) throw new InvalidOperationException("Bound " + context + " identity changed before termination.");
+    return match;
+  }
+
+  private static List<Candidate> EnumerateCandidates(string executablePath) {
+    string expectedPath = Canonicalize(executablePath);
+    string expectedName = Path.GetFileName(expectedPath);
+    IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == InvalidHandleValue) ThrowWin32("CreateToolhelp32Snapshot failed");
+    List<Candidate> candidates = new List<Candidate>();
+    try {
+      PROCESSENTRY32W entry = new PROCESSENTRY32W();
+      entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
+      if (!Process32FirstW(snapshot, ref entry)) ThrowWin32("Process32FirstW failed");
+      do {
+        if (string.Equals(entry.szExeFile, expectedName, StringComparison.OrdinalIgnoreCase)) {
+          SafeProcessHandle handle = OpenRequired(entry.th32ProcessID, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, "candidate");
+          try {
+            string observedPath = QueryPath(handle);
+            if (SamePath(observedPath, expectedPath)) {
+              candidates.Add(new Candidate(
+                entry.th32ProcessID,
+                entry.th32ParentProcessID,
+                QueryCreationFileTime(handle),
+                observedPath,
+                handle
+              ));
+              handle = null;
+            }
+          } finally {
+            if (handle != null) handle.Dispose();
+          }
+        }
+        entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
+      } while (Process32NextW(snapshot, ref entry));
+      int error = Marshal.GetLastWin32Error();
+      if (error != 18) throw new Win32Exception(error, "Process32NextW failed");
+      return candidates;
+    } catch {
+      DisposeCandidates(candidates);
+      throw;
+    } finally {
+      if (!CloseHandle(snapshot)) ThrowWin32("CloseHandle(process snapshot) failed");
+    }
+  }
+
+  private static List<ProcessLink> EnumerateProcessLinks() {
+    IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == InvalidHandleValue) ThrowWin32("CreateToolhelp32Snapshot failed");
+    try {
+      List<ProcessLink> links = new List<ProcessLink>();
+      PROCESSENTRY32W entry = new PROCESSENTRY32W();
+      entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
+      if (!Process32FirstW(snapshot, ref entry)) ThrowWin32("Process32FirstW failed");
+      do {
+        if (entry.th32ProcessID != 0) links.Add(new ProcessLink(entry.th32ProcessID, entry.th32ParentProcessID));
+        entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
+      } while (Process32NextW(snapshot, ref entry));
+      int error = Marshal.GetLastWin32Error();
+      if (error != 18) throw new Win32Exception(error, "Process32NextW failed");
+      return links;
+    } finally {
+      if (!CloseHandle(snapshot)) ThrowWin32("CloseHandle(process snapshot) failed");
+    }
+  }
+
+  private static SafeProcessHandle OpenRequired(uint pid, uint access, string context) {
+    SafeProcessHandle handle = OpenProcess(access, false, pid);
+    if (handle == null || handle.IsInvalid) {
+      if (handle != null) handle.Dispose();
+      ThrowWin32("OpenProcess(" + context + ") failed");
+    }
+    return handle;
+  }
+
+  private static void RequireIdentity(SafeProcessHandle handle, uint pid, string path, long creationFileTime, string context) {
+    uint observedPid = GetProcessId(handle);
+    if (observedPid == 0) ThrowWin32("GetProcessId(" + context + ") failed");
+    if (observedPid != pid || !SamePath(QueryPath(handle), path) || QueryCreationFileTime(handle) != creationFileTime) {
+      throw new InvalidOperationException("Bound " + context + " process identity changed.");
+    }
+  }
+
+  private static string QueryPath(SafeProcessHandle handle) {
+    StringBuilder value = new StringBuilder(32768);
+    uint length = (uint)value.Capacity;
+    if (!QueryFullProcessImageNameW(handle, 0, value, ref length)) ThrowWin32("QueryFullProcessImageNameW failed");
+    if (length == 0 || length >= value.Capacity) throw new InvalidOperationException("Process image path was invalid.");
+    return Canonicalize(value.ToString());
+  }
+
+  private static long QueryCreationFileTime(SafeProcessHandle handle) {
+    long creation;
+    long exit;
+    long kernel;
+    long user;
+    if (!GetProcessTimes(handle, out creation, out exit, out kernel, out user)) ThrowWin32("GetProcessTimes failed");
+    if (creation <= 0) throw new InvalidOperationException("Process creation FILETIME was invalid.");
+    return creation;
+  }
+
+  private static void RequireWait(SafeProcessHandle handle, uint expected, string context) {
+    RequireWait(handle, expected, 0, context);
+  }
+
+  private static void RequireWait(SafeProcessHandle handle, uint expected, uint milliseconds, string context) {
+    uint observed = WaitForSingleObject(handle, milliseconds);
+    if (observed == WAIT_FAILED) ThrowWin32("WaitForSingleObject failed");
+    if (observed != expected) throw new InvalidOperationException(context + ".");
+  }
+
+  private static string Canonicalize(string value) {
+    if (string.IsNullOrWhiteSpace(value) || !Path.IsPathRooted(value)) {
+      throw new ArgumentException("Executable path must be absolute.", "value");
+    }
+    return Path.GetFullPath(value);
+  }
+
+  private static bool SamePath(string left, string right) {
+    return string.Equals(Canonicalize(left), Canonicalize(right), StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static void DisposeCandidates(List<Candidate> candidates) {
+    foreach (Candidate candidate in candidates) candidate.Dispose();
+  }
+
+  private static void ThrowWin32(string message) {
+    throw new Win32Exception(Marshal.GetLastWin32Error(), message);
+  }
+}
+'@
+
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $packagedProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-vscode-packaged-native.mjs"))
 $installedHarnessPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "test-vscode-installed-extension-host.ps1"))
@@ -68,6 +453,8 @@ $packagedRecoveryIndeterminateProbePath = [System.IO.Path]::GetFullPath((Join-Pa
 $installedRecoveryIndeterminateProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-recovery-indeterminate.ps1"))
 $packagedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-redaction.mjs"))
 $installedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-redaction.ps1"))
+$packagedWorkerCrashProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-worker-crash.mjs"))
+$installedWorkerCrashProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-worker-crash.ps1"))
 $installedLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-local-event-zero-network.ps1"))
 $countingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-counting-proxy.mjs"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
@@ -206,6 +593,137 @@ function Invoke-BoundedProcess(
   finally {
     $process.Dispose()
   }
+}
+
+function Start-WorkerCrashProbeProcess(
+  [string]$FilePath,
+  [string[]]$Arguments,
+  [hashtable]$Environment = @{}
+) {
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $FilePath
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+  foreach ($entry in $Environment.GetEnumerator()) {
+    $startInfo.Environment[[string]$entry.Key] = [string]$entry.Value
+  }
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  try {
+    Assert-True $process.Start() "Failed to start the controlled worker-crash probe process."
+    return [pscustomobject]@{
+      Process = $process
+      ProcessId = [long]$process.Id
+      StdoutTask = $process.StandardOutput.ReadToEndAsync()
+      StderrTask = $process.StandardError.ReadToEndAsync()
+    }
+  }
+  catch {
+    $process.Dispose()
+    throw
+  }
+}
+
+function Complete-WorkerCrashProbeProcess([object]$Started, [int]$TimeoutSeconds, [string]$Context) {
+  $process = [System.Diagnostics.Process]$Started.Process
+  try {
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+      $process.Kill($true)
+      $process.WaitForExit()
+      throw "$Context probe exceeded its absolute deadline."
+    }
+    $stdout = $Started.StdoutTask.GetAwaiter().GetResult()
+    $stderr = $Started.StderrTask.GetAwaiter().GetResult()
+    Assert-True ($stdout.Length -le 65536) "$Context probe stdout exceeded 65536 bytes."
+    Assert-True ($stderr.Length -le 32768) "$Context probe stderr exceeded 32768 bytes."
+    return [pscustomobject]@{
+      ProcessId = [long]$Started.ProcessId
+      ExitCode = [int]$process.ExitCode
+      Stdout = [string]$stdout
+      Stderr = [string]$stderr
+    }
+  }
+  finally {
+    if (-not $process.HasExited) {
+      $process.Kill($true)
+      $process.WaitForExit()
+    }
+    $process.Dispose()
+  }
+}
+
+function Wait-WorkerCrashGreetingBarrier(
+  [string]$FixtureStatePath,
+  [int]$ExpectedPort,
+  [System.Diagnostics.Process]$ProbeProcess,
+  [string]$Context
+) {
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+  do {
+    Assert-True (-not $ProbeProcess.HasExited) "$Context probe exited before the greeting barrier."
+    $state = $null
+    try {
+      $state = Get-Content -Raw -LiteralPath $FixtureStatePath | ConvertFrom-Json -Depth 16
+    }
+    catch {
+      $state = $null
+    }
+    if ($null -ne $state) {
+      $actualProperties = @($state.PSObject.Properties.Name | Sort-Object)
+      $expectedProperties = @(
+        "schema", "pid", "port", "suppliedAuthorityPort", "scenario", "connections",
+        "suppliedAuthorityConnections", "greetingSent", "clientResponseReceived",
+        "authRequestSent", "reposInfoSent", "commandsReceived", "followupContacts", "status"
+      ) | Sort-Object
+      Assert-True (($actualProperties -join ",") -ceq ($expectedProperties -join ",")) "$Context fixture state shape was invalid."
+      Assert-True (
+        [string]$state.schema -ceq "subversionr.release.m8-i6-ra-svn-fault-fixture.v1" -and
+        [string]$state.status -ceq "ready" -and [string]$state.scenario -ceq "greeting-stall" -and
+        [int]$state.port -eq $ExpectedPort -and [int]$state.suppliedAuthorityPort -eq 0 -and
+        [int]$state.connections -ge 0 -and [int]$state.greetingSent -ge 0 -and
+        [int]$state.clientResponseReceived -ge 0 -and [int]$state.authRequestSent -eq 0 -and
+        [int]$state.reposInfoSent -eq 0 -and [int]$state.commandsReceived -eq 0 -and
+        [int]$state.followupContacts -eq 0 -and [int]$state.suppliedAuthorityConnections -eq 0
+      ) "$Context fixture state violated the greeting-stall contract."
+      if (
+        [int]$state.connections -eq 1 -and [int]$state.greetingSent -eq 1 -and
+        [int]$state.clientResponseReceived -eq 1
+      ) {
+        return $state
+      }
+      Assert-True (
+        [int]$state.connections -le 1 -and [int]$state.greetingSent -le 1 -and
+        [int]$state.clientResponseReceived -le 1
+      ) "$Context exceeded the exact greeting barrier before worker termination."
+    }
+    Start-Sleep -Milliseconds 10
+  } while ([DateTimeOffset]::UtcNow -lt $deadline)
+  throw "$Context did not reach the exact greeting barrier before its deadline."
+}
+
+function Assert-WorkerCrashCandidateCount([string]$ExecutablePath, [int]$ExpectedCount, [string]$Context) {
+  $count = [SubversionRM8I6WorkerCrashNative]::GetExactCandidateCount($ExecutablePath)
+  Assert-True ($count -eq $ExpectedCount) "$Context expected exactly $ExpectedCount daemon-path candidates, observed $count."
+}
+
+function Wait-WorkerCrashCandidateCount(
+  [string]$ExecutablePath,
+  [int]$ExpectedCount,
+  [int]$TimeoutMilliseconds,
+  [string]$Context
+) {
+  $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+  do {
+    $count = [SubversionRM8I6WorkerCrashNative]::GetExactCandidateCount($ExecutablePath)
+    if ($count -eq $ExpectedCount) { return }
+    if ([DateTimeOffset]::UtcNow -ge $deadline) {
+      throw "$Context expected exactly $ExpectedCount daemon-path candidates, observed $count."
+    }
+    Start-Sleep -Milliseconds 25
+  } while ($true)
 }
 
 function Get-ExactFileSecurityDescriptor([string]$Path, [string]$Context) {
@@ -1374,6 +1892,8 @@ $packagedRecoveryIndeterminateProbeResolved = Resolve-RequiredFile $packagedReco
 $installedRecoveryIndeterminateProbeResolved = Resolve-RequiredFile $installedRecoveryIndeterminateProbePath "installed VSIX I6 recovery-indeterminate probe"
 $packagedRedactionProbeResolved = Resolve-RequiredFile $packagedRedactionProbePath "packaged-native I6 redaction probe"
 $installedRedactionProbeResolved = Resolve-RequiredFile $installedRedactionProbePath "installed VSIX I6 redaction probe"
+$packagedWorkerCrashProbeResolved = Resolve-RequiredFile $packagedWorkerCrashProbePath "packaged-native I6 worker-crash probe"
+$installedWorkerCrashProbeResolved = Resolve-RequiredFile $installedWorkerCrashProbePath "installed VSIX I6 worker-crash probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $installedLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $countingProxyResolved = Resolve-RequiredFile $countingProxyPath "I6 transparent counting proxy"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
@@ -4116,5 +4636,261 @@ finally {
 }
 Assert-True ($trustRevokedObservations.Count -eq 2) "The packaged-native and installed VSIX trust-revoked observation set was incomplete."
 
+$workerCrashWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6w\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $workerCrashWorkRoot $repoTargetRoot) "The worker-crash short work root escaped repo target."
+Assert-True ($workerCrashWorkRoot.Length -le 120) "The worker-crash short work root exceeds the reviewed 120-character budget."
+Assert-True (-not (Test-Path -LiteralPath $workerCrashWorkRoot)) "The worker-crash short work root already exists."
+New-Item -ItemType Directory -Path $workerCrashWorkRoot | Out-Null
+$workerCrashObservations = @()
+try {
+  $workerCrashContracts = @(
+    [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
+    [pscustomobject]@{ Surface = "installed-vsix-extension-host"; WorkRoot = "i"; WorkingCopy = $installedAuthzWorkingCopyResolved }
+  )
+  foreach ($contract in $workerCrashContracts) {
+    $surfaceName = [string]$contract.Surface
+    $surfaceRoot = Join-Path $probeRoot "worker-crash-$surfaceName"
+    $surfaceWorkRoot = Join-Path $workerCrashWorkRoot ([string]$contract.WorkRoot)
+    $fixtureStatePath = Join-Path $surfaceRoot "fixture-state.json"
+    $operationId = [Guid]::NewGuid().ToString("D")
+    New-Item -ItemType Directory -Force -Path $surfaceRoot, $surfaceWorkRoot | Out-Null
+    Assert-WorkerCrashCandidateCount $daemonResolved 0 "The $surfaceName worker-crash preflight"
+    $faultFixture = $null
+    $startedProbe = $null
+    $probeCompleted = $false
+    $binding = $null
+    try {
+      $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "greeting-stall" $fixtureStatePath $repositoryUri.Port
+      $workerCrashRepositoryUrl = "svn://127.0.0.1:$($repositoryUri.Port)/repo/trunk"
+      if ($surfaceName -ceq "packaged-native") {
+        $startedProbe = Start-WorkerCrashProbeProcess $nodeHost @(
+          $packagedWorkerCrashProbeResolved,
+          "--backend-module", $backendModulePath,
+          "--daemon", $daemonResolved,
+          "--bridge", $bridgeResolved,
+          "--profile-root", $surfaceWorkRoot,
+          "--working-copy-path", ([string]$contract.WorkingCopy),
+          "--repository-url", $workerCrashRepositoryUrl,
+          "--operation-id", $operationId,
+          "--fixture-state-path", $fixtureStatePath
+        ) @{ ELECTRON_RUN_AS_NODE = "1" }
+      }
+      else {
+        $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
+        $startedProbe = Start-WorkerCrashProbeProcess (Get-Process -Id $PID).Path @(
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", $installedWorkerCrashProbeResolved,
+          "-VsixPath", $vsixResolved,
+          "-CodeCliPath", $codeCliResolved,
+          "-FixtureRoot", $installedFixtureRoot,
+          "-WorkingCopyPath", ([string]$contract.WorkingCopy),
+          "-RepositoryUrl", $workerCrashRepositoryUrl,
+          "-FixtureStatePath", $fixtureStatePath,
+          "-OperationId", $operationId,
+          "-ExpectedProductVersion", $ExpectedProductVersion,
+          "-DaemonPath", $daemonResolved,
+          "-BridgePath", $bridgeResolved,
+          "-TimeoutSeconds", "180"
+        )
+      }
+
+      $barrierState = Wait-WorkerCrashGreetingBarrier `
+        $fixtureStatePath `
+        $repositoryUri.Port `
+        ([System.Diagnostics.Process]$startedProbe.Process) `
+        "$surfaceName worker-crash"
+      $binding = [SubversionRM8I6WorkerCrashNative]::BindExactParentWorker($daemonResolved)
+      Assert-True (
+        [long]$binding.ParentProcessId -gt 0 -and [long]$binding.WorkerProcessId -gt 0 -and
+        [long]$binding.ParentProcessId -ne [long]$binding.WorkerProcessId -and
+        [long]$binding.ParentStartFileTime -gt 0 -and [long]$binding.WorkerStartFileTime -gt 0
+      ) "The $surfaceName worker-crash process identity binding was invalid."
+      $workerDescendantsAtBarrier = [SubversionRM8I6WorkerCrashNative]::GetBoundDescendantCount($binding)
+      $terminationExitCode = [SubversionRM8I6WorkerCrashNative]::TerminateBoundWorker(
+        $binding,
+        [uint32]1398166083,
+        [uint32]10000
+      )
+      Assert-True ([uint32]$terminationExitCode -eq [uint32]1398166083) "The $surfaceName worker termination exit code was not exact."
+      try {
+        $probeResult = Complete-WorkerCrashProbeProcess $startedProbe $(if ($surfaceName -ceq "packaged-native") { 90 } else { 240 }) "$surfaceName worker-crash"
+      }
+      finally {
+        $probeCompleted = $true
+      }
+      $probeFailure = $probeResult.Stderr.Trim()
+      Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The $surfaceName worker-crash probe failed: $probeFailure"
+      $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "$surfaceName worker-crash probe stdout"
+
+      if ($surfaceName -ceq "packaged-native") {
+        Assert-ExactProperties $probeReport @(
+          "schema", "status", "cell", "surface", "stableCode", "reason", "protocol", "settlement",
+          "daemonState", "workerCrashSettlement", "remoteSvnAnonymous", "credentialRequests",
+          "credentialSettlements", "certificateRequests", "temporaryRootsAfter", "diagnosticsRedacted",
+          "fixtureCliInvocations"
+        ) "packaged-native worker-crash report"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-packaged-native-worker-crash.v1" -and
+          [string]$probeReport.status -ceq "passed" -and [string]$probeReport.cell -ceq "workerCrash" -and
+          [string]$probeReport.surface -ceq "packaged-native" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          $probeReport.remoteSvnAnonymous -eq $true -and [int]$probeReport.credentialRequests -eq 0 -and
+          [int]$probeReport.credentialSettlements -eq 0 -and [int]$probeReport.certificateRequests -eq 0 -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and $probeReport.diagnosticsRedacted -eq $true -and
+          [int]$probeReport.fixtureCliInvocations -eq 0
+        ) "The packaged-native worker-crash report was incomplete."
+        $credentialRequests = [int]$probeReport.credentialRequests
+        $credentialSettlements = [int]$probeReport.credentialSettlements
+      }
+      else {
+        Assert-ExactProperties $probeReport @(
+          "schema", "status", "surface", "cell", "stableCode", "reason", "settlement", "daemonState",
+          "workerCrashSettlement", "protocol", "trust", "authActivity", "diagnosticsRedacted",
+          "temporaryRootsAfter", "checkoutJournalEntriesAfter", "workingCopyPreserved"
+        ) "installed VSIX worker-crash report"
+        Assert-True (
+          [string]$probeReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-worker-crash.v1" -and
+          [string]$probeReport.status -ceq "passed" -and [string]$probeReport.surface -ceq "installed-vsix-extension-host" -and
+          [string]$probeReport.cell -ceq "workerCrash" -and
+          [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+          [int]$probeReport.authActivity.credentialRequests -eq 0 -and
+          [int]$probeReport.authActivity.credentialSettlements -eq 0 -and
+          [int]$probeReport.authActivity.certificateRequests -eq 0 -and
+          [int]$probeReport.temporaryRootsAfter -eq 0 -and [int]$probeReport.checkoutJournalEntriesAfter -eq 0 -and
+          $probeReport.workingCopyPreserved -eq $true -and $probeReport.diagnosticsRedacted -eq $true
+        ) "The installed VSIX worker-crash report was incomplete."
+        $credentialRequests = [int]$probeReport.authActivity.credentialRequests
+        $credentialSettlements = [int]$probeReport.authActivity.credentialSettlements
+      }
+
+      Assert-True (
+        [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_WORKER_CRASHED" -and
+        [string]$probeReport.reason -ceq "workerContainmentFailed"
+      ) "The $surfaceName worker-crash origin was invalid."
+      Assert-ExactProperties $probeReport.settlement @("code", "category", "messageKey", "retryable", "safeArgs", "diagnostics") "$surfaceName worker-crash settlement"
+      Assert-ExactProperties $probeReport.settlement.safeArgs @("stage", "remoteFailure") "$surfaceName worker-crash safe args"
+      Assert-ExactProperties $probeReport.settlement.safeArgs.remoteFailure @("category", "reason", "cleanupAppropriate") "$surfaceName worker-crash remote failure"
+      Assert-True (
+        [string]$probeReport.settlement.code -ceq "SUBVERSIONR_REMOTE_WORKER_CRASHED" -and
+        [string]$probeReport.settlement.category -ceq "process" -and
+        [string]$probeReport.settlement.messageKey -ceq "error.remote.workerCrashed" -and
+        $probeReport.settlement.retryable -eq $false -and $null -eq $probeReport.settlement.diagnostics -and
+        [string]$probeReport.settlement.safeArgs.stage -ceq "workerProcess" -and
+        [string]$probeReport.settlement.safeArgs.remoteFailure.category -ceq "process" -and
+        [string]$probeReport.settlement.safeArgs.remoteFailure.reason -ceq "workerContainmentFailed" -and
+        $probeReport.settlement.safeArgs.remoteFailure.cleanupAppropriate -eq $false
+      ) "The $surfaceName worker-crash settlement was invalid."
+
+      $expectedDaemonStateProperties = if ($surfaceName -ceq "packaged-native") {
+        @("kind", "reason", "originOperationIdMatched", "recovery", "cleanupAppropriate")
+      }
+      else {
+        @("kind", "reason", "originOperationIdMatched", "recovery", "cleanupAppropriate", "repositoryIdMatched", "epochMatched")
+      }
+      Assert-ExactProperties $probeReport.daemonState $expectedDaemonStateProperties "$surfaceName worker-crash daemon state"
+      Assert-True (
+        [string]$probeReport.daemonState.kind -ceq "indeterminate" -and
+        [string]$probeReport.daemonState.reason -ceq "workerTerminated" -and
+        [string]$probeReport.daemonState.recovery -ceq "notRequired" -and
+        $probeReport.daemonState.cleanupAppropriate -eq $false -and
+        $probeReport.daemonState.originOperationIdMatched -eq $true
+      ) "The $surfaceName worker-crash daemon state was invalid."
+      if ($surfaceName -ceq "installed-vsix-extension-host") {
+        Assert-True (
+          $probeReport.daemonState.repositoryIdMatched -eq $true -and $probeReport.daemonState.epochMatched -eq $true
+        ) "The installed VSIX worker-crash daemon state did not bind the repository session."
+      }
+      Assert-ExactProperties $probeReport.workerCrashSettlement @(
+        "trigger", "terminationExitCode", "workerIdentityBound", "workerTerminationObserved",
+        "wireSettlementObserved", "daemonSurvived", "nativeLaneReleased", "localSnapshotAfterCrash",
+        "workingCopyPreserved"
+      ) "$surfaceName worker-crash proof"
+      Assert-True (
+        [string]$probeReport.workerCrashSettlement.trigger -ceq "external-worker-termination-after-greeting" -and
+        [uint32]$probeReport.workerCrashSettlement.terminationExitCode -eq [uint32]$terminationExitCode
+      ) "The $surfaceName worker-crash trigger or exit code was invalid."
+      foreach ($field in @(
+          "workerIdentityBound", "workerTerminationObserved", "wireSettlementObserved", "daemonSurvived",
+          "nativeLaneReleased", "localSnapshotAfterCrash", "workingCopyPreserved"
+        )) {
+        Assert-True ($probeReport.workerCrashSettlement.$field -eq $true) "The $surfaceName worker-crash proof $field was invalid."
+      }
+
+      $finalFixtureState = Get-Content -Raw -LiteralPath $fixtureStatePath | ConvertFrom-Json -Depth 16
+      Assert-True (
+        [string]$finalFixtureState.scenario -ceq "greeting-stall" -and
+        [int]$finalFixtureState.port -eq $repositoryUri.Port -and
+        [int]$finalFixtureState.connections -eq 1 -and [int]$finalFixtureState.greetingSent -eq 1 -and
+        [int]$finalFixtureState.clientResponseReceived -eq 1 -and [int]$finalFixtureState.authRequestSent -eq 0 -and
+        [int]$finalFixtureState.reposInfoSent -eq 0 -and [int]$finalFixtureState.commandsReceived -eq 0 -and
+        [int]$finalFixtureState.followupContacts -eq 0 -and [int]$finalFixtureState.suppliedAuthorityConnections -eq 0
+      ) "The $surfaceName worker-crash fixture did not remain at the exact greeting barrier."
+      Wait-WorkerCrashCandidateCount $daemonResolved 0 10000 "The $surfaceName worker-crash settlement"
+      $workerDescendantsAfter = [SubversionRM8I6WorkerCrashNative]::GetBoundDescendantCount($binding)
+      Assert-True ($workerDescendantsAfter -eq 0) "The $surfaceName worker-crash settlement left bound daemon/worker descendants."
+
+      $workerCrashObservations += [pscustomobject]@{
+        surface = $surfaceName
+        originCode = [string]$probeReport.stableCode
+        originReason = [string]$probeReport.reason
+        settlementCode = [string]$probeReport.settlement.code
+        settlementReason = [string]$probeReport.settlement.safeArgs.remoteFailure.reason
+        networkProgress = "greeting"
+        networkAttempts = [int]$finalFixtureState.connections
+        networkConnections = [int]$finalFixtureState.connections
+        fixtureCliInvocations = 0
+        credentialRequests = $credentialRequests
+        credentialSettlements = $credentialSettlements
+        followupNetworkContacts = [int]$finalFixtureState.followupContacts
+        workerDescendantsAtBarrier = [int]$workerDescendantsAtBarrier
+        workerDescendantsAfter = [int]$workerDescendantsAfter
+        temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        diagnosticsRedacted = [bool]$probeReport.diagnosticsRedacted
+        workerCrashSettlement = [pscustomobject]@{
+          trigger = [string]$probeReport.workerCrashSettlement.trigger
+          terminationExitCode = [uint32]$probeReport.workerCrashSettlement.terminationExitCode
+          workerIdentityBound = [bool]$probeReport.workerCrashSettlement.workerIdentityBound
+          workerTerminationObserved = [bool]$probeReport.workerCrashSettlement.workerTerminationObserved
+          wireSettlementObserved = [bool]$probeReport.workerCrashSettlement.wireSettlementObserved
+          daemonSurvived = [bool]$probeReport.workerCrashSettlement.daemonSurvived
+          nativeLaneReleased = [bool]$probeReport.workerCrashSettlement.nativeLaneReleased
+          localSnapshotAfterCrash = [bool]$probeReport.workerCrashSettlement.localSnapshotAfterCrash
+          workingCopyPreserved = [bool]$probeReport.workerCrashSettlement.workingCopyPreserved
+        }
+        daemonState = [pscustomobject]@{
+          kind = [string]$probeReport.daemonState.kind
+          reason = [string]$probeReport.daemonState.reason
+          recovery = [string]$probeReport.daemonState.recovery
+          cleanupAppropriate = [bool]$probeReport.daemonState.cleanupAppropriate
+        }
+      }
+    }
+    finally {
+      if ($null -ne $binding) { $binding.Dispose() }
+      if ($null -ne $startedProbe -and -not $probeCompleted) {
+        $probeProcess = [System.Diagnostics.Process]$startedProbe.Process
+        try {
+          if (-not $probeProcess.HasExited) {
+            $probeProcess.Kill($true)
+            $probeProcess.WaitForExit()
+          }
+        }
+        finally {
+          $probeProcess.Dispose()
+        }
+      }
+      if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "greeting-stall" }
+    }
+  }
+}
+finally {
+  if (Test-Path -LiteralPath $workerCrashWorkRoot) {
+    Assert-True (Test-PathWithin $workerCrashWorkRoot $repoTargetRoot) "The worker-crash cleanup root escaped repo target."
+    Remove-Item -LiteralPath $workerCrashWorkRoot -Recurse -Force
+  }
+  Assert-True (-not (Test-Path -LiteralPath $workerCrashWorkRoot)) "The worker-crash short work root remained after cleanup."
+}
+Assert-True ($workerCrashObservations.Count -eq 2) "The packaged-native and installed VSIX worker-crash observation set was incomplete."
+
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host nine-operation anonymous svn:// matrices plus exact lock/unlock authenticationRequired boundaries, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface blackhole-connect, worker-crash, and daemon-disconnect cells are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host nine-operation anonymous svn:// matrices plus exact lock/unlock authenticationRequired boundaries, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, worker-crash, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface blackhole-connect and daemon-disconnect cells are incomplete; therefore no I6 evidence was written."
