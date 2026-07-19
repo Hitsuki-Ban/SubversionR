@@ -12,11 +12,22 @@ const PROBE = path.join(REPO_ROOT, "scripts/release/probe-m8-i6-packaged-recover
 const SCHEMA = "subversionr.release.m8-i6-packaged-native-recovery-blocked.v1";
 const ORIGIN_ID = "12345678-1234-4234-8234-123456789abc";
 
-test("proves armed command barrier, blocked restart, exact disposition, and healthy fresh checkout", async () => {
+test("proves blocked restart isolation through an unrelated HEAD checkout, exact disposition, and healthy fresh checkout", async () => {
   const fixture = await createFixture();
   try {
     const targetSha256 = sha256(path.resolve(fixture.checkoutTarget));
+    const unrelatedTargetSha256 = sha256(path.resolve(fixture.unrelatedCheckoutTarget));
     const originSha256 = sha256(ORIGIN_ID);
+    const blockedJournalSha256 = sha256(JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        targetPath: path.resolve(fixture.checkoutTarget),
+        targetSha256,
+        originOperationId: ORIGIN_ID,
+        effect: "checkoutTarget",
+        state: "blocked",
+      }],
+    }));
     const result = runProbe(fixture.args);
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(result.stderr, "");
@@ -40,6 +51,13 @@ test("proves armed command barrier, blocked restart, exact disposition, and heal
       partialTargetObserved: false,
       daemonRestartRequired: true,
       restartListExact: true,
+      unrelatedRepositoryServed: true,
+      blockedEntryUnchangedAfterUnrelated: true,
+      blockedJournalUnchangedAfterUnrelated: true,
+      blockedJournalBytesSha256BeforeUnrelated: blockedJournalSha256,
+      blockedJournalBytesSha256AfterUnrelated: blockedJournalSha256,
+      unrelatedCheckoutRevision: 2,
+      unrelatedTargetPathSha256: unrelatedTargetSha256,
       journalStateBeforeConfirmation: "blocked",
       automaticCleanupBeforeConfirmation: false,
       sameTargetFailClosed: true,
@@ -80,7 +98,9 @@ test("proves armed command barrier, blocked restart, exact disposition, and heal
     for (const sensitive of [
       fixture.faultUrl,
       fixture.healthyUrl,
+      fixture.unrelatedUrl,
       fixture.checkoutTarget,
+      fixture.unrelatedCheckoutTarget,
       fixture.profileRoot,
       fixture.faultStatePath,
       ORIGIN_ID,
@@ -104,6 +124,8 @@ test("proves armed command barrier, blocked restart, exact disposition, and heal
       "remote/listCheckoutTargetRecoveries",
       "repository/checkout",
       "remote/listCheckoutTargetRecoveries",
+      "repository/checkout",
+      "remote/listCheckoutTargetRecoveries",
       "remote/confirmCheckoutTargetDisposition",
       "remote/listCheckoutTargetRecoveries",
       "repository/checkout",
@@ -112,9 +134,15 @@ test("proves armed command barrier, blocked restart, exact disposition, and heal
     ]);
     assert.equal(capture.shutdowns, 2);
     assert.equal(capture.sameTargetBlockedBeforeNetwork, true);
+    assert.equal(capture.unrelatedWorkerLikeRequests, 1);
+    assert.equal(path.resolve(capture.unrelatedTargetPath), path.resolve(fixture.unrelatedCheckoutTarget));
+    assert.equal(capture.unrelatedRepositoryUrl, fixture.unrelatedUrl);
+    assert.notEqual(capture.unrelatedOperationId, ORIGIN_ID);
+    assert.equal(capture.unrelatedRequestedRevision, "head");
     assert.equal(capture.confirmation, "reviewedAndResolved");
     assert.equal(capture.requestHandlerType, "function");
     assert.equal(capture.notificationHandlerType, "function");
+    assert.equal((await readFile(path.join(fixture.unrelatedCheckoutTarget, ".svn", "wc.db"))).byteLength > 0, true);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -143,6 +171,72 @@ test("rejects restart list attribution tampering", async () => {
   }
 });
 
+test("rejects blocked-entry serialization tampering immediately after the unrelated checkout", async () => {
+  const fixture = await createFixture({}, { tamperListAfterUnrelated: true });
+  try {
+    const result = runProbe(fixture.args);
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.stdout), failed("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ENTRY_CHANGED_AFTER_UNRELATED"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects raw blocked-journal byte changes after the unrelated checkout", async () => {
+  const fixture = await createFixture({}, { mutateJournalAfterUnrelated: true });
+  try {
+    const result = runProbe(fixture.args);
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.stdout), failed("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_JOURNAL_CHANGED_AFTER_UNRELATED"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects an unrelated checkout failure", async () => {
+  const fixture = await createFixture({}, { unrelatedCheckoutFailure: true });
+  try {
+    const result = runProbe(fixture.args);
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.stdout), failed("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_UNRELATED_CHECKOUT_FAILED"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects an unrelated checkout response path mismatch", async () => {
+  const fixture = await createFixture({}, { unrelatedCheckoutPathMismatch: true });
+  try {
+    const result = runProbe(fixture.args);
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.stdout), failed("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_UNRELATED_CHECKOUT_INVALID"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects an unrelated checkout response outside the deterministic r2 fixture", async () => {
+  const fixture = await createFixture({}, { unrelatedCheckoutRevision: 3 });
+  try {
+    const result = runProbe(fixture.args);
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.stdout), failed("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_UNRELATED_CHECKOUT_INVALID"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects an empty unrelated working-copy database", async () => {
+  const fixture = await createFixture({}, { unrelatedEmptyWcDb: true });
+  try {
+    const result = runProbe(fixture.args);
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.stdout), failed("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_UNRELATED_WC_DB_INVALID"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("rejects any fault-fixture state change during the fail-closed retry", async () => {
   const fixture = await createFixture({}, { mutateFaultStateOnRetry: true });
   try {
@@ -160,8 +254,14 @@ test("strict CLI rejects aliases, missing values, short origin deadlines, and no
     const cases = [
       [[...fixture.args, "--extra", "value"], "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID"],
       [fixture.args.slice(0, -2), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID"],
+      [removeOption(fixture.args, "--unrelated-repository-url"), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID"],
+      [removeOption(fixture.args, "--unrelated-checkout-target"), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID"],
       [replaceValue(fixture.args, "--origin-timeout-ms", "999"), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID"],
       [replaceValue(fixture.args, "--healthy-repository-url", "svn://localhost:3690/repo/trunk"), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_URL_INVALID"],
+      [replaceValue(fixture.args, "--unrelated-repository-url", "svn://localhost:3690/repo/trunk"), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_URL_INVALID"],
+      [replaceValue(fixture.args, "--unrelated-repository-url", "svn://127.0.0.1:43114/repo/trunk"), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_URL_INVALID"],
+      [replaceValue(fixture.args, "--unrelated-repository-url", fixture.healthyUrl), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_URL_INVALID"],
+      [replaceValue(fixture.args, "--unrelated-checkout-target", fixture.checkoutTarget), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID"],
       [replaceValue(fixture.args, "--fault-repository-url", "svn://127.0.0.1:3690/other"), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_URL_INVALID"],
       [replaceValue(fixture.args, "--origin-operation-id", "NOT-A-UUID"), "SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID"],
     ];
@@ -193,8 +293,10 @@ async function createFixture(fixturePatch = {}, behavior = {}) {
   const bridge = path.join(tooling, "subversionr-native.dll");
   const faultStatePath = path.join(root, "fault-state.json");
   const checkoutTarget = path.join(workspace, "checkout");
+  const unrelatedCheckoutTarget = path.join(workspace, "unrelated-checkout");
   const faultUrl = "svn://127.0.0.1:43111/repo/trunk";
   const healthyUrl = "svn://127.0.0.1:43112/repo/trunk";
+  const unrelatedUrl = "svn://127.0.0.1:43113/unrelated/trunk";
   await writeFile(backendModule, fakeBackendSource(behavior), "utf8");
   await writeFile(remoteAccessModule, fakeRemoteAccessSource(), "utf8");
   await writeFile(daemon, "daemon", "utf8");
@@ -215,9 +317,11 @@ async function createFixture(fixturePatch = {}, behavior = {}) {
     root,
     profileRoot,
     checkoutTarget,
+    unrelatedCheckoutTarget,
     faultStatePath,
     faultUrl,
     healthyUrl,
+    unrelatedUrl,
     args: [
       "--backend-module", backendModule,
       "--daemon", daemon,
@@ -226,6 +330,8 @@ async function createFixture(fixturePatch = {}, behavior = {}) {
       "--checkout-target", checkoutTarget,
       "--fault-repository-url", faultUrl,
       "--healthy-repository-url", healthyUrl,
+      "--unrelated-repository-url", unrelatedUrl,
+      "--unrelated-checkout-target", unrelatedCheckoutTarget,
       "--fault-state-path", faultStatePath,
       "--origin-operation-id", ORIGIN_ID,
       "--origin-timeout-ms", "1100",
@@ -247,6 +353,8 @@ exports.startBackendProcess = async function(config, handlers) {
   const capturePath = path.join(config.remoteStateRoot, "capture.json");
   const readCapture = () => fs.existsSync(capturePath) ? JSON.parse(fs.readFileSync(capturePath, "utf8")) : {
     starts: 0, clients: [], methods: [], shutdowns: 0, sameTargetBlockedBeforeNetwork: false,
+    restartLists: 0, unrelatedWorkerLikeRequests: 0, unrelatedTargetPath: null, unrelatedOperationId: null,
+    unrelatedRepositoryUrl: null, unrelatedRequestedRevision: null,
     confirmation: null, requestHandlerType: null, notificationHandlerType: null,
   };
   const writeCapture = (capture) => fs.writeFileSync(capturePath, JSON.stringify(capture));
@@ -278,14 +386,19 @@ exports.startBackendProcess = async function(config, handlers) {
         source: "subversionr-daemon", protocol: { major: 1, minor: 35 }, capabilities: { remoteSvnAnonymous: true },
       };
       if (method === "remote/listCheckoutTargetRecoveries") {
+        const observed = readCapture();
+        if (start === 2) observed.restartLists += 1;
+        writeCapture(observed);
         const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
-        const entries = journal.entries.map(({ targetPath, targetSha256, originOperationId, state }) => ({
-          targetPath, targetSha256,
-          originOperationId: behavior.tamperRestartList === true && start === 2
+        const entries = journal.entries.map(({ targetPath, targetSha256, originOperationId, state }) => {
+          const effectiveOriginOperationId = behavior.tamperRestartList === true && start === 2 && observed.restartLists === 1
             ? "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-            : originOperationId,
-          state,
-        }));
+            : originOperationId;
+          if (behavior.tamperListAfterUnrelated === true && start === 2 && observed.restartLists === 2) {
+            return { state, originOperationId: effectiveOriginOperationId, targetSha256, targetPath };
+          }
+          return { targetPath, targetSha256, originOperationId: effectiveOriginOperationId, state };
+        });
         return { entries };
       }
       if (method === "remote/confirmCheckoutTargetDisposition") {
@@ -316,7 +429,7 @@ exports.startBackendProcess = async function(config, handlers) {
       }
       if (method === "repository/checkout") {
         const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
-        if (journal.entries.length === 1) {
+        if (journal.entries.length === 1 && path.resolve(params.targetPath) === path.resolve(journal.entries[0].targetPath)) {
           const updated = readCapture();
           updated.sameTargetBlockedBeforeNetwork = true;
           writeCapture(updated);
@@ -327,6 +440,25 @@ exports.startBackendProcess = async function(config, handlers) {
             fs.writeFileSync(faultStatePath, JSON.stringify(faultState));
           }
           throw recoveryBlocked(false);
+        }
+        if (journal.entries.length === 1) {
+          const updated = readCapture();
+          updated.unrelatedWorkerLikeRequests += 1;
+          updated.unrelatedTargetPath = params.targetPath;
+          updated.unrelatedRepositoryUrl = params.url;
+          updated.unrelatedOperationId = params.remote.operationId;
+          updated.unrelatedRequestedRevision = params.revision;
+          writeCapture(updated);
+          if (behavior.unrelatedCheckoutFailure === true) throw new Error("unrelated checkout failed");
+          fs.mkdirSync(path.join(params.targetPath, ".svn"), { recursive: true });
+          fs.writeFileSync(path.join(params.targetPath, ".svn", "wc.db"), behavior.unrelatedEmptyWcDb === true ? "" : "unrelated-wc");
+          if (behavior.mutateJournalAfterUnrelated === true) fs.appendFileSync(journalPath, "\\n");
+          return {
+            workingCopyPath: behavior.unrelatedCheckoutPathMismatch === true
+              ? path.join(params.targetPath, "mismatch")
+              : params.targetPath,
+            revision: behavior.unrelatedCheckoutRevision ?? 2,
+          };
         }
         fs.mkdirSync(path.join(params.targetPath, ".svn"), { recursive: true });
         fs.writeFileSync(path.join(params.targetPath, ".svn", "wc.db"), "wc");
@@ -380,6 +512,12 @@ function runProbe(args) {
 function replaceValue(args, flag, value) {
   const copy = [...args];
   copy[copy.indexOf(flag) + 1] = value;
+  return copy;
+}
+
+function removeOption(args, flag) {
+  const copy = [...args];
+  copy.splice(copy.indexOf(flag), 2);
   return copy;
 }
 

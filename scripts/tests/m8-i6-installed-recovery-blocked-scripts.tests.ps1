@@ -31,7 +31,8 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($probePath, [re
 Assert-True ($parseErrors.Count -eq 0) "Installed recovery-blocked probe must parse without PowerShell errors."
 $parameterNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
 $expectedParameters = @(
-  "VsixPath", "CodeCliPath", "FixtureRoot", "FaultRepositoryUrl", "HealthyRepositoryUrl", "FaultFixtureStatePath",
+  "VsixPath", "CodeCliPath", "FixtureRoot", "FaultRepositoryUrl", "HealthyRepositoryUrl", "UnrelatedRepositoryUrl",
+  "UnrelatedTargetPath", "FaultFixtureStatePath",
   "OriginOperationId", "RetryOperationId", "FreshOperationId", "OperationTimeoutMilliseconds",
   "ExpectedProductVersion", "DaemonPath", "BridgePath", "TimeoutSeconds"
 )
@@ -52,6 +53,21 @@ foreach ($required in @(
     'targetDisposition = [string]$recoverReport.targetDisposition',
     'unexpectedly created a target before the first RA command',
     'fixtureCountersUnchangedOnBlockedRetry',
+    'unrelatedRepositoryServed',
+    'blockedEntryUnchangedAfterUnrelated',
+    'blockedJournalUnchangedAfterUnrelated',
+    'blockedJournalBytesSha256BeforeUnrelated',
+    'blockedJournalBytesSha256AfterUnrelated',
+    'unrelatedCheckoutRevision',
+    'unrelatedTargetPathSha256',
+    'SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_UNRELATED_URL',
+    'SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_UNRELATED_TARGET',
+    'Assert-NonemptyWorkingCopyDatabase $unrelatedTargetResolved',
+    '[int]$recoverReport.authActivity.credentialRequests -eq 0',
+    '[int]$recoverReport.authActivity.credentialSettlements -eq 0',
+    '[int]$recoverReport.authActivity.certificateRequests -eq 0',
+    '$FaultRepositoryUrl, $HealthyRepositoryUrl, $UnrelatedRepositoryUrl',
+    '$unrelatedTargetResolved, $OriginOperationId',
     'requiredConfirmation',
     'reviewedAndResolved',
     'subsequentCheckoutPassed',
@@ -100,6 +116,20 @@ foreach ($required in @(
     'originFailureCode,remoteFailure',
     'remoteRecoveryBlocked',
     'readFixtureState(path: string): Promise<unknown>',
+    'readRecoveryJournalBytes(): Promise<Uint8Array>',
+    'const journalBeforeUnrelated = requireRecoveryJournalBytes(await readRecoveryJournalBytes());',
+    'const afterUnrelated = await recovery.list();',
+    'JSON.stringify(afterUnrelated[0]) !== blockedEntryBeforeUnrelated',
+    'blockedJournalBytesSha256AfterUnrelated !== blockedJournalBytesSha256BeforeUnrelated',
+    'unrelatedCheckout.revision !== 2',
+    'SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_JOURNAL_CHANGED_AFTER_UNRELATED',
+    'unrelatedRepositoryServed: true',
+    'blockedEntryUnchangedAfterUnrelated: true',
+    'blockedJournalUnchangedAfterUnrelated: true',
+    'blockedJournalBytesSha256BeforeUnrelated',
+    'blockedJournalBytesSha256AfterUnrelated',
+    'unrelatedCheckoutRevision: unrelatedCheckout.revision',
+    'unrelatedTargetPathSha256: sha256(request.unrelatedTargetPath)',
     'targetPathExists(path: string): boolean',
     'SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_TARGET_DISPOSITION_INVALID',
     'JSON.stringify(afterFixture) !== JSON.stringify(beforeFixture)'
@@ -114,6 +144,8 @@ $extensionSource = Get-Content -Raw -LiteralPath $extensionPath
 Assert-True ($extensionSource.Contains('consumeInstalledSvnAnonymousRecoveryBlockedReportToken()')) "Extension must consume the installed recovery-blocked token."
 Assert-True ($extensionSource.Contains('collectInstalledSvnAnonymousRecoveryBlockedReport({')) "Extension must execute the installed recovery-blocked collector."
 Assert-True ($extensionSource.Contains('readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown')) "Extension must bind the real fixture state reader."
+Assert-True ($extensionSource.Contains('readRecoveryJournalBytes: async () =>')) "Extension must bind the real recovery journal byte reader."
+Assert-True ($extensionSource.Contains('await readFile(nodePath.join(remoteStateRoot, "subversionr-remote-checkout-mutations-v1.json"))')) "Extension must read the fixed external recovery journal path."
 Assert-True ($extensionSource.Contains('targetPathExists: (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined')) "Extension must check the real target immediately before confirmation."
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 $activation = @($manifest.activationEvents | Where-Object { $_ -ceq "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport" })
@@ -121,7 +153,7 @@ Assert-True ($activation.Count -eq 1) "Manifest must activate the hidden install
 $contributed = @($manifest.contributes.commands | Where-Object { $_.command -ceq "subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport" })
 Assert-True ($contributed.Count -eq 0) "Installed recovery-blocked diagnostics command must remain hidden."
 
-$helperNames = @("Assert-True", "Assert-ExactProperties", "Get-TextSha256", "Read-CheckoutJournal", "Wait-ArmedCheckoutJournal")
+$helperNames = @("Assert-True", "Assert-ExactProperties", "Get-TextSha256", "Assert-NonemptyWorkingCopyDatabase", "Read-CheckoutJournal", "Wait-ArmedCheckoutJournal")
 $helperSources = foreach ($functionName in $helperNames) {
   $matches = @($ast.FindAll({
         param($node)
@@ -173,6 +205,10 @@ try {
   Assert-ScriptThrowsContaining {
     Wait-ArmedCheckoutJournal $journalPath $temporaryPath $targetPath $operationId (Get-Process -Id $PID) 50
   } "atomic temporary file" "Armed journal observation must reject the temporary file."
+
+  Assert-ScriptThrowsContaining {
+    Assert-NonemptyWorkingCopyDatabase (Join-Path $testRoot "missing-unrelated-working-copy") "The unrelated repository checkout"
+  } "did not create a real SVN working-copy database" "Unrelated checkout proof must reject a missing working-copy database."
 }
 finally {
   if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }

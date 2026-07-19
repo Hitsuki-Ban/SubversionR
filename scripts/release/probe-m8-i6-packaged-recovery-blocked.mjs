@@ -10,8 +10,12 @@ let connection;
 
 try {
   const options = parseOptions(process.argv.slice(2));
-  const faultEndpoint = parseRepositoryUrl(options.faultRepositoryUrl);
-  const healthyEndpoint = parseRepositoryUrl(options.healthyRepositoryUrl);
+  const faultEndpoint = parseRepositoryUrl(options.faultRepositoryUrl, "/repo/trunk");
+  const healthyEndpoint = parseRepositoryUrl(options.healthyRepositoryUrl, "/repo/trunk");
+  const unrelatedEndpoint = parseRepositoryUrl(options.unrelatedRepositoryUrl, "/unrelated/trunk");
+  if (sameEndpoint(unrelatedEndpoint, faultEndpoint) || sameEndpoint(unrelatedEndpoint, healthyEndpoint)) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_URL_INVALID");
+  }
   const remoteAccessModule = path.resolve(
     path.dirname(options.backendModule),
     "..",
@@ -29,7 +33,8 @@ try {
     typeof RemoteOperationEnvelopeFactory !== "function" ||
     typeof canonicalEndpointFromRepositoryUrl !== "function" ||
     !sameEndpoint(canonicalEndpointFromRepositoryUrl(options.faultRepositoryUrl), faultEndpoint) ||
-    !sameEndpoint(canonicalEndpointFromRepositoryUrl(options.healthyRepositoryUrl), healthyEndpoint)
+    !sameEndpoint(canonicalEndpointFromRepositoryUrl(options.healthyRepositoryUrl), healthyEndpoint) ||
+    !sameEndpoint(canonicalEndpointFromRepositoryUrl(options.unrelatedRepositoryUrl), unrelatedEndpoint)
   ) {
     throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_MODULE_INVALID");
   }
@@ -61,7 +66,7 @@ try {
   connection = await startConnection("origin");
   let trustEpoch = requireCapabilities(connection);
   let envelopeFactory = createEnvelopeFactory(RemoteOperationEnvelopeFactory, connection);
-  let context = { options, faultEndpoint, healthyEndpoint, remoteStateRoot, inboundMethods, trustEpoch, envelopeFactory };
+  let context = { options, faultEndpoint, healthyEndpoint, unrelatedEndpoint, remoteStateRoot, inboundMethods, trustEpoch, envelopeFactory };
   const originObservation = await runOriginPhase(context);
   requireNoCredentialsAndStableTrust(context);
   const diagnostics = await connection.sendRequest("diagnostics/get", {});
@@ -75,7 +80,7 @@ try {
   connection = await startConnection("restart");
   trustEpoch = requireCapabilities(connection);
   envelopeFactory = createEnvelopeFactory(RemoteOperationEnvelopeFactory, connection);
-  context = { options, faultEndpoint, healthyEndpoint, remoteStateRoot, inboundMethods, trustEpoch, envelopeFactory };
+  context = { options, faultEndpoint, healthyEndpoint, unrelatedEndpoint, remoteStateRoot, inboundMethods, trustEpoch, envelopeFactory };
   const recoveryObservation = await runRecoveryPhase(context);
   requireNoCredentialsAndStableTrust(context);
   const restartDiagnostics = await connection.sendRequest("diagnostics/get", {});
@@ -85,6 +90,7 @@ try {
   await connection.shutdown();
   connection = undefined;
   await requireNoTemporaryRoots(options.profileRoot);
+  await requireNonemptyFile(path.join(options.unrelatedCheckoutTarget, ".svn", "wc.db"), "UNRELATED_WC_DB_INVALID");
 
   process.stdout.write(`${JSON.stringify({
     schema: SCHEMA,
@@ -114,8 +120,9 @@ try {
 async function runOriginPhase(context) {
   const { options, faultEndpoint, trustEpoch, envelopeFactory, remoteStateRoot } = context;
   const pendingCheckout = connection.sendRequest("repository/checkout", checkoutRequest(
-      options,
       options.faultRepositoryUrl,
+      options.checkoutTarget,
+      options.checkoutRevision,
       remoteEnvelope(envelopeFactory, faultEndpoint, trustEpoch, options.originOperationId, options.originTimeoutMs),
     )).then(
       (value) => ({ status: "fulfilled", value }),
@@ -153,20 +160,52 @@ async function runOriginPhase(context) {
 }
 
 async function runRecoveryPhase(context) {
-  const { options, faultEndpoint, healthyEndpoint, trustEpoch, envelopeFactory, remoteStateRoot } = context;
+  const { options, faultEndpoint, healthyEndpoint, unrelatedEndpoint, trustEpoch, envelopeFactory, remoteStateRoot } = context;
   const targetSha256 = hashTarget(options.checkoutTarget);
+  const unrelatedTargetSha256 = hashTarget(options.unrelatedCheckoutTarget);
   const originOperationIdSha256 = hashText(options.originOperationId);
-  const firstList = await connection.sendRequest("remote/listCheckoutTargetRecoveries", {});
-  requireBlockedList(firstList, options, targetSha256);
   await requireBlockedJournal(remoteStateRoot, options, targetSha256);
   await requireAbsent(options.checkoutTarget, "CHECKOUT_TARGET_UNEXPECTEDLY_PRESENT");
+  const journalBytesBeforeUnrelated = await readJournalBytes(remoteStateRoot);
+  const journalSha256BeforeUnrelated = hashBytes(journalBytesBeforeUnrelated);
+  const firstList = await connection.sendRequest("remote/listCheckoutTargetRecoveries", {});
+  requireBlockedList(firstList, options, targetSha256);
+  const blockedEntryBeforeUnrelated = JSON.stringify(firstList.entries[0]);
+
+  let unrelatedCheckout;
+  try {
+    unrelatedCheckout = await connection.sendRequest("repository/checkout", checkoutRequest(
+      options.unrelatedRepositoryUrl,
+      options.unrelatedCheckoutTarget,
+      "head",
+      remoteEnvelope(envelopeFactory, unrelatedEndpoint, trustEpoch, randomUUID(), options.healthyTimeoutMs),
+    ));
+  } catch (error) {
+    requireRedacted(error, options);
+    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_UNRELATED_CHECKOUT_FAILED");
+  }
+  const listAfterUnrelated = await connection.sendRequest("remote/listCheckoutTargetRecoveries", {});
+  requireBlockedList(listAfterUnrelated, options, targetSha256);
+  if (JSON.stringify(listAfterUnrelated.entries[0]) !== blockedEntryBeforeUnrelated) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ENTRY_CHANGED_AFTER_UNRELATED");
+  }
+  const journalBytesAfterUnrelated = await readJournalBytes(remoteStateRoot);
+  const journalSha256AfterUnrelated = hashBytes(journalBytesAfterUnrelated);
+  if (!journalBytesAfterUnrelated.equals(journalBytesBeforeUnrelated)) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_JOURNAL_CHANGED_AFTER_UNRELATED");
+  }
+  requireUnrelatedCheckout(unrelatedCheckout, options.unrelatedCheckoutTarget);
+  await requireNonemptyFile(path.join(options.unrelatedCheckoutTarget, ".svn", "wc.db"), "UNRELATED_WC_DB_INVALID");
+  await requireBlockedJournal(remoteStateRoot, options, targetSha256);
+  requireNoCredentialsAndStableTrust(context);
   const fixtureBeforeBlockedRetry = await readExactCommandBarrierState(options.faultStatePath);
 
   let blockedError;
   try {
     await connection.sendRequest("repository/checkout", checkoutRequest(
-      options,
       options.faultRepositoryUrl,
+      options.checkoutTarget,
+      options.checkoutRevision,
       remoteEnvelope(envelopeFactory, faultEndpoint, trustEpoch, randomUUID(), options.healthyTimeoutMs),
     ));
   } catch (error) {
@@ -195,8 +234,9 @@ async function runRecoveryPhase(context) {
   await requireEmptyRecoveryState(remoteStateRoot);
 
   const checkout = await connection.sendRequest("repository/checkout", checkoutRequest(
-    options,
     options.healthyRepositoryUrl,
+    options.checkoutTarget,
+    options.checkoutRevision,
     remoteEnvelope(envelopeFactory, healthyEndpoint, trustEpoch, randomUUID(), options.healthyTimeoutMs),
   ));
   requireFreshCheckout(checkout, options);
@@ -206,6 +246,13 @@ async function runRecoveryPhase(context) {
 
   return {
     restartListExact: true,
+    unrelatedRepositoryServed: true,
+    blockedEntryUnchangedAfterUnrelated: true,
+    blockedJournalUnchangedAfterUnrelated: true,
+    blockedJournalBytesSha256BeforeUnrelated: journalSha256BeforeUnrelated,
+    blockedJournalBytesSha256AfterUnrelated: journalSha256AfterUnrelated,
+    unrelatedCheckoutRevision: unrelatedCheckout.revision,
+    unrelatedTargetPathSha256: unrelatedTargetSha256,
     journalStateBeforeConfirmation: "blocked",
     automaticCleanupBeforeConfirmation: false,
     sameTargetFailClosed: true,
@@ -239,11 +286,11 @@ async function runRecoveryPhase(context) {
   };
 }
 
-function checkoutRequest(options, repositoryUrl, remote) {
+function checkoutRequest(repositoryUrl, targetPath, revision, remote) {
   return {
     url: repositoryUrl,
-    targetPath: options.checkoutTarget,
-    revision: options.checkoutRevision,
+    targetPath,
+    revision,
     depth: "infinity",
     ignoreExternals: true,
     remote,
@@ -464,13 +511,29 @@ async function requireEmptyRecoveryState(remoteStateRoot) {
 }
 
 function requireFreshCheckout(value, options) {
+  requireCheckout(value, options.checkoutTarget, options.checkoutRevision, "FRESH_CHECKOUT_INVALID");
+}
+
+function requireUnrelatedCheckout(value, targetPath) {
   if (
     !isRecord(value) ||
     exactKeys(value) !== "revision,workingCopyPath" ||
-    path.resolve(value.workingCopyPath) !== path.resolve(options.checkoutTarget) ||
-    value.revision !== options.checkoutRevision
+    typeof value.workingCopyPath !== "string" ||
+    path.resolve(value.workingCopyPath) !== path.resolve(targetPath) ||
+    value.revision !== 2
   ) {
-    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_FRESH_CHECKOUT_INVALID");
+    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_UNRELATED_CHECKOUT_INVALID");
+  }
+}
+
+function requireCheckout(value, targetPath, revision, suffix) {
+  if (
+    !isRecord(value) ||
+    exactKeys(value) !== "revision,workingCopyPath" ||
+    path.resolve(value.workingCopyPath) !== path.resolve(targetPath) ||
+    value.revision !== revision
+  ) {
+    throw new Error(`SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_${suffix}`);
   }
 }
 
@@ -531,9 +594,12 @@ function requireRedacted(value, options) {
   const sensitive = [
     options.faultRepositoryUrl,
     options.healthyRepositoryUrl,
+    options.unrelatedRepositoryUrl,
     options.faultStatePath,
     options.checkoutTarget,
     options.checkoutTarget.replaceAll("\\", "/"),
+    options.unrelatedCheckoutTarget,
+    options.unrelatedCheckoutTarget.replaceAll("\\", "/"),
     options.profileRoot,
     options.profileRoot.replaceAll("\\", "/"),
     options.originOperationId,
@@ -567,6 +633,8 @@ function parseOptions(args) {
     "checkout-target",
     "fault-repository-url",
     "healthy-repository-url",
+    "unrelated-repository-url",
+    "unrelated-checkout-target",
     "fault-state-path",
     "origin-operation-id",
     "origin-timeout-ms",
@@ -599,14 +667,21 @@ function parseOptions(args) {
   ) {
     throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID");
   }
+  const checkoutTarget = requireAbsolute(parsed["checkout-target"]);
+  const unrelatedCheckoutTarget = requireAbsolute(parsed["unrelated-checkout-target"]);
+  if (sameFilesystemPath(checkoutTarget, unrelatedCheckoutTarget)) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_ARGUMENT_INVALID");
+  }
   return {
     backendModule: requireAbsolute(parsed["backend-module"]),
     daemon: requireAbsolute(parsed.daemon),
     bridge: requireAbsolute(parsed.bridge),
     profileRoot: requireAbsolute(parsed["profile-root"]),
-    checkoutTarget: requireAbsolute(parsed["checkout-target"]),
+    checkoutTarget,
+    unrelatedCheckoutTarget,
     faultRepositoryUrl: parsed["fault-repository-url"],
     healthyRepositoryUrl: parsed["healthy-repository-url"],
+    unrelatedRepositoryUrl: parsed["unrelated-repository-url"],
     faultStatePath: requireAbsolute(parsed["fault-state-path"]),
     originOperationId: parsed["origin-operation-id"],
     originTimeoutMs,
@@ -620,16 +695,18 @@ async function requireFilesystemContract(options) {
   await requireFile(options.faultStatePath);
   const profile = await stat(options.profileRoot);
   const parent = await stat(path.dirname(options.checkoutTarget));
-  if (!profile.isDirectory() || !parent.isDirectory()) {
+  const unrelatedParent = await stat(path.dirname(options.unrelatedCheckoutTarget));
+  if (!profile.isDirectory() || !parent.isDirectory() || !unrelatedParent.isDirectory()) {
     throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_FILESYSTEM_INVALID");
   }
   if ((await readdir(options.profileRoot)).length !== 0) {
     throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_PROFILE_NOT_EMPTY");
   }
   await requireAbsent(options.checkoutTarget, "CHECKOUT_TARGET_PRESENT");
+  await requireAbsent(options.unrelatedCheckoutTarget, "UNRELATED_CHECKOUT_TARGET_PRESENT");
 }
 
-function parseRepositoryUrl(value) {
+function parseRepositoryUrl(value, expectedPathname) {
   let url;
   try {
     url = new URL(value);
@@ -644,7 +721,7 @@ function parseRepositoryUrl(value) {
     url.password.length !== 0 ||
     url.search.length !== 0 ||
     url.hash.length !== 0 ||
-    url.pathname !== "/repo/trunk"
+    url.pathname !== expectedPathname
   ) {
     throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_URL_INVALID");
   }
@@ -678,8 +755,20 @@ function hashText(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function hashBytes(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 async function readJournal(remoteStateRoot) {
   return await readJsonFile(path.join(remoteStateRoot, JOURNAL_FILE), "JOURNAL_INVALID");
+}
+
+async function readJournalBytes(remoteStateRoot) {
+  try {
+    return await readFile(path.join(remoteStateRoot, JOURNAL_FILE));
+  } catch {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_JOURNAL_INVALID");
+  }
 }
 
 async function readJsonFile(file, suffix) {
@@ -699,6 +788,18 @@ async function requireFile(file) {
     throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_FILE_INVALID");
   }
   if (!metadata.isFile()) throw new Error("SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_FILE_INVALID");
+}
+
+async function requireNonemptyFile(file, suffix) {
+  let metadata;
+  try {
+    metadata = await stat(file);
+  } catch {
+    throw new Error(`SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_${suffix}`);
+  }
+  if (!metadata.isFile() || metadata.size < 1) {
+    throw new Error(`SUBVERSIONR_I6_PACKAGED_RECOVERY_BLOCKED_${suffix}`);
+  }
 }
 
 async function requireDirectory(directory, suffix) {
@@ -753,6 +854,11 @@ function sameEndpoint(left, right) {
   return left?.scheme === right.scheme &&
     left?.canonicalHost === right.canonicalHost &&
     left?.effectivePort === right.effectivePort;
+}
+
+function sameFilesystemPath(left, right) {
+  const normalize = (value) => process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
+  return normalize(left) === normalize(right);
 }
 
 function exactKeys(value) {

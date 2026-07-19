@@ -1563,6 +1563,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               initialize: () => service.initialize(),
               authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
               readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+              readRecoveryJournalBytes: async () =>
+                await readFile(nodePath.join(remoteStateRoot, "subversionr-remote-checkout-mutations-v1.json")),
               targetPathExists: (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined,
             }),
         );

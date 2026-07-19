@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as nodePath from "node:path";
 import type { BackendConnection } from "../backend/backendProcess";
 import {
@@ -34,6 +34,7 @@ export interface InstalledSvnAnonymousRecoveryBlockedReportOptions {
   initialize(): Promise<RecoveryBlockedConnection>;
   authActivity(): InstalledSvnAnonymousAuthActivity;
   readFixtureState(path: string): Promise<unknown>;
+  readRecoveryJournalBytes(): Promise<Uint8Array>;
   targetPathExists(path: string): boolean;
 }
 
@@ -56,6 +57,8 @@ interface RecoverRequest extends CommonRequest {
   phase: "recover";
   faultRepositoryUrl: string;
   healthyRepositoryUrl: string;
+  unrelatedRepositoryUrl: string;
+  unrelatedTargetPath: string;
   retryOperationId: string;
   freshOperationId: string;
   fixtureStatePath: string;
@@ -81,6 +84,7 @@ export async function collectInstalledSvnAnonymousRecoveryBlockedReport(
       request,
       trustEpoch,
       options.readFixtureState,
+      options.readRecoveryJournalBytes,
       options.targetPathExists,
     );
   }
@@ -160,10 +164,54 @@ async function recoverBlockedCheckout(
   request: RecoverRequest,
   trustEpoch: number,
   readFixtureState: (path: string) => Promise<unknown>,
+  readRecoveryJournalBytes: () => Promise<Uint8Array>,
   targetPathExists: (path: string) => boolean,
 ): Promise<Record<string, unknown>> {
+  const journalBeforeUnrelated = requireRecoveryJournalBytes(await readRecoveryJournalBytes());
   const before = await recovery.list();
   const entry = requireOnlyBlockedEntry(before, request);
+  const blockedEntryBeforeUnrelated = JSON.stringify(entry);
+  const unrelatedEndpoint = requireLoopbackSvnOrigin(request.unrelatedRepositoryUrl);
+  let unrelatedCheckout: Awaited<ReturnType<RepositoryCheckoutRpcClient["checkout"]>>;
+  try {
+    unrelatedCheckout = await new RepositoryCheckoutRpcClient(connection).checkout({
+      url: request.unrelatedRepositoryUrl,
+      targetPath: request.unrelatedTargetPath,
+      revision: "head",
+      depth: "infinity",
+      ignoreExternals: true,
+      remote: createRemoteEnvelope(
+        connection,
+        randomUUID(),
+        unrelatedEndpoint,
+        trustEpoch,
+        FRESH_CHECKOUT_TIMEOUT_MS,
+      ),
+    });
+  } catch {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_UNRELATED_CHECKOUT_INVALID");
+  }
+  const afterUnrelated = await recovery.list();
+  if (
+    afterUnrelated.length !== 1 ||
+    JSON.stringify(afterUnrelated[0]) !== blockedEntryBeforeUnrelated
+  ) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_ENTRY_CHANGED_AFTER_UNRELATED");
+  }
+  requireOnlyBlockedEntry(afterUnrelated, request);
+  const journalAfterUnrelated = requireRecoveryJournalBytes(await readRecoveryJournalBytes());
+  const blockedJournalBytesSha256BeforeUnrelated = sha256Bytes(journalBeforeUnrelated);
+  const blockedJournalBytesSha256AfterUnrelated = sha256Bytes(journalAfterUnrelated);
+  if (blockedJournalBytesSha256AfterUnrelated !== blockedJournalBytesSha256BeforeUnrelated) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_JOURNAL_CHANGED_AFTER_UNRELATED");
+  }
+  if (
+    normalizeAbsolutePath(unrelatedCheckout.workingCopyPath) !==
+      normalizeAbsolutePath(request.unrelatedTargetPath) ||
+    unrelatedCheckout.revision !== 2
+  ) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_UNRELATED_CHECKOUT_INVALID");
+  }
   const faultEndpoint = requireLoopbackSvnOrigin(request.faultRepositoryUrl);
   const beforeFixture = requireCommandStallFixtureState(
     await readFixtureState(request.fixtureStatePath),
@@ -247,6 +295,13 @@ async function recoverBlockedCheckout(
     stableCode: "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
     reason: "remoteRecoveryBlocked",
     restartRestoredBlocked: true,
+    unrelatedRepositoryServed: true,
+    blockedEntryUnchangedAfterUnrelated: true,
+    blockedJournalUnchangedAfterUnrelated: true,
+    blockedJournalBytesSha256BeforeUnrelated,
+    blockedJournalBytesSha256AfterUnrelated,
+    unrelatedCheckoutRevision: unrelatedCheckout.revision,
+    unrelatedTargetPathSha256: sha256(request.unrelatedTargetPath),
     automaticClear: false,
     requiredConfirmation: "reviewedAndResolved",
     armedTargetPathSha256: sha256(entry.targetPath),
@@ -396,12 +451,14 @@ function parseRequest(value: unknown, expectedToken: string | undefined): Recove
   }
   if (value.phase === "recover") {
     requireExactKeys(value, [
-      "token", "phase", "faultRepositoryUrl", "healthyRepositoryUrl", "targetPath", "operationId",
+      "token", "phase", "faultRepositoryUrl", "healthyRepositoryUrl", "unrelatedRepositoryUrl",
+      "unrelatedTargetPath", "targetPath", "operationId",
       "retryOperationId", "freshOperationId", "fixtureStatePath", "timeoutMs",
     ]);
     if (
       typeof value.faultRepositoryUrl !== "string" || value.faultRepositoryUrl.length === 0 || /[\0\r\n]/u.test(value.faultRepositoryUrl) ||
       typeof value.healthyRepositoryUrl !== "string" || value.healthyRepositoryUrl.length === 0 || /[\0\r\n]/u.test(value.healthyRepositoryUrl) ||
+      typeof value.unrelatedRepositoryUrl !== "string" || value.unrelatedRepositoryUrl.length === 0 || /[\0\r\n]/u.test(value.unrelatedRepositoryUrl) ||
       typeof value.fixtureStatePath !== "string" || value.fixtureStatePath.length === 0 || !isAbsolutePath(value.fixtureStatePath) || /[\0\r\n]/u.test(value.fixtureStatePath) ||
       value.timeoutMs !== FRESH_CHECKOUT_TIMEOUT_MS
     ) {
@@ -410,7 +467,22 @@ function parseRequest(value: unknown, expectedToken: string | undefined): Recove
     const operationId = requireOperationId(value.operationId);
     const retryOperationId = requireOperationId(value.retryOperationId);
     const freshOperationId = requireOperationId(value.freshOperationId);
+    const targetPath = requireTargetPath(value.targetPath);
+    const unrelatedTargetPath = requireTargetPath(value.unrelatedTargetPath);
+    const faultEndpoint = requireLoopbackSvnOrigin(value.faultRepositoryUrl);
+    const healthyEndpoint = requireLoopbackSvnOrigin(value.healthyRepositoryUrl);
+    const unrelatedEndpoint = requireLoopbackSvnOrigin(value.unrelatedRepositoryUrl);
+    if (
+      new URL(value.unrelatedRepositoryUrl).pathname !== "/unrelated/trunk" ||
+      sameEndpoint(unrelatedEndpoint, faultEndpoint) ||
+      sameEndpoint(unrelatedEndpoint, healthyEndpoint)
+    ) {
+      throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_REQUEST_INVALID");
+    }
     if (new Set([operationId, retryOperationId, freshOperationId]).size !== 3) {
+      throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_REQUEST_INVALID");
+    }
+    if (normalizeAbsolutePath(unrelatedTargetPath) === normalizeAbsolutePath(targetPath)) {
       throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_REQUEST_INVALID");
     }
     return {
@@ -418,7 +490,9 @@ function parseRequest(value: unknown, expectedToken: string | undefined): Recove
       phase: "recover",
       faultRepositoryUrl: value.faultRepositoryUrl,
       healthyRepositoryUrl: value.healthyRepositoryUrl,
-      targetPath: requireTargetPath(value.targetPath),
+      unrelatedRepositoryUrl: value.unrelatedRepositoryUrl,
+      unrelatedTargetPath,
+      targetPath,
       operationId,
       retryOperationId,
       freshOperationId,
@@ -454,6 +528,13 @@ function requireTargetPath(value: unknown): string {
     /[\0\r\n]/u.test(value)
   ) {
     throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_REQUEST_INVALID");
+  }
+  return value;
+}
+
+function requireRecoveryJournalBytes(value: Uint8Array): Uint8Array {
+  if (!(value instanceof Uint8Array) || value.byteLength === 0) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_JOURNAL_INVALID");
   }
   return value;
 }
@@ -555,6 +636,10 @@ function requireRedacted(value: unknown, request: RecoveryBlockedRequest): void 
       : [
           request.faultRepositoryUrl,
           request.healthyRepositoryUrl,
+          request.unrelatedRepositoryUrl,
+          request.unrelatedTargetPath,
+          request.unrelatedTargetPath.replaceAll("\\", "/"),
+          JSON.stringify(request.unrelatedTargetPath).slice(1, -1),
           request.retryOperationId,
           request.freshOperationId,
           request.fixtureStatePath,
@@ -599,6 +684,10 @@ function requireAuthActivity(value: InstalledSvnAnonymousAuthActivity): Installe
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function sha256Bytes(value: Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function normalizeAbsolutePath(value: string): string {

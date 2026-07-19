@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string]$RepositoryUrl,
+  [Parameter(Mandatory = $true)] [string]$UnrelatedRepositoryUrl,
   [Parameter(Mandatory = $true)] [string]$FixtureRoot,
   [Parameter(Mandatory = $true)] [string]$FixtureConfigPath,
   [Parameter(Mandatory = $true)] [string]$FixtureAuthzPath,
@@ -521,7 +522,7 @@ function Get-RecoveryBlockedProcessObservation(
   $candidateStarts = @($recordedDescendants | Where-Object {
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     } | Sort-Object -Property eventFileTime)
-  Assert-True ($candidateStarts.Count -eq 4) "The $Context surface must start exactly two candidate daemons and two direct workers."
+  Assert-True ($candidateStarts.Count -eq 5) "The $Context surface must start exactly two candidate daemons and three direct workers."
   $candidatePids = [System.Collections.Generic.HashSet[long]]::new()
   foreach ($candidateStart in $candidateStarts) {
     Assert-True (
@@ -536,16 +537,19 @@ function Get-RecoveryBlockedProcessObservation(
   $workerStarts = @($candidateStarts | Where-Object {
       $candidatePids.Contains([long]$_.parentProcessId)
     } | Sort-Object -Property eventFileTime)
-  Assert-True ($workerStarts.Count -eq 2) "The $Context surface must start exactly two direct workers."
+  Assert-True ($workerStarts.Count -eq 3) "The $Context surface must start exactly three direct workers."
   for ($index = 0; $index -lt 2; $index += 1) {
     $daemonStart = $daemonStarts[$index]
     $directWorkers = @($workerStarts | Where-Object {
         [long]$_.parentProcessId -eq [long]$daemonStart.processId
       })
-    Assert-True ($directWorkers.Count -eq 1) "The $Context candidate daemon must own exactly one direct worker."
-    Assert-True (
-      [long]$daemonStart.eventFileTime -lt [long]$directWorkers[0].eventFileTime
-    ) "The $Context daemon/worker start ordering was invalid."
+    $expectedWorkerCount = if ($index -eq 0) { 1 } else { 2 }
+    Assert-True ($directWorkers.Count -eq $expectedWorkerCount) "The $Context candidate daemon owned an unexpected number of direct workers."
+    foreach ($directWorker in $directWorkers) {
+      Assert-True (
+        [long]$daemonStart.eventFileTime -lt [long]$directWorker.eventFileTime
+      ) "The $Context daemon/worker start ordering was invalid."
+    }
   }
   Assert-True (
     [long]$probeStarts[0].eventFileTime -lt [long]$daemonStarts[0].eventFileTime -and
@@ -988,6 +992,19 @@ Assert-True ($repositoryUri.Scheme -ceq "svn") "RepositoryUrl must use direct sv
 Assert-True ($repositoryUri.Host -ceq "127.0.0.1") "RepositoryUrl must use the controlled IPv4 loopback host."
 Assert-True ([string]::IsNullOrEmpty($repositoryUri.UserInfo)) "RepositoryUrl must not contain user information."
 Assert-True ([string]::IsNullOrEmpty($repositoryUri.Query) -and [string]::IsNullOrEmpty($repositoryUri.Fragment)) "RepositoryUrl must not contain a query or fragment."
+try {
+  $unrelatedRepositoryUri = [System.Uri]::new($UnrelatedRepositoryUrl, [System.UriKind]::Absolute)
+}
+catch {
+  throw "UnrelatedRepositoryUrl must be an absolute direct svn:// URL."
+}
+Assert-True ($unrelatedRepositoryUri.Scheme -ceq "svn") "UnrelatedRepositoryUrl must use direct svn:// transport."
+Assert-True ($unrelatedRepositoryUri.Host -ceq "127.0.0.1") "UnrelatedRepositoryUrl must use the controlled IPv4 loopback host."
+Assert-True ([string]::IsNullOrEmpty($unrelatedRepositoryUri.UserInfo)) "UnrelatedRepositoryUrl must not contain user information."
+Assert-True ([string]::IsNullOrEmpty($unrelatedRepositoryUri.Query) -and [string]::IsNullOrEmpty($unrelatedRepositoryUri.Fragment)) "UnrelatedRepositoryUrl must not contain a query or fragment."
+Assert-True ($unrelatedRepositoryUri.Port -eq $repositoryUri.Port) "UnrelatedRepositoryUrl must use the controlled source-built svnserve port."
+Assert-True ($unrelatedRepositoryUri.AbsolutePath -ceq "/unrelated/trunk") "UnrelatedRepositoryUrl must identify the separately created unrelated repository trunk."
+Assert-True (-not $unrelatedRepositoryUri.AbsoluteUri.Equals($repositoryUri.AbsoluteUri, [System.StringComparison]::Ordinal)) "UnrelatedRepositoryUrl must differ from RepositoryUrl."
 
 $expectedConfig = "[general]`nanon-access = write`nauth-access = none`nauthz-db = authz`nrealm = SubversionR I6 Controlled Anonymous`n[sasl]`nuse-sasl = false"
 $actualConfig = (Get-Content -Raw -LiteralPath $fixtureConfigResolved).Replace("`r`n", "`n")
@@ -1063,6 +1080,21 @@ Assert-True ($null -ne (Get-Command Register-CimIndicationEvent -CommandType Cmd
 $packagedI6ProbeResolved = Resolve-RequiredFile (Join-Path $PSScriptRoot "probe-m8-i6-packaged-native.mjs") "packaged-native I6 positive probe"
 $seedWorkingCopy = Resolve-RequiredDirectory (Join-Path $fixtureRootResolved "seed-wc") "I6 seed working copy"
 $oracleConfigRoot = Resolve-RequiredDirectory (Join-Path $fixtureRootResolved "fixture-cli-config") "I6 fixture CLI configuration"
+$repositoryUuidResult = Invoke-BoundedProcess $svnResolved @(
+  "info", "--show-item", "repos-uuid", $RepositoryUrl,
+  "--non-interactive", "--no-auth-cache", "--config-dir", $oracleConfigRoot
+) 30
+$unrelatedRepositoryUuidResult = Invoke-BoundedProcess $svnResolved @(
+  "info", "--show-item", "repos-uuid", $UnrelatedRepositoryUrl,
+  "--non-interactive", "--no-auth-cache", "--config-dir", $oracleConfigRoot
+) 30
+Assert-True ($repositoryUuidResult.ExitCode -eq 0 -and $repositoryUuidResult.Stderr.Length -eq 0) "The driver could not read the controlled repository UUID."
+Assert-True ($unrelatedRepositoryUuidResult.ExitCode -eq 0 -and $unrelatedRepositoryUuidResult.Stderr.Length -eq 0) "The driver could not read the controlled unrelated repository UUID."
+$repositoryUuid = $repositoryUuidResult.Stdout.Trim()
+$unrelatedRepositoryUuid = $unrelatedRepositoryUuidResult.Stdout.Trim()
+Assert-True ($repositoryUuid -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') "The controlled repository UUID was invalid."
+Assert-True ($unrelatedRepositoryUuid -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') "The controlled unrelated repository UUID was invalid."
+Assert-True (-not $repositoryUuid.Equals($unrelatedRepositoryUuid, [System.StringComparison]::OrdinalIgnoreCase)) "The unrelated repository must have a distinct repository UUID."
 Add-Content -LiteralPath (Join-Path $seedWorkingCopy "tracked.txt") -Value "SubversionR I6 controlled r3 update fixture"
 $seedCommitResult = Invoke-BoundedProcess $svnResolved @(
   "commit", $seedWorkingCopy,
@@ -1939,6 +1971,7 @@ Assert-True (-not (Test-Path -LiteralPath $recoveryBlockedWorkRoot)) "The recove
 New-Item -ItemType Directory -Path $recoveryBlockedWorkRoot | Out-Null
 $recoveryBlockedObservations = @()
 $recoveryBlockedSettlementObservations = @()
+$unrelatedRepositoryObservations = @()
 try {
   $recoveryBlockedContracts = @(
     [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p" },
@@ -1949,8 +1982,14 @@ try {
     $surfaceRoot = Join-Path $probeRoot "recovery-blocked-$surfaceName"
     $surfaceWorkRoot = Join-Path $recoveryBlockedWorkRoot ([string]$contract.WorkRoot)
     $fixtureStatePath = Join-Path $surfaceRoot "fixture-state.json"
+    $unrelatedProxyStatePath = Join-Path $surfaceRoot "unrelated-proxy-state.json"
+    $unrelatedCheckoutTarget = Join-Path $surfaceWorkRoot "u"
     New-Item -ItemType Directory -Force -Path $surfaceRoot, $surfaceWorkRoot | Out-Null
+    Assert-True ($unrelatedCheckoutTarget.Length -le 120) "The $surfaceName unrelated checkout target exceeds the reviewed 120-character budget."
+    Assert-True (-not (Test-Path -LiteralPath $unrelatedCheckoutTarget)) "The $surfaceName unrelated checkout target already existed."
     $faultFixture = $null
+    $unrelatedProxy = $null
+    $unrelatedProxyAfter = $null
     $processStartSourceIdentifier = "subversionr-m8-i6-recovery-blocked-$([Guid]::NewGuid().ToString('N'))"
     $processStartSubscriber = $null
     $processStartEvents = [System.Collections.Generic.List[object]]::new()
@@ -1959,6 +1998,17 @@ try {
       Assert-CandidateProcessAbsent $daemonResolved "The $surfaceName recovery-blocked preflight"
       $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "command-stall" $fixtureStatePath
       $faultRepositoryUrl = "svn://127.0.0.1:$([int]$faultFixture.State.port)/repo/trunk"
+      $unrelatedProxy = Start-CountingProxy $nodeHost $countingProxyResolved $repositoryUri.Port $unrelatedProxyStatePath
+      $unrelatedProxyBaseline = Read-CountingProxyState $unrelatedProxyStatePath $unrelatedProxy.Process $true
+      foreach ($counterName in @(
+          "acceptedConnections", "upstreamAttempts", "upstreamConnections",
+          "clientToUpstreamBytes", "upstreamToClientBytes", "activeConnections", "upstreamConnectFailures"
+        )) {
+        Assert-True ([int64]$unrelatedProxyBaseline.$counterName -eq 0) "The $surfaceName unrelated counting proxy did not begin at zero for '$counterName'."
+      }
+      $unrelatedProxyUriBuilder = [System.UriBuilder]::new($unrelatedRepositoryUri)
+      $unrelatedProxyUriBuilder.Port = [int]$unrelatedProxy.State.port
+      $proxiedUnrelatedRepositoryUrl = $unrelatedProxyUriBuilder.Uri.AbsoluteUri
       try {
         Register-CimIndicationEvent `
           -ClassName Win32_ProcessStartTrace `
@@ -1986,6 +2036,8 @@ try {
           "--checkout-target", (Join-Path $workspaceRoot "checkout"),
           "--fault-repository-url", $faultRepositoryUrl,
           "--healthy-repository-url", $RepositoryUrl,
+          "--unrelated-repository-url", $proxiedUnrelatedRepositoryUrl,
+          "--unrelated-checkout-target", $unrelatedCheckoutTarget,
           "--fault-state-path", $fixtureStatePath,
           "--origin-operation-id", ([Guid]::NewGuid().ToString("D")),
           "--origin-timeout-ms", "5000",
@@ -2003,6 +2055,8 @@ try {
           "-FixtureRoot", $installedFixtureRoot,
           "-FaultRepositoryUrl", $faultRepositoryUrl,
           "-HealthyRepositoryUrl", $RepositoryUrl,
+          "-UnrelatedRepositoryUrl", $proxiedUnrelatedRepositoryUrl,
+          "-UnrelatedTargetPath", $unrelatedCheckoutTarget,
           "-FaultFixtureStatePath", $fixtureStatePath,
           "-OriginOperationId", ([Guid]::NewGuid().ToString("D")),
           "-RetryOperationId", ([Guid]::NewGuid().ToString("D")),
@@ -2028,6 +2082,13 @@ try {
         [string]$probeReport.settlementReason -ceq "remoteRecoveryBlocked" -and
         [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
         $probeReport.armedWindowObserved -eq $true -and
+        $probeReport.unrelatedRepositoryServed -eq $true -and
+        $probeReport.blockedEntryUnchangedAfterUnrelated -eq $true -and
+        $probeReport.blockedJournalUnchangedAfterUnrelated -eq $true -and
+        [string]$probeReport.blockedJournalBytesSha256BeforeUnrelated -cmatch '^[0-9a-f]{64}$' -and
+        [string]$probeReport.blockedJournalBytesSha256AfterUnrelated -ceq [string]$probeReport.blockedJournalBytesSha256BeforeUnrelated -and
+        [int]$probeReport.unrelatedCheckoutRevision -eq 2 -and
+        [string]$probeReport.unrelatedTargetPathSha256 -ceq (Get-TextSha256 $unrelatedCheckoutTarget) -and
         $probeReport.fixtureCountersUnchangedOnBlockedRetry -eq $true -and
         [string]$probeReport.targetDisposition -ceq "confirmedAbsent" -and
         [int]$probeReport.temporaryRootsAfter -eq 0 -and
@@ -2082,6 +2143,16 @@ try {
         [int]$faultState.reposInfoSent -eq 1 -and [int]$faultState.commandsReceived -eq 1 -and
         [int]$faultState.followupContacts -eq 0 -and [int]$faultState.suppliedAuthorityConnections -eq 0
       ) "The $surfaceName recovery-blocked command-stage network observation was invalid."
+      $unrelatedProxyAfter = Read-CountingProxyState $unrelatedProxyStatePath $unrelatedProxy.Process $true
+      Assert-True (
+        [int64]$unrelatedProxyAfter.acceptedConnections -eq 1 -and
+        [int64]$unrelatedProxyAfter.upstreamAttempts -eq 1 -and
+        [int64]$unrelatedProxyAfter.upstreamConnections -eq 1 -and
+        [int64]$unrelatedProxyAfter.clientToUpstreamBytes -gt 0 -and
+        [int64]$unrelatedProxyAfter.upstreamToClientBytes -gt 0 -and
+        [int]$unrelatedProxyAfter.activeConnections -eq 0 -and
+        [int]$unrelatedProxyAfter.upstreamConnectFailures -eq 0
+      ) "The $surfaceName unrelated repository proxy observation was invalid."
       Complete-ProcessStartEventDrain $processStartSourceIdentifier $processStartEvents $processStartEventKeys $ProcessStartEventSettlementMilliseconds
       $processObservation = Get-RecoveryBlockedProcessObservation `
         -AllEvents @($processStartEvents) `
@@ -2117,13 +2188,46 @@ try {
         surface = $surfaceName
         blocked = $probeReport.blocked
       }
+      $unrelatedRepositoryObservations += [pscustomobject]@{
+        surface = $surfaceName
+        originCode = "none"
+        originReason = "none"
+        settlementCode = "none"
+        settlementReason = "none"
+        networkProgress = "command"
+        networkAttempts = [int]$unrelatedProxyAfter.upstreamAttempts
+        networkConnections = [int]$unrelatedProxyAfter.upstreamConnections
+        fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations
+        credentialRequests = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialRequests } else { [int]$probeReport.authActivity.credentialRequests }
+        credentialSettlements = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialSettlements } else { [int]$probeReport.authActivity.credentialSettlements }
+        followupNetworkContacts = 0
+        workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter
+        temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        diagnosticsRedacted = [bool]$probeReport.diagnosticsRedacted
+      }
     }
     finally {
       if ($null -ne $processStartSubscriber) {
         Unregister-Event -SubscriptionId $processStartSubscriber.SubscriptionId -ErrorAction SilentlyContinue
       }
       Get-Event -SourceIdentifier $processStartSourceIdentifier -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
-      if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "command-stall" }
+      try {
+        if ($null -ne $unrelatedProxy) {
+          $unrelatedProxyFinal = Stop-CountingProxy $unrelatedProxy
+          if ($null -ne $unrelatedProxyAfter) {
+            foreach ($counterName in @(
+                "acceptedConnections", "upstreamAttempts", "upstreamConnections",
+                "clientToUpstreamBytes", "upstreamToClientBytes", "upstreamConnectFailures"
+              )) {
+              Assert-True ([int64]$unrelatedProxyFinal.$counterName -eq [int64]$unrelatedProxyAfter.$counterName) "The stopped $surfaceName unrelated counting proxy changed final counter '$counterName'."
+            }
+          }
+          Assert-True ([int]$unrelatedProxyFinal.activeConnections -eq 0) "The stopped $surfaceName unrelated counting proxy retained an active connection."
+        }
+      }
+      finally {
+        if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "command-stall" }
+      }
     }
   }
 }
@@ -2136,6 +2240,7 @@ finally {
 }
 Assert-True ($recoveryBlockedObservations.Count -eq 2) "The packaged-native and installed VSIX recovery-blocked observation set was incomplete."
 Assert-True ($recoveryBlockedSettlementObservations.Count -eq 2) "The packaged-native and installed VSIX blocked settlement set was incomplete."
+Assert-True ($unrelatedRepositoryObservations.Count -eq 2) "The packaged-native and installed VSIX unrelated-repository observation set was incomplete."
 
 $stalledReadWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6r\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
 Assert-True (Test-PathWithin $stalledReadWorkRoot $repoTargetRoot) "The stalled-mid-read short work root escaped repo target."
@@ -2922,4 +3027,4 @@ finally {
 Assert-True ($trustRevokedObservations.Count -eq 2) "The packaged-native and installed VSIX trust-revoked observation set was incomplete."
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, and durable recovery-blocked cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells, including Safe and Indeterminate recovery, and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, durable recovery-blocked, and blocked-lane unrelated-repository cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface negative/recovery cells, including Safe and Indeterminate recovery, and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."

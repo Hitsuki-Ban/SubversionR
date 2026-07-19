@@ -5,6 +5,8 @@ param(
   [Parameter(Mandatory = $true)] [string]$FixtureRoot,
   [Parameter(Mandatory = $true)] [string]$FaultRepositoryUrl,
   [Parameter(Mandatory = $true)] [string]$HealthyRepositoryUrl,
+  [Parameter(Mandatory = $true)] [string]$UnrelatedRepositoryUrl,
+  [Parameter(Mandatory = $true)] [string]$UnrelatedTargetPath,
   [Parameter(Mandatory = $true)] [string]$FaultFixtureStatePath,
   [Parameter(Mandatory = $true)] [ValidatePattern('^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')] [string]$OriginOperationId,
   [Parameter(Mandatory = $true)] [ValidatePattern('^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')] [string]$RetryOperationId,
@@ -72,6 +74,12 @@ function Get-TextSha256([string]$Value) {
     return [Convert]::ToHexString($algorithm.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Value))).ToLowerInvariant()
   }
   finally { $algorithm.Dispose() }
+}
+
+function Assert-NonemptyWorkingCopyDatabase([string]$TargetPath, [string]$Name) {
+  $databasePath = Join-Path $TargetPath ".svn\wc.db"
+  Assert-True (Test-Path -LiteralPath $databasePath -PathType Leaf) "$Name did not create a real SVN working-copy database."
+  Assert-True ((Get-Item -LiteralPath $databasePath).Length -gt 0) "$Name working-copy database was empty."
 }
 
 function ConvertTo-ProcessArgument([string]$Value) {
@@ -207,7 +215,11 @@ $faultStateResolved = Resolve-RequiredFile $FaultFixtureStatePath "FaultFixtureS
 $fixtureResolved = Resolve-NewDirectoryPath $FixtureRoot "FixtureRoot"
 $faultUri = Assert-LoopbackSvnUrl $FaultRepositoryUrl "FaultRepositoryUrl"
 $healthyUri = Assert-LoopbackSvnUrl $HealthyRepositoryUrl "HealthyRepositoryUrl"
+$unrelatedUri = Assert-LoopbackSvnUrl $UnrelatedRepositoryUrl "UnrelatedRepositoryUrl"
 Assert-True ($faultUri.Port -ne $healthyUri.Port) "FaultRepositoryUrl and HealthyRepositoryUrl must use distinct controlled endpoints."
+Assert-True ($unrelatedUri.AbsolutePath -ceq "/unrelated/trunk") "UnrelatedRepositoryUrl must identify the controlled unrelated repository trunk."
+Assert-True ($unrelatedUri.Port -ne $faultUri.Port) "UnrelatedRepositoryUrl and FaultRepositoryUrl must use distinct controlled endpoints."
+Assert-True ($unrelatedUri.Port -ne $healthyUri.Port) "UnrelatedRepositoryUrl and HealthyRepositoryUrl must use distinct controlled endpoints."
 Assert-True ((@($OriginOperationId, $RetryOperationId, $FreshOperationId) | Sort-Object -Unique).Count -eq 3) "All recovery-blocked operation IDs must be distinct."
 
 New-Item -ItemType Directory -Path $fixtureResolved | Out-Null
@@ -224,11 +236,13 @@ $profileRoot = Join-Path $environmentRoot "p"
 $armResultPath = Join-Path $fixtureResolved "arm-result.json"
 $recoverResultPath = Join-Path $fixtureResolved "recover-result.json"
 $targetPath = Join-Path $fixtureResolved "checkout-target"
+$unrelatedTargetResolved = Resolve-NewDirectoryPath $UnrelatedTargetPath "UnrelatedTargetPath"
 $remoteWorkersRoot = Join-Path $tempRoot "SubversionR\remote-workers"
 $remoteStateRoot = Join-Path $userDataRoot "User\globalStorage\hitsuki-ban.subversionr\remote-state"
 $journalPath = Join-Path $remoteStateRoot $JournalFileName
 $journalTemporaryPath = Join-Path $remoteStateRoot $JournalTemporaryFileName
 Assert-True (Test-PathWithin $targetPath $fixtureResolved) "The checkout target escaped the isolated fixture root."
+Assert-True (-not $unrelatedTargetResolved.Equals($targetPath, [System.StringComparison]::OrdinalIgnoreCase)) "UnrelatedTargetPath must differ from the blocked checkout target."
 foreach ($directory in @($userDataRoot, $extensionsRoot, $workspaceRoot, $harnessDistRoot, $tempRoot, $appDataRoot, $localAppDataRoot, $profileRoot)) {
   New-Item -ItemType Directory -Path $directory -Force | Out-Null
 }
@@ -263,13 +277,15 @@ async function run() {
   } else if (phase === "recover") {
     request = {
       token, phase, faultRepositoryUrl: required("SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FAULT_URL"),
-      healthyRepositoryUrl: required("SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_HEALTHY_URL"), targetPath, operationId,
+      healthyRepositoryUrl: required("SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_HEALTHY_URL"),
+      unrelatedRepositoryUrl: required("SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_UNRELATED_URL"),
+      unrelatedTargetPath: required("SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_UNRELATED_TARGET"), targetPath, operationId,
       retryOperationId: required("SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_RETRY_OPERATION_ID"),
       freshOperationId: required("SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FRESH_OPERATION_ID"),
       fixtureStatePath: required("SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FAULT_STATE"), timeoutMs: 300000,
     };
   } else { throw new Error("Installed recovery-blocked phase was invalid."); }
-  const report = await withDeadline(vscode.commands.executeCommand(COMMAND, request), `installed recovery-blocked ${phase} command`, phase === "arm" ? 35000 : 330000);
+  const report = await withDeadline(vscode.commands.executeCommand(COMMAND, request), `installed recovery-blocked ${phase} command`, phase === "arm" ? 35000 : 630000);
   if (process.env[TOKEN_ENVIRONMENT] !== undefined) throw new Error("Installed recovery-blocked token was not consumed during activation.");
   const serialized = JSON.stringify(report).toLowerCase();
   const sensitive = Object.values(request).filter((value) => typeof value === "string" && value !== phase && value !== "arm" && value !== "recover");
@@ -298,7 +314,8 @@ $environmentNames = @(
   "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_EXTENSIONS_ROOT", "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_TARGET",
   "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_ORIGIN_OPERATION_ID", "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_RETRY_OPERATION_ID",
   "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FRESH_OPERATION_ID", "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FAULT_URL",
-  "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_HEALTHY_URL", "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FAULT_STATE",
+  "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_HEALTHY_URL", "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_UNRELATED_URL",
+  "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_UNRELATED_TARGET", "SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FAULT_STATE",
   $TokenEnvironment, "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME", "TEMP", "TMP"
 )
 $previousEnvironment = @{}
@@ -313,6 +330,8 @@ try {
   $env:SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FRESH_OPERATION_ID = $FreshOperationId
   $env:SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FAULT_URL = $FaultRepositoryUrl
   $env:SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_HEALTHY_URL = $HealthyRepositoryUrl
+  $env:SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_UNRELATED_URL = $UnrelatedRepositoryUrl
+  $env:SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_UNRELATED_TARGET = $unrelatedTargetResolved
   $env:SUBVERSIONR_INSTALLED_I6_RECOVERY_BLOCKED_FAULT_STATE = $faultStateResolved
   $env:APPDATA = $appDataRoot
   $env:LOCALAPPDATA = $localAppDataRoot
@@ -398,6 +417,8 @@ Assert-True (
 $recoverReport = $recoverResult.report
 Assert-ExactProperties $recoverReport @(
   "schema", "schemaVersion", "kind", "phase", "outcome", "stableCode", "reason", "restartRestoredBlocked", "automaticClear",
+  "unrelatedRepositoryServed", "blockedEntryUnchangedAfterUnrelated", "unrelatedCheckoutRevision", "unrelatedTargetPathSha256",
+  "blockedJournalUnchangedAfterUnrelated", "blockedJournalBytesSha256BeforeUnrelated", "blockedJournalBytesSha256AfterUnrelated",
   "requiredConfirmation", "armedTargetPathSha256", "confirmedTargetPathSha256", "armedOriginOperationIdSha256",
   "confirmedOriginOperationIdSha256", "confirmedEntryRemoved", "fixtureCountersUnchangedOnBlockedRetry",
   "targetDisposition", "subsequentCheckoutPassed", "checkoutRevision", "protocol", "trust", "authActivity", "diagnosticsRedacted", "redaction"
@@ -408,6 +429,13 @@ Assert-True (
   [string]$recoverReport.stableCode -ceq "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" -and
   [string]$recoverReport.reason -ceq "remoteRecoveryBlocked" -and
   $recoverReport.restartRestoredBlocked -eq $true -and $recoverReport.automaticClear -eq $false -and
+  $recoverReport.unrelatedRepositoryServed -eq $true -and
+  $recoverReport.blockedEntryUnchangedAfterUnrelated -eq $true -and
+  $recoverReport.blockedJournalUnchangedAfterUnrelated -eq $true -and
+  [string]$recoverReport.blockedJournalBytesSha256BeforeUnrelated -cmatch '^[0-9a-f]{64}$' -and
+  [string]$recoverReport.blockedJournalBytesSha256AfterUnrelated -ceq [string]$recoverReport.blockedJournalBytesSha256BeforeUnrelated -and
+  [int]$recoverReport.unrelatedCheckoutRevision -ge 0 -and
+  [string]$recoverReport.unrelatedTargetPathSha256 -ceq (Get-TextSha256 $unrelatedTargetResolved) -and
   [string]$recoverReport.requiredConfirmation -ceq "reviewedAndResolved" -and
   [string]$recoverReport.armedTargetPathSha256 -ceq $armedTargetPathSha256 -and
   [string]$recoverReport.confirmedTargetPathSha256 -ceq $armedTargetPathSha256 -and
@@ -425,8 +453,8 @@ Assert-True (
   [int]$recoverReport.authActivity.certificateRequests -eq 0
 ) "Installed recovery-blocked execution produced authentication activity."
 Assert-True ($recoverReport.diagnosticsRedacted -eq $true) "Installed recovery-blocked execution did not prove redaction."
-Assert-True (Test-Path -LiteralPath (Join-Path $targetPath ".svn\wc.db") -PathType Leaf) "The fresh healthy checkout did not create a real SVN working copy."
-Assert-True ((Get-Item -LiteralPath (Join-Path $targetPath ".svn\wc.db")).Length -gt 0) "The fresh healthy checkout database was empty."
+Assert-NonemptyWorkingCopyDatabase $unrelatedTargetResolved "The unrelated repository checkout"
+Assert-NonemptyWorkingCopyDatabase $targetPath "The fresh healthy checkout"
 Assert-True (-not (Test-Path -LiteralPath $journalTemporaryPath)) "Installed recovery-blocked recovery left a checkout journal temporary file."
 $clearedJournal = Get-Content -Raw -LiteralPath $journalPath | ConvertFrom-Json -Depth 8
 Assert-ExactProperties $clearedJournal @("schemaVersion", "entries") "installed recovery-blocked cleared journal"
@@ -435,7 +463,10 @@ $temporaryRootsAfter = if (Test-Path -LiteralPath $remoteWorkersRoot) { @(Get-Ch
 Assert-True ($temporaryRootsAfter -eq 0) "Installed recovery-blocked execution left operation temporary roots."
 
 $reportText = @($armReport, $recoverReport) | ConvertTo-Json -Depth 32 -Compress
-foreach ($sensitive in @($FaultRepositoryUrl, $HealthyRepositoryUrl, $faultStateResolved, $targetPath, $OriginOperationId, $RetryOperationId, $FreshOperationId)) {
+foreach ($sensitive in @(
+    $FaultRepositoryUrl, $HealthyRepositoryUrl, $UnrelatedRepositoryUrl, $faultStateResolved, $targetPath,
+    $unrelatedTargetResolved, $OriginOperationId, $RetryOperationId, $FreshOperationId
+  )) {
   $sensitiveForms = @(
     $sensitive,
     $sensitive.Replace("\", "/"),
@@ -460,6 +491,13 @@ foreach ($sensitive in @($FaultRepositoryUrl, $HealthyRepositoryUrl, $faultState
   authActivity = $recoverReport.authActivity
   diagnosticsRedacted = [bool]$recoverReport.diagnosticsRedacted
   armedWindowObserved = $true
+  unrelatedRepositoryServed = [bool]$recoverReport.unrelatedRepositoryServed
+  blockedEntryUnchangedAfterUnrelated = [bool]$recoverReport.blockedEntryUnchangedAfterUnrelated
+  blockedJournalUnchangedAfterUnrelated = [bool]$recoverReport.blockedJournalUnchangedAfterUnrelated
+  blockedJournalBytesSha256BeforeUnrelated = [string]$recoverReport.blockedJournalBytesSha256BeforeUnrelated
+  blockedJournalBytesSha256AfterUnrelated = [string]$recoverReport.blockedJournalBytesSha256AfterUnrelated
+  unrelatedCheckoutRevision = [int]$recoverReport.unrelatedCheckoutRevision
+  unrelatedTargetPathSha256 = [string]$recoverReport.unrelatedTargetPathSha256
   blocked = [ordered]@{
     outcome = "Blocked"
     stableCode = [string]$recoverReport.stableCode

@@ -156,7 +156,10 @@ The report must contain all of the following controlled cells in exact order:
   `operationDeadlineExceeded`, whose product settlement is
   `SUBVERSIONR_REMOTE_RECOVERY_BLOCKED` / `remoteRecoveryBlocked`, and which
   clears only through the exact explicit disposition confirmation contract;
-- unrelated repository state unchanged;
+- unrelated-repository serviceability while the original checkout-target lane
+  remains blocked: each surface checks out a second source-built repository
+  with a distinct UUID through one transparent counting-proxy connection, while
+  the original blocked entry and its durable journal bytes remain unchanged;
 - local filesystem events causing zero remote network attempts; and
 - bounded redaction with no forbidden token disclosure.
 
@@ -237,11 +240,20 @@ This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
 `saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`,
 `stalledMidRead`, `deadline`, `cancellation`, `trustRevoked`, and
-`recoveryBlocked` product probes. The blocked-recovery probe uses a dedicated
+`recoveryBlocked`, and `unrelatedRepository` product probes. The blocked-recovery probe uses a dedicated
 `command-stall` server that completes greeting, anonymous authentication, and
 repository-info exchange, then stalls after the first real RA command. While
 that request remains pending, each surface captures the exact durable `armed`
 entry before observing the timeout-origin/recovery-blocked settlement.
+Before confirming that blocked entry, the same restarted product surface checks
+out `/unrelated/trunk` from a separately created repository whose UUID is
+independently checked by both the runner and the bound probe driver. A fresh
+transparent counting proxy must observe exactly one accepted connection, one
+upstream attempt, one upstream connection, nonzero bytes in both directions,
+zero connection failures, and zero active connections at settlement. The
+unrelated working copy must contain a nonempty `.svn/wc.db`; the recovery RPC
+entry and the original checkout journal's raw bytes must remain identical across
+that checkout.
 The separate `deadline` probes use independent
 operation IDs and a reviewed 500 ms envelope timeout, measure request settlement
 with a monotonic clock, and require the owned timeout plus cleanup to settle no
@@ -269,6 +281,12 @@ subsequent checkout against the still-running source-built `svnserve`. The
 command-stage stall occurs before libsvn creates the target directory, so the
 evidence records the operator disposition as an explicit `confirmedAbsent`
 review; it does not manufacture or silently remove a synthetic partial target.
+The same probes also close `unrelatedRepository`: the separately seeded fixture
+has deterministic HEAD `r2`, and the probes require the checkout to report that
+exact revision. The unrelated checkout occurs
+after restart has restored the blocked lane and before same-target retry or
+operator confirmation, so later journal clearance cannot mask cross-repository
+interference.
 
 The installed-negative VSIX/user-data environment uses a bounded disposable
 work root under repository `target/i6n`, separate from the evidence fixture

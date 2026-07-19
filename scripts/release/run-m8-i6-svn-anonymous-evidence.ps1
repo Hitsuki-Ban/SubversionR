@@ -166,7 +166,9 @@ New-Item -ItemType Directory -Force -Path $fixtureRootResolved | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $evidenceResolved) | Out-Null
 
 $repositoryRoot = Join-Path $fixtureRootResolved "repositories\repo"
+$unrelatedRepositoryRoot = Join-Path $fixtureRootResolved "repositories\unrelated"
 $seedWorkingCopy = Join-Path $fixtureRootResolved "seed-wc"
+$unrelatedSeedWorkingCopy = Join-Path $fixtureRootResolved "unrelated-seed-wc"
 $oracleConfigRoot = Join-Path $fixtureRootResolved "fixture-cli-config"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $repositoryRoot) | Out-Null
 New-Item -ItemType Directory -Force -Path $oracleConfigRoot | Out-Null
@@ -174,7 +176,9 @@ Set-Content -LiteralPath (Join-Path $oracleConfigRoot "config") -Value "[auth]`n
 Set-Content -LiteralPath (Join-Path $oracleConfigRoot "servers") -Value "[global]`nstore-auth-creds = no`nstore-passwords = no`n" -NoNewline
 
 Invoke-RequiredTool $svnadmin @("create", $repositoryRoot) "Create I6 fixture repository" | Out-Null
+Invoke-RequiredTool $svnadmin @("create", $unrelatedRepositoryRoot) "Create I6 unrelated fixture repository" | Out-Null
 $repositoryFileUrl = ([System.Uri]::new($repositoryRoot)).AbsoluteUri.TrimEnd('/')
+$unrelatedRepositoryFileUrl = ([System.Uri]::new($unrelatedRepositoryRoot)).AbsoluteUri.TrimEnd('/')
 Invoke-RequiredTool $svn @(
   "mkdir",
   "$repositoryFileUrl/trunk",
@@ -217,6 +221,45 @@ Invoke-RequiredTool $svn @(
   $oracleConfigRoot
 ) "Commit I6 fixture seed file" | Out-Null
 
+Invoke-RequiredTool $svn @(
+  "mkdir",
+  "$unrelatedRepositoryFileUrl/trunk",
+  "-m",
+  "create I6 unrelated fixture layout",
+  "--non-interactive",
+  "--no-auth-cache",
+  "--config-dir",
+  $oracleConfigRoot
+) "Create I6 unrelated fixture layout" | Out-Null
+Invoke-RequiredTool $svn @(
+  "checkout",
+  "$unrelatedRepositoryFileUrl/trunk",
+  $unrelatedSeedWorkingCopy,
+  "--non-interactive",
+  "--no-auth-cache",
+  "--config-dir",
+  $oracleConfigRoot
+) "Checkout I6 unrelated fixture seed working copy" | Out-Null
+Set-Content -LiteralPath (Join-Path $unrelatedSeedWorkingCopy "unrelated.txt") -Value "SubversionR I6 controlled unrelated repository`n" -NoNewline
+Invoke-RequiredTool $svn @(
+  "add",
+  (Join-Path $unrelatedSeedWorkingCopy "unrelated.txt"),
+  "--non-interactive",
+  "--no-auth-cache",
+  "--config-dir",
+  $oracleConfigRoot
+) "Add I6 unrelated fixture seed file" | Out-Null
+Invoke-RequiredTool $svn @(
+  "commit",
+  $unrelatedSeedWorkingCopy,
+  "-m",
+  "seed I6 unrelated fixture",
+  "--non-interactive",
+  "--no-auth-cache",
+  "--config-dir",
+  $oracleConfigRoot
+) "Commit I6 unrelated fixture seed file" | Out-Null
+
 $fixtureConfigPath = Join-Path $repositoryRoot "conf\svnserve.conf"
 $fixtureAuthzPath = Join-Path $repositoryRoot "conf\authz"
 $fixtureLogPath = Join-Path $fixtureRootResolved "logs\svnserve.log"
@@ -234,9 +277,25 @@ Set-Content -LiteralPath $fixtureAuthzPath -Value @"
 [repo:/]
 * = rw
 "@ -NoNewline
+$unrelatedFixtureConfigPath = Join-Path $unrelatedRepositoryRoot "conf\svnserve.conf"
+$unrelatedFixtureAuthzPath = Join-Path $unrelatedRepositoryRoot "conf\authz"
+Set-Content -LiteralPath $unrelatedFixtureConfigPath -Value @"
+[general]
+anon-access = write
+auth-access = none
+authz-db = authz
+realm = SubversionR I6 Controlled Unrelated Anonymous
+[sasl]
+use-sasl = false
+"@ -NoNewline
+Set-Content -LiteralPath $unrelatedFixtureAuthzPath -Value @"
+[unrelated:/]
+* = rw
+"@ -NoNewline
 
 $port = Get-LoopbackPort
 $repositoryUrl = "svn://127.0.0.1:$port/repo/trunk"
+$unrelatedRepositoryUrl = "svn://127.0.0.1:$port/unrelated/trunk"
 $server = $null
 try {
   $server = Start-Process -FilePath $svnserve -ArgumentList @(
@@ -252,6 +311,12 @@ try {
     $fixtureLogPath
   ) -PassThru -WindowStyle Hidden
   Wait-SvnserveReady $svn $repositoryUrl $oracleConfigRoot $server
+  Wait-SvnserveReady $svn $unrelatedRepositoryUrl $oracleConfigRoot $server
+  $repositoryUuid = (Invoke-RequiredTool $svn @("info", "--show-item", "repos-uuid", $repositoryUrl, "--non-interactive", "--no-auth-cache", "--config-dir", $oracleConfigRoot) "Read I6 fixture repository UUID" | Select-Object -First 1).ToString().Trim()
+  $unrelatedRepositoryUuid = (Invoke-RequiredTool $svn @("info", "--show-item", "repos-uuid", $unrelatedRepositoryUrl, "--non-interactive", "--no-auth-cache", "--config-dir", $oracleConfigRoot) "Read I6 unrelated fixture repository UUID" | Select-Object -First 1).ToString().Trim()
+  Assert-True (-not [string]::IsNullOrWhiteSpace($repositoryUuid)) "The I6 fixture repository UUID was empty."
+  Assert-True (-not [string]::IsNullOrWhiteSpace($unrelatedRepositoryUuid)) "The I6 unrelated fixture repository UUID was empty."
+  Assert-True (-not $repositoryUuid.Equals($unrelatedRepositoryUuid, [System.StringComparison]::OrdinalIgnoreCase)) "The I6 unrelated fixture must have a distinct repository UUID."
   $svnserveStartTimeUtc = $server.StartTime.ToUniversalTime().ToString("O", [Globalization.CultureInfo]::InvariantCulture)
   $packagedAuthzWorkingCopyPath = Join-Path $fixtureRootResolved "authz-denied-packaged-wc"
   $installedAuthzWorkingCopyPath = Join-Path $fixtureRootResolved "authz-denied-installed-wc"
@@ -275,6 +340,7 @@ try {
 
   & pwsh -NoProfile -ExecutionPolicy Bypass -File $probeDriverResolved `
     -RepositoryUrl $repositoryUrl `
+    -UnrelatedRepositoryUrl $unrelatedRepositoryUrl `
     -FixtureRoot $fixtureRootResolved `
     -FixtureConfigPath $fixtureConfigPath `
     -FixtureAuthzPath $fixtureAuthzPath `

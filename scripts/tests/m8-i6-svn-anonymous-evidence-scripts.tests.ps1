@@ -871,6 +871,7 @@ try {
     "-ExecutionPolicy", "Bypass",
     "-File", $probeDriverPath,
     "-RepositoryUrl", "svn://127.0.0.1:3690/repo/trunk",
+    "-UnrelatedRepositoryUrl", "svn://127.0.0.1:3690/unrelated/trunk",
     "-FixtureRoot", $driverFixtureRoot,
     "-FixtureConfigPath", $driverConfigPath,
     "-FixtureAuthzPath", $driverAuthzPath,
@@ -906,6 +907,9 @@ try {
       'anon-access = write',
       'auth-access = none',
       'use-sasl = false',
+      'Create I6 unrelated fixture repository',
+      'The I6 unrelated fixture must have a distinct repository UUID.',
+      '-UnrelatedRepositoryUrl $unrelatedRepositoryUrl',
       '[string]$ProbeDriverPath',
       'Assert-SubversionStageForBridge',
       '-ExpectedArch "x64"',
@@ -946,7 +950,7 @@ try {
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, and durable recovery-blocked cells',
+      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, durable recovery-blocked, and blocked-lane unrelated-repository cells',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface negative/recovery cells',
@@ -980,6 +984,10 @@ try {
       'wireSettlementObserved',
       'Get-ZeroWorkerProcessObservation',
       'Start-CountingProxy',
+      'The unrelated repository must have a distinct repository UUID.',
+      'blockedJournalBytesSha256BeforeUnrelated',
+      'unrelatedCheckoutRevision -eq 2',
+      'The packaged-native and installed VSIX unrelated-repository observation set was incomplete.',
       '$proxyFinalState = Stop-CountingProxy $countingProxy',
       'The stopped installed local-event counting proxy changed final counter',
       'Get-CimProcessSnapshot',
@@ -995,6 +1003,9 @@ try {
     )) {
     Assert-True ($driverText.Contains($requiredObservationText)) "Packaged-negative evidence must retain measured process/network observation text '$requiredObservationText'."
   }
+  Assert-True (
+    $driverText -cmatch '(?s)try\s*\{\s*if \(\$null -ne \$unrelatedProxy\).*?\}\s*finally\s*\{\s*if \(\$null -ne \$faultFixture\) \{ Stop-FaultFixture'
+  ) "The unrelated counting proxy cleanup must not prevent command-stall fixture cleanup."
   foreach ($forbiddenObservationText in @(
       'Get-WmiObject',
       'networkAttempts = 1',
