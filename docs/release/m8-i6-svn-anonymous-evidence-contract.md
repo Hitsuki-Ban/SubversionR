@@ -235,29 +235,40 @@ when any candidate observation fails.
 
 This contract intentionally remains fail-closed. The source branch now contains
 the installed 100+1 stress probe and real packaged/installed `maliciousRoot`,
-`saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`, and
-`stalledMidRead`, `deadline`, `cancellation`, and `trustRevoked` product probes.
+`saslOnly`, `greetingStall`, `connectedStall`, `authzDenied`,
+`stalledMidRead`, `deadline`, `cancellation`, `trustRevoked`, and
+`recoveryBlocked` product probes. The blocked-recovery probe uses a dedicated
+`command-stall` server that completes greeting, anonymous authentication, and
+repository-info exchange, then stalls after the first real RA command. While
+that request remains pending, each surface captures the exact durable `armed`
+entry before observing the timeout-origin/recovery-blocked settlement.
 The separate `deadline` probes use independent
 operation IDs and a reviewed 500 ms envelope timeout, measure request settlement
 with a monotonic clock, and require the owned timeout plus cleanup to settle no
 later than the 5,000 ms cleanup slack before proving the same-session local lane
 is available. The evidence schema requires those timing values only for the
 `deadline` cell, so an existing stalled-mid-read observation cannot be
-relabelled. The remaining controlled negative/recovery cells
-are incomplete and no complete candidate report has passed the executable
+relabelled. The remaining controlled negative/recovery cells, including Safe
+and Indeterminate recovery, are incomplete and no complete candidate report has passed the executable
 verifier. Missing controlled observations may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
 only after one real report passes the executable verifier against the candidate
 artifacts.
 
-The two checkout-stall probes establish only the installed surface's exact
+The two earlier checkout-stall probes establish only the installed surface's exact
 timeout origin, recovery-blocked settlement, and one durable blocked entry bound
 to the checkout target and origin operation. They do not satisfy the
 `stalledMidRead` cell; that cell is established separately by a read-only
 remote-status operation whose origin and settlement both remain timeout. The
-checkout-stall probes also do not satisfy the complete `recoveryBlocked` cell,
-which additionally requires restart, explicit disposition confirmation,
-journal clearance, and a subsequent successful checkout.
+dedicated packaged and installed `recoveryBlocked` probes close that separate
+cell by capturing the armed entry before settlement, restarting the real product
+surface, proving the same target remains blocked without another network
+contact, confirming the reviewed target and origin through the exact
+`reviewedAndResolved` contract, requiring journal clearance, and completing a
+subsequent checkout against the still-running source-built `svnserve`. The
+command-stage stall occurs before libsvn creates the target directory, so the
+evidence records the operator disposition as an explicit `confirmedAbsent`
+review; it does not manufacture or silently remove a synthetic partial target.
 
 The installed-negative VSIX/user-data environment uses a bounded disposable
 work root under repository `target/i6n`, separate from the evidence fixture
@@ -265,6 +276,14 @@ tree, so the staged native bridge remains within the reviewed Windows path
 budget. Scenario fixture state and all reportable observations remain under the
 I6 fixture root. The driver verifies the disposable root stays below repository
 `target`, removes it in `finally`, and rejects any cleanup residue.
+
+The packaged and installed blocked-recovery probes use a separate bounded work
+root under repository `target/i6b`. Each surface owns an isolated remote-state
+root across exactly two daemon or Extension Host lifetimes. Its command-stall
+fixture binds an ephemeral loopback port while the original source-built
+`svnserve` remains online for the final successful checkout. The blocked retry
+must leave every fixture counter unchanged, so the explicit confirmation is the
+only action that releases the target lane.
 
 The stalled-mid-read packaged profile and installed VSIX/user-data environment
 similarly use a bounded disposable work root under repository `target/i6r`.

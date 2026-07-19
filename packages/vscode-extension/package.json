@@ -61,6 +61,7 @@
     "onCommand:subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
     "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
     "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",

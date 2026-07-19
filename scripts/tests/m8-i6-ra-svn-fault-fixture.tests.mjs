@@ -72,6 +72,31 @@ test("greeting-stall records the client greeting response then sends no auth req
   }
 });
 
+test("command-stall completes greeting, anonymous auth, and repos-info before stalling on the first checkout command", async () => {
+  const fixture = await startFixture("command-stall");
+  try {
+    const socket = await connect(fixture.port);
+    const reader = new ItemReader(socket);
+    await reader.read();
+    socket.write(clientGreeting(fixture.port));
+    await reader.read();
+    const repositoryInfo = (await reader.read()).toString("utf8");
+    assert.match(repositoryInfo, new RegExp(`svn://127\\.0\\.0\\.1:${fixture.port}/repo`, "u"));
+    socket.write("( get-latest-rev ( ) ) ");
+    const state = await fixture.waitFor((value) => value.commandsReceived === 1);
+    assert.equal(state.connections, 1);
+    assert.equal(state.greetingSent, 1);
+    assert.equal(state.clientResponseReceived, 1);
+    assert.equal(state.authRequestSent, 1);
+    assert.equal(state.reposInfoSent, 1);
+    assert.equal(state.followupContacts, 0);
+    assert.equal(await receivesData(socket, 100), false);
+    socket.destroy();
+  } finally {
+    await fixture.stop();
+  }
+});
+
 test("connected-stall accepts TCP without sending protocol bytes", async () => {
   const fixture = await startFixture("connected-stall");
   try {

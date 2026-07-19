@@ -14,6 +14,7 @@ $packagedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6
 $packagedDeadlineProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-deadline.mjs"
 $packagedCancellationProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-cancellation.mjs"
 $packagedTrustRevokedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-trust-revoked.mjs"
+$packagedRecoveryBlockedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-blocked.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
 $countingProxyPath = Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"
 $installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
@@ -23,6 +24,7 @@ $installedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i
 $installedDeadlineProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-deadline.ps1"
 $installedCancellationProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-cancellation.ps1"
 $installedTrustRevokedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-trust-revoked.ps1"
+$installedRecoveryBlockedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-blocked.ps1"
 $installedLocalEventProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
 $packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
@@ -345,7 +347,7 @@ function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [stri
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $packagedRecoveryBlockedProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedRecoveryBlockedProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
     Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
   }
 
@@ -387,6 +389,7 @@ try {
     packagedDeadlineProbe = New-ArtifactBinding "i6-packaged-deadline-probe" $packagedDeadlineProbePath
     packagedCancellationProbe = New-ArtifactBinding "i6-packaged-cancellation-probe" $packagedCancellationProbePath
     packagedTrustRevokedProbe = New-ArtifactBinding "i6-packaged-trust-revoked-probe" $packagedTrustRevokedProbePath
+    packagedRecoveryBlockedProbe = New-ArtifactBinding "i6-packaged-recovery-blocked-probe" $packagedRecoveryBlockedProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
     countingProxy = New-ArtifactBinding "i6-counting-proxy" $countingProxyPath
     installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
@@ -396,6 +399,7 @@ try {
     installedDeadlineProbe = New-ArtifactBinding "i6-installed-deadline-probe" $installedDeadlineProbePath
     installedCancellationProbe = New-ArtifactBinding "i6-installed-cancellation-probe" $installedCancellationProbePath
     installedTrustRevokedProbe = New-ArtifactBinding "i6-installed-trust-revoked-probe" $installedTrustRevokedProbePath
+    installedRecoveryBlockedProbe = New-ArtifactBinding "i6-installed-recovery-blocked-probe" $installedRecoveryBlockedProbePath
     installedLocalEventProbe = New-ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
     packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
@@ -770,12 +774,14 @@ try {
       @("packagedNegativeProbe", $packagedNegativeProbePath),
       @("packagedAuthzDeniedProbe", $packagedAuthzDeniedProbePath),
       @("packagedTrustRevokedProbe", $packagedTrustRevokedProbePath),
+      @("packagedRecoveryBlockedProbe", $packagedRecoveryBlockedProbePath),
       @("raSvnFaultFixture", $raSvnFaultFixturePath),
       @("countingProxy", $countingProxyPath),
       @("installedStressProbe", $installedStressProbePath),
       @("installedNegativeProbe", $installedNegativeProbePath),
       @("installedAuthzDeniedProbe", $installedAuthzDeniedProbePath),
       @("installedTrustRevokedProbe", $installedTrustRevokedProbePath),
+      @("installedRecoveryBlockedProbe", $installedRecoveryBlockedProbePath),
       @("installedLocalEventProbe", $installedLocalEventProbePath),
       @("installedVsixProbe", $installedVsixProbePath),
       @("packagedCompatibilityProbe", $packagedCompatibilityProbePath),
@@ -922,6 +928,7 @@ try {
       'probe-m8-i6-packaged-stalled-read.mjs',
       'probe-m8-i6-packaged-deadline.mjs',
       'probe-m8-i6-packaged-cancellation.mjs',
+      'probe-m8-i6-packaged-recovery-blocked.mjs',
       'serve-m8-i6-ra-svn-fault-fixture.mjs',
       'serve-m8-i6-counting-proxy.mjs',
       'probe-m8-i6-installed-stress.ps1',
@@ -930,6 +937,7 @@ try {
       'probe-m8-i6-installed-stalled-read.ps1',
       'probe-m8-i6-installed-deadline.ps1',
       'probe-m8-i6-installed-cancellation.ps1',
+      'probe-m8-i6-installed-recovery-blocked.ps1',
       'probe-m8-i6-installed-local-event-zero-network.ps1',
       'probe-m8-i6-installed-vsix.ps1',
       'test-vscode-installed-extension-host.ps1',
@@ -938,7 +946,7 @@ try {
       'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
       'the four packaged-native fault cells',
       'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, and trust-revoked remote-status cells',
+      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, and durable recovery-blocked cells',
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface negative/recovery cells',
@@ -1254,6 +1262,7 @@ try {
       "target/i6r",
       "monotonic clock",
       "target/i6d",
+      "command-stall",
       "may not be represented as"
     )) {
     Assert-True ($contractText.Contains($requiredText)) "I6 evidence contract must retain fail-closed boundary '$requiredText'."
@@ -1270,12 +1279,14 @@ try {
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-deadline.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native deadline probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-cancellation.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native cancellation probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-trust-revoked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native trust-revoked probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-recovery-blocked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native recovery-blocked probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stress-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed 100+1 stress probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-authz-denied-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed authz-denied probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stalled-read-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed stalled-mid-read probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-deadline-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed deadline probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-cancellation-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed cancellation probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-trust-revoked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed trust-revoked probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-recovery-blocked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed recovery-blocked probe contract tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-local-event-zero-network-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed local-event zero-network probe contract tests."
 
   Write-Host "M8 I6 svn anonymous evidence script tests passed."

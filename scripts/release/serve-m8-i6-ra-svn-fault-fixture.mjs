@@ -9,6 +9,7 @@ const SCENARIOS = new Set([
   "malicious-root",
   "sasl-only",
   "greeting-stall",
+  "command-stall",
   "connected-stall",
   "counting-listener",
 ]);
@@ -67,7 +68,14 @@ async function main() {
         connections: connectionNumber,
         followupContacts: state.followupContacts + (connectionNumber > 1 ? 1 : 0),
       })
-        .then(() => handleConnection(socket, options.scenario, state.suppliedAuthorityPort, persist, stopped, state))
+        .then(() => handleConnection(
+          socket,
+          options.scenario,
+          options.scenario === "malicious-root" ? state.suppliedAuthorityPort : state.port,
+          persist,
+          stopped,
+          state,
+        ))
         .catch(() => shutdown(1, persist, state, "failed"));
     });
     server.on("error", () => {
@@ -155,8 +163,19 @@ async function handleConnection(socket, scenario, port, persist, stopSignal, sta
 
   socket.write(noAuthRequest());
   await persist({ authRequestSent: state.authRequestSent + 1 });
-  socket.write(repositoryInfo(port));
+  socket.write(repositoryInfo(port, scenario));
   await persist({ reposInfoSent: state.reposInfoSent + 1 });
+
+  if (scenario === "command-stall") {
+    try {
+      await reader.readItem();
+    } catch {
+      return;
+    }
+    await persist({ commandsReceived: state.commandsReceived + 1 });
+    await stopSignal;
+    return;
+  }
 
   while (!stopping && !socket.destroyed) {
     try {
@@ -408,11 +427,13 @@ function saslOnlyAuthRequest() {
   return `( success ( ( CRAM-MD5 ) ${protocolString("SubversionR M8 I6 controlled SASL-only fixture")} ) ) `;
 }
 
-function repositoryInfo(port) {
+function repositoryInfo(port, scenario) {
   if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535) {
     throw fixtureError("SUBVERSIONR_M8_I6_FAULT_FIXTURE_LISTEN_INVALID");
   }
-  const repositoryRoot = `svn://127.0.0.1:${port}/controlled-root`;
+  const repositoryRoot = scenario === "command-stall"
+    ? `svn://127.0.0.1:${port}/repo`
+    : `svn://127.0.0.1:${port}/controlled-root`;
   return `( success ( ${protocolString("12345678-1234-1234-1234-123456789abc")} ${protocolString(repositoryRoot)} ( mergeinfo depth log-revprops atomic-revprops ) ) ) `;
 }
 

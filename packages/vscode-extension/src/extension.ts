@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { appendFile, readFile } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { performance } from "node:perf_hooks";
@@ -65,6 +65,7 @@ import { collectInstalledSvnAnonymousStalledReadReport } from "./diagnostics/ins
 import { collectInstalledSvnAnonymousDeadlineReport } from "./diagnostics/installedSvnAnonymousDeadlineReport";
 import { collectInstalledSvnAnonymousCancellationReport } from "./diagnostics/installedSvnAnonymousCancellationReport";
 import { collectInstalledSvnAnonymousTrustRevokedReport } from "./diagnostics/installedSvnAnonymousTrustRevokedReport";
+import { collectInstalledSvnAnonymousRecoveryBlockedReport } from "./diagnostics/installedSvnAnonymousRecoveryBlockedReport";
 import { InstalledSvnAnonymousLocalEventZeroNetworkObserver } from "./diagnostics/installedSvnAnonymousLocalEventZeroNetwork";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
@@ -321,6 +322,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const installedSvnAnonymousDeadlineReportToken = consumeInstalledSvnAnonymousDeadlineReportToken();
   const installedSvnAnonymousCancellationReportToken = consumeInstalledSvnAnonymousCancellationReportToken();
   const installedSvnAnonymousTrustRevokedReportToken = consumeInstalledSvnAnonymousTrustRevokedReportToken();
+  const installedSvnAnonymousRecoveryBlockedReportToken = consumeInstalledSvnAnonymousRecoveryBlockedReportToken();
   const installedSvnAnonymousLocalEventZeroNetworkToken =
     consumeInstalledSvnAnonymousLocalEventZeroNetworkToken();
   const installedSvnAnonymousStressCheckoutContext =
@@ -401,6 +403,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       installedSvnAnonymousDeadlineReportToken !== undefined ||
       installedSvnAnonymousCancellationReportToken !== undefined ||
       installedSvnAnonymousTrustRevokedReportToken !== undefined ||
+      installedSvnAnonymousRecoveryBlockedReportToken !== undefined ||
       installedSvnAnonymousLocalEventZeroNetworkToken !== undefined
     ) {
       if (method === "credentials/request") {
@@ -1548,6 +1551,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
             }),
         );
+  const installedSvnAnonymousRecoveryBlockedReportCommand =
+    installedSvnAnonymousRecoveryBlockedReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousRecoveryBlockedReport({
+              expectedToken: installedSvnAnonymousRecoveryBlockedReportToken,
+              request,
+              initialize: () => service.initialize(),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+              targetPathExists: (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined,
+            }),
+        );
   const installedSvnAnonymousLocalEventZeroNetworkObserver =
     installedSvnAnonymousLocalEventZeroNetworkToken === undefined
       ? undefined
@@ -2371,6 +2389,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   if (installedSvnAnonymousTrustRevokedReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousTrustRevokedReportCommand);
+  }
+  if (installedSvnAnonymousRecoveryBlockedReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousRecoveryBlockedReportCommand);
   }
   if (
     installedSvnAnonymousLocalEventZeroNetworkObserver !== undefined &&
@@ -4379,6 +4400,12 @@ function consumeInstalledSvnAnonymousCancellationReportToken(): string | undefin
 function consumeInstalledSvnAnonymousTrustRevokedReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_TRUST_REVOKED_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_TRUST_REVOKED_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousRecoveryBlockedReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_REPORT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 
