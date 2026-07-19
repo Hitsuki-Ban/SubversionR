@@ -2,6 +2,8 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { decodeContentLengthFrame, encodeContentLengthFrame } from "../src/transport/framing";
 import {
+  JsonRpcCancellationSettlementTimeoutError,
+  JsonRpcCancellationSettlementUnavailableError,
   JsonRpcRequestCancelledError,
   JsonRpcStreamClient,
   JsonRpcStreamError,
@@ -124,11 +126,44 @@ describe("JsonRpcStreamClient", () => {
     await expect(blocker).rejects.toThrow("test complete");
   });
 
-  it("sends a cancel notification and ignores a later response when an outbound request is aborted", async () => {
+  it("does not retain ordinary high-frequency cancellations without the evidence opt-in", async () => {
+    vi.useFakeTimers();
+    try {
+      const onProtocolFault = vi.fn();
+      const { client, stdout } = createClient({ onProtocolFault });
+      const cancellations: Promise<unknown>[] = [];
+
+      for (let index = 0; index < 100; index += 1) {
+        const controller = new AbortController();
+        const request = client.sendRequest("status/refresh", { index }, { signal: controller.signal });
+        controller.abort();
+        cancellations.push(request);
+      }
+
+      const settlements = await Promise.allSettled(cancellations);
+      expect(settlements.every(
+        (settlement) => settlement.status === "rejected" && settlement.reason instanceof JsonRpcRequestCancelledError,
+      )).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toBeInstanceOf(
+        JsonRpcCancellationSettlementUnavailableError,
+      );
+
+      stdout.write(framePayload({ jsonrpc: "1.0", id: 1, result: "ordinary-late-response" }));
+      expect(onProtocolFault).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an aborted request immediately and exposes its later wire result to one observer", async () => {
     const { client, stdin, stdout } = createClient();
     const controller = new AbortController();
     const request = client.sendRequest<{ accepted: boolean }>("status/refresh", { repositoryId: "repo-1" }, {
       signal: controller.signal,
+      retainCancelledWireSettlementForEvidence: true,
     });
     const requestFrame = await readFrame(stdin);
     expect(JSON.parse(requestFrame)).toEqual({
@@ -146,12 +181,291 @@ describe("JsonRpcStreamClient", () => {
       method: "$/cancelRequest",
       params: { id: 1 },
     });
-    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+    const cancellation = await rejectedError(request);
+    expect(cancellation).toBeInstanceOf(JsonRpcRequestCancelledError);
+    expect(cancellation).toMatchObject({ requestId: 1 });
 
     stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: { accepted: true } }));
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).resolves.toEqual({ accepted: true });
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toBeInstanceOf(
+      JsonRpcCancellationSettlementUnavailableError,
+    );
+
     const followUp = client.sendRequest("shutdown", {});
     stdout.write(framePayload({ jsonrpc: "2.0", id: 2, result: { accepted: true } }));
     await expect(followUp).resolves.toEqual({ accepted: true });
+  });
+
+  it("waits for a daemon error settlement after local cancellation", async () => {
+    const { client, stdout } = createClient();
+    const controller = new AbortController();
+    const request = client.sendRequest("status/refresh", {}, {
+      signal: controller.signal,
+      retainCancelledWireSettlementForEvidence: true,
+    });
+
+    controller.abort();
+    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+    const settlement = client.waitForCancelledRequestWireSettlement(1, 1_000);
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toBeInstanceOf(
+      JsonRpcCancellationSettlementUnavailableError,
+    );
+    stdout.write(
+      framePayload({
+        jsonrpc: "2.0",
+        id: 1,
+        error: rpcErrorPayload(
+          "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+          "cancelled",
+          "operationCancelled",
+        ),
+      }),
+    );
+
+    await expect(settlement).rejects.toMatchObject({
+      name: "JsonRpcStreamError",
+      code: "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+      category: "cancelled",
+      messageKey: "operationCancelled",
+    });
+  });
+
+  it("rejects observation before cancellation but permits it after cancellation", async () => {
+    const { client, stdout } = createClient();
+    const controller = new AbortController();
+    const request = client.sendRequest("status/refresh", {}, {
+      signal: controller.signal,
+      retainCancelledWireSettlementForEvidence: true,
+    });
+
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toBeInstanceOf(
+      JsonRpcCancellationSettlementUnavailableError,
+    );
+    controller.abort();
+    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+    const settlement = client.waitForCancelledRequestWireSettlement<string>(1, 1_000);
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "cancelled-settled" }));
+
+    await expect(settlement).resolves.toBe("cancelled-settled");
+  });
+
+  it("times out an observer while retaining a tombstone for the later first response", async () => {
+    const onProtocolFault = vi.fn();
+    const { client, stdout } = createClient({ onProtocolFault });
+    const controller = new AbortController();
+    const request = client.sendRequest("status/refresh", {}, {
+      signal: controller.signal,
+      retainCancelledWireSettlementForEvidence: true,
+    });
+
+    controller.abort();
+    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+    await expect(client.waitForCancelledRequestWireSettlement(1, 5)).rejects.toBeInstanceOf(
+      JsonRpcCancellationSettlementTimeoutError,
+    );
+
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "too-late" }));
+    expect(onProtocolFault).not.toHaveBeenCalled();
+    const followUp = client.sendRequest("shutdown", {});
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 2, result: "done" }));
+    await expect(followUp).resolves.toBe("done");
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toBeInstanceOf(
+      JsonRpcCancellationSettlementUnavailableError,
+    );
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "duplicate" }));
+    expect(onProtocolFault).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires an unobserved cancelled request without retaining its id", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client } = createClient();
+      const controller = new AbortController();
+      const request = client.sendRequest("status/refresh", {}, {
+        signal: controller.signal,
+        retainCancelledWireSettlementForEvidence: true,
+      });
+
+      controller.abort();
+      await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toBeInstanceOf(
+        JsonRpcCancellationSettlementUnavailableError,
+      );
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a cancellation settlement observer when the readable stream closes", async () => {
+    const { client, stdout } = createClient();
+    const controller = new AbortController();
+    const request = client.sendRequest("status/refresh", {}, {
+      signal: controller.signal,
+      retainCancelledWireSettlementForEvidence: true,
+    });
+
+    controller.abort();
+    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+    const settlement = client.waitForCancelledRequestWireSettlement(1, 1_000);
+    stdout.emit("close");
+
+    await expect(settlement).rejects.toThrow("JSON-RPC stream closed");
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toThrow(
+      "JSON-RPC stream closed",
+    );
+  });
+
+  it("rejects a cancellation settlement observer when disposed", async () => {
+    const { client } = createClient();
+    const controller = new AbortController();
+    const request = client.sendRequest("status/refresh", {}, {
+      signal: controller.signal,
+      retainCancelledWireSettlementForEvidence: true,
+    });
+
+    controller.abort();
+    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+    const settlement = client.waitForCancelledRequestWireSettlement(1, 1_000);
+    client.dispose(new Error("backend exited"));
+
+    await expect(settlement).rejects.toThrow("backend exited");
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toThrow("backend exited");
+  });
+
+  it("does not retire a pre-aborted id or leak it into the next request that reuses the id", async () => {
+    const { client, stdout } = createClient();
+    const controller = new AbortController();
+    controller.abort();
+
+    const cancelled = await rejectedError(
+      client.sendRequest("status/refresh", {}, { signal: controller.signal }),
+    );
+    expect(cancelled).toMatchObject({ requestId: 1 });
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toBeInstanceOf(
+      JsonRpcCancellationSettlementUnavailableError,
+    );
+
+    const reused = client.sendRequest("shutdown", {});
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "reused" }));
+    await expect(reused).resolves.toBe("reused");
+
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "unknown-late" }));
+    const next = client.sendRequest("initialize", {});
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 2, result: "next" }));
+    await expect(next).resolves.toBe("next");
+  });
+
+  it("fails fast for invalid cancellation settlement observation arguments", async () => {
+    const { client } = createClient();
+
+    await expect(client.waitForCancelledRequestWireSettlement(0, 100)).rejects.toThrow(
+      "request id must be a positive safe integer",
+    );
+    await expect(client.waitForCancelledRequestWireSettlement(1, 0)).rejects.toThrow(
+      "timeout must be a positive safe integer",
+    );
+  });
+
+  it("treats every non-exact opted-in cancellation response shape as a protocol fault", async () => {
+    const malformedResponses = [
+      { jsonrpc: "1.0", id: 1, result: null },
+      { jsonrpc: "2.0", id: 1 },
+      { jsonrpc: "2.0", id: 1, result: null, extra: true },
+      { jsonrpc: "2.0", id: 1, result: null, error: rpcErrorPayload("E", "cancelled", "error.e") },
+      { jsonrpc: "2.0", id: "1", result: null },
+      { jsonrpc: "2.0", id: null, result: null },
+      { jsonrpc: "2.0", result: null },
+      { jsonrpc: "2.0", id: 1, error: null },
+    ];
+
+    for (const response of malformedResponses) {
+      const onProtocolFault = vi.fn();
+      const { client, stdout } = createClient({ onProtocolFault });
+      const controller = new AbortController();
+      const request = client.sendRequest("status/refresh", {}, {
+        signal: controller.signal,
+        retainCancelledWireSettlementForEvidence: true,
+      });
+      controller.abort();
+      await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+      const observer = client.waitForCancelledRequestWireSettlement(1, 1_000);
+
+      stdout.write(framePayload(response));
+
+      await expect(observer).rejects.toBeInstanceOf(Error);
+      expect(onProtocolFault).toHaveBeenCalledTimes(1);
+      await expect(client.sendRequest("shutdown", {})).rejects.toThrow("disposed");
+    }
+  });
+
+  it("rejects a duplicate cancellation response before an observer consumes the first response", async () => {
+    const onProtocolFault = vi.fn();
+    const { client, stdout } = createClient({ onProtocolFault });
+    const controller = new AbortController();
+    const request = client.sendRequest("status/refresh", {}, {
+      signal: controller.signal,
+      retainCancelledWireSettlementForEvidence: true,
+    });
+    controller.abort();
+    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "first" }));
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "duplicate" }));
+
+    expect(onProtocolFault).toHaveBeenCalledTimes(1);
+    await expect(client.waitForCancelledRequestWireSettlement(1, 1_000)).rejects.toThrow(
+      "duplicate wire settlement",
+    );
+  });
+
+  it("keeps a tombstone that rejects a duplicate response after the observer settles", async () => {
+    const onProtocolFault = vi.fn();
+    const { client, stdout } = createClient({ onProtocolFault });
+    const controller = new AbortController();
+    const request = client.sendRequest("status/refresh", {}, {
+      signal: controller.signal,
+      retainCancelledWireSettlementForEvidence: true,
+    });
+    controller.abort();
+    await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+    const observer = client.waitForCancelledRequestWireSettlement<string>(1, 1_000);
+
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "first" }));
+    await expect(observer).resolves.toBe("first");
+    stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "duplicate" }));
+
+    expect(onProtocolFault).toHaveBeenCalledTimes(1);
+    await expect(client.sendRequest("shutdown", {})).rejects.toThrow("disposed");
+  });
+
+  it("expires a settled cancellation tombstone at the bounded retention window", async () => {
+    vi.useFakeTimers();
+    try {
+      const onProtocolFault = vi.fn();
+      const { client, stdout } = createClient({ onProtocolFault });
+      const controller = new AbortController();
+      const request = client.sendRequest("status/refresh", {}, {
+        signal: controller.signal,
+        retainCancelledWireSettlementForEvidence: true,
+      });
+      controller.abort();
+      await expect(request).rejects.toBeInstanceOf(JsonRpcRequestCancelledError);
+      const observer = client.waitForCancelledRequestWireSettlement<string>(1, 1_000);
+      stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "first" }));
+      await expect(observer).resolves.toBe("first");
+
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(vi.getTimerCount()).toBe(0);
+      stdout.write(framePayload({ jsonrpc: "2.0", id: 1, result: "after-retention" }));
+      expect(onProtocolFault).not.toHaveBeenCalled();
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("answers daemon initiated requests with the registered handler result", async () => {
@@ -551,4 +865,24 @@ async function captureImmediateRejection(promise: Promise<unknown>): Promise<Err
     ),
     new Promise<undefined>((resolve) => setImmediate(() => resolve(undefined))),
   ]);
+}
+
+async function rejectedError(promise: Promise<unknown>): Promise<Error> {
+  return await promise.then(
+    () => {
+      throw new Error("Expected promise to reject");
+    },
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+}
+
+function rpcErrorPayload(code: string, category: string, messageKey: string): Record<string, unknown> {
+  return {
+    code,
+    category,
+    messageKey,
+    args: {},
+    retryable: false,
+    diagnostics: null,
+  };
 }

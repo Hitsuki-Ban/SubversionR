@@ -22,6 +22,25 @@ interface PendingRequest {
   reject(error: Error): void;
 }
 
+type CancelledRequestSettlement =
+  | { kind: "result"; value: unknown }
+  | { kind: "error"; error: JsonRpcStreamError };
+
+interface CancelledRequestSettlementObserver {
+  timeout: NodeJS.Timeout;
+  timeoutMs: number;
+  resolve(value: unknown): void;
+  reject(error: Error): void;
+}
+
+interface RetiredCancelledRequest {
+  retentionTimeout: NodeJS.Timeout;
+  consumed: boolean;
+  wireResponseReceived: boolean;
+  settlement?: CancelledRequestSettlement;
+  observer?: CancelledRequestSettlementObserver;
+}
+
 interface JsonRpcResponse {
   jsonrpc: "2.0";
   id: number | string;
@@ -72,12 +91,37 @@ export class JsonRpcRequestCancelledError extends Error {
   }
 }
 
+export class JsonRpcCancellationSettlementTimeoutError extends Error {
+  public readonly code = "JSON_RPC_CANCELLATION_SETTLEMENT_TIMEOUT";
+
+  public constructor(
+    public readonly requestId: number,
+    public readonly timeoutMs: number,
+  ) {
+    super("Timed out waiting for cancelled JSON-RPC request wire settlement");
+    this.name = "JsonRpcCancellationSettlementTimeoutError";
+  }
+}
+
+export class JsonRpcCancellationSettlementUnavailableError extends Error {
+  public readonly code = "JSON_RPC_CANCELLATION_SETTLEMENT_UNAVAILABLE";
+
+  public constructor(public readonly requestId: number) {
+    super("Cancelled JSON-RPC request wire settlement is unavailable");
+    this.name = "JsonRpcCancellationSettlementUnavailableError";
+  }
+}
+
+const CANCELLED_REQUEST_SETTLEMENT_RETENTION_MS = 30_000;
+
 export class JsonRpcStreamClient implements JsonRpcSender {
   private readonly decoder = new ContentLengthFrameDecoder();
   private readonly pending = new Map<number, PendingRequest>();
+  private readonly retiredCancelled = new Map<number, RetiredCancelledRequest>();
   private readonly writer: OrderedWriteQueue;
   private nextId = 1;
   private disposed = false;
+  private disposalReason: Error | undefined;
 
   public constructor(private readonly options: JsonRpcStreamClientOptions) {
     this.writer = new OrderedWriteQueue(this.options.writable, this.handleStreamError);
@@ -112,6 +156,9 @@ export class JsonRpcStreamClient implements JsonRpcSender {
         }
         this.pending.delete(id);
         pending.cleanup();
+        if (options.retainCancelledWireSettlementForEvidence === true) {
+          this.retireCancelledRequest(id);
+        }
         this.writeCancelNotification(id);
         pending.reject(new JsonRpcRequestCancelledError(id));
       };
@@ -129,17 +176,63 @@ export class JsonRpcStreamClient implements JsonRpcSender {
     });
   }
 
+  /**
+   * Evidence-only observer for the daemon's real response to an already-cancelled request.
+   * The settlement is single-consumer and is retained only for a bounded hand-off window.
+   */
+  public waitForCancelledRequestWireSettlement<T>(requestId: number, timeoutMs: number): Promise<T> {
+    if (!Number.isSafeInteger(requestId) || requestId < 1) {
+      return Promise.reject(new Error("Cancelled JSON-RPC request id must be a positive safe integer"));
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+      return Promise.reject(new Error("Cancellation settlement timeout must be a positive safe integer"));
+    }
+    if (this.disposed) {
+      return Promise.reject(this.disposalReason);
+    }
+
+    const retired = this.retiredCancelled.get(requestId);
+    if (!retired || retired.consumed) {
+      return Promise.reject(new JsonRpcCancellationSettlementUnavailableError(requestId));
+    }
+    retired.consumed = true;
+
+    if (retired.settlement) {
+      const settlement = retired.settlement;
+      retired.settlement = undefined;
+      return settleCancelledRequest<T>(settlement);
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (this.retiredCancelled.get(requestId) === retired) {
+          retired.observer = undefined;
+        }
+        reject(new JsonRpcCancellationSettlementTimeoutError(requestId, timeoutMs));
+      }, timeoutMs);
+      timeout.unref();
+      retired.observer = {
+        timeout,
+        timeoutMs,
+        resolve: (value) => resolve(value as T),
+        reject,
+      };
+    });
+  }
+
   public dispose(reason = new Error("JSON-RPC stream client disposed")): void {
     if (this.disposed) {
       return;
     }
     this.disposed = true;
+    this.disposalReason = reason;
     this.options.readable.off("data", this.handleData);
     this.options.readable.off("error", this.handleStreamError);
     this.options.readable.off("close", this.handleClose);
     this.options.readable.off("end", this.handleClose);
     this.writer.dispose(reason);
     this.rejectPending(reason);
+    this.rejectCancelledSettlementObservers(reason);
   }
 
   private readonly handleData = (chunk: Buffer | string): void => {
@@ -166,10 +259,16 @@ export class JsonRpcStreamClient implements JsonRpcSender {
 
     const response = message;
     if (typeof response.id !== "number") {
+      if (this.retiredCancelled.size > 0) {
+        this.disposeForProtocolFault(
+          new Error("Cancelled JSON-RPC request wire settlement id must be a number"),
+        );
+      }
       return;
     }
     const pending = this.pending.get(response.id);
     if (!pending) {
+      this.handleCancelledRequestSettlement(response.id, response);
       return;
     }
 
@@ -267,6 +366,67 @@ export class JsonRpcStreamClient implements JsonRpcSender {
     });
   }
 
+  private retireCancelledRequest(id: number): void {
+    const retentionTimeout = setTimeout(() => {
+      const retired = this.retiredCancelled.get(id);
+      if (!retired) {
+        return;
+      }
+      this.retiredCancelled.delete(id);
+      if (retired.observer) {
+        clearTimeout(retired.observer.timeout);
+        retired.observer.reject(
+          new JsonRpcCancellationSettlementTimeoutError(id, retired.observer.timeoutMs),
+        );
+      }
+    }, CANCELLED_REQUEST_SETTLEMENT_RETENTION_MS);
+    retentionTimeout.unref();
+    this.retiredCancelled.set(id, {
+      retentionTimeout,
+      consumed: false,
+      wireResponseReceived: false,
+    });
+  }
+
+  private handleCancelledRequestSettlement(requestId: number, response: JsonRpcResponse): void {
+    const retired = this.retiredCancelled.get(requestId);
+    if (!retired) {
+      return;
+    }
+
+    if (retired.wireResponseReceived) {
+      this.disposeForProtocolFault(new Error("Cancelled JSON-RPC request received a duplicate wire settlement"));
+      return;
+    }
+
+    let settlement: CancelledRequestSettlement;
+    try {
+      settlement = requireCancelledRequestSettlement(response, requestId);
+    } catch (validationError) {
+      this.disposeForProtocolFault(
+        validationError instanceof Error ? validationError : new Error(String(validationError)),
+      );
+      return;
+    }
+    retired.wireResponseReceived = true;
+
+    if (!retired.observer) {
+      if (!retired.consumed) {
+        retired.settlement = settlement;
+      }
+      return;
+    }
+
+    clearTimeout(retired.observer.timeout);
+    const observer = retired.observer;
+    retired.observer = undefined;
+    if (settlement.kind === "error") {
+      observer.reject(settlement.error);
+    } else {
+      observer.resolve(settlement.value);
+    }
+  }
+
   private readonly handleStreamError = (error: Error): void => {
     this.dispose(error);
   };
@@ -283,6 +443,47 @@ export class JsonRpcStreamClient implements JsonRpcSender {
       request.reject(error);
     }
   }
+
+  private rejectCancelledSettlementObservers(error: Error): void {
+    const retired = Array.from(this.retiredCancelled.values());
+    this.retiredCancelled.clear();
+    for (const request of retired) {
+      clearTimeout(request.retentionTimeout);
+      if (request.observer) {
+        clearTimeout(request.observer.timeout);
+        request.observer.reject(error);
+      }
+    }
+  }
+}
+
+function settleCancelledRequest<T>(settlement: CancelledRequestSettlement): Promise<T> {
+  if (settlement.kind === "error") {
+    return Promise.reject(settlement.error);
+  }
+  return Promise.resolve(settlement.value as T);
+}
+
+function requireCancelledRequestSettlement(
+  response: JsonRpcResponse,
+  expectedRequestId: number,
+): CancelledRequestSettlement {
+  if (
+    response.jsonrpc !== "2.0" ||
+    response.id !== expectedRequestId ||
+    !Number.isSafeInteger(response.id) ||
+    response.id < 1
+  ) {
+    throw new Error("Cancelled JSON-RPC request wire settlement has an invalid id or protocol version");
+  }
+  const keys = Object.keys(response).sort().join(",");
+  if (keys === "error,id,jsonrpc") {
+    return { kind: "error", error: new JsonRpcStreamError(response.error) };
+  }
+  if (keys === "id,jsonrpc,result") {
+    return { kind: "result", value: response.result };
+  }
+  throw new Error("Cancelled JSON-RPC request wire settlement does not match an exact response shape");
 }
 
 interface StructuredRpcError {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { performance } from "node:perf_hooks";
 import * as vscode from "vscode";
@@ -63,6 +63,7 @@ import { collectInstalledSvnAnonymousNegativeReport } from "./diagnostics/instal
 import { collectInstalledSvnAnonymousAuthzDeniedReport } from "./diagnostics/installedSvnAnonymousAuthzDeniedReport";
 import { collectInstalledSvnAnonymousStalledReadReport } from "./diagnostics/installedSvnAnonymousStalledReadReport";
 import { collectInstalledSvnAnonymousDeadlineReport } from "./diagnostics/installedSvnAnonymousDeadlineReport";
+import { collectInstalledSvnAnonymousCancellationReport } from "./diagnostics/installedSvnAnonymousCancellationReport";
 import { InstalledSvnAnonymousLocalEventZeroNetworkObserver } from "./diagnostics/installedSvnAnonymousLocalEventZeroNetwork";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
@@ -317,6 +318,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const installedSvnAnonymousAuthzDeniedReportToken = consumeInstalledSvnAnonymousAuthzDeniedReportToken();
   const installedSvnAnonymousStalledReadReportToken = consumeInstalledSvnAnonymousStalledReadReportToken();
   const installedSvnAnonymousDeadlineReportToken = consumeInstalledSvnAnonymousDeadlineReportToken();
+  const installedSvnAnonymousCancellationReportToken = consumeInstalledSvnAnonymousCancellationReportToken();
   const installedSvnAnonymousLocalEventZeroNetworkToken =
     consumeInstalledSvnAnonymousLocalEventZeroNetworkToken();
   const installedSvnAnonymousStressCheckoutContext =
@@ -395,6 +397,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       installedSvnAnonymousAuthzDeniedReportToken !== undefined ||
       installedSvnAnonymousStalledReadReportToken !== undefined ||
       installedSvnAnonymousDeadlineReportToken !== undefined ||
+      installedSvnAnonymousCancellationReportToken !== undefined ||
       installedSvnAnonymousLocalEventZeroNetworkToken !== undefined
     ) {
       if (method === "credentials/request") {
@@ -1509,6 +1512,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               monotonicNowMs: () => performance.now(),
             }),
         );
+  const installedSvnAnonymousCancellationReportCommand =
+    installedSvnAnonymousCancellationReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousCancellationReport({
+              expectedToken: installedSvnAnonymousCancellationReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              monotonicNowMs: () => performance.now(),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+            }),
+        );
   const installedSvnAnonymousLocalEventZeroNetworkObserver =
     installedSvnAnonymousLocalEventZeroNetworkToken === undefined
       ? undefined
@@ -2326,6 +2346,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   if (installedSvnAnonymousDeadlineReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousDeadlineReportCommand);
+  }
+  if (installedSvnAnonymousCancellationReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousCancellationReportCommand);
   }
   if (
     installedSvnAnonymousLocalEventZeroNetworkObserver !== undefined &&
@@ -4322,6 +4345,12 @@ function consumeInstalledSvnAnonymousStalledReadReportToken(): string | undefine
 function consumeInstalledSvnAnonymousDeadlineReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DEADLINE_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DEADLINE_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousCancellationReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_CANCELLATION_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_CANCELLATION_REPORT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 

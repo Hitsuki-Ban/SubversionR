@@ -64,6 +64,7 @@
         "packagedAuthzDeniedProbe",
         "packagedStalledReadProbe",
         "packagedDeadlineProbe",
+        "packagedCancellationProbe",
         "raSvnFaultFixture",
         "countingProxy",
         "installedStressProbe",
@@ -71,6 +72,7 @@
         "installedAuthzDeniedProbe",
         "installedStalledReadProbe",
         "installedDeadlineProbe",
+        "installedCancellationProbe",
         "installedLocalEventProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
@@ -114,6 +116,9 @@
         "packagedDeadlineProbe": {
           "$ref": "#/$defs/artifact"
         },
+        "packagedCancellationProbe": {
+          "$ref": "#/$defs/artifact"
+        },
         "raSvnFaultFixture": {
           "$ref": "#/$defs/artifact"
         },
@@ -133,6 +138,9 @@
           "$ref": "#/$defs/artifact"
         },
         "installedDeadlineProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedCancellationProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedLocalEventProbe": {
@@ -508,6 +516,18 @@
         "cleanupSlackMs": { "const": 5000 }
       }
     },
+    "cancellationSettlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger", "localCode", "wireCode", "wireReason", "wireSettlementObserved"],
+      "properties": {
+        "trigger": { "const": "abort-signal-after-greeting" },
+        "localCode": { "const": "JSON_RPC_REQUEST_CANCELLED" },
+        "wireCode": { "const": "SUBVERSIONR_REMOTE_WORKER_CANCELLED" },
+        "wireReason": { "const": "operationCancelled" },
+        "wireSettlementObserved": { "const": true }
+      }
+    },
     "stressCycleObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -718,6 +738,9 @@
         },
         "deadlineTiming": {
           "$ref": "#/$defs/deadlineTiming"
+        },
+        "cancellationSettlement": {
+          "$ref": "#/$defs/cancellationSettlement"
         }
       }
     },
@@ -864,7 +887,22 @@
     },
     "negativeCancellation": {
       "$ref": "#/$defs/negativeCell",
-      "properties": { "cell": { "const": "cancellation" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_CANCELLED" }, "reason": { "const": "operationCancelled" } }
+      "properties": {
+        "cell": { "const": "cancellation" },
+        "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_CANCELLED" },
+        "reason": { "const": "operationCancelled" },
+        "surfaceObservations": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/negativeSurfaceObservation" },
+              { "required": ["cancellationSettlement"] }
+            ]
+          }
+        }
+      }
     },
     "negativeWorkerCrash": {
       "$ref": "#/$defs/negativeCell",

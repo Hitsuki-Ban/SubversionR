@@ -42,6 +42,7 @@ export interface StatusRefreshRequest {
 
 export interface StatusRefreshClientOptions {
   signal?: AbortSignal;
+  retainCancelledWireSettlementForEvidence?: true;
 }
 
 export interface StatusRefreshClient {
@@ -54,4 +55,5 @@ export interface JsonRpcSender {
 
 export interface JsonRpcRequestOptions {
   signal?: AbortSignal;
+  retainCancelledWireSettlementForEvidence?: true;
 }

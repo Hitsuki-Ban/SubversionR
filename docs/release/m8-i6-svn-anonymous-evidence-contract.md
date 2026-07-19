@@ -133,7 +133,11 @@ The report must contain all of the following controlled cells in exact order:
 - a server that accepts a connection and stalls mid-read, independently proving
   the same deadline and cleanup properties after network progress;
 - absolute deadline and explicit cancellation terminated through their owned
-  worker outcomes;
+  worker outcomes. Cancellation is triggered only after the controlled
+  greeting barrier, preserves the caller's immediate
+  `JSON_RPC_REQUEST_CANCELLED` result, and separately observes the daemon's
+  exact `SUBVERSIONR_REMOTE_WORKER_CANCELLED` / `operationCancelled` response
+  for the same request ID before proving the native lane reusable;
 - worker crash contained with zero residue;
 - daemon/client disconnect supervised as
   `SUBVERSIONR_REMOTE_WORKER_DISCONNECTED` / `workerContainmentFailed`, with no

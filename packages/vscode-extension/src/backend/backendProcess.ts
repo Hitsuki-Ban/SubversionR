@@ -186,6 +186,7 @@ export interface BackendConnection extends JsonRpcSender {
   readonly initializeResult: InitializeResult;
   isRemoteSubmissionEnabled(): boolean;
   currentRemoteTrustEpoch(): number;
+  waitForCancelledRequestWireSettlement?<T>(requestId: number, timeoutMs: number): Promise<T>;
   updateWorkspaceTrust(trusted: boolean): Promise<number>;
   onDidTerminate(listener: (event: BackendConnectionTermination) => void): BackendConnectionTerminationSubscription;
   shutdown(): Promise<void>;
@@ -897,6 +898,10 @@ class BackendConnectionImpl implements BackendConnection {
         // Operation-finalization cleanup must not replace the daemon result.
       }
     });
+  }
+
+  public waitForCancelledRequestWireSettlement<T>(requestId: number, timeoutMs: number): Promise<T> {
+    return this.rpc.waitForCancelledRequestWireSettlement<T>(requestId, timeoutMs);
   }
 
   public dispose(): void {

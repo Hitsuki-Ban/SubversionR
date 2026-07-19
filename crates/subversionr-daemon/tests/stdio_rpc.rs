@@ -11,9 +11,10 @@ use subversionr_daemon::{
     ContentBlob, HistoryBlameRequest, HistoryBlameResult, HistoryLogRequest, HistoryLogResult,
     MoveOperationRequest, OperationResult, PropertiesListResult, PropertyDeleteOperationRequest,
     PropertyEntry, PropertySetOperationRequest, RemoteConfigPlan, RemoteOperationEffect,
-    RemoteWorkerSettlement, RemoteWorkerSupervisor, RemoveOperationRequest,
-    ResolveOperationRequest, RevertOperationRequest, UpdateOperationRequest, UpdateOperationResult,
-    WorkerTerminationDisposition, run_json_rpc_stdio, run_json_rpc_stdio_with_remote_worker,
+    RemoteSvnAnonymousRequest, RemoteWorkerSettlement, RemoteWorkerSupervisor,
+    RemoveOperationRequest, ResolveOperationRequest, RevertOperationRequest,
+    UpdateOperationRequest, UpdateOperationResult, WorkerTerminationDisposition,
+    run_json_rpc_stdio, run_json_rpc_stdio_with_remote_worker,
 };
 use subversionr_protocol::{
     CanonicalEndpoint, CertificateTrustRequest, CertificateTrustResponse, Credential,
@@ -154,7 +155,9 @@ impl BridgeApi for FakeBridge {
     fn open_working_copy(&self, path: &str) -> Result<RepositoryIdentity, BridgeFailure> {
         Ok(RepositoryIdentity {
             repository_uuid: "repo-uuid".to_string(),
-            repository_root_url: if path.contains("remote-recovery") {
+            repository_root_url: if path.contains("svn-anonymous") {
+                "svn://127.0.0.1:3690/project".to_string()
+            } else if path.contains("remote-recovery") {
                 "https://svn.example.invalid/project".to_string()
             } else {
                 "file:///repo".to_string()
@@ -3543,6 +3546,97 @@ struct AuthWaitingRemoteWorker {
     auth_wait_cancelled: AtomicBool,
 }
 
+#[derive(Debug)]
+struct ReadOnlyGreetingStallRemoteWorker {
+    stage: Arc<AtomicUsize>,
+    active: AtomicBool,
+    cancellation_observed: AtomicBool,
+    executions: AtomicUsize,
+}
+
+impl ReadOnlyGreetingStallRemoteWorker {
+    fn new(stage: Arc<AtomicUsize>) -> Self {
+        Self {
+            stage,
+            active: AtomicBool::new(false),
+            cancellation_observed: AtomicBool::new(false),
+            executions: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl RemoteWorkerSupervisor for ReadOnlyGreetingStallRemoteWorker {
+    fn execute(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        _effect: RemoteOperationEffect,
+        _cancellation: &dyn BridgeCancellationToken,
+        _auth: &mut dyn AuthRequestBroker,
+        _bridge: &dyn BridgeApi,
+        _deadline: Instant,
+    ) -> RemoteWorkerSettlement {
+        panic!("read-only greeting-stall fixture must use the svn anonymous worker path")
+    }
+
+    fn execute_svn_anonymous(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        effect: RemoteOperationEffect,
+        request: RemoteSvnAnonymousRequest,
+        cancellation: &dyn BridgeCancellationToken,
+        deadline: Instant,
+    ) -> RemoteWorkerSettlement {
+        assert_eq!(effect, RemoteOperationEffect::ReadOnly);
+        assert!(matches!(request, RemoteSvnAnonymousRequest::Status { .. }));
+        assert_eq!(self.executions.fetch_add(1, Ordering::SeqCst), 0);
+        self.active.store(true, Ordering::SeqCst);
+        self.stage.store(1, Ordering::SeqCst);
+
+        while !cancellation.is_cancelled() {
+            assert!(
+                Instant::now() < deadline,
+                "greeting-stall cancellation must arrive before the operation deadline"
+            );
+            thread::yield_now();
+        }
+
+        self.cancellation_observed.store(true, Ordering::SeqCst);
+        self.active.store(false, Ordering::SeqCst);
+        worker_settlement(
+            effect,
+            Err(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+                "cancelled",
+                "error.remote.workerCancelled",
+                serde_json::json!({}),
+                false,
+            )),
+            true,
+            true,
+        )
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+
+    fn svn_anonymous_available(&self) -> bool {
+        true
+    }
+}
+
 impl RemoteWorkerSupervisor for AuthWaitingRemoteWorker {
     fn execute(
         &self,
@@ -3868,6 +3962,83 @@ fn stdio_remote_worker_keeps_diagnostics_and_other_working_copies_responsive() {
     );
     assert_eq!(responses[7]["result"]["accepted"], true);
     assert_eq!(worker.executions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn stdio_read_only_greeting_stall_cancel_settles_on_wire_and_preserves_local_snapshot() {
+    let operation_id = "31234567-89ab-4def-8123-456789abcdef";
+    let stage = Arc::new(AtomicUsize::new(0));
+    let worker = Arc::new(ReadOnlyGreetingStallRemoteWorker::new(Arc::clone(&stage)));
+    let reader = BrokerRoundTripReader::new(
+        vec![
+            [
+                frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+                frame(r#"{"jsonrpc":"2.0","id":2,"method":"repository/open","params":{"path":"C:/wc-svn-anonymous-cancel"}}"#),
+                remote_svn_anonymous_status_frame(3, operation_id, 30_000),
+            ]
+            .concat(),
+            frame(r#"{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":3}}"#),
+            [
+                frame(r#"{"jsonrpc":"2.0","id":4,"method":"status/getSnapshot","params":{"repositoryId":"repo-uuid:C:/wc-svn-anonymous-cancel","epoch":1}}"#),
+                frame(r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":{}}"#),
+            ]
+            .concat(),
+        ],
+        vec![1, 2],
+        Arc::clone(&stage),
+    );
+    let mut output = OutputMarkerWriter::new(stage, vec![(b"\"id\":3".to_vec(), 2)]);
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
+        .expect("read-only greeting-stall cancellation must keep stdio serviceable");
+
+    let frames = decode_frames(output.as_bytes()).expect("responses must remain framed");
+    let by_id = |id: u64| {
+        frames
+            .iter()
+            .find(|frame| frame["id"].as_u64() == Some(id))
+            .expect("expected response id")
+    };
+    assert_eq!(
+        by_id(3)["error"],
+        serde_json::json!({
+            "code": "SUBVERSIONR_REMOTE_WORKER_CANCELLED",
+            "category": "cancelled",
+            "messageKey": "error.remote.workerCancelled",
+            "args": {
+                "remoteFailure": {
+                    "category": "cancellation",
+                    "reason": "operationCancelled",
+                    "cleanupAppropriate": false
+                }
+            },
+            "retryable": false,
+            "diagnostics": null
+        })
+    );
+    assert_eq!(
+        by_id(4)["result"]["repositoryId"],
+        "repo-uuid:C:/wc-svn-anonymous-cancel"
+    );
+    assert_eq!(by_id(4)["result"]["epoch"], 1);
+    assert_eq!(by_id(4)["result"]["generation"], 1);
+    assert_eq!(by_id(4)["result"]["source"], "libsvn-local");
+    assert_eq!(by_id(4)["result"]["localEntries"][0]["path"], "tracked.txt");
+    assert_eq!(by_id(4)["result"]["remoteEntries"], serde_json::json!([]));
+    assert_eq!(by_id(5)["result"]["accepted"], true);
+    assert!(frames.iter().any(|frame| {
+        frame["method"] == "remoteConnection/state"
+            && frame["params"]["repositoryId"] == "repo-uuid:C:/wc-svn-anonymous-cancel"
+            && frame["params"]["state"]["kind"] == "unchecked"
+    }));
+    assert!(!frames.iter().any(|frame| {
+        frame["method"] == "remoteConnection/state"
+            && frame["params"]["state"]["kind"] == "indeterminate"
+    }));
+    assert!(!frames.iter().any(|frame| frame["method"] == "status/stale"));
+    assert_eq!(worker.executions.load(Ordering::SeqCst), 1);
+    assert!(worker.cancellation_observed.load(Ordering::SeqCst));
+    assert!(!worker.active.load(Ordering::SeqCst));
 }
 
 #[test]
@@ -4805,6 +4976,42 @@ fn remote_status_frame(id: u64, operation_id: &str, timeout_ms: u64) -> Vec<u8> 
                         "redirectPolicy": "rejectAll"
                     },
                     "expectedOrigin": { "scheme": "https", "canonicalHost": "svn.example.invalid", "effectivePort": 443 }
+                }
+            }
+        })
+        .to_string(),
+    )
+}
+
+fn remote_svn_anonymous_status_frame(id: u64, operation_id: &str, timeout_ms: u64) -> Vec<u8> {
+    frame(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "status/checkRemote",
+            "params": {
+                "repositoryId": "repo-uuid:C:/wc-svn-anonymous-cancel",
+                "epoch": 1,
+                "remote": {
+                    "version": 1,
+                    "operationId": operation_id,
+                    "intent": "foreground",
+                    "interaction": "allowed",
+                    "timeoutMs": timeout_ms,
+                    "workspaceTrust": "trusted",
+                    "trustEpoch": 1,
+                    "profile": {
+                        "schema": "subversionr.remote-profile.v1",
+                        "profileId": "stdio-svn-anonymous-status-cancel-test",
+                        "authority": { "scheme": "svn", "canonicalHost": "127.0.0.1", "effectivePort": 3690 },
+                        "serverAuth": "anonymous",
+                        "serverAccount": "none",
+                        "serverCredentialPersistence": "secretStorage",
+                        "proxy": "none",
+                        "ssh": "none",
+                        "redirectPolicy": "rejectAll"
+                    },
+                    "expectedOrigin": { "scheme": "svn", "canonicalHost": "127.0.0.1", "effectivePort": 3690 }
                 }
             }
         })
