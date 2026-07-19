@@ -4580,6 +4580,12 @@ function operationMayHaveMutated(error: unknown): boolean {
 type RepositoryErrorLocalize = (message: string, ...args: unknown[]) => string;
 
 function repositoryErrorOperation(code: string, localize: RepositoryErrorLocalize): string {
+  if (code.includes("UNLOCK")) {
+    return localize("Unlock");
+  }
+  if (code.includes("LOCK")) {
+    return localize("Lock");
+  }
   if (code.includes("COMMIT")) {
     return localize("Commit");
   }
@@ -4603,7 +4609,20 @@ function repositoryFailureMessage(
   error: unknown,
   localize: RepositoryErrorLocalize,
 ): string {
-  switch (errorCode(error)) {
+  const code = errorCode(error);
+  if (anonymousIdentityRequired(error)) {
+    if (code === "SVN_OPERATION_UNLOCK_FAILED") {
+      return localize(
+        "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.",
+      );
+    }
+    if (code === "SVN_OPERATION_LOCK_FAILED") {
+      return localize(
+        "Locking requires an authenticated identity; the current SVN server profile is anonymous.",
+      );
+    }
+  }
+  switch (code) {
     case "SUBVERSIONR_HISTORY_REPOSITORY_ID_INVALID":
       return localize("Select an open SVN repository and try Show Repository Log again.");
     case "SUBVERSIONR_HISTORY_REPOSITORY_NOT_OPEN":
@@ -4717,6 +4736,21 @@ function repositoryFailureMessage(
       }
       return localize("SVN {0} failed. Open the SubversionR log for details.", operation);
   }
+}
+
+function anonymousIdentityRequired(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("safeArgs" in error)) {
+    return false;
+  }
+  const safeArgs = (error as { safeArgs?: unknown }).safeArgs;
+  if (typeof safeArgs !== "object" || safeArgs === null || !("remoteFailure" in safeArgs)) {
+    return false;
+  }
+  const remoteFailure = (safeArgs as { remoteFailure?: unknown }).remoteFailure;
+  return (safeArgs as { anonymousIdentityRequired?: unknown }).anonymousIdentityRequired === true &&
+    typeof remoteFailure === "object" && remoteFailure !== null &&
+    (remoteFailure as { category?: unknown }).category === "authentication" &&
+    (remoteFailure as { reason?: unknown }).reason === "authenticationRequired";
 }
 
 function operationFailureCause(error: unknown): string | undefined {

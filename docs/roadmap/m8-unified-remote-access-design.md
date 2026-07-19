@@ -777,7 +777,7 @@ redacted.
 
 | Cell | Required controlled evidence |
 | --- | --- |
-| `svn://` anonymous | source-built `svnserve`; checkout/open, remote status, content, history/blame, update, commit, copy/switch, lock/unlock; authz and deadline negatives |
+| `svn://` anonymous | source-built `svnserve`; nine positive cells for checkout/open, remote status, content, history/blame, update, commit, and copy/switch; exact `authenticationRequired` negatives for lock/unlock because the upstream RA contract never permits anonymous locking, including the explicit anonymous-identity-required/non-mutation markers, the observed `SVN_ERR_RA_NOT_AUTHORIZED` lock or `SVN_ERR_FS_NO_USER` break-unlock cause, and a same-repository fresh status reconcile after each failure; authz and deadline negatives |
 | `svn://` CRAM-MD5 | the same operation groups; correct/stale/wrong/cancelled credentials, multiple accounts, realm changes, single-flight, no cache/config ambient route |
 | HTTPS Basic | source-built Apache/mod_dav_svn; the same applicable operation groups; system/explicit CA, reject/once/permanent/change, redirect and authz negatives |
 | `svn+ssh` OpenSSH | pinned Windows inbox client and controlled server; agent and unencrypted identity-file modes, unknown/changed host key, timeout/cancel/crash, 100-cycle local and server residue check |
@@ -871,13 +871,16 @@ reconcile, and claim/evidence wording together as required by `AGENTS.md`.
    machine, typed errors, English/Japanese/Chinese status/recovery UI, hard-stop
    residue blocking, separately bounded reconcile, stale Incoming behavior, and
    local-event zero-network evidence. No transport claim changes.
-6. **I6 — direct `svn://` anonymous.** Close every claimed anonymous operation
-   group, the reviewed repository-root authority hook and malicious-root
-   zero-contact fixture, authz/deadline negatives, installed-product flows,
-   reconciliation, and exact anonymous claim cells.
+6. **I6 — direct `svn://` anonymous.** Close the nine permitted anonymous
+   operation cells, the exact lock/unlock `authenticationRequired` boundary,
+   the reviewed repository-root authority hook and malicious-root zero-contact
+   fixture, authz/deadline negatives, installed-product flows, reconciliation,
+   and exact anonymous claim cells. Anonymous profiles never inherit an OS or
+   cached username.
 7. **I7 — direct `svn://` CRAM-MD5.** Close credential rotation, multiple
-   accounts, realm changes, provider iteration, installed-product negatives,
-   reconciliation, and exact CRAM-MD5 claim cells.
+   accounts, realm changes, provider iteration, authenticated lock/unlock
+   success, installed-product negatives, reconciliation, and exact CRAM-MD5
+   claim cells.
 8. **I8 — HTTPS anonymous and TLS trust.** Move ra_serf into workers; replace
    prompt-time permanent storage with trust-once for ordinary operations and a
    separate RA-session-open permanent-verification flow; close anonymous HTTPS,

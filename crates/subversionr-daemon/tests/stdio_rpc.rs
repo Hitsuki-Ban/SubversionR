@@ -19,10 +19,11 @@ use subversionr_daemon::{
 use subversionr_protocol::{
     CanonicalEndpoint, CertificateTrustRequest, CertificateTrustResponse, Credential,
     CredentialAttempt, CredentialAuthKind, CredentialPersistenceIntent, CredentialRequest,
-    CredentialResponse, CredentialSettlementOutcome, CredentialSettlementRequest, RemoteFailure,
-    RemoteFailureCategory, RemoteFailureClass, RemoteOperationEnvelope, RemoteOperationIntent,
-    RemoteScheme, RepositoryIdentity, ServerAccountSelection, StatusEntry, StatusSnapshot,
-    StatusSummary,
+    CredentialResponse, CredentialSettlementOutcome, CredentialSettlementRequest,
+    OperationFailureCause, OperationFailureDiagnostics, RemoteFailure, RemoteFailureCategory,
+    RemoteFailureClass, RemoteOperationEnvelope, RemoteOperationIntent, RemoteScheme,
+    RepositoryIdentity, ServerAccountSelection, StatusEntry, StatusSnapshot, StatusSummary,
+    SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
 };
 
 fn credential_request(
@@ -3785,6 +3786,110 @@ struct RecoveryBlockedRemoteWorker;
 #[derive(Debug, Default)]
 struct MutationFailureRemoteWorker;
 
+#[derive(Debug, Default)]
+struct AuthenticatedIdentityRequiredRemoteWorker {
+    executions: AtomicUsize,
+}
+
+impl RemoteWorkerSupervisor for AuthenticatedIdentityRequiredRemoteWorker {
+    fn execute(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        _effect: RemoteOperationEffect,
+        _cancellation: &dyn BridgeCancellationToken,
+        _auth: &mut dyn AuthRequestBroker,
+        _bridge: &dyn BridgeApi,
+        _deadline: Instant,
+    ) -> RemoteWorkerSettlement {
+        panic!("direct svn anonymous fixture must use the anonymous worker path")
+    }
+
+    fn execute_svn_anonymous(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        effect: RemoteOperationEffect,
+        request: RemoteSvnAnonymousRequest,
+        _cancellation: &dyn BridgeCancellationToken,
+        _deadline: Instant,
+    ) -> RemoteWorkerSettlement {
+        assert_eq!(effect, RemoteOperationEffect::Mutation);
+        let (code, message_key) = match request {
+            RemoteSvnAnonymousRequest::Unlock { .. } => (
+                "SVN_OPERATION_UNLOCK_FAILED",
+                "error.native.operationUnlockFailed",
+            ),
+            RemoteSvnAnonymousRequest::Lock { .. } => (
+                "SVN_OPERATION_LOCK_FAILED",
+                "error.native.operationLockFailed",
+            ),
+            _ => panic!("fixture accepts only lock and unlock"),
+        };
+        let (diagnostic_code, diagnostic_name) = if code == "SVN_OPERATION_UNLOCK_FAILED" {
+            (160034, "SVN_ERR_FS_NO_USER")
+        } else {
+            (170001, "SVN_ERR_RA_NOT_AUTHORIZED")
+        };
+        self.executions.fetch_add(1, Ordering::SeqCst);
+        let failure = BridgeFailure::new(
+            code,
+            "native",
+            message_key,
+            serde_json::json!({
+                "path": "C:/wc-svn-anonymous-auth/tracked.txt",
+                "status": 2,
+                "mayHaveMutated": false,
+                "anonymousIdentityRequired": true
+            }),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause: OperationFailureCause::AuthenticationFailed,
+            svn: SvnErrorDiagnostics {
+                entries: vec![SvnErrorDiagnosticEntry {
+                    code: diagnostic_code,
+                    name: diagnostic_name.to_string(),
+                }],
+                truncated: false,
+            },
+        });
+        RemoteWorkerSettlement {
+            result: Err(failure),
+            operation_output: None,
+            remote_failure: Some(RemoteFailure {
+                category: RemoteFailureCategory::Authentication,
+                reason: RemoteFailureClass::AuthenticationRequired,
+                cleanup_appropriate: false,
+            }),
+            effect,
+            worker_was_resumed: true,
+            execution_origin_known: true,
+            termination: WorkerTerminationDisposition::NotRequired,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+        }
+    }
+
+    fn terminate_active(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn disconnect(&self) -> Result<(), BridgeFailure> {
+        Ok(())
+    }
+
+    fn capability_available(&self) -> bool {
+        true
+    }
+
+    fn svn_anonymous_available(&self) -> bool {
+        true
+    }
+}
+
 impl RemoteWorkerSupervisor for MutationFailureRemoteWorker {
     fn execute(
         &self,
@@ -4039,6 +4144,87 @@ fn stdio_read_only_greeting_stall_cancel_settles_on_wire_and_preserves_local_sna
     assert_eq!(worker.executions.load(Ordering::SeqCst), 1);
     assert!(worker.cancellation_observed.load(Ordering::SeqCst));
     assert!(!worker.active.load(Ordering::SeqCst));
+}
+
+#[test]
+fn stdio_anonymous_lock_identity_failures_are_typed_and_release_the_mutation_lane() {
+    let worker = Arc::new(AuthenticatedIdentityRequiredRemoteWorker::default());
+    let stage = Arc::new(AtomicUsize::new(0));
+    let reader = BrokerRoundTripReader::new(
+        vec![
+            [
+                frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+                frame(r#"{"jsonrpc":"2.0","id":2,"method":"repository/open","params":{"path":"C:/wc-svn-anonymous-auth"}}"#),
+                remote_svn_anonymous_lock_frame(
+                    3,
+                    "41234567-89ab-4def-8123-456789abcdef",
+                    "lock",
+                ),
+            ]
+            .concat(),
+            remote_svn_anonymous_lock_frame(
+            4,
+            "51234567-89ab-4def-8123-456789abcdef",
+            "unlock",
+        ),
+            frame(r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":{}}"#),
+        ],
+        vec![1, 2],
+        Arc::clone(&stage),
+    );
+    let mut output = OutputMarkerWriter::new(
+        stage,
+        vec![(b"\"id\":3".to_vec(), 1), (b"\"id\":4".to_vec(), 2)],
+    );
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
+        .expect("authenticated identity failures must keep stdio serviceable");
+
+    let frames = decode_frames(output.as_bytes()).expect("responses must remain framed");
+    let by_id = |id: u64| {
+        frames
+            .iter()
+            .find(|frame| frame["id"].as_u64() == Some(id))
+            .expect("expected response id")
+    };
+    for (id, code) in [
+        (3, "SVN_OPERATION_LOCK_FAILED"),
+        (4, "SVN_OPERATION_UNLOCK_FAILED"),
+    ] {
+        let error = &by_id(id)["error"];
+        assert_eq!(error["code"], code);
+        assert_eq!(error["args"]["anonymousIdentityRequired"], true);
+        assert_eq!(error["diagnostics"]["cause"], "authenticationFailed");
+        let expected_entry = if code == "SVN_OPERATION_UNLOCK_FAILED" {
+            serde_json::json!({ "code": 160034, "name": "SVN_ERR_FS_NO_USER" })
+        } else {
+            serde_json::json!({ "code": 170001, "name": "SVN_ERR_RA_NOT_AUTHORIZED" })
+        };
+        assert_eq!(
+            error["diagnostics"]["svn"]["entries"],
+            serde_json::json!([expected_entry])
+        );
+        assert_eq!(
+            error["args"]["remoteFailure"],
+            serde_json::json!({
+                "category": "authentication",
+                "reason": "authenticationRequired",
+                "cleanupAppropriate": false
+            })
+        );
+    }
+    assert_eq!(worker.executions.load(Ordering::SeqCst), 2);
+    assert_eq!(by_id(5)["result"]["accepted"], true);
+    assert!(frames.iter().any(|frame| {
+        frame["method"] == "remoteConnection/state"
+            && frame["params"]["repositoryId"] == "repo-uuid:C:/wc-svn-anonymous-auth"
+            && frame["params"]["state"]["kind"] == "attention"
+            && frame["params"]["state"]["reason"] == "authRequired"
+    }));
+    assert!(!frames.iter().any(|frame| {
+        frame["method"] == "remoteConnection/state"
+            && frame["params"]["state"]["kind"] == "indeterminate"
+    }));
 }
 
 #[test]
@@ -5012,6 +5198,66 @@ fn remote_svn_anonymous_status_frame(id: u64, operation_id: &str, timeout_ms: u6
                         "redirectPolicy": "rejectAll"
                     },
                     "expectedOrigin": { "scheme": "svn", "canonicalHost": "127.0.0.1", "effectivePort": 3690 }
+                }
+            }
+        })
+        .to_string(),
+    )
+}
+
+fn remote_svn_anonymous_lock_frame(id: u64, operation_id: &str, kind: &str) -> Vec<u8> {
+    let options = match kind {
+        "unlock" => serde_json::json!({
+            "version": 1,
+            "paths": ["tracked.txt"],
+            "breakLock": false
+        }),
+        "lock" => serde_json::json!({
+            "version": 1,
+            "paths": ["tracked.txt"],
+            "comment": null,
+            "stealLock": false
+        }),
+        _ => panic!("test frame supports only lock and unlock"),
+    };
+    frame(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "operation/run",
+            "params": {
+                "repositoryId": "repo-uuid:C:/wc-svn-anonymous-auth",
+                "epoch": 1,
+                "kind": kind,
+                "options": options,
+                "remote": {
+                    "version": 1,
+                    "operationId": operation_id,
+                    "intent": "foreground",
+                    "interaction": "allowed",
+                    "timeoutMs": 30_000,
+                    "workspaceTrust": "trusted",
+                    "trustEpoch": 1,
+                    "profile": {
+                        "schema": "subversionr.remote-profile.v1",
+                        "profileId": "stdio-svn-anonymous-lock-auth-test",
+                        "authority": {
+                            "scheme": "svn",
+                            "canonicalHost": "127.0.0.1",
+                            "effectivePort": 3690
+                        },
+                        "serverAuth": "anonymous",
+                        "serverAccount": "none",
+                        "serverCredentialPersistence": "secretStorage",
+                        "proxy": "none",
+                        "ssh": "none",
+                        "redirectPolicy": "rejectAll"
+                    },
+                    "expectedOrigin": {
+                        "scheme": "svn",
+                        "canonicalHost": "127.0.0.1",
+                        "effectivePort": 3690
+                    }
                 }
             }
         })

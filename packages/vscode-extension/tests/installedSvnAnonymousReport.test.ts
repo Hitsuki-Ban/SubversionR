@@ -8,6 +8,7 @@ import {
 import type { RepositorySession } from "../src/repository/repositorySessionService";
 import type { ScmRepositoryProjection } from "../src/scm/sourceControlResourceStore";
 import type { StatusDelta } from "../src/status/statusRefreshRpcClient";
+import { JsonRpcStreamError } from "../src/transport/jsonRpcStreamClient";
 
 const TOKEN = "installed-i6-token";
 const REPOSITORY_URL = "svn://127.0.0.1:3691/repo/trunk";
@@ -18,8 +19,10 @@ const REPOSITORY_ID = "fixture-uuid:C:/evidence/i6-checkout";
 describe("installed SVN anonymous report", () => {
   it("executes all real typed RPC surfaces with unique envelopes and emits only redacted machine evidence", async () => {
     const observedEnvelopes: Array<Record<string, unknown>> = [];
+    const executionOrder: string[] = [];
     const sendRequest = vi.fn(async (method: string, params: unknown): Promise<unknown> => {
       const request = params as Record<string, unknown>;
+      executionOrder.push(method === "operation/run" ? `${method}:${String(request.kind)}` : method);
       if ("remote" in request) {
         observedEnvelopes.push(request.remote as Record<string, unknown>);
       }
@@ -28,13 +31,18 @@ describe("installed SVN anonymous report", () => {
       if (method === "content/get") return contentResponse();
       if (method === "history/log") return logResponse();
       if (method === "history/blame") return blameResponse();
-      if (method === "operation/run") return operationResponse(request.kind as string);
+      if (method === "operation/run") {
+        const kind = request.kind as string;
+        if (kind === "lock" || kind === "unlock") throw identityRequiredError(kind);
+        return operationResponse(kind);
+      }
       throw new Error(`unexpected method: ${method}`);
     });
     let generation = 1;
     const projection = () => freshProjection(generation);
     const append = vi.fn(async () => undefined);
     const fullReconcile = vi.fn(async () => {
+      executionOrder.push("fullReconcile");
       generation += 1;
     });
     let operationIndex = 0;
@@ -58,8 +66,14 @@ describe("installed SVN anonymous report", () => {
       protocol: { major: 1, minor: 35 },
       origin: { scheme: "svn", loopback: true, consistent: true },
       trust: { acknowledgedEpoch: 7, consistent: true },
+      positiveOperationCount: 9,
+      identityRequiredOperationCount: 2,
       remoteOperationCount: 11,
       uniqueOperationIds: true,
+      anonymousIdentityRequired: {
+        lock: identityRequiredEvidence("lock"),
+        unlock: identityRequiredEvidence("unlock"),
+      },
       semanticValidation: {
         checkoutRevision: 1,
         updateRevision: 3,
@@ -74,7 +88,7 @@ describe("installed SVN anonymous report", () => {
     });
     expect(report.operations).toEqual([
       "checkoutOpen", "remoteStatus", "content", "historyLog", "historyBlame", "update", "commit",
-      "branchCopy", "switch", "lock", "unlock",
+      "branchCopy", "switch",
     ]);
     expect(observedEnvelopes).toHaveLength(11);
     expect(new Set(observedEnvelopes.map((remote) => remote.operationId)).size).toBe(11);
@@ -99,6 +113,10 @@ describe("installed SVN anonymous report", () => {
     expect(sendRequest.mock.calls.slice(5).map(([, params]) => (params as Record<string, unknown>).kind)).toEqual([
       "update", "commit", "branchCreate", "switch", "lock", "unlock",
     ]);
+    expect(sendRequest.mock.calls[10]?.[1]).toMatchObject({
+      kind: "unlock",
+      options: { breakLock: true },
+    });
     expect(sendRequest.mock.calls[7]?.[1]).toMatchObject({
       options: {
         sourceUrl: REPOSITORY_URL,
@@ -111,6 +129,9 @@ describe("installed SVN anonymous report", () => {
       "\nSubversionR installed I6 anonymous evidence mutation.\n",
     );
     expect(fullReconcile).toHaveBeenCalledTimes(9);
+    expect(executionOrder.slice(-4)).toEqual([
+      "operation/run:lock", "fullReconcile", "operation/run:unlock", "fullReconcile",
+    ]);
     expect(closeRepository).toHaveBeenCalledOnce();
     expect(closeRepository).toHaveBeenCalledWith(REPOSITORY_ID);
     const serialized = JSON.stringify(report);
@@ -162,6 +183,39 @@ describe("installed SVN anonymous report", () => {
       code: "SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_AUTH_ACTIVITY_INVALID",
     });
   });
+
+  it.each([
+    ["wrong stable code", { code: "SVN_OPERATION_UNLOCK_FAILED" }],
+    ["wrong diagnostics cause", { cause: "authorizationDenied" }],
+    ["wrong remote failure reason", { failureReason: "authorizationDenied" }],
+    ["truncated SVN cause chain", { truncated: true }],
+    ["missing SVN cause entries", { emptyEntries: true }],
+    ["duplicate SVN cause names", { duplicateEntries: true }],
+    ["no allowed upstream identity cause", { noAllowedIdentityCause: true }],
+    ["swapped operation-specific identity cause", { swappedIdentityCause: true }],
+    ["missing anonymous identity marker", { missingIdentityMarker: true }],
+    ["false anonymous identity marker", { falseIdentityMarker: true }],
+  ])("rejects an identity-required lock settlement with %s", async (_label, override) => {
+    const options = successfulOptions();
+    options.initialize = vi.fn().mockResolvedValue(connection(async (method, params) => {
+      if (method === "repository/checkout") return { workingCopyPath: CHECKOUT_PATH, revision: 1 };
+      if (method === "status/checkRemote") return remoteDelta();
+      if (method === "content/get") return contentResponse();
+      if (method === "history/log") return logResponse();
+      if (method === "history/blame") return blameResponse();
+      if (method === "operation/run") {
+        const kind = (params as Record<string, unknown>).kind as string;
+        if (kind === "lock") throw identityRequiredError(kind, override);
+        if (kind === "unlock") throw identityRequiredError(kind);
+        return operationResponse(kind);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    }));
+
+    await expect(collectInstalledSvnAnonymousReport(options)).rejects.toMatchObject({
+      code: "SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_IDENTITY_BOUNDARY_INVALID",
+    });
+  });
 });
 
 function successfulOptions(): InstalledSvnAnonymousReportOptions {
@@ -175,7 +229,11 @@ function successfulOptions(): InstalledSvnAnonymousReportOptions {
       if (method === "content/get") return contentResponse();
       if (method === "history/log") return logResponse();
       if (method === "history/blame") return blameResponse();
-      if (method === "operation/run") return operationResponse((params as Record<string, unknown>).kind as string);
+      if (method === "operation/run") {
+        const kind = (params as Record<string, unknown>).kind as string;
+        if (kind === "lock" || kind === "unlock") throw identityRequiredError(kind);
+        return operationResponse(kind);
+      }
       throw new Error(`unexpected method: ${method}`);
     })),
     applyRemoteStatusDelta: async () => { generation += 1; },
@@ -411,6 +469,74 @@ function operationResponse(kind: string) {
         : [{ path: FILE_PATH, depth: "empty", reason: `operation${kind[0]!.toUpperCase()}${kind.slice(1)}` }],
       requiresFullReconcile,
     },
+  };
+}
+
+function identityRequiredError(
+  kind: "lock" | "unlock",
+  overrides: Record<string, unknown> = {},
+): JsonRpcStreamError {
+  const code = kind === "lock" ? "SVN_OPERATION_LOCK_FAILED" : "SVN_OPERATION_UNLOCK_FAILED";
+  const messageKey = kind === "lock" ? "error.native.operationLockFailed" : "error.native.operationUnlockFailed";
+  return new JsonRpcStreamError({
+    code: overrides.code ?? code,
+    category: "native",
+    messageKey,
+    args: {
+      path: CHECKOUT_PATH,
+      status: 2,
+      ...(overrides.missingIdentityMarker === true
+        ? {}
+        : { anonymousIdentityRequired: overrides.falseIdentityMarker === true ? false : true }),
+      mayHaveMutated: false,
+      remoteFailure: {
+        category: "authentication",
+        reason: overrides.failureReason ?? "authenticationRequired",
+        cleanupAppropriate: false,
+      },
+    },
+    retryable: false,
+    diagnostics: {
+      cause: overrides.cause ?? "authenticationFailed",
+      svn: {
+        entries: overrides.emptyEntries === true
+          ? []
+          : [
+              { code: 170001, name: "SVN_ERR_AUTHN_FAILED" },
+              ...(overrides.duplicateEntries === true ? [{ code: 170002, name: "SVN_ERR_AUTHN_FAILED" }] : []),
+              {
+                code: 170001,
+                name: overrides.noAllowedIdentityCause === true
+                  ? "SVN_ERR_AUTHZ_UNWRITABLE"
+                  : overrides.swappedIdentityCause === true
+                    ? kind === "lock" ? "SVN_ERR_FS_NO_USER" : "SVN_ERR_RA_NOT_AUTHORIZED"
+                  : kind === "lock" ? "SVN_ERR_RA_NOT_AUTHORIZED" : "SVN_ERR_FS_NO_USER",
+              },
+            ],
+        truncated: overrides.truncated ?? false,
+      },
+    },
+  });
+}
+
+function identityRequiredEvidence(operation: "lock" | "unlock"): Record<string, unknown> {
+  return {
+    operation,
+    anonymousIdentityRequired: true,
+    stableCode: operation === "lock" ? "SVN_OPERATION_LOCK_FAILED" : "SVN_OPERATION_UNLOCK_FAILED",
+    diagnosticsCause: "authenticationFailed",
+    mayHaveMutated: false,
+    remoteFailure: {
+      category: "authentication",
+      reason: "authenticationRequired",
+      cleanupAppropriate: false,
+    },
+    promptCount: 0,
+    credentialSettlement: "none",
+    laneReleaseProof: { method: "status/refresh", reconcile: "fresh" },
+    nativeLaneReleased: true,
+    diagnosticsRedacted: true,
+    svnCauseNames: ["SVN_ERR_AUTHN_FAILED", operation === "lock" ? "SVN_ERR_RA_NOT_AUTHORIZED" : "SVN_ERR_FS_NO_USER"],
   };
 }
 

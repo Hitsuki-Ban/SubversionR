@@ -637,5 +637,7 @@
   "Review checkout target": "チェックアウト先を確認",
   "A possibly changed SVN checkout target is blocked until you review its disposition.": "変更された可能性がある SVN チェックアウト先は、状態を確認するまでブロックされています。",
   "SVN {0} failed because the server denied authorization for this operation.": "サーバーがこの操作を許可しなかったため、SVN {0} に失敗しました。",
-  "SVN {0} failed because the server authorization configuration is invalid.": "サーバーの認可設定が無効なため、SVN {0} に失敗しました。"
+  "SVN {0} failed because the server authorization configuration is invalid.": "サーバーの認可設定が無効なため、SVN {0} に失敗しました。",
+  "Locking requires an authenticated identity; the current SVN server profile is anonymous.": "ロックには認証済みの ID が必要ですが、現在の SVN サーバープロファイルは匿名です。",
+  "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.": "ロック解除には認証済みの ID が必要ですが、現在の SVN サーバープロファイルは匿名です。"
 }

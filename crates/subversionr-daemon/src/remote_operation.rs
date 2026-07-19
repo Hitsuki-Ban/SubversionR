@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use subversionr_protocol::{
     CanonicalEndpoint, CertificateTrustRequest, CertificateTrustResponse, CredentialRequest,
-    CredentialResponse, CredentialSettlementAck, CredentialSettlementRequest, RepositoryIdentity,
-    StatusSnapshot,
+    CredentialResponse, CredentialSettlementAck, CredentialSettlementRequest,
+    OperationFailureCause, RepositoryIdentity, StatusSnapshot,
 };
 
 use crate::{
@@ -14,6 +14,8 @@ use crate::{
     RepositoryCheckoutResult, SwitchOperationRequest, SwitchOperationResult,
     UnlockOperationRequest, UpdateOperationRequest, UpdateOperationResult,
 };
+
+pub(crate) const ANONYMOUS_IDENTITY_REQUIRED_ARG: &str = "anonymousIdentityRequired";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -132,6 +134,9 @@ impl RemoteSvnAnonymousRequest {
                 .map(RemoteSvnAnonymousOutput::Update),
             Self::Lock { identity, request } => bridge
                 .operation_lock_with_cancellation(&identity, &request, &mut anonymous, cancellation)
+                .map_err(|failure| {
+                    normalize_anonymous_lock_failure(failure, "SVN_OPERATION_LOCK_FAILED")
+                })
                 .map(RemoteSvnAnonymousOutput::Lock),
             Self::Unlock { identity, request } => bridge
                 .operation_unlock_with_cancellation(
@@ -140,6 +145,9 @@ impl RemoteSvnAnonymousRequest {
                     &mut anonymous,
                     cancellation,
                 )
+                .map_err(|failure| {
+                    normalize_anonymous_lock_failure(failure, "SVN_OPERATION_UNLOCK_FAILED")
+                })
                 .map(RemoteSvnAnonymousOutput::Unlock),
             Self::BranchCreate { identity, request } => bridge
                 .operation_branch_create_with_cancellation(
@@ -167,6 +175,89 @@ impl RemoteSvnAnonymousRequest {
                 .map(RemoteSvnAnonymousOutput::Commit),
         }
     }
+}
+
+fn normalize_anonymous_lock_failure(
+    mut failure: BridgeFailure,
+    expected_code: &str,
+) -> BridgeFailure {
+    let should_normalize = failure.code() == expected_code
+        && failure.safe_args().as_object().is_some_and(|args| {
+            args.get("mayHaveMutated")
+                .and_then(serde_json::Value::as_bool)
+                == Some(false)
+                && !args.contains_key(ANONYMOUS_IDENTITY_REQUIRED_ARG)
+        })
+        && failure
+            .diagnostics()
+            .is_some_and(native_identity_required_diagnostics);
+    if should_normalize {
+        failure
+            .diagnostics
+            .as_mut()
+            .expect("normalization requires diagnostics")
+            .cause = OperationFailureCause::AuthenticationFailed;
+        failure
+            .args
+            .as_object_mut()
+            .expect("normalization requires native safe args")
+            .insert(
+                ANONYMOUS_IDENTITY_REQUIRED_ARG.to_string(),
+                serde_json::Value::Bool(true),
+            );
+    }
+    failure
+}
+
+pub(crate) fn is_anonymous_identity_required_failure(failure: &BridgeFailure) -> bool {
+    matches!(
+        failure.code(),
+        "SVN_OPERATION_LOCK_FAILED" | "SVN_OPERATION_UNLOCK_FAILED"
+    ) && failure.safe_args().as_object().is_some_and(|args| {
+        args.get("mayHaveMutated")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+            && args
+                .get(ANONYMOUS_IDENTITY_REQUIRED_ARG)
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+    }) && failure.diagnostics().is_some_and(|diagnostics| {
+        diagnostics.cause == OperationFailureCause::AuthenticationFailed
+            && bounded_identity_required_chain(diagnostics)
+    })
+}
+
+fn native_identity_required_diagnostics(
+    diagnostics: &subversionr_protocol::OperationFailureDiagnostics,
+) -> bool {
+    bounded_identity_required_chain(diagnostics)
+        && match diagnostics.cause {
+            OperationFailureCause::AuthorizationDenied => diagnostics
+                .svn
+                .entries
+                .iter()
+                .any(|entry| entry.name == "SVN_ERR_RA_NOT_AUTHORIZED"),
+            OperationFailureCause::UnknownNative => diagnostics
+                .svn
+                .entries
+                .iter()
+                .any(|entry| entry.name == "SVN_ERR_FS_NO_USER"),
+            _ => false,
+        }
+}
+
+fn bounded_identity_required_chain(
+    diagnostics: &subversionr_protocol::OperationFailureDiagnostics,
+) -> bool {
+    !diagnostics.svn.truncated
+        && !diagnostics.svn.entries.is_empty()
+        && diagnostics.svn.entries.len() <= 8
+        && diagnostics.svn.entries.iter().any(|entry| {
+            matches!(
+                entry.name.as_str(),
+                "SVN_ERR_RA_NOT_AUTHORIZED" | "SVN_ERR_FS_NO_USER"
+            )
+        })
 }
 
 struct AnonymousOnlyAuthBroker;
@@ -206,4 +297,192 @@ fn anonymous_auth_challenge() -> BridgeFailure {
         json!({ "scheme": "svn", "auth": "anonymous" }),
         false,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use subversionr_protocol::{
+        OperationFailureDiagnostics, SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
+    };
+
+    fn native_failure(
+        code: &str,
+        cause: OperationFailureCause,
+        may_have_mutated: Option<bool>,
+        entries: Vec<SvnErrorDiagnosticEntry>,
+    ) -> BridgeFailure {
+        let mut args = serde_json::Map::from_iter([
+            ("path".to_string(), json!("C:/wc/trunk.txt")),
+            ("status".to_string(), json!(2)),
+        ]);
+        if let Some(may_have_mutated) = may_have_mutated {
+            args.insert("mayHaveMutated".to_string(), json!(may_have_mutated));
+        }
+        BridgeFailure::new(
+            code,
+            "native",
+            "error.native.operationLockFailed",
+            serde_json::Value::Object(args),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause,
+            svn: SvnErrorDiagnostics {
+                entries,
+                truncated: false,
+            },
+        })
+    }
+
+    fn not_authorized_entries() -> Vec<SvnErrorDiagnosticEntry> {
+        vec![
+            SvnErrorDiagnosticEntry {
+                code: 160035,
+                name: "SVN_ERR_CLIENT_UNRELATED_RESOURCES".to_string(),
+            },
+            SvnErrorDiagnosticEntry {
+                code: 170001,
+                name: "SVN_ERR_RA_NOT_AUTHORIZED".to_string(),
+            },
+        ]
+    }
+
+    fn no_user_entries() -> Vec<SvnErrorDiagnosticEntry> {
+        vec![SvnErrorDiagnosticEntry {
+            code: 160034,
+            name: "SVN_ERR_FS_NO_USER".to_string(),
+        }]
+    }
+
+    #[test]
+    fn anonymous_lock_boundary_normalizes_only_exact_lock_and_unlock_authorization_failures() {
+        for code in ["SVN_OPERATION_LOCK_FAILED", "SVN_OPERATION_UNLOCK_FAILED"] {
+            let normalized = normalize_anonymous_lock_failure(
+                native_failure(
+                    code,
+                    OperationFailureCause::AuthorizationDenied,
+                    Some(false),
+                    not_authorized_entries(),
+                ),
+                code,
+            );
+            let diagnostics = normalized
+                .diagnostics()
+                .expect("diagnostics must remain present");
+            assert_eq!(
+                diagnostics.cause,
+                OperationFailureCause::AuthenticationFailed
+            );
+            assert_eq!(diagnostics.svn.entries.len(), 2);
+            assert_eq!(diagnostics.svn.entries[1].name, "SVN_ERR_RA_NOT_AUTHORIZED");
+            assert!(!diagnostics.svn.truncated);
+            assert_eq!(
+                normalized.safe_args()[ANONYMOUS_IDENTITY_REQUIRED_ARG],
+                true
+            );
+            assert!(is_anonymous_identity_required_failure(&normalized));
+        }
+
+        let no_user = normalize_anonymous_lock_failure(
+            native_failure(
+                "SVN_OPERATION_UNLOCK_FAILED",
+                OperationFailureCause::UnknownNative,
+                Some(false),
+                no_user_entries(),
+            ),
+            "SVN_OPERATION_UNLOCK_FAILED",
+        );
+        assert_eq!(
+            no_user.diagnostics().expect("diagnostics").cause,
+            OperationFailureCause::AuthenticationFailed
+        );
+        assert_eq!(no_user.safe_args()[ANONYMOUS_IDENTITY_REQUIRED_ARG], true);
+        assert!(is_anonymous_identity_required_failure(&no_user));
+
+        let other_code = normalize_anonymous_lock_failure(
+            native_failure(
+                "SVN_OPERATION_UPDATE_FAILED",
+                OperationFailureCause::AuthorizationDenied,
+                Some(false),
+                not_authorized_entries(),
+            ),
+            "SVN_OPERATION_LOCK_FAILED",
+        );
+        assert_eq!(
+            other_code.diagnostics().expect("diagnostics").cause,
+            OperationFailureCause::AuthorizationDenied
+        );
+
+        let other_cause = normalize_anonymous_lock_failure(
+            native_failure(
+                "SVN_OPERATION_LOCK_FAILED",
+                OperationFailureCause::AuthorizationConfigurationInvalid,
+                Some(false),
+                not_authorized_entries(),
+            ),
+            "SVN_OPERATION_LOCK_FAILED",
+        );
+        assert_eq!(
+            other_cause.diagnostics().expect("diagnostics").cause,
+            OperationFailureCause::AuthorizationConfigurationInvalid
+        );
+
+        for may_have_mutated in [Some(true), None] {
+            let conservative = normalize_anonymous_lock_failure(
+                native_failure(
+                    "SVN_OPERATION_LOCK_FAILED",
+                    OperationFailureCause::AuthorizationDenied,
+                    may_have_mutated,
+                    not_authorized_entries(),
+                ),
+                "SVN_OPERATION_LOCK_FAILED",
+            );
+            assert_eq!(
+                conservative.diagnostics().expect("diagnostics").cause,
+                OperationFailureCause::AuthorizationDenied
+            );
+            assert!(conservative.safe_args()[ANONYMOUS_IDENTITY_REQUIRED_ARG].is_null());
+        }
+
+        let unrelated_cause_chain = normalize_anonymous_lock_failure(
+            native_failure(
+                "SVN_OPERATION_LOCK_FAILED",
+                OperationFailureCause::AuthorizationDenied,
+                Some(false),
+                vec![SvnErrorDiagnosticEntry {
+                    code: 170001,
+                    name: "SVN_ERR_AUTHZ_UNWRITABLE".to_string(),
+                }],
+            ),
+            "SVN_OPERATION_LOCK_FAILED",
+        );
+        assert_eq!(
+            unrelated_cause_chain
+                .diagnostics()
+                .expect("diagnostics")
+                .cause,
+            OperationFailureCause::AuthorizationDenied
+        );
+        assert!(unrelated_cause_chain.safe_args()[ANONYMOUS_IDENTITY_REQUIRED_ARG].is_null());
+
+        let mut truncated = native_failure(
+            "SVN_OPERATION_LOCK_FAILED",
+            OperationFailureCause::AuthorizationDenied,
+            Some(false),
+            not_authorized_entries(),
+        );
+        truncated
+            .diagnostics
+            .as_mut()
+            .expect("fixture diagnostics")
+            .svn
+            .truncated = true;
+        let truncated = normalize_anonymous_lock_failure(truncated, "SVN_OPERATION_LOCK_FAILED");
+        assert_eq!(
+            truncated.diagnostics().expect("diagnostics").cause,
+            OperationFailureCause::AuthorizationDenied
+        );
+        assert!(truncated.safe_args()[ANONYMOUS_IDENTITY_REQUIRED_ARG].is_null());
+    }
 }

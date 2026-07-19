@@ -6411,7 +6411,10 @@ fn unsupported_operation_kind(request: &JsonRpcRequest, kind: &str) -> (Dispatch
 #[cfg(test)]
 mod i5_remote_lane_tests {
     use super::*;
-    use subversionr_protocol::{RemoteFailure, RemoteFailureCategory};
+    use subversionr_protocol::{
+        OperationFailureCause, OperationFailureDiagnostics, RemoteFailure, RemoteFailureCategory,
+        SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
+    };
 
     fn cancelled_settlement(
         effect: RemoteOperationEffect,
@@ -6434,6 +6437,55 @@ mod i5_remote_lane_tests {
             worker_was_resumed,
             execution_origin_known: true,
             termination: crate::WorkerTerminationDisposition::Settled,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+            operation_output: None,
+        }
+    }
+
+    fn authenticated_identity_settlement(code: &str) -> RemoteWorkerSettlement {
+        let (diagnostic_code, diagnostic_name) = if code == "SVN_OPERATION_UNLOCK_FAILED" {
+            (160034, "SVN_ERR_FS_NO_USER")
+        } else {
+            (170001, "SVN_ERR_RA_NOT_AUTHORIZED")
+        };
+        let failure = BridgeFailure::new(
+            code,
+            "native",
+            if code == "SVN_OPERATION_UNLOCK_FAILED" {
+                "error.native.operationUnlockFailed"
+            } else {
+                "error.native.operationLockFailed"
+            },
+            json!({
+                "path": "C:/wc/trunk.txt",
+                "status": 2,
+                "mayHaveMutated": false,
+                "anonymousIdentityRequired": true
+            }),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause: OperationFailureCause::AuthenticationFailed,
+            svn: SvnErrorDiagnostics {
+                entries: vec![SvnErrorDiagnosticEntry {
+                    code: diagnostic_code,
+                    name: diagnostic_name.to_string(),
+                }],
+                truncated: false,
+            },
+        });
+        RemoteWorkerSettlement {
+            result: Err(failure),
+            remote_failure: Some(RemoteFailure {
+                category: RemoteFailureCategory::Authentication,
+                reason: RemoteFailureClass::AuthenticationRequired,
+                cleanup_appropriate: false,
+            }),
+            effect: RemoteOperationEffect::Mutation,
+            worker_was_resumed: true,
+            execution_origin_known: true,
+            termination: crate::WorkerTerminationDisposition::NotRequired,
             job_descendants_zero: true,
             temp_root_removed: true,
             operation_output: None,
@@ -6547,6 +6599,137 @@ mod i5_remote_lane_tests {
                 ..
             }) if origin_operation_id == origin
         ));
+    }
+
+    #[test]
+    fn authenticated_identity_lock_failure_releases_lane_and_sets_auth_attention() {
+        for (index, code) in ["SVN_OPERATION_LOCK_FAILED", "SVN_OPERATION_UNLOCK_FAILED"]
+            .into_iter()
+            .enumerate()
+        {
+            let path = format!("C:/wc-auth-{index}");
+            let lane = absolute_path_key(&normalize_absolute_path_text(&path));
+            let origin = format!("{index}1234567-89ab-4def-8123-456789abcdef");
+            let mut state = DaemonState::new();
+            let repository_id = insert_remote_recovery_session(&mut state, &path);
+            assert!(
+                state
+                    .reserve_remote_lane(
+                        &lane,
+                        &origin,
+                        RemoteOperationEffect::Mutation,
+                        Some(repository_id.clone()),
+                        Some(1),
+                    )
+                    .is_none()
+            );
+
+            assert!(
+                state
+                    .settle_remote_launch(&lane, &origin, &authenticated_identity_settlement(code),)
+                    .is_none()
+            );
+            assert!(!state.remote_native_lanes.contains_key(&lane));
+            let notifications = state.take_pending_notifications();
+            assert!(notifications.iter().any(|notification| {
+                notification["method"] == "remoteConnection/state"
+                    && notification["params"]["repositoryId"] == repository_id
+                    && notification["params"]["state"]["kind"] == "attention"
+                    && notification["params"]["state"]["reason"] == "authRequired"
+            }));
+            assert!(!notifications.iter().any(|notification| {
+                notification["method"] == "remoteConnection/state"
+                    && notification["params"]["state"]["kind"] == "indeterminate"
+            }));
+        }
+    }
+
+    #[test]
+    fn partial_authenticated_identity_evidence_enters_conservative_recovery() {
+        for (index, scenario) in [
+            "markerMissing",
+            "mutationMissing",
+            "mutationTrue",
+            "unrelatedCause",
+            "truncatedCause",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = format!("C:/wc-auth-partial-{index}");
+            let lane = absolute_path_key(&normalize_absolute_path_text(&path));
+            let origin = format!("{index}2234567-89ab-4def-8123-456789abcdef");
+            let mut state = DaemonState::new();
+            let repository_id = insert_remote_recovery_session(&mut state, &path);
+            assert!(
+                state
+                    .reserve_remote_lane(
+                        &lane,
+                        &origin,
+                        RemoteOperationEffect::Mutation,
+                        Some(repository_id.clone()),
+                        Some(1),
+                    )
+                    .is_none()
+            );
+
+            let mut settlement = authenticated_identity_settlement("SVN_OPERATION_LOCK_FAILED");
+            let failure = settlement
+                .result
+                .as_mut()
+                .expect_err("fixture must retain its failure");
+            match scenario {
+                "markerMissing" => {
+                    failure
+                        .args
+                        .as_object_mut()
+                        .expect("fixture safe args")
+                        .remove("anonymousIdentityRequired");
+                }
+                "mutationMissing" => {
+                    failure
+                        .args
+                        .as_object_mut()
+                        .expect("fixture safe args")
+                        .remove("mayHaveMutated");
+                }
+                "mutationTrue" => failure.args["mayHaveMutated"] = json!(true),
+                "unrelatedCause" => {
+                    failure
+                        .diagnostics
+                        .as_mut()
+                        .expect("fixture diagnostics")
+                        .svn
+                        .entries[0]
+                        .name = "SVN_ERR_AUTHZ_UNWRITABLE".to_string();
+                }
+                "truncatedCause" => {
+                    failure
+                        .diagnostics
+                        .as_mut()
+                        .expect("fixture diagnostics")
+                        .svn
+                        .truncated = true;
+                }
+                _ => unreachable!("enumerated scenarios are exhaustive"),
+            }
+
+            assert!(
+                state
+                    .settle_remote_launch(&lane, &origin, &settlement)
+                    .is_none()
+            );
+            assert!(matches!(
+                state.remote_native_lanes.get(&lane),
+                Some(RemoteNativeLaneState::Recovering { .. })
+            ));
+            let notifications = state.take_pending_notifications();
+            assert!(notifications.iter().any(|notification| {
+                notification["method"] == "remoteConnection/state"
+                    && notification["params"]["repositoryId"] == repository_id
+                    && notification["params"]["state"]["kind"] == "indeterminate"
+            }));
+        }
     }
 
     #[test]

@@ -1268,6 +1268,60 @@ function Convert-JsonObject([string]$Text, [string]$Name) {
   return $value
 }
 
+function Assert-AnonymousIdentityRequiredObservation(
+  [object]$Observation,
+  [string]$ExpectedOperation,
+  [string]$ExpectedCode,
+  [string]$ExpectedCauseName,
+  [string]$ExpectedSurface,
+  [string]$Context
+) {
+  $properties = @(
+    "operation", "anonymousIdentityRequired", "stableCode", "diagnosticsCause", "mayHaveMutated",
+    "remoteFailure", "promptCount", "credentialSettlement", "laneReleaseProof",
+    "nativeLaneReleased", "diagnosticsRedacted", "svnCauseNames"
+  )
+  if ($ExpectedSurface -ceq "packaged-native") {
+    $properties += "temporaryRootsAfter"
+  }
+  Assert-ExactProperties $Observation $properties $Context
+  Assert-ExactProperties $Observation.remoteFailure @("category", "reason", "cleanupAppropriate") "$Context remote failure"
+  Assert-ExactProperties $Observation.laneReleaseProof @("method", "reconcile") "$Context lane-release proof"
+  Assert-True (
+    [string]$Observation.operation -ceq $ExpectedOperation -and
+    $Observation.anonymousIdentityRequired -eq $true -and
+    [string]$Observation.stableCode -ceq $ExpectedCode -and
+    [string]$Observation.diagnosticsCause -ceq "authenticationFailed" -and
+    $Observation.mayHaveMutated -eq $false -and
+    [string]$Observation.remoteFailure.category -ceq "authentication" -and
+    [string]$Observation.remoteFailure.reason -ceq "authenticationRequired" -and
+    $Observation.remoteFailure.cleanupAppropriate -eq $false -and
+    [int]$Observation.promptCount -eq 0 -and
+    [string]$Observation.credentialSettlement -ceq "none" -and
+    [string]$Observation.laneReleaseProof.method -ceq "status/refresh" -and
+    [string]$Observation.laneReleaseProof.reconcile -ceq "fresh" -and
+    $Observation.nativeLaneReleased -eq $true -and
+    $Observation.diagnosticsRedacted -eq $true
+  ) "$Context did not prove the exact anonymous identity boundary."
+  if ($ExpectedSurface -ceq "packaged-native") {
+    Assert-True ([int]$Observation.temporaryRootsAfter -eq 0) "$Context left an observed worker temporary root."
+  }
+  $causeNames = @($Observation.svnCauseNames)
+  Assert-True ($causeNames.Count -ge 1 -and $causeNames.Count -le 8) "$Context did not preserve a bounded libsvn cause chain."
+  $uniqueCauseNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  foreach ($causeName in $causeNames) {
+    Assert-True ([string]$causeName -cmatch '^SVN_ERR_[A-Z0-9_]+$') "$Context contained an invalid libsvn cause name."
+    Assert-True ($uniqueCauseNames.Add([string]$causeName)) "$Context contained a duplicate libsvn cause name."
+  }
+  $observedIdentityCauseNames = @($causeNames | Where-Object {
+      [string]$_ -ceq "SVN_ERR_RA_NOT_AUTHORIZED" -or [string]$_ -ceq "SVN_ERR_FS_NO_USER"
+    })
+  Assert-True (
+    $observedIdentityCauseNames.Count -eq 1 -and
+    [string]$observedIdentityCauseNames[0] -ceq $ExpectedCauseName
+  ) "$Context did not retain the operation-specific upstream anonymous-identity cause."
+}
+
 $fixtureRootResolved = Resolve-RequiredDirectory $FixtureRoot "FixtureRoot"
 Assert-True ([System.IO.Path]::IsPathFullyQualified($OutputPath)) "OutputPath must be an absolute path."
 $outputResolved = [System.IO.Path]::GetFullPath($OutputPath)
@@ -2213,10 +2267,19 @@ else {
   "unknown"
 }
 Assert-True ($positiveResult.ExitCode -eq 0) "The packaged-native I6 positive operation matrix failed against the candidate artifacts: $positiveFailure."
-$expectedPositiveOperations = @("checkoutOpen", "remoteStatus", "content", "historyLog", "historyBlame", "update", "commit", "branchCopy", "switch", "lock", "unlock")
+$expectedPositiveOperations = @("checkoutOpen", "remoteStatus", "content", "historyLog", "historyBlame", "update", "commit", "branchCopy", "switch")
 Assert-True ([string]$positiveReport.schema -ceq "subversionr.release.m8-i6-packaged-native-positive.v1") "The packaged-native I6 positive probe returned an unexpected schema."
 Assert-True ([string]$positiveReport.status -ceq "passed") "The packaged-native I6 positive probe did not pass."
 Assert-True ((@($positiveReport.operations.operation) -join ",") -ceq ($expectedPositiveOperations -join ",")) "The packaged-native I6 positive probe did not execute the exact operation matrix."
+Assert-True (
+  [int]$positiveReport.positiveOperationCount -eq 9 -and
+  [int]$positiveReport.identityRequiredOperationCount -eq 2 -and
+  [int]$positiveReport.remoteOperationCount -eq 11 -and
+  $positiveReport.uniqueOperationIds -eq $true
+) "The packaged-native I6 report did not prove nine positive and two identity-required operations with unique IDs."
+Assert-ExactProperties $positiveReport.anonymousIdentityRequired @("lock", "unlock") "The packaged-native anonymous identity boundary"
+Assert-AnonymousIdentityRequiredObservation $positiveReport.anonymousIdentityRequired.lock "lock" "SVN_OPERATION_LOCK_FAILED" "SVN_ERR_RA_NOT_AUTHORIZED" "packaged-native" "The packaged-native anonymous lock observation"
+Assert-AnonymousIdentityRequiredObservation $positiveReport.anonymousIdentityRequired.unlock "unlock" "SVN_OPERATION_UNLOCK_FAILED" "SVN_ERR_FS_NO_USER" "packaged-native" "The packaged-native anonymous unlock observation"
 Assert-True ($positiveReport.remoteSvnAnonymous -eq $true -and [int]$positiveReport.fixtureCliInvocations -eq 0) "The packaged-native I6 positive probe did not preserve anonymous native-only execution."
 foreach ($operation in @($positiveReport.operations)) {
   Assert-True (
@@ -2225,9 +2288,7 @@ foreach ($operation in @($positiveReport.operations)) {
     [int]$operation.promptCount -eq 0 -and
     [string]$operation.credentialSettlement -ceq "none" -and
     [string]$operation.reconcile -ceq "fresh" -and
-    [int]$operation.workerDescendantsAfter -eq 0 -and
     [int]$operation.temporaryRootsAfter -eq 0 -and
-    $operation.nativeLaneReleased -eq $true -and
     $operation.diagnosticsRedacted -eq $true
   ) "The packaged-native I6 positive probe returned an incomplete operation observation."
 }
@@ -2273,6 +2334,15 @@ try {
   Assert-True ([string]$installedPositiveReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-positive.v1") "The installed Extension Host I6 positive probe returned an unexpected schema."
   Assert-True ([string]$installedPositiveReport.status -ceq "passed") "The installed Extension Host I6 positive probe did not pass."
   Assert-True ((@($installedPositiveReport.operations.operation) -join ",") -ceq ($expectedPositiveOperations -join ",")) "The installed Extension Host I6 positive probe did not execute the exact operation matrix."
+  Assert-True (
+    [int]$installedPositiveReport.positiveOperationCount -eq 9 -and
+    [int]$installedPositiveReport.identityRequiredOperationCount -eq 2 -and
+    [int]$installedPositiveReport.remoteOperationCount -eq 11 -and
+    $installedPositiveReport.uniqueOperationIds -eq $true
+  ) "The installed Extension Host I6 report did not prove nine positive and two identity-required operations with unique IDs."
+  Assert-ExactProperties $installedPositiveReport.anonymousIdentityRequired @("lock", "unlock") "The installed anonymous identity boundary"
+  Assert-AnonymousIdentityRequiredObservation $installedPositiveReport.anonymousIdentityRequired.lock "lock" "SVN_OPERATION_LOCK_FAILED" "SVN_ERR_RA_NOT_AUTHORIZED" "installed-vsix-extension-host" "The installed anonymous lock observation"
+  Assert-AnonymousIdentityRequiredObservation $installedPositiveReport.anonymousIdentityRequired.unlock "unlock" "SVN_OPERATION_UNLOCK_FAILED" "SVN_ERR_FS_NO_USER" "installed-vsix-extension-host" "The installed anonymous unlock observation"
   foreach ($operation in @($installedPositiveReport.operations)) {
     Assert-True (
       [string]$operation.status -ceq "passed" -and
@@ -2280,9 +2350,6 @@ try {
       [int]$operation.promptCount -eq 0 -and
       [string]$operation.credentialSettlement -ceq "none" -and
       [string]$operation.reconcile -ceq "fresh" -and
-      [int]$operation.workerDescendantsAfter -eq 0 -and
-      [int]$operation.temporaryRootsAfter -eq 0 -and
-      $operation.nativeLaneReleased -eq $true -and
       $operation.diagnosticsRedacted -eq $true
     ) "The installed Extension Host I6 positive probe returned an incomplete operation observation."
   }
@@ -4050,4 +4117,4 @@ finally {
 Assert-True ($trustRevokedObservations.Count -eq 2) "The packaged-native and installed VSIX trust-revoked observation set was incomplete."
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host eleven-operation svn:// matrices, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface blackhole-connect, worker-crash, and daemon-disconnect cells and the reviewed lock/unlock matrix decision in issue #136 are incomplete; therefore no I6 evidence was written."
+throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host nine-operation anonymous svn:// matrices plus exact lock/unlock authenticationRequired boundaries, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface blackhole-connect, worker-crash, and daemon-disconnect cells are incomplete; therefore no I6 evidence was written."

@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use serde_json::{Value, json};
+use subversionr_protocol::OperationFailureCause;
+
+use crate::remote_operation::ANONYMOUS_IDENTITY_REQUIRED_ARG;
 
 type Bool = i32;
 type Dword = u32;
@@ -1245,6 +1248,21 @@ fn validate_wire_failure(failure: WireFailure) -> Result<BridgeFailure, BridgeFa
         if let Some(diagnostics) = failure.diagnostics {
             validated = validated.with_diagnostics(diagnostics);
         }
+        if matches!(
+            validated.code(),
+            "SVN_OPERATION_LOCK_FAILED" | "SVN_OPERATION_UNLOCK_FAILED"
+        ) {
+            let claims_anonymous_identity = validated
+                .safe_args()
+                .as_object()
+                .is_some_and(|args| args.contains_key(ANONYMOUS_IDENTITY_REQUIRED_ARG))
+                || validated.diagnostics().is_some_and(|diagnostics| {
+                    diagnostics.cause == OperationFailureCause::AuthenticationFailed
+                });
+            if claims_anonymous_identity && !is_anonymous_identity_required_failure(&validated) {
+                return Err(worker_protocol_failure());
+            }
+        }
         return Ok(validated);
     }
     let (category, key, permits_status) = match failure.code.as_str() {
@@ -1289,7 +1307,7 @@ fn validate_wire_failure(failure: WireFailure) -> Result<BridgeFailure, BridgeFa
 enum WireFailureArgsKind {
     Empty,
     PathStatus,
-    PathStatusMutation,
+    PathStatusMutationAnonymousIdentity,
     PathStatusOptionalMutation,
     AnonymousAuth,
 }
@@ -1452,13 +1470,13 @@ fn svn_anonymous_failure_contract(
         "SVN_OPERATION_LOCK_FAILED" => (
             "native",
             "error.native.operationLockFailed",
-            PathStatusMutation,
+            PathStatusMutationAnonymousIdentity,
             true,
         ),
         "SVN_OPERATION_UNLOCK_FAILED" => (
             "native",
             "error.native.operationUnlockFailed",
-            PathStatusMutation,
+            PathStatusMutationAnonymousIdentity,
             true,
         ),
         "SVN_OPERATION_BRANCH_CREATE_FAILED" => (
@@ -1604,11 +1622,26 @@ fn validate_svn_anonymous_failure_args(args: &Value, kind: WireFailureArgsKind) 
                 && object.get("auth").and_then(Value::as_str) == Some("anonymous")
         }
         WireFailureArgsKind::PathStatus => validate_path_status_args(object, false, false),
-        WireFailureArgsKind::PathStatusMutation => validate_path_status_args(object, true, false),
+        WireFailureArgsKind::PathStatusMutationAnonymousIdentity => {
+            validate_path_status_anonymous_identity_args(object)
+        }
         WireFailureArgsKind::PathStatusOptionalMutation => {
             validate_path_status_args(object, false, true)
         }
     }
+}
+
+fn validate_path_status_anonymous_identity_args(
+    object: &serde_json::Map<String, Value>,
+) -> bool {
+    validate_path_status_args(object, true, false)
+        || (object.len() == 4
+            && object
+                .get(ANONYMOUS_IDENTITY_REQUIRED_ARG)
+                .and_then(Value::as_bool)
+                == Some(true)
+            && object.get("mayHaveMutated").and_then(Value::as_bool) == Some(false)
+            && validate_path_status_fields(object))
 }
 
 fn validate_path_status_args(
@@ -1616,6 +1649,21 @@ fn validate_path_status_args(
     requires_mutation: bool,
     permits_mutation: bool,
 ) -> bool {
+    if !validate_path_status_fields(object) {
+        return false;
+    }
+    let mutation = object.get("mayHaveMutated");
+    if requires_mutation {
+        object.len() == 3 && mutation.is_some_and(Value::is_boolean)
+    } else if permits_mutation {
+        (object.len() == 2 && mutation.is_none())
+            || (object.len() == 3 && mutation.and_then(Value::as_bool) == Some(true))
+    } else {
+        object.len() == 2 && mutation.is_none()
+    }
+}
+
+fn validate_path_status_fields(object: &serde_json::Map<String, Value>) -> bool {
     let Some(path) = object.get("path").and_then(Value::as_str) else {
         return false;
     };
@@ -1628,15 +1676,7 @@ fn validate_path_status_args(
     if i32::try_from(status).is_err() {
         return false;
     }
-    let mutation = object.get("mayHaveMutated");
-    if requires_mutation {
-        object.len() == 3 && mutation.is_some_and(Value::is_boolean)
-    } else if permits_mutation {
-        (object.len() == 2 && mutation.is_none())
-            || (object.len() == 3 && mutation.and_then(Value::as_bool) == Some(true))
-    } else {
-        object.len() == 2 && mutation.is_none()
-    }
+    true
 }
 
 fn validate_wire_diagnostics(
@@ -2017,6 +2057,150 @@ mod tests {
                 .code(),
             "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
         );
+
+        for (code, message_key) in [
+            ("SVN_OPERATION_LOCK_FAILED", "error.native.operationLockFailed"),
+            (
+                "SVN_OPERATION_UNLOCK_FAILED",
+                "error.native.operationUnlockFailed",
+            ),
+        ] {
+            let (identity_code, identity_name) = if code == "SVN_OPERATION_UNLOCK_FAILED" {
+                (160034, "SVN_ERR_FS_NO_USER")
+            } else {
+                (170001, "SVN_ERR_RA_NOT_AUTHORIZED")
+            };
+            let authenticated_identity_required = WireFailure {
+                code: code.to_string(),
+                category: "native".to_string(),
+                message_key: message_key.to_string(),
+                args: json!({
+                    "path": "C:/wc/trunk.txt",
+                    "status": 2,
+                    "mayHaveMutated": false,
+                    "anonymousIdentityRequired": true
+                }),
+                retryable: false,
+                diagnostics: Some(OperationFailureDiagnostics {
+                    cause: OperationFailureCause::AuthenticationFailed,
+                    svn: subversionr_protocol::SvnErrorDiagnostics {
+                        entries: vec![subversionr_protocol::SvnErrorDiagnosticEntry {
+                            code: identity_code,
+                            name: identity_name.to_string(),
+                        }],
+                        truncated: false,
+                    },
+                }),
+            };
+            let validated = validate_wire_failure(authenticated_identity_required)
+                .expect("authenticated-identity failure must cross the private boundary");
+            assert_eq!(validated.code(), code);
+            assert_eq!(
+                validated.diagnostics().expect("diagnostics must survive").cause,
+                OperationFailureCause::AuthenticationFailed
+            );
+
+            for args in [
+                json!({
+                    "path": "C:/wc/trunk.txt",
+                    "status": 2,
+                    "mayHaveMutated": false
+                }),
+                json!({
+                    "path": "C:/wc/trunk.txt",
+                    "status": 2,
+                    "mayHaveMutated": true,
+                    "anonymousIdentityRequired": true
+                }),
+                json!({
+                    "path": "C:/wc/trunk.txt",
+                    "status": 2,
+                    "anonymousIdentityRequired": true
+                }),
+            ] {
+                let rejected = WireFailure {
+                    code: code.to_string(),
+                    category: "native".to_string(),
+                    message_key: message_key.to_string(),
+                    args,
+                    retryable: false,
+                    diagnostics: Some(OperationFailureDiagnostics {
+                        cause: OperationFailureCause::AuthenticationFailed,
+                        svn: subversionr_protocol::SvnErrorDiagnostics {
+                            entries: vec![subversionr_protocol::SvnErrorDiagnosticEntry {
+                                code: 170001,
+                                name: "SVN_ERR_RA_NOT_AUTHORIZED".to_string(),
+                            }],
+                            truncated: false,
+                        },
+                    }),
+                };
+                assert_eq!(
+                    validate_wire_failure(rejected)
+                        .expect_err("partial identity evidence must fail closed")
+                        .code(),
+                    "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
+                );
+            }
+
+            let unrelated_chain = WireFailure {
+                code: code.to_string(),
+                category: "native".to_string(),
+                message_key: message_key.to_string(),
+                args: json!({
+                    "path": "C:/wc/trunk.txt",
+                    "status": 2,
+                    "mayHaveMutated": false,
+                    "anonymousIdentityRequired": true
+                }),
+                retryable: false,
+                diagnostics: Some(OperationFailureDiagnostics {
+                    cause: OperationFailureCause::AuthenticationFailed,
+                    svn: subversionr_protocol::SvnErrorDiagnostics {
+                        entries: vec![subversionr_protocol::SvnErrorDiagnosticEntry {
+                            code: 170001,
+                            name: "SVN_ERR_AUTHZ_UNWRITABLE".to_string(),
+                        }],
+                        truncated: false,
+                    },
+                }),
+            };
+            assert_eq!(
+                validate_wire_failure(unrelated_chain)
+                    .expect_err("unrelated SVN cause chains must fail closed")
+                    .code(),
+                "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
+            );
+
+            let truncated_chain = WireFailure {
+                code: code.to_string(),
+                category: "native".to_string(),
+                message_key: message_key.to_string(),
+                args: json!({
+                    "path": "C:/wc/trunk.txt",
+                    "status": 2,
+                    "mayHaveMutated": false,
+                    "anonymousIdentityRequired": true
+                }),
+                retryable: false,
+                diagnostics: Some(OperationFailureDiagnostics {
+                    cause: OperationFailureCause::AuthenticationFailed,
+                    svn: subversionr_protocol::SvnErrorDiagnostics {
+                        entries: vec![subversionr_protocol::SvnErrorDiagnosticEntry {
+                            code: 170001,
+                            name: "SVN_ERR_RA_NOT_AUTHORIZED".to_string(),
+                        }],
+                        truncated: true,
+                    },
+                }),
+            };
+            assert_eq!(
+                validate_wire_failure(truncated_chain)
+                    .expect_err("truncated SVN cause chains must fail closed")
+                    .code(),
+                "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
+            );
+        }
 
         let accepted = WireFailure {
             code: "SUBVERSIONR_REMOTE_CONFIG_CREATE_FAILED".to_string(),

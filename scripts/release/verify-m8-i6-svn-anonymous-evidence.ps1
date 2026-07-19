@@ -62,9 +62,7 @@ $ExpectedOperations = @(
   "update",
   "commit",
   "branchCopy",
-  "switch",
-  "lock",
-  "unlock"
+  "switch"
 )
 
 $ExpectedNegativeCells = @(
@@ -177,29 +175,82 @@ function Assert-ArtifactBinding(
   Assert-Equal ([int64](Get-Item -LiteralPath $Path).Length) ([int64]$Binding.sizeBytes) "$Context size must match the exact file bytes."
 }
 
-function Assert-OperationCell([object]$Cell, [string]$ExpectedOperation, [string]$Context) {
-  Assert-ExactProperties $Cell @(
+function Assert-OperationCell([object]$Cell, [string]$ExpectedOperation, [string]$ExpectedKind, [string]$Context) {
+  $properties = @(
     "operation",
     "status",
     "serverAuth",
     "promptCount",
     "credentialSettlement",
     "reconcile",
-    "workerDescendantsAfter",
-    "temporaryRootsAfter",
-    "nativeLaneReleased",
     "diagnosticsRedacted"
-  ) $Context
+  )
+  if ($ExpectedKind -ceq "packaged-native") {
+    $properties += "temporaryRootsAfter"
+  }
+  Assert-ExactProperties $Cell $properties $Context
   Assert-Equal $ExpectedOperation ([string]$Cell.operation) "$Context operation must match its matrix slot."
   Assert-Equal "passed" ([string]$Cell.status) "$Context must pass."
   Assert-Equal "anonymous" ([string]$Cell.serverAuth) "$Context must prove anonymous server access."
   Assert-Equal 0 ([int]$Cell.promptCount) "$Context must not prompt for credentials."
   Assert-Equal "none" ([string]$Cell.credentialSettlement) "$Context must not settle credentials."
   Assert-Equal "fresh" ([string]$Cell.reconcile) "$Context must finish with fresh reconciled state."
-  Assert-Equal 0 ([int]$Cell.workerDescendantsAfter) "$Context must leave zero worker descendants."
-  Assert-Equal 0 ([int]$Cell.temporaryRootsAfter) "$Context must leave zero operation temporary roots."
-  Assert-Equal $true ([bool]$Cell.nativeLaneReleased) "$Context must release the native lane only after cleanup."
+  if ($ExpectedKind -ceq "packaged-native") {
+    Assert-Equal 0 ([int]$Cell.temporaryRootsAfter) "$Context must leave zero observed operation temporary roots."
+  }
   Assert-Equal $true ([bool]$Cell.diagnosticsRedacted) "$Context diagnostics must be redacted."
+}
+
+function Assert-AnonymousIdentityRequiredOperation(
+  [object]$Observation,
+  [string]$ExpectedOperation,
+  [string]$ExpectedCode,
+  [string]$ExpectedCauseName,
+  [string]$ExpectedKind,
+  [string]$Context
+) {
+  $properties = @(
+    "operation", "anonymousIdentityRequired", "stableCode", "diagnosticsCause", "mayHaveMutated",
+    "remoteFailure", "promptCount", "credentialSettlement", "laneReleaseProof",
+    "nativeLaneReleased", "diagnosticsRedacted", "svnCauseNames"
+  )
+  if ($ExpectedKind -ceq "packaged-native") {
+    $properties += "temporaryRootsAfter"
+  }
+  Assert-ExactProperties $Observation $properties $Context
+  Assert-Equal $ExpectedOperation ([string]$Observation.operation) "$Context operation must be exact."
+  Assert-Equal $true ([bool]$Observation.anonymousIdentityRequired) "$Context must identify the reviewed anonymous identity boundary."
+  Assert-Equal $ExpectedCode ([string]$Observation.stableCode) "$Context product code must remain exact."
+  Assert-Equal "authenticationFailed" ([string]$Observation.diagnosticsCause) "$Context diagnostics cause must identify the missing authenticated identity."
+  Assert-Equal $false ([bool]$Observation.mayHaveMutated) "$Context must prove that authenticated identity was required before mutation."
+  Assert-ExactProperties $Observation.remoteFailure @("category", "reason", "cleanupAppropriate") "$Context.remoteFailure"
+  Assert-Equal "authentication" ([string]$Observation.remoteFailure.category) "$Context remote category must be authentication."
+  Assert-Equal "authenticationRequired" ([string]$Observation.remoteFailure.reason) "$Context remote reason must be authenticationRequired."
+  Assert-Equal $false ([bool]$Observation.remoteFailure.cleanupAppropriate) "$Context must not request unrelated working-copy cleanup."
+  Assert-Equal 0 ([int]$Observation.promptCount) "$Context must not prompt under the anonymous profile."
+  Assert-Equal "none" ([string]$Observation.credentialSettlement) "$Context must not settle credentials."
+  if ($ExpectedKind -ceq "packaged-native") {
+    Assert-Equal 0 ([int]$Observation.temporaryRootsAfter) "$Context.temporaryRootsAfter must be the observed zero count."
+  }
+  Assert-ExactProperties $Observation.laneReleaseProof @("method", "reconcile") "$Context.laneReleaseProof"
+  Assert-Equal "status/refresh" ([string]$Observation.laneReleaseProof.method) "$Context must prove lane release with the same-repository local status method."
+  Assert-Equal "fresh" ([string]$Observation.laneReleaseProof.reconcile) "$Context lane-release reconcile must be fresh."
+  Assert-Equal $true ([bool]$Observation.nativeLaneReleased) "$Context must release the native lane."
+  Assert-Equal $true ([bool]$Observation.diagnosticsRedacted) "$Context diagnostics must be redacted."
+  $causeNames = @($Observation.svnCauseNames)
+  Assert-True ($causeNames.Count -ge 1 -and $causeNames.Count -le 8) "$Context must preserve a bounded libsvn cause chain."
+  $uniqueCauseNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  foreach ($name in $causeNames) {
+    Assert-True ([string]$name -cmatch '^SVN_ERR_[A-Z0-9_]+$') "$Context contains an invalid libsvn cause name."
+    Assert-True ($uniqueCauseNames.Add([string]$name)) "$Context libsvn cause names must be unique."
+  }
+  $observedIdentityCauseNames = @($causeNames | Where-Object {
+      [string]$_ -ceq "SVN_ERR_RA_NOT_AUTHORIZED" -or [string]$_ -ceq "SVN_ERR_FS_NO_USER"
+    })
+  Assert-True (
+    $observedIdentityCauseNames.Count -eq 1 -and
+    [string]$observedIdentityCauseNames[0] -ceq $ExpectedCauseName
+  ) "$Context must retain only the operation-specific allowed upstream anonymous-identity cause."
 }
 
 function Assert-Surface([object]$Surface, [string]$ExpectedKind, [string]$ExpectedBindingHash, [string]$Context) {
@@ -209,7 +260,12 @@ function Assert-Surface([object]$Surface, [string]$ExpectedKind, [string]$Expect
     "protocol",
     "remoteSvnAnonymous",
     "fixtureCliInvocations",
-    "operations"
+    "positiveOperationCount",
+    "identityRequiredOperationCount",
+    "remoteOperationCount",
+    "uniqueOperationIds",
+    "operations",
+    "anonymousIdentityRequired"
   ) $Context
   Assert-Equal $ExpectedKind ([string]$Surface.kind) "$Context kind must match."
   Assert-Equal $ExpectedBindingHash ([string]$Surface.artifactSha256) "$Context must bind the product artifact used by this surface."
@@ -218,12 +274,19 @@ function Assert-Surface([object]$Surface, [string]$ExpectedKind, [string]$Expect
   Assert-Equal 35 ([int]$Surface.protocol.minor) "$Context protocol minor must be exact."
   Assert-Equal $true ([bool]$Surface.remoteSvnAnonymous) "$Context must prove the runtime remoteSvnAnonymous capability."
   Assert-Equal 0 ([int]$Surface.fixtureCliInvocations) "$Context product actions must not invoke svn fixture tools."
+  Assert-Equal 9 ([int]$Surface.positiveOperationCount) "$Context must prove exactly nine anonymous positive operations."
+  Assert-Equal 2 ([int]$Surface.identityRequiredOperationCount) "$Context must prove exactly two identity-required operations."
+  Assert-Equal 11 ([int]$Surface.remoteOperationCount) "$Context must submit exactly eleven unique remote requests."
+  Assert-Equal $true ([bool]$Surface.uniqueOperationIds) "$Context remote operation IDs must be unique."
 
   $operations = @($Surface.operations)
   Assert-Equal $ExpectedOperations.Count $operations.Count "$Context must contain every anonymous operation cell exactly once."
   for ($index = 0; $index -lt $ExpectedOperations.Count; $index += 1) {
-    Assert-OperationCell $operations[$index] $ExpectedOperations[$index] "$Context.operations[$index]"
+    Assert-OperationCell $operations[$index] $ExpectedOperations[$index] $ExpectedKind "$Context.operations[$index]"
   }
+  Assert-ExactProperties $Surface.anonymousIdentityRequired @("lock", "unlock") "$Context.anonymousIdentityRequired"
+  Assert-AnonymousIdentityRequiredOperation $Surface.anonymousIdentityRequired.lock "lock" "SVN_OPERATION_LOCK_FAILED" "SVN_ERR_RA_NOT_AUTHORIZED" $ExpectedKind "$Context.anonymousIdentityRequired.lock"
+  Assert-AnonymousIdentityRequiredOperation $Surface.anonymousIdentityRequired.unlock "unlock" "SVN_OPERATION_UNLOCK_FAILED" "SVN_ERR_FS_NO_USER" $ExpectedKind "$Context.anonymousIdentityRequired.unlock"
 }
 
 function Assert-NegativeSurfaceObservation(

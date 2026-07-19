@@ -637,5 +637,7 @@
   "Review checkout target": "检查检出目标",
   "A possibly changed SVN checkout target is blocked until you review its disposition.": "一个可能发生变更的 SVN 检出目标已被阻塞，需检查其处置状态后才能解除。",
   "SVN {0} failed because the server denied authorization for this operation.": "服务器拒绝授权此操作，因此 SVN {0} 失败。",
-  "SVN {0} failed because the server authorization configuration is invalid.": "服务器授权配置无效，因此 SVN {0} 失败。"
+  "SVN {0} failed because the server authorization configuration is invalid.": "服务器授权配置无效，因此 SVN {0} 失败。",
+  "Locking requires an authenticated identity; the current SVN server profile is anonymous.": "锁定需要已认证的身份，但当前 SVN 服务器配置为匿名。",
+  "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.": "解锁需要已认证的身份，但当前 SVN 服务器配置为匿名。"
 }

@@ -89,10 +89,10 @@ fails on a missing `ProbeDriverPath` or on verifier rejection. Source-built
 `svn`/`svnadmin` observations may seed or inspect fixtures only and cannot be
 copied into either product surface's operation results.
 
-## Required positive matrix
+## Required anonymous operation matrix
 
 Both `packaged-native` and `installed-vsix-extension-host` surfaces must execute
-these cells in this exact order:
+these nine positive cells in this exact order:
 
 1. checkout/open;
 2. remote status;
@@ -101,16 +101,42 @@ these cells in this exact order:
 5. blame history;
 6. update;
 7. commit;
-8. repository copy for branch/tag creation;
-9. switch;
-10. lock; and
-11. unlock.
+8. repository copy for branch/tag creation; and
+9. switch.
 
 Every cell proves anonymous access with zero prompts and no credential
-settlement, a fresh reconcile result, zero remaining worker descendants and
-operation temporary roots, native-lane release after cleanup, and redacted
-diagnostics. Fixture startup or a direct bridge/unit probe does not satisfy the
-installed surface.
+settlement, a fresh reconcile result, and redacted diagnostics. The
+`packaged-native` probe additionally records the directly observed count of
+remaining operation temporary roots and requires it to be zero. The installed
+extension-host report does not expose worker-process or operation-temporary-root
+state, so it must not synthesize either observation.
+Fixture startup or a direct bridge/unit probe does not satisfy the installed
+surface.
+
+Each surface then submits two additional, unique remote requests for lock and
+unlock. They are not positive anonymous operations. Apache Subversion's RA API
+states that both [`svn_ra_lock`](https://subversion.apache.org/docs/api/latest/svn__ra_8h.html)
+and `svn_ra_unlock` are never anonymous and require the server to obtain a
+username. The controlled PASS result is therefore the exact outer product code
+`SVN_OPERATION_LOCK_FAILED` or `SVN_OPERATION_UNLOCK_FAILED`, preserved bounded
+libsvn symbolic causes, diagnostics cause `authenticationFailed`, and
+`authentication` / `authenticationRequired` remote settlement. Both operations
+must set the explicit `anonymousIdentityRequired` marker, prove
+`mayHaveMutated: false`, and preserve at least one exact upstream identity cause
+in the unique symbolic cause names. The controlled server produces
+`SVN_ERR_RA_NOT_AUTHORIZED` for lock and `SVN_ERR_FS_NO_USER` for break-unlock;
+these are the only accepted qualifying identity causes. Both cells produce no
+prompt or credential settlement. Immediately
+after each expected failure, the same product surface must issue a fresh
+`status/refresh` for the same repository and epoch; only that successful fresh
+reconcile proves `nativeLaneReleased`. The `packaged-native` probe additionally
+requires the directly observed operation-temporary-root count to be zero. The
+installed report omits unobservable worker and temporary-root fields rather than
+hard-coding them. No ambient OS username, cached username, retry, or alternate
+profile may be introduced.
+The report's `allOperationCellsPassed` verdict means both that all nine positive
+cells succeeded and that both identity-required boundary cells produced their
+exact expected failures; it never means eleven anonymous successes.
 
 ## Required negative and recovery matrix
 
@@ -302,10 +328,10 @@ later than the 5,000 ms cleanup slack before proving the same-session local lane
 is available. The evidence schema requires those timing values only for the
 `deadline` cell, so an existing stalled-mid-read observation cannot be
 relabelled. The remaining controlled negative/recovery cells are
-`blackholeConnect`, `workerCrash`, and `daemonDisconnect`; the reviewed
-lock/unlock matrix decision also remains open in issue #136. No complete
-candidate report has passed the executable verifier. Missing controlled
-observations or the unresolved matrix decision may not be represented as `verified`
+`blackholeConnect`, `workerCrash`, and `daemonDisconnect`. The reviewed
+lock/unlock boundary is closed as nine positive anonymous operations plus two
+exact authentication-required negative cells. No complete candidate report has
+passed the executable verifier. Missing controlled observations may not be represented as `verified`
 by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
 only after one real report passes the executable verifier against the candidate
 artifacts.

@@ -16,7 +16,9 @@ use subversionr_protocol::{
     RemoteFailure, RemoteOperationEnvelope,
 };
 
-use crate::remote_operation::{RemoteSvnAnonymousOutput, RemoteSvnAnonymousRequest};
+use crate::remote_operation::{
+    RemoteSvnAnonymousOutput, RemoteSvnAnonymousRequest, is_anonymous_identity_required_failure,
+};
 use crate::{
     AuthRequestBroker, BridgeApi, BridgeCancellationToken, BridgeFailure, NativeBridge,
     NeverCancelled, RemoteConfigPlan, RemoteConfigScheme, RemoteConfigServerAuth,
@@ -146,7 +148,7 @@ impl RemoteWorkerSettlement {
                 matches!(
                     failure.code(),
                     "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH" | "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
-                )
+                ) || is_anonymous_identity_required_failure(failure)
             })
     }
 }
@@ -1359,6 +1361,7 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use subversionr_protocol::OperationFailureCause;
 
     fn failed_mutation_settlement(
         code: &str,
@@ -1383,6 +1386,42 @@ mod tests {
         }
     }
 
+    fn failed_authenticated_identity_settlement(code: &str) -> RemoteWorkerSettlement {
+        let failure = BridgeFailure::new(
+            code,
+            "native",
+            "error.native.operationLockFailed",
+            json!({
+                "path": "C:/wc/trunk.txt",
+                "status": 2,
+                "mayHaveMutated": false,
+                "anonymousIdentityRequired": true
+            }),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause: OperationFailureCause::AuthenticationFailed,
+            svn: subversionr_protocol::SvnErrorDiagnostics {
+                entries: vec![subversionr_protocol::SvnErrorDiagnosticEntry {
+                    code: 170001,
+                    name: "SVN_ERR_RA_NOT_AUTHORIZED".to_string(),
+                }],
+                truncated: false,
+            },
+        });
+        RemoteWorkerSettlement {
+            result: Err(failure),
+            remote_failure: None,
+            effect: RemoteOperationEffect::Mutation,
+            worker_was_resumed: true,
+            execution_origin_known: true,
+            termination: WorkerTerminationDisposition::NotRequired,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+            operation_output: None,
+        }
+    }
+
     #[test]
     fn only_origin_known_pre_operation_failures_prove_no_mutation() {
         for code in [
@@ -1394,6 +1433,85 @@ mod tests {
         }
         assert!(
             failed_mutation_settlement("SUBVERSIONR_REMOTE_WORKER_TIMED_OUT", true)
+                .may_have_mutated()
+        );
+    }
+
+    #[test]
+    fn authenticated_identity_lock_failures_prove_no_mutation_only_at_the_exact_boundary() {
+        for code in ["SVN_OPERATION_LOCK_FAILED", "SVN_OPERATION_UNLOCK_FAILED"] {
+            assert!(!failed_authenticated_identity_settlement(code).may_have_mutated());
+        }
+        let mut no_user = failed_authenticated_identity_settlement("SVN_OPERATION_UNLOCK_FAILED");
+        no_user
+            .result
+            .as_mut()
+            .expect_err("fixture must fail")
+            .diagnostics
+            .as_mut()
+            .expect("fixture diagnostics")
+            .svn
+            .entries[0] = subversionr_protocol::SvnErrorDiagnosticEntry {
+            code: 160034,
+            name: "SVN_ERR_FS_NO_USER".to_string(),
+        };
+        assert!(!no_user.may_have_mutated());
+
+        let mut ordinary_lock =
+            failed_authenticated_identity_settlement("SVN_OPERATION_LOCK_FAILED");
+        ordinary_lock
+            .result
+            .as_mut()
+            .expect_err("fixture must fail")
+            .diagnostics
+            .as_mut()
+            .expect("fixture diagnostics")
+            .cause = OperationFailureCause::AuthorizationDenied;
+        assert!(ordinary_lock.may_have_mutated());
+        for field in ["anonymousIdentityRequired", "mayHaveMutated"] {
+            let mut incomplete =
+                failed_authenticated_identity_settlement("SVN_OPERATION_LOCK_FAILED");
+            incomplete
+                .result
+                .as_mut()
+                .expect_err("fixture must fail")
+                .args
+                .as_object_mut()
+                .expect("fixture safe args")
+                .remove(field);
+            assert!(incomplete.may_have_mutated());
+        }
+        let mut partial = failed_authenticated_identity_settlement("SVN_OPERATION_LOCK_FAILED");
+        partial.result.as_mut().expect_err("fixture must fail").args["mayHaveMutated"] =
+            json!(true);
+        assert!(partial.may_have_mutated());
+        let mut unrelated_chain =
+            failed_authenticated_identity_settlement("SVN_OPERATION_LOCK_FAILED");
+        unrelated_chain
+            .result
+            .as_mut()
+            .expect_err("fixture must fail")
+            .diagnostics
+            .as_mut()
+            .expect("fixture diagnostics")
+            .svn
+            .entries[0]
+            .name = "SVN_ERR_AUTHZ_UNWRITABLE".to_string();
+        assert!(unrelated_chain.may_have_mutated());
+        let mut truncated_chain =
+            failed_authenticated_identity_settlement("SVN_OPERATION_LOCK_FAILED");
+        truncated_chain
+            .result
+            .as_mut()
+            .expect_err("fixture must fail")
+            .diagnostics
+            .as_mut()
+            .expect("fixture diagnostics")
+            .svn
+            .truncated = true;
+        assert!(truncated_chain.may_have_mutated());
+        assert!(
+            failed_authenticated_identity_settlement("SVN_OPERATION_UPDATE_FAILED")
                 .may_have_mutated()
         );
     }

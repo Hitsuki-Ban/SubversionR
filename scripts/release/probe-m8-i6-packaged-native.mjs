@@ -5,7 +5,7 @@ import path from "node:path";
 
 const SCHEMA = "subversionr.release.m8-i6-packaged-native-positive.v1";
 const PROTOCOL = { major: 1, minor: 35 };
-const OPERATION_NAMES = [
+const POSITIVE_OPERATION_NAMES = [
   "checkoutOpen",
   "remoteStatus",
   "content",
@@ -15,9 +15,10 @@ const OPERATION_NAMES = [
   "commit",
   "branchCopy",
   "switch",
-  "lock",
-  "unlock",
 ];
+const EXPECTED_POSITIVE_OPERATION_COUNT = 9;
+const EXPECTED_IDENTITY_REQUIRED_OPERATION_COUNT = 2;
+const EXPECTED_REMOTE_OPERATION_COUNT = 11;
 
 let connection;
 
@@ -58,6 +59,15 @@ try {
   const trustEpoch = connection.initializeResult.acknowledgedTrustEpoch;
   const remoteWorkersRoot = path.join(options.profileRoot, "SubversionR", "remote-workers");
   const operations = [];
+  const remoteOperationIds = new Set();
+  const nextRemoteEnvelope = (timeoutMs) => {
+    const operationId = randomUUID();
+    if (!isCanonicalOperationId(operationId) || remoteOperationIds.has(operationId)) {
+      throw new Error("SUBVERSIONR_I6_PACKAGED_OPERATION_ID_INVALID");
+    }
+    remoteOperationIds.add(operationId);
+    return remoteEnvelope(repository.endpoint, trustEpoch, timeoutMs, operationId);
+  };
   let opened;
 
   await recordOperation("checkoutOpen", async () => {
@@ -67,7 +77,7 @@ try {
       revision: options.checkoutRevision,
       depth: "infinity",
       ignoreExternals: true,
-      remote: remoteEnvelope(repository.endpoint, trustEpoch, 300_000),
+      remote: nextRemoteEnvelope(300_000),
     });
     requireRecord(checkout, "checkout response");
     if (path.resolve(checkout.workingCopyPath) !== path.resolve(options.checkoutTarget)) {
@@ -83,7 +93,7 @@ try {
     const response = await connection.sendRequest("status/checkRemote", {
       repositoryId: opened.repositoryId,
       epoch: opened.epoch,
-      remote: remoteEnvelope(repository.endpoint, trustEpoch, 30_000),
+      remote: nextRemoteEnvelope(30_000),
     });
     requireRemoteStatus(response, opened);
     await freshReconcile(opened);
@@ -95,7 +105,7 @@ try {
       epoch: opened.epoch,
       path: "tracked.txt",
       revision: "head",
-      remote: remoteEnvelope(repository.endpoint, trustEpoch, 300_000),
+      remote: nextRemoteEnvelope(300_000),
     });
     requireRecord(response, "content response");
     if (response.source !== "libsvn-head" || !Number.isSafeInteger(response.byteLength) || response.byteLength <= 0) {
@@ -115,7 +125,7 @@ try {
       discoverChangedPaths: true,
       strictNodeHistory: true,
       includeMergedRevisions: false,
-      remote: remoteEnvelope(repository.endpoint, trustEpoch, 300_000),
+      remote: nextRemoteEnvelope(300_000),
     });
     requireRecord(response, "history log response");
     if (response.source !== "libsvn-log" || !Array.isArray(response.entries) || response.entries.length < 1) {
@@ -138,7 +148,7 @@ try {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-      remote: remoteEnvelope(repository.endpoint, trustEpoch, 300_000),
+      remote: nextRemoteEnvelope(300_000),
     });
     requireRecord(response, "history blame response");
     if (response.source !== "libsvn-blame" || !Array.isArray(response.lines) || response.lines.length < 1) {
@@ -155,7 +165,7 @@ try {
       depth: "workingCopy",
       depthIsSticky: false,
       ignoreExternals: true,
-    }, repository.endpoint, trustEpoch);
+    }, nextRemoteEnvelope(300_000));
     requireOperationResponse(response, "update", opened);
     await freshReconcile(opened);
   });
@@ -173,7 +183,7 @@ try {
       commitAsOperations: false,
       includeFileExternals: false,
       includeDirExternals: false,
-    }, repository.endpoint, trustEpoch);
+    }, nextRemoteEnvelope(300_000));
     requireOperationResponse(response, "commit", opened);
     requireRevision(response.revision, "commit revision");
     await freshReconcile(opened);
@@ -188,7 +198,7 @@ try {
       message: "SubversionR I6 packaged evidence branch",
       makeParents: false,
       ignoreExternals: true,
-    }, repository.endpoint, trustEpoch);
+    }, nextRemoteEnvelope(300_000));
     requireOperationResponse(response, "branchCreate", opened);
     requireRevision(response.revision, "branch revision");
     await freshReconcile(opened);
@@ -204,35 +214,45 @@ try {
       depthIsSticky: false,
       ignoreExternals: true,
       ignoreAncestry: false,
-    }, repository.endpoint, trustEpoch);
+    }, nextRemoteEnvelope(300_000));
     requireOperationResponse(response, "switch", opened);
     requireRevision(response.revision, "switch revision");
     await freshReconcile(opened);
   });
 
-  await recordOperation("lock", async () => {
-    const response = await runOperation(opened, "lock", {
+  const lock = await recordIdentityRequiredOperation(
+    "lock",
+    "SVN_OPERATION_LOCK_FAILED",
+    "SVN_ERR_RA_NOT_AUTHORIZED",
+    async () => {
+    await runOperation(opened, "lock", {
       version: 1,
       paths: ["tracked.txt"],
       comment: null,
       stealLock: false,
-    }, repository.endpoint, trustEpoch);
-    requireOperationResponse(response, "lock", opened);
-    await freshReconcile(opened);
-  });
+    }, nextRemoteEnvelope(300_000));
+    },
+  );
 
-  await recordOperation("unlock", async () => {
-    const response = await runOperation(opened, "unlock", {
+  const unlock = await recordIdentityRequiredOperation(
+    "unlock",
+    "SVN_OPERATION_UNLOCK_FAILED",
+    "SVN_ERR_FS_NO_USER",
+    async () => {
+    await runOperation(opened, "unlock", {
       version: 1,
       paths: ["tracked.txt"],
-      breakLock: false,
-    }, repository.endpoint, trustEpoch);
-    requireOperationResponse(response, "unlock", opened);
-    await freshReconcile(opened);
-  });
+      breakLock: true,
+    }, nextRemoteEnvelope(300_000));
+    },
+  );
+
+  if (remoteOperationIds.size !== EXPECTED_REMOTE_OPERATION_COUNT) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_OPERATION_COUNT_INVALID");
+  }
 
   async function recordOperation(operation, action) {
-    if (OPERATION_NAMES[operations.length] !== operation) {
+    if (POSITIVE_OPERATION_NAMES[operations.length] !== operation) {
       throw new Error("SUBVERSIONR_I6_PACKAGED_OPERATION_ORDER_INVALID");
     }
     const inboundBefore = inboundMethods.length;
@@ -251,11 +271,50 @@ try {
       promptCount: 0,
       credentialSettlement: "none",
       reconcile: "fresh",
-      workerDescendantsAfter: 0,
-      temporaryRootsAfter: 0,
-      nativeLaneReleased: true,
+      temporaryRootsAfter: temporaryRoots.length,
       diagnosticsRedacted: true,
     });
+  }
+
+  async function recordIdentityRequiredOperation(operation, stableCode, expectedCauseName, action) {
+    const inboundBefore = inboundMethods.length;
+    let observedError;
+    try {
+      await action();
+    } catch (error) {
+      observedError = error;
+    }
+    if (observedError === undefined) {
+      throw new Error("SUBVERSIONR_I6_PACKAGED_IDENTITY_BOUNDARY_UNEXPECTED_SUCCESS");
+    }
+    const svnCauseNames = requireIdentityRequiredFailure(observedError, stableCode, expectedCauseName);
+    if (inboundMethods.length !== inboundBefore) {
+      throw new Error("SUBVERSIONR_I6_PACKAGED_ANONYMOUS_PROMPTED");
+    }
+    const temporaryRoots = await readDirectoryIfPresent(remoteWorkersRoot);
+    if (temporaryRoots.length !== 0) {
+      throw new Error("SUBVERSIONR_I6_PACKAGED_WORKER_TEMP_RESIDUE");
+    }
+    const laneReleaseProof = await freshReconcile(opened);
+    return {
+      operation,
+      anonymousIdentityRequired: true,
+      stableCode,
+      diagnosticsCause: "authenticationFailed",
+      mayHaveMutated: false,
+      remoteFailure: {
+        category: "authentication",
+        reason: "authenticationRequired",
+        cleanupAppropriate: false,
+      },
+      promptCount: 0,
+      credentialSettlement: "none",
+      temporaryRootsAfter: temporaryRoots.length,
+      laneReleaseProof,
+      nativeLaneReleased: laneReleaseProof.reconcile === "fresh",
+      diagnosticsRedacted: true,
+      svnCauseNames,
+    };
   }
 
   async function freshReconcile(session) {
@@ -273,6 +332,7 @@ try {
     ) {
       throw new Error("SUBVERSIONR_I6_PACKAGED_RECONCILE_INVALID");
     }
+    return { method: "status/refresh", reconcile: "fresh" };
   }
 
   const diagnostics = await connection.sendRequest("diagnostics/get", {});
@@ -293,6 +353,11 @@ try {
     remoteSvnAnonymous: true,
     fixtureCliInvocations: 0,
     operations,
+    positiveOperationCount: EXPECTED_POSITIVE_OPERATION_COUNT,
+    identityRequiredOperationCount: EXPECTED_IDENTITY_REQUIRED_OPERATION_COUNT,
+    remoteOperationCount: remoteOperationIds.size,
+    uniqueOperationIds: true,
+    anonymousIdentityRequired: { lock, unlock },
     subsequentDiagnostics: true,
   })}\n`);
 } catch (error) {
@@ -308,20 +373,20 @@ try {
   process.exitCode = 1;
 }
 
-function runOperation(session, kind, operationOptions, endpoint, trustEpoch) {
+function runOperation(session, kind, operationOptions, remote) {
   return connection.sendRequest("operation/run", {
     repositoryId: session.repositoryId,
     epoch: session.epoch,
-    remote: remoteEnvelope(endpoint, trustEpoch, 300_000),
+    remote,
     kind,
     options: operationOptions,
   });
 }
 
-function remoteEnvelope(endpoint, trustEpoch, timeoutMs) {
+function remoteEnvelope(endpoint, trustEpoch, timeoutMs, operationId) {
   return {
     version: 1,
-    operationId: randomUUID(),
+    operationId,
     intent: "foreground",
     interaction: "forbidden",
     timeoutMs,
@@ -400,6 +465,62 @@ function requireRevision(value, field) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`SUBVERSIONR_I6_PACKAGED_${field.toUpperCase().replaceAll(" ", "_")}_INVALID`);
   }
+}
+
+function requireIdentityRequiredFailure(error, stableCode, expectedCauseName) {
+  const messageKey = stableCode === "SVN_OPERATION_LOCK_FAILED"
+    ? "error.native.operationLockFailed"
+    : "error.native.operationUnlockFailed";
+  if (
+    !isRecord(error) ||
+    error.code !== stableCode ||
+    error.category !== "native" ||
+    error.messageKey !== messageKey ||
+    error.retryable !== false ||
+    !isRecord(error.safeArgs) ||
+    error.safeArgs.anonymousIdentityRequired !== true ||
+    error.safeArgs.mayHaveMutated !== false ||
+    !isRecord(error.diagnostics) ||
+    Object.keys(error.diagnostics).sort().join(",") !== "cause,svn" ||
+    error.diagnostics.cause !== "authenticationFailed" ||
+    !isRecord(error.diagnostics.svn) ||
+    Object.keys(error.diagnostics.svn).sort().join(",") !== "entries,truncated" ||
+    error.diagnostics.svn.truncated !== false
+  ) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_IDENTITY_BOUNDARY_INVALID");
+  }
+  const remoteFailure = error.safeArgs.remoteFailure;
+  if (
+    !isRecord(remoteFailure) ||
+    Object.keys(remoteFailure).sort().join(",") !== "category,cleanupAppropriate,reason" ||
+    remoteFailure.category !== "authentication" ||
+    remoteFailure.reason !== "authenticationRequired" ||
+    remoteFailure.cleanupAppropriate !== false
+  ) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_IDENTITY_BOUNDARY_INVALID");
+  }
+  const entries = error.diagnostics.svn.entries;
+  const allowedIdentityCauseNames = new Set(["SVN_ERR_RA_NOT_AUTHORIZED", "SVN_ERR_FS_NO_USER"]);
+  const observedIdentityCauseNames = Array.isArray(entries)
+    ? entries.map((entry) => entry?.name).filter((name) => allowedIdentityCauseNames.has(name))
+    : [];
+  if (
+    !Array.isArray(entries) ||
+    entries.length === 0 ||
+    entries.length > 8 ||
+    new Set(entries.map((entry) => entry?.name)).size !== entries.length ||
+    observedIdentityCauseNames.length !== 1 ||
+    observedIdentityCauseNames[0] !== expectedCauseName ||
+    entries.some((entry) =>
+      !isRecord(entry) ||
+      Object.keys(entry).sort().join(",") !== "code,name" ||
+      !Number.isInteger(entry.code) ||
+      !/^SVN_ERR_[A-Z0-9_]+$/u.test(entry.name)
+    )
+  ) {
+    throw new Error("SUBVERSIONR_I6_PACKAGED_IDENTITY_BOUNDARY_INVALID");
+  }
+  return entries.map((entry) => entry.name);
 }
 
 function parseRepositoryUrl(value) {
@@ -504,6 +625,15 @@ function requireRecord(value, field) {
     throw new Error(`SUBVERSIONR_I6_PACKAGED_${field.toUpperCase().replaceAll(" ", "_")}_INVALID`);
   }
   return value;
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCanonicalOperationId(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value) &&
+    value !== "00000000-0000-0000-0000-000000000000";
 }
 
 function safeErrorCode(error) {

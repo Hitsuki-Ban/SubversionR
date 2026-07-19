@@ -17,12 +17,15 @@ import {
 } from "../security/remoteAccessProfile";
 import { StatusRemoteCheckRpcClient } from "../status/statusRemoteCheckRpcClient";
 import type { StatusDelta } from "../status/statusRefreshRpcClient";
+import { JsonRpcStreamError } from "../transport/jsonRpcStreamClient";
 
 const EXPECTED_PROTOCOL_MAJOR = 1;
 const EXPECTED_PROTOCOL_MINOR = 35;
 const MAX_SVN_REVNUM = 2_147_483_647;
 const REMOTE_STATUS_TIMEOUT_MS = 30_000;
 const REMOTE_OPERATION_TIMEOUT_MS = 300_000;
+const EXPECTED_POSITIVE_OPERATION_COUNT = 9;
+const EXPECTED_IDENTITY_REQUIRED_OPERATION_COUNT = 2;
 const EXPECTED_REMOTE_OPERATION_COUNT = 11;
 
 type InstalledSvnAnonymousConnection = Pick<
@@ -255,26 +258,45 @@ export async function collectInstalledSvnAnonymousReport(
     await options.fullReconcile(session.repositoryId, session.epoch);
     generation = requireFreshProjection(options.getProjection(session.repositoryId), session, generation);
 
-    const locked = await operationClient.lock({
-      ...target,
-      paths: [request.filePath],
-      comment: "SubversionR installed I6 anonymous evidence lock",
-      stealLock: false,
-      remote: nextEnvelope(REMOTE_OPERATION_TIMEOUT_MS),
-    });
-    requireSinglePathOperation(locked.touchedPaths, locked.summary.affectedPaths, locked.summary.skippedPaths, request.filePath);
-    await options.fullReconcile(session.repositoryId, session.epoch);
-    generation = requireFreshProjection(options.getProjection(session.repositoryId), session, generation);
+    const boundarySession = session;
+    const lock = await captureIdentityRequiredFailure(
+      "lock",
+      "SVN_OPERATION_LOCK_FAILED",
+      "error.native.operationLockFailed",
+      "SVN_ERR_RA_NOT_AUTHORIZED",
+      () => operationClient.lock({
+        ...target,
+        paths: [request.filePath],
+        comment: "SubversionR installed I6 anonymous evidence lock",
+        stealLock: false,
+        remote: nextEnvelope(REMOTE_OPERATION_TIMEOUT_MS),
+      }),
+      options,
+      async () => {
+        await options.fullReconcile(boundarySession.repositoryId, boundarySession.epoch);
+        generation = requireFreshProjection(options.getProjection(boundarySession.repositoryId), boundarySession, generation);
+        return { method: "status/refresh", reconcile: "fresh" };
+      },
+    );
 
-    const unlocked = await operationClient.unlock({
-      ...target,
-      paths: [request.filePath],
-      breakLock: false,
-      remote: nextEnvelope(REMOTE_OPERATION_TIMEOUT_MS),
-    });
-    requireSinglePathOperation(unlocked.touchedPaths, unlocked.summary.affectedPaths, unlocked.summary.skippedPaths, request.filePath);
-    await options.fullReconcile(session.repositoryId, session.epoch);
-    generation = requireFreshProjection(options.getProjection(session.repositoryId), session, generation);
+    const unlock = await captureIdentityRequiredFailure(
+      "unlock",
+      "SVN_OPERATION_UNLOCK_FAILED",
+      "error.native.operationUnlockFailed",
+      "SVN_ERR_FS_NO_USER",
+      () => operationClient.unlock({
+        ...target,
+        paths: [request.filePath],
+        breakLock: true,
+        remote: nextEnvelope(REMOTE_OPERATION_TIMEOUT_MS),
+      }),
+      options,
+      async () => {
+        await options.fullReconcile(boundarySession.repositoryId, boundarySession.epoch);
+        generation = requireFreshProjection(options.getProjection(boundarySession.repositoryId), boundarySession, generation);
+        return { method: "status/refresh", reconcile: "fresh" };
+      },
+    );
 
     if (operationIds.size !== EXPECTED_REMOTE_OPERATION_COUNT) {
       throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_OPERATION_COUNT_INVALID");
@@ -305,11 +327,12 @@ export async function collectInstalledSvnAnonymousReport(
         "commit",
         "branchCopy",
         "switch",
-        "lock",
-        "unlock",
       ],
+      positiveOperationCount: EXPECTED_POSITIVE_OPERATION_COUNT,
+      identityRequiredOperationCount: EXPECTED_IDENTITY_REQUIRED_OPERATION_COUNT,
       remoteOperationCount: operationIds.size,
       uniqueOperationIds: true,
+      anonymousIdentityRequired: { lock, unlock },
       semanticValidation: {
         checkoutRevision: checkout.revision,
         updateRevision: update.revision,
@@ -327,6 +350,103 @@ export async function collectInstalledSvnAnonymousReport(
       await options.closeRepository(session.repositoryId);
     }
   }
+}
+
+async function captureIdentityRequiredFailure(
+  operation: "lock" | "unlock",
+  stableCode: "SVN_OPERATION_LOCK_FAILED" | "SVN_OPERATION_UNLOCK_FAILED",
+  messageKey: "error.native.operationLockFailed" | "error.native.operationUnlockFailed",
+  expectedCauseName: "SVN_ERR_RA_NOT_AUTHORIZED" | "SVN_ERR_FS_NO_USER",
+  action: () => Promise<unknown>,
+  options: InstalledSvnAnonymousReportOptions,
+  proveLaneReleased: () => Promise<{ method: "status/refresh"; reconcile: "fresh" }>,
+): Promise<Record<string, unknown>> {
+  const authBefore = requireAuthActivity(options.authActivity());
+  let observedError: unknown;
+  try {
+    await action();
+  } catch (error) {
+    observedError = error;
+  }
+  if (observedError === undefined) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_IDENTITY_BOUNDARY_UNEXPECTED_SUCCESS");
+  }
+  const svnCauseNames = requireIdentityRequiredFailure(observedError, stableCode, messageKey, expectedCauseName);
+  const authDelta = subtractAuthActivity(requireAuthActivity(options.authActivity()), authBefore);
+  if (
+    authDelta.credentialRequests !== 0 ||
+    authDelta.credentialSettlements !== 0 ||
+    authDelta.certificateRequests !== 0
+  ) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_AUTH_ACTIVITY_INVALID");
+  }
+  const laneReleaseProof = await proveLaneReleased();
+  return {
+    operation,
+    anonymousIdentityRequired: true,
+    stableCode,
+    diagnosticsCause: "authenticationFailed",
+    mayHaveMutated: false,
+    remoteFailure: {
+      category: "authentication",
+      reason: "authenticationRequired",
+      cleanupAppropriate: false,
+    },
+    promptCount: 0,
+    credentialSettlement: "none",
+    laneReleaseProof,
+    nativeLaneReleased: laneReleaseProof.reconcile === "fresh",
+    diagnosticsRedacted: true,
+    svnCauseNames,
+  };
+}
+
+function requireIdentityRequiredFailure(
+  error: unknown,
+  stableCode: "SVN_OPERATION_LOCK_FAILED" | "SVN_OPERATION_UNLOCK_FAILED",
+  messageKey: "error.native.operationLockFailed" | "error.native.operationUnlockFailed",
+  expectedCauseName: "SVN_ERR_RA_NOT_AUTHORIZED" | "SVN_ERR_FS_NO_USER",
+): string[] {
+  if (
+    !(error instanceof JsonRpcStreamError) ||
+    error.code !== stableCode ||
+    error.category !== "native" ||
+    error.messageKey !== messageKey ||
+    error.retryable !== false ||
+    error.safeArgs.anonymousIdentityRequired !== true ||
+    error.safeArgs.mayHaveMutated !== false ||
+    error.diagnostics === null ||
+    error.diagnostics.cause !== "authenticationFailed" ||
+    error.diagnostics.svn.truncated !== false
+  ) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_IDENTITY_BOUNDARY_INVALID");
+  }
+  const remoteFailure = error.safeArgs.remoteFailure;
+  if (
+    !isRecord(remoteFailure) ||
+    Object.keys(remoteFailure).sort().join(",") !== "category,cleanupAppropriate,reason" ||
+    remoteFailure.category !== "authentication" ||
+    remoteFailure.reason !== "authenticationRequired" ||
+    remoteFailure.cleanupAppropriate !== false
+  ) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_IDENTITY_BOUNDARY_INVALID");
+  }
+  const entries = error.diagnostics.svn.entries;
+  const allowedIdentityCauseNames = new Set(["SVN_ERR_RA_NOT_AUTHORIZED", "SVN_ERR_FS_NO_USER"]);
+  const observedIdentityCauseNames = entries
+    .map((entry) => entry.name)
+    .filter((name) => allowedIdentityCauseNames.has(name));
+  if (
+    entries.length === 0 ||
+    entries.length > 8 ||
+    new Set(entries.map((entry) => entry.name)).size !== entries.length ||
+    observedIdentityCauseNames.length !== 1 ||
+    observedIdentityCauseNames[0] !== expectedCauseName ||
+    entries.some((entry) => !Number.isInteger(entry.code) || !/^SVN_ERR_[A-Z0-9_]+$/u.test(entry.name))
+  ) {
+    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_IDENTITY_BOUNDARY_INVALID");
+  }
+  return entries.map((entry) => entry.name);
 }
 
 function parseRequest(value: unknown, expectedToken: string | undefined): InstalledSvnAnonymousRequest {
@@ -478,17 +598,6 @@ function requireSameOriginUrl(url: string, endpoint: CanonicalEndpoint): void {
   }
   if (!sameEndpoint(actual, endpoint)) {
     throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_ORIGIN_INVALID");
-  }
-}
-
-function requireSinglePathOperation(
-  touchedPaths: readonly string[],
-  affectedPaths: number,
-  skippedPaths: number,
-  expectedPath: string,
-): void {
-  if (touchedPaths.length !== 1 || touchedPaths[0] !== expectedPath || affectedPaths !== 1 || skippedPaths !== 0) {
-    throw reportError("SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_OPERATION_RESULT_INVALID");
   }
 }
 

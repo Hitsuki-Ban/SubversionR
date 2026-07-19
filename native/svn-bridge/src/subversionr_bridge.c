@@ -1904,13 +1904,16 @@ static svn_error_t *bridge_create_auth_baton(
     return bridge_auth_callback_error();
   }
 
-  prompt_baton->default_username_required = require_default_username;
+  int svn_anonymous = prompt_baton->expected_svn_origin != NULL;
+  prompt_baton->default_username_required = require_default_username && !svn_anonymous;
   prompt_baton->pool = pool;
-  const char *default_username = svn_user_get_name(pool);
-  prompt_baton->default_username =
-    (default_username != NULL && default_username[0] != '\0') ? default_username : NULL;
-  if (require_default_username && prompt_baton->default_username == NULL) {
-    return bridge_auth_default_username_error();
+  if (!svn_anonymous) {
+    const char *default_username = svn_user_get_name(pool);
+    prompt_baton->default_username =
+      (default_username != NULL && default_username[0] != '\0') ? default_username : NULL;
+    if (require_default_username && prompt_baton->default_username == NULL) {
+      return bridge_auth_default_username_error();
+    }
   }
 
   svn_auth_provider_object_t *provider = NULL;
@@ -1920,23 +1923,25 @@ static svn_error_t *bridge_create_auth_baton(
     sizeof(svn_auth_provider_object_t *)
   );
 
-  svn_auth_get_simple_prompt_provider(
-    &provider,
-    bridge_auth_simple_prompt,
-    prompt_baton,
-    2,
-    pool
-  );
-  APR_ARRAY_PUSH(providers, svn_auth_provider_object_t *) = provider;
+  if (!svn_anonymous) {
+    svn_auth_get_simple_prompt_provider(
+      &provider,
+      bridge_auth_simple_prompt,
+      prompt_baton,
+      2,
+      pool
+    );
+    APR_ARRAY_PUSH(providers, svn_auth_provider_object_t *) = provider;
 
-  svn_auth_get_username_prompt_provider(
-    &provider,
-    bridge_auth_username_prompt,
-    prompt_baton,
-    2,
-    pool
-  );
-  APR_ARRAY_PUSH(providers, svn_auth_provider_object_t *) = provider;
+    svn_auth_get_username_prompt_provider(
+      &provider,
+      bridge_auth_username_prompt,
+      prompt_baton,
+      2,
+      pool
+    );
+    APR_ARRAY_PUSH(providers, svn_auth_provider_object_t *) = provider;
+  }
 
   svn_auth_get_ssl_server_trust_prompt_provider(
     &provider,

@@ -2197,6 +2197,27 @@ describe("extension manifest", () => {
     });
   });
 
+  it("localizes anonymous lock identity requirements in priority languages", () => {
+    expect(readJson("l10n/bundle.l10n.json")).toMatchObject({
+      "Locking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "Locking requires an authenticated identity; the current SVN server profile is anonymous.",
+      "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.",
+    });
+    expect(readJson("l10n/bundle.l10n.ja.json")).toMatchObject({
+      "Locking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "ロックには認証済みの ID が必要ですが、現在の SVN サーバープロファイルは匿名です。",
+      "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "ロック解除には認証済みの ID が必要ですが、現在の SVN サーバープロファイルは匿名です。",
+    });
+    expect(readJson("l10n/bundle.l10n.zh-cn.json")).toMatchObject({
+      "Locking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "锁定需要已认证的身份，但当前 SVN 服务器配置为匿名。",
+      "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "解锁需要已认证的身份，但当前 SVN 服务器配置为匿名。",
+    });
+  });
+
   it("localizes singular and plural SVN conflict counts in priority languages", () => {
     expect(readJson("l10n/bundle.l10n.json")).toMatchObject({
       "{0} SVN conflict": "{0} SVN conflict",
@@ -2310,6 +2331,8 @@ function runtimeLocalizationKeys(): string[] {
     "SubversionR released the reviewed SVN checkout target: {0}",
     "SVN {0} failed because the server denied authorization for this operation.",
     "SVN {0} failed because the server authorization configuration is invalid.",
+    "Locking requires an authenticated identity; the current SVN server profile is anonymous.",
+    "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.",
     "Revert",
     "Remove",
     "Delete",

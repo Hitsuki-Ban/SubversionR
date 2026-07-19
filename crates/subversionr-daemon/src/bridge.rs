@@ -399,7 +399,8 @@ impl BridgeFailure {
         }
     }
 
-    pub(crate) fn with_diagnostics(mut self, diagnostics: OperationFailureDiagnostics) -> Self {
+    /// Attaches the native symbolic diagnostics that must survive the bridge boundary.
+    pub fn with_diagnostics(mut self, diagnostics: OperationFailureDiagnostics) -> Self {
         self.diagnostics = Some(Box::new(diagnostics));
         self
     }

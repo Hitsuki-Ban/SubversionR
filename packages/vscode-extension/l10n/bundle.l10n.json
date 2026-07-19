@@ -637,5 +637,7 @@
   "Review checkout target": "Review checkout target",
   "A possibly changed SVN checkout target is blocked until you review its disposition.": "A possibly changed SVN checkout target is blocked until you review its disposition.",
   "SVN {0} failed because the server denied authorization for this operation.": "SVN {0} failed because the server denied authorization for this operation.",
-  "SVN {0} failed because the server authorization configuration is invalid.": "SVN {0} failed because the server authorization configuration is invalid."
+  "SVN {0} failed because the server authorization configuration is invalid.": "SVN {0} failed because the server authorization configuration is invalid.",
+  "Locking requires an authenticated identity; the current SVN server profile is anonymous.": "Locking requires an authenticated identity; the current SVN server profile is anonymous.",
+  "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.": "Unlocking requires an authenticated identity; the current SVN server profile is anonymous."
 }

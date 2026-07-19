@@ -507,14 +507,11 @@
         "promptCount",
         "credentialSettlement",
         "reconcile",
-        "workerDescendantsAfter",
-        "temporaryRootsAfter",
-        "nativeLaneReleased",
         "diagnosticsRedacted"
       ],
       "properties": {
         "operation": {
-          "enum": ["checkoutOpen", "remoteStatus", "content", "historyLog", "historyBlame", "update", "commit", "branchCopy", "switch", "lock", "unlock"]
+          "enum": ["checkoutOpen", "remoteStatus", "content", "historyLog", "historyBlame", "update", "commit", "branchCopy", "switch"]
         },
         "status": {
           "const": "passed"
@@ -531,19 +528,25 @@
         "reconcile": {
           "const": "fresh"
         },
-        "workerDescendantsAfter": {
-          "const": 0
-        },
         "temporaryRootsAfter": {
           "const": 0
-        },
-        "nativeLaneReleased": {
-          "const": true
         },
         "diagnosticsRedacted": {
           "const": true
         }
       }
+    },
+    "packagedOperation": {
+      "allOf": [
+        { "$ref": "#/$defs/operation" },
+        { "required": ["temporaryRootsAfter"] }
+      ]
+    },
+    "installedOperation": {
+      "allOf": [
+        { "$ref": "#/$defs/operation" },
+        { "not": { "required": ["temporaryRootsAfter"] } }
+      ]
     },
     "deadlineTiming": {
       "type": "object",
@@ -664,7 +667,7 @@
     "surfaceBase": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "artifactSha256", "protocol", "remoteSvnAnonymous", "fixtureCliInvocations", "operations"],
+      "required": ["kind", "artifactSha256", "protocol", "remoteSvnAnonymous", "fixtureCliInvocations", "positiveOperationCount", "identityRequiredOperationCount", "remoteOperationCount", "uniqueOperationIds", "operations", "anonymousIdentityRequired"],
       "properties": {
         "kind": {
           "type": "string"
@@ -681,15 +684,139 @@
         "fixtureCliInvocations": {
           "const": 0
         },
+        "positiveOperationCount": {
+          "const": 9
+        },
+        "identityRequiredOperationCount": {
+          "const": 2
+        },
+        "remoteOperationCount": {
+          "const": 11
+        },
+        "uniqueOperationIds": {
+          "const": true
+        },
         "operations": {
           "type": "array",
-          "minItems": 11,
-          "maxItems": 11,
+          "minItems": 9,
+          "maxItems": 9,
           "items": {
             "$ref": "#/$defs/operation"
           }
+        },
+        "anonymousIdentityRequired": {
+          "$ref": "#/$defs/anonymousIdentityRequired"
         }
       }
+    },
+    "anonymousIdentityRequired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock", "unlock"],
+      "properties": {
+        "lock": {
+          "allOf": [
+            { "$ref": "#/$defs/anonymousIdentityRequiredOperation" },
+            {
+              "properties": {
+                "operation": { "const": "lock" },
+                "stableCode": { "const": "SVN_OPERATION_LOCK_FAILED" },
+                "svnCauseNames": {
+                  "allOf": [
+                    { "contains": { "const": "SVN_ERR_RA_NOT_AUTHORIZED" }, "minContains": 1, "maxContains": 1 },
+                    { "not": { "contains": { "const": "SVN_ERR_FS_NO_USER" } } }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "unlock": {
+          "allOf": [
+            { "$ref": "#/$defs/anonymousIdentityRequiredOperation" },
+            {
+              "properties": {
+                "operation": { "const": "unlock" },
+                "stableCode": { "const": "SVN_OPERATION_UNLOCK_FAILED" },
+                "svnCauseNames": {
+                  "allOf": [
+                    { "contains": { "const": "SVN_ERR_FS_NO_USER" }, "minContains": 1, "maxContains": 1 },
+                    { "not": { "contains": { "const": "SVN_ERR_RA_NOT_AUTHORIZED" } } }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "anonymousIdentityRequiredOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "anonymousIdentityRequired", "stableCode", "diagnosticsCause", "mayHaveMutated", "remoteFailure", "promptCount", "credentialSettlement", "laneReleaseProof", "nativeLaneReleased", "diagnosticsRedacted", "svnCauseNames"],
+      "properties": {
+        "operation": { "enum": ["lock", "unlock"] },
+        "anonymousIdentityRequired": { "const": true },
+        "stableCode": { "enum": ["SVN_OPERATION_LOCK_FAILED", "SVN_OPERATION_UNLOCK_FAILED"] },
+        "diagnosticsCause": { "const": "authenticationFailed" },
+        "mayHaveMutated": { "const": false },
+        "remoteFailure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["category", "reason", "cleanupAppropriate"],
+          "properties": {
+            "category": { "const": "authentication" },
+            "reason": { "const": "authenticationRequired" },
+            "cleanupAppropriate": { "const": false }
+          }
+        },
+        "promptCount": { "const": 0 },
+        "credentialSettlement": { "const": "none" },
+        "temporaryRootsAfter": { "const": 0 },
+        "laneReleaseProof": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "reconcile"],
+          "properties": {
+            "method": { "const": "status/refresh" },
+            "reconcile": { "const": "fresh" }
+          }
+        },
+        "nativeLaneReleased": { "const": true },
+        "diagnosticsRedacted": { "const": true },
+        "svnCauseNames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^SVN_ERR_[A-Z0-9_]+$" },
+          "contains": { "enum": ["SVN_ERR_RA_NOT_AUTHORIZED", "SVN_ERR_FS_NO_USER"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    "packagedAnonymousIdentityRequired": {
+      "allOf": [
+        { "$ref": "#/$defs/anonymousIdentityRequired" },
+        {
+          "properties": {
+            "lock": { "required": ["temporaryRootsAfter"] },
+            "unlock": { "required": ["temporaryRootsAfter"] }
+          }
+        }
+      ]
+    },
+    "installedAnonymousIdentityRequired": {
+      "allOf": [
+        { "$ref": "#/$defs/anonymousIdentityRequired" },
+        {
+          "properties": {
+            "lock": { "not": { "required": ["temporaryRootsAfter"] } },
+            "unlock": { "not": { "required": ["temporaryRootsAfter"] } }
+          }
+        }
+      ]
     },
     "packagedSurface": {
       "allOf": [
@@ -700,6 +827,12 @@
           "properties": {
             "kind": {
               "const": "packaged-native"
+            },
+            "operations": {
+              "items": { "$ref": "#/$defs/packagedOperation" }
+            },
+            "anonymousIdentityRequired": {
+              "$ref": "#/$defs/packagedAnonymousIdentityRequired"
             }
           }
         }
@@ -714,6 +847,12 @@
           "properties": {
             "kind": {
               "const": "installed-vsix-extension-host"
+            },
+            "operations": {
+              "items": { "$ref": "#/$defs/installedOperation" }
+            },
+            "anonymousIdentityRequired": {
+              "$ref": "#/$defs/installedAnonymousIdentityRequired"
             }
           }
         }

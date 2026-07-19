@@ -95,19 +95,20 @@ function New-MissingArtifactBinding([string]$Kind) {
   }
 }
 
-function New-OperationCell([string]$Operation) {
-  return [ordered]@{
+function New-OperationCell([string]$Operation, [string]$Kind) {
+  $cell = [ordered]@{
     operation = $Operation
     status = "passed"
     serverAuth = "anonymous"
     promptCount = 0
     credentialSettlement = "none"
     reconcile = "fresh"
-    workerDescendantsAfter = 0
-    temporaryRootsAfter = 0
-    nativeLaneReleased = $true
     diagnosticsRedacted = $true
   }
+  if ($Kind -ceq "packaged-native") {
+    $cell["temporaryRootsAfter"] = 0
+  }
+  return $cell
 }
 
 function New-Surface([string]$Kind, [string]$ArtifactSha256) {
@@ -120,17 +121,54 @@ function New-Surface([string]$Kind, [string]$ArtifactSha256) {
     "update",
     "commit",
     "branchCopy",
-    "switch",
-    "lock",
-    "unlock"
-  ) | ForEach-Object { New-OperationCell $_ }
+    "switch"
+  ) | ForEach-Object { New-OperationCell $_ $Kind }
+  $identityRequired = [ordered]@{
+    lock = [ordered]@{
+      operation = "lock"
+      anonymousIdentityRequired = $true
+      stableCode = "SVN_OPERATION_LOCK_FAILED"
+      diagnosticsCause = "authenticationFailed"
+      mayHaveMutated = $false
+      remoteFailure = [ordered]@{ category = "authentication"; reason = "authenticationRequired"; cleanupAppropriate = $false }
+      promptCount = 0
+      credentialSettlement = "none"
+      laneReleaseProof = [ordered]@{ method = "status/refresh"; reconcile = "fresh" }
+      nativeLaneReleased = $true
+      diagnosticsRedacted = $true
+      svnCauseNames = @("SVN_ERR_RA_NOT_AUTHORIZED")
+    }
+    unlock = [ordered]@{
+      operation = "unlock"
+      anonymousIdentityRequired = $true
+      stableCode = "SVN_OPERATION_UNLOCK_FAILED"
+      diagnosticsCause = "authenticationFailed"
+      mayHaveMutated = $false
+      remoteFailure = [ordered]@{ category = "authentication"; reason = "authenticationRequired"; cleanupAppropriate = $false }
+      promptCount = 0
+      credentialSettlement = "none"
+      laneReleaseProof = [ordered]@{ method = "status/refresh"; reconcile = "fresh" }
+      nativeLaneReleased = $true
+      diagnosticsRedacted = $true
+      svnCauseNames = @("SVN_ERR_FS_NO_USER")
+    }
+  }
+  if ($Kind -ceq "packaged-native") {
+    $identityRequired.lock["temporaryRootsAfter"] = 0
+    $identityRequired.unlock["temporaryRootsAfter"] = 0
+  }
   return [ordered]@{
     kind = $Kind
     artifactSha256 = $ArtifactSha256
     protocol = [ordered]@{ major = 1; minor = 35 }
     remoteSvnAnonymous = $true
     fixtureCliInvocations = 0
+    positiveOperationCount = 9
+    identityRequiredOperationCount = 2
+    remoteOperationCount = 11
+    uniqueOperationIds = $true
     operations = @($operations)
+    anonymousIdentityRequired = $identityRequired
   }
 }
 
@@ -545,6 +583,66 @@ try {
   $tampered.surfaces[0].operations[0].promptCount = 1
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject anonymous credential prompting."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].positiveOperationCount = 11
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an overstated anonymous positive-operation count."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.lock.remoteFailure.reason = "authorizationDenied"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject the misleading anonymous lock authorization classification."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.unlock.svnCauseNames = @()
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must require the bounded libsvn cause chain for anonymous unlock."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.lock.svnCauseNames = @("SVN_ERR_AUTHZ_UNWRITABLE")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an identity boundary without an allowed upstream cause."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.lock.svnCauseNames = @("SVN_ERR_FS_NO_USER")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject the unlock cause in the lock cell."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.unlock.svnCauseNames = @("SVN_ERR_RA_NOT_AUTHORIZED")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject the lock cause in the unlock cell."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.lock.mayHaveMutated = $true
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an identity boundary that may have mutated."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.unlock.anonymousIdentityRequired = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must require the anonymousIdentityRequired marker."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.lock.laneReleaseProof.method = "diagnostics/get"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must require a same-repository status refresh lane proof."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.lock | Add-Member -NotePropertyName temporaryRootsAfter -NotePropertyValue 0
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject synthetic installed residue evidence."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.lock.PSObject.Properties.Remove("temporaryRootsAfter")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 schema must require packaged boundary temporary-root evidence."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.unlock | Add-Member -NotePropertyName workerDescendantsAfter -NotePropertyValue 0
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 schema must reject unobservable installed boundary worker evidence."
 
   $tampered = Copy-Report $report
   $tampered.negativeCells[0].surfaceObservations[0].followupNetworkContacts = 1
@@ -981,12 +1079,32 @@ try {
       'installed real-watcher local-event zero-network cell',
       'installed 100+1 single-Extension-Host residue stress',
       'remaining cross-surface blackhole-connect, worker-crash, and daemon-disconnect cells',
-      'issue #136',
+      'nine-operation anonymous svn:// matrices plus exact lock/unlock authenticationRequired boundaries',
+      'SVN_OPERATION_LOCK_FAILED',
+      'SVN_OPERATION_UNLOCK_FAILED',
+      'anonymousIdentityRequired',
       'Remove-Item -LiteralPath $outputResolved -Force'
     )) {
     Assert-True ($driverText.Contains($requiredText)) "I6 probe driver must retain real-artifact/fail-closed contract text '$requiredText'."
   }
   Assert-True (-not $driverText.Contains('publicClaimEligible = $true')) "I6 probe driver must not synthesize a passing public claim while the installed operation harness is absent."
+
+  $installedVsixProbeText = Get-Content -Raw -LiteralPath $installedVsixProbePath
+  foreach ($requiredText in @(
+      'const environment = Object.freeze({',
+      'reportToken: process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN',
+      'token: environment.reportToken',
+      'repositoryUrl: environment.repositoryUrl',
+      'checkoutPath: environment.checkoutPath',
+      'checkoutRevision: Number(environment.checkoutRevision)',
+      'fs.writeFileSync(environment.resultPath'
+    )) {
+    Assert-True ($installedVsixProbeText.Contains($requiredText)) "Installed positive probe must retain pre-activation environment capture '$requiredText'."
+  }
+  $installedActivationIndex = $installedVsixProbeText.IndexOf('vscode.commands.executeCommand("subversionr.diagnostics.versionReport")')
+  Assert-True ($installedActivationIndex -ge 0) "Installed positive probe must activate through the version report command."
+  Assert-True ($installedVsixProbeText.IndexOf('process.env', $installedActivationIndex) -lt 0) "Installed positive probe must not read process.env after product activation can consume the report token."
+
   foreach ($requiredObservationText in @(
       'Register-CimIndicationEvent',
       'Get-EventSubscriber',
