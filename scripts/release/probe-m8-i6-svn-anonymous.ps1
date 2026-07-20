@@ -912,6 +912,34 @@ function Get-Sha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-InstalledDaemonFileIdentityFromHarnessResult(
+  [string]$HarnessResultPath,
+  [string]$ExpectedExtensionsRoot,
+  [string]$ExpectedProductVersion,
+  [string]$ExpectedCandidateDaemonPath,
+  [string]$Context
+) {
+  $resultResolved = Resolve-RequiredFile $HarnessResultPath "$Context harness result"
+  $extensionsRootResolved = Resolve-RequiredDirectory $ExpectedExtensionsRoot "$Context extensions root"
+  $candidateDaemonResolved = Resolve-RequiredFile $ExpectedCandidateDaemonPath "$Context candidate daemon"
+  $result = Get-Content -Raw -LiteralPath $resultResolved | ConvertFrom-Json -Depth 64
+  $actualProperties = @($result.PSObject.Properties.Name | Sort-Object)
+  $expectedProperties = @("extensionId", "extensionPath", "extensionVersion", "report") | Sort-Object
+  Assert-True (($actualProperties -join ",") -ceq ($expectedProperties -join ",")) "$Context harness result must contain exactly the required fields."
+  Assert-True ([string]$result.extensionId -ceq "hitsuki-ban.subversionr") "$Context harness result extension identity was invalid."
+  Assert-True ([string]$result.extensionVersion -ceq $ExpectedProductVersion) "$Context harness result extension version was invalid."
+  Assert-True ([System.IO.Path]::IsPathFullyQualified([string]$result.extensionPath)) "$Context installed extension path was not absolute."
+  $installedExtensionResolved = Resolve-RequiredDirectory ([string]$result.extensionPath) "$Context installed extension"
+  Assert-True (Test-PathWithin $installedExtensionResolved $extensionsRootResolved) "$Context installed extension escaped the controlled extensions root."
+  $installedDaemonResolved = Resolve-RequiredFile `
+    (Join-Path $installedExtensionResolved "resources\backend\win32-x64\subversionr-daemon.exe") `
+    "$Context installed daemon"
+  Assert-True (
+    (Get-Sha256 $installedDaemonResolved) -ceq (Get-Sha256 $candidateDaemonResolved)
+  ) "$Context installed daemon bytes did not match the candidate daemon."
+  return [SubversionRM8I6ExactFileIdentity]::Get($installedDaemonResolved)
+}
+
 function Get-TextSha256([string]$Value) {
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
   $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -2096,16 +2124,26 @@ function Get-ZeroWorkerProcessObservation(
   Assert-True ($candidateStarts.Count -eq 1) "The $Context surface must start exactly one candidate daemon and no remote worker."
   $daemonStart = $candidateStarts[0]
   Assert-True (
-    [long]$probeStart.eventFileTime -lt [long]$daemonStart.eventFileTime -and
+    [long]$probeStart.eventFileTime -lt [long]$daemonStart.eventFileTime
+  ) "The $Context candidate daemon start did not follow the controlled probe start."
+  Assert-True (
     @($AllEvents | Where-Object {
         [long]$_.processId -eq [long]$daemonStart.processId -and
         [long]$_.eventFileTime -eq [long]$daemonStart.eventFileTime
-      }).Count -eq 1 -and
+      }).Count -eq 1
+  ) "The $Context candidate daemon exact start identity was not unique."
+  Assert-True (
     [long]$daemonStart.imageStartFileTime -gt 0 -and
-    [long]$daemonStart.imageStartFileTime -le [long]$daemonStart.eventFileTime -and
-    [long]$daemonStart.sessionId -ge 0 -and
+    -not [string]::IsNullOrWhiteSpace([string]$daemonStart.imagePath) -and
+    -not [string]::IsNullOrWhiteSpace([string]$daemonStart.imageFileIdentity)
+  ) "The $Context candidate daemon live image identity was not captured."
+  Assert-True (
+    [long]$daemonStart.imageStartFileTime -le [long]$daemonStart.eventFileTime
+  ) "The $Context candidate daemon PID was reused by a later process generation."
+  Assert-True ([long]$daemonStart.sessionId -ge 0) "The $Context candidate daemon session identity was invalid."
+  Assert-True (
     [string]$daemonStart.imageFileIdentity -ceq $ExpectedDaemonFileIdentity
-  ) "The $Context candidate daemon start identity was invalid or reused."
+  ) "The $Context candidate daemon image did not match the expected exact file identity."
   $daemonDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents $daemonStart)
   $consoleHostStarts = @($daemonDescendantStarts | Where-Object {
       [long]$_.parentProcessId -eq [long]$daemonStart.processId -and
@@ -2118,12 +2156,22 @@ function Get-ZeroWorkerProcessObservation(
       @($AllEvents | Where-Object {
           [long]$_.processId -eq [long]$consoleHostStart.processId -and
           [long]$_.eventFileTime -eq [long]$consoleHostStart.eventFileTime
-        }).Count -eq 1 -and
+        }).Count -eq 1
+    ) "The $Context Windows console-host exact start identity was not unique."
+    Assert-True (
       [long]$consoleHostStart.imageStartFileTime -gt 0 -and
-      [long]$consoleHostStart.imageStartFileTime -le [long]$consoleHostStart.eventFileTime -and
-      [long]$consoleHostStart.sessionId -eq [long]$daemonStart.sessionId -and
+      -not [string]::IsNullOrWhiteSpace([string]$consoleHostStart.imagePath) -and
+      -not [string]::IsNullOrWhiteSpace([string]$consoleHostStart.imageFileIdentity)
+    ) "The $Context Windows console-host live image identity was not captured."
+    Assert-True (
+      [long]$consoleHostStart.imageStartFileTime -le [long]$consoleHostStart.eventFileTime
+    ) "The $Context Windows console-host PID was reused by a later process generation."
+    Assert-True (
+      [long]$consoleHostStart.sessionId -eq [long]$daemonStart.sessionId
+    ) "The $Context Windows console-host session did not match its daemon."
+    Assert-True (
       [string]$consoleHostStart.imageFileIdentity -ceq $ExpectedConsoleHostFileIdentity
-    ) "The $Context Windows console-host start identity was ambiguous."
+    ) "The $Context Windows console-host image did not match the system console host."
   }
   $unexpectedDaemonDescendantStarts = @($daemonDescendantStarts | Where-Object {
       -not (
@@ -3354,6 +3402,12 @@ try {
       [int]$installedLocalEventReport.temporaryRootsAfter -eq 0 -and
       $installedLocalEventReport.candidateDaemonExitedAfter -eq $true
     ) "The installed VSIX local-event zero-network observation was incomplete."
+    $installedLocalEventDaemonFileIdentity = Get-InstalledDaemonFileIdentityFromHarnessResult `
+      -HarnessResultPath (Join-Path $localEventProbeRoot "installed-local-event-zero-network-result.json") `
+      -ExpectedExtensionsRoot (Join-Path $localEventProbeRoot "extensions") `
+      -ExpectedProductVersion $ExpectedProductVersion `
+      -ExpectedCandidateDaemonPath $daemonResolved `
+      -Context "installed local-event"
 
     $proxyAfterObservation = Read-CountingProxyState $localEventProxyStatePath $countingProxy.Process $true
     foreach ($counterName in @(
@@ -3379,7 +3433,7 @@ try {
       -ProbeParentPid ([long]$PID) `
       -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
       -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
-      -ExpectedDaemonFileIdentity $daemonFileIdentity `
+      -ExpectedDaemonFileIdentity $installedLocalEventDaemonFileIdentity `
       -ExpectedConsoleHostFileIdentity $consoleHostFileIdentity `
       -ForbiddenFixtureProcessNames @(
         [System.IO.Path]::GetFileName($svnResolved),
@@ -5166,6 +5220,7 @@ try {
   )
   foreach ($contract in $trustRevokedContracts) {
     $surfaceName = [string]$contract.Surface
+    $surfaceDaemonFileIdentity = $daemonFileIdentity
     $surfaceRoot = Join-Path $probeRoot "trust-revoked-$surfaceName"
     $surfaceWorkRoot = Join-Path $trustRevokedWorkRoot ([string]$contract.WorkRoot)
     $fixtureStatePath = Join-Path $surfaceRoot "fixture-state.json"
@@ -5266,6 +5321,12 @@ try {
           [int]$probeReport.temporaryRootsAfter -eq 0 -and [int]$probeReport.checkoutJournalEntriesAfter -eq 0 -and
           $probeReport.diagnosticsRedacted -eq $true -and $probeReport.candidateDaemonExitedAfter -eq $true
         ) "The installed VSIX trust-revoked report was incomplete."
+        $surfaceDaemonFileIdentity = Get-InstalledDaemonFileIdentityFromHarnessResult `
+          -HarnessResultPath (Join-Path $installedFixtureRoot "result.json") `
+          -ExpectedExtensionsRoot (Join-Path $installedFixtureRoot "x") `
+          -ExpectedProductVersion $ExpectedProductVersion `
+          -ExpectedCandidateDaemonPath $daemonResolved `
+          -Context "installed trust-revoked"
       }
 
       $trustTransition = if ($surfaceName -ceq "packaged-native") {
@@ -5307,7 +5368,7 @@ try {
         -ProbeParentPid ([long]$PID) `
         -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
-        -ExpectedDaemonFileIdentity $daemonFileIdentity `
+        -ExpectedDaemonFileIdentity $surfaceDaemonFileIdentity `
         -ExpectedConsoleHostFileIdentity $consoleHostFileIdentity `
         -ForbiddenFixtureProcessNames @(
           [System.IO.Path]::GetFileName($svnResolved),

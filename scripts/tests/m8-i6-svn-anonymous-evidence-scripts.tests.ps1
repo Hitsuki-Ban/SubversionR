@@ -1350,6 +1350,10 @@ try {
       'Invoke-BoundedProcessWithStartEventCapture',
       'imageStartFileTime',
       'ExpectedConsoleHostFileIdentity',
+      'Get-InstalledDaemonFileIdentityFromHarnessResult',
+      '$installedLocalEventDaemonFileIdentity',
+      '$surfaceDaemonFileIdentity',
+      'installed daemon bytes did not match the candidate daemon',
       'Get-RecordedCandidateParentStartIdentity',
       'Get-PackagedNegativeProcessObservation',
       'Get-InstalledNegativeProcessObservation',
@@ -1457,6 +1461,10 @@ try {
   )
   Assert-True ($driverParseErrors.Count -eq 0) "I6 probe driver must parse after packaged-negative observation changes."
   $observationHelpers = @(
+    "Resolve-RequiredFile",
+    "Resolve-RequiredDirectory",
+    "Test-PathWithin",
+    "Get-InstalledDaemonFileIdentityFromHarnessResult",
     "Get-DescendantProcessIds",
     "Get-ProcessSnapshotStartFileTime",
     "Get-NextRecordedProcessStartFileTime",
@@ -1491,6 +1499,34 @@ try {
   $faultMutationIndex = $readFaultHelper.IndexOf('Set-ExactCurrentUserReadDeny $descriptor $Context', [System.StringComparison]::Ordinal)
   Assert-True ($faultFlagIndex -ge 0 -and $faultMutationIndex -gt $faultFlagIndex) "Packaged recovery-indeterminate cleanup flag must be armed before the DACL mutation."
   Invoke-Expression ($observationHelperSources -join "`n`n")
+
+  $installedIdentityRoot = Join-Path $tempRoot "installed-daemon-identity"
+  $installedExtensionsRoot = Join-Path $installedIdentityRoot "extensions"
+  $installedPackageRoot = Join-Path $installedExtensionsRoot "hitsuki-ban.subversionr-0.2.5"
+  $installedBackendRoot = Join-Path $installedPackageRoot "resources\backend\win32-x64"
+  New-Item -ItemType Directory -Force -Path $installedBackendRoot | Out-Null
+  $identityCandidatePath = Join-Path $installedIdentityRoot "candidate-daemon.exe"
+  $identityInstalledPath = Join-Path $installedBackendRoot "subversionr-daemon.exe"
+  [System.IO.File]::WriteAllText($identityCandidatePath, "same candidate bytes", [System.Text.UTF8Encoding]::new($false))
+  Copy-Item -LiteralPath $identityCandidatePath -Destination $identityInstalledPath
+  $identityHarnessResultPath = Join-Path $installedIdentityRoot "result.json"
+  [ordered]@{
+    extensionId = "hitsuki-ban.subversionr"
+    extensionVersion = "0.2.5"
+    extensionPath = $installedPackageRoot
+    report = [ordered]@{ status = "passed" }
+  } | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $identityHarnessResultPath -Encoding utf8 -NoNewline
+  $candidateFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($identityCandidatePath)
+  $installedFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($identityInstalledPath)
+  Assert-True ($candidateFileIdentity -cne $installedFileIdentity) "Installed identity fixture must use a copied file with a distinct exact file identity."
+  $resolvedInstalledFileIdentity = Get-InstalledDaemonFileIdentityFromHarnessResult `
+    $identityHarnessResultPath $installedExtensionsRoot "0.2.5" $identityCandidatePath "installed identity test"
+  Assert-Equal $installedFileIdentity $resolvedInstalledFileIdentity "Installed identity resolution must select the hash-bound installed copy rather than the build-tree candidate."
+  [System.IO.File]::AppendAllText($identityInstalledPath, "changed", [System.Text.UTF8Encoding]::new($false))
+  Assert-ScriptThrowsContaining {
+    Get-InstalledDaemonFileIdentityFromHarnessResult `
+      $identityHarnessResultPath $installedExtensionsRoot "0.2.5" $identityCandidatePath "installed identity test"
+  } "installed daemon bytes did not match the candidate daemon" "Installed identity resolution must reject an installed executable whose bytes differ from the candidate."
 
   $authzAtomicPath = Join-Path $tempRoot "authz-atomic"
   Set-Content -LiteralPath $authzAtomicPath -Value "old" -NoNewline
@@ -1715,6 +1751,31 @@ try {
   Assert-Equal 0 $localEventObservation.workerStarts "Zero-worker observation must ignore a pre-daemon numeric parent-PID collision."
   Assert-Equal 0 $localEventObservation.consoleHostStarts "Zero-worker observation must measure an absent Windows console-host baseline."
 
+  $wrongLocalEventDaemonIdentity = $localEventDaemonStart.PSObject.Copy()
+  $wrongLocalEventDaemonIdentity.imageFileIdentity = "build-tree-candidate-file-identity"
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $wrongLocalEventDaemonIdentity) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "installed-copy-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "candidate daemon image did not match the expected exact file identity" "Zero-worker observation must reject a same-byte candidate identity when the installed copy identity is required."
+
+  $missingLocalEventDaemonCapture = $localEventDaemonStart.PSObject.Copy()
+  $missingLocalEventDaemonCapture.imagePath = ""
+  $missingLocalEventDaemonCapture.imageFileIdentity = ""
+  $missingLocalEventDaemonCapture.imageStartFileTime = 0L
+  $missingLocalEventDaemonCapture.sessionId = -1L
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $missingLocalEventDaemonCapture) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "candidate daemon live image identity was not captured" "Zero-worker observation must fail closed when the live daemon image capture is missing."
+
   $localEventConsoleHostStart = [pscustomobject]@{
     processId = 603L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6250L
     imagePath = "\\?\C:\Windows\System32\conhost.exe"; imageFileIdentity = "console-host-file-identity"
@@ -1741,7 +1802,7 @@ try {
       -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @() -Context "installed local-event"
-  } "Windows console-host start identity was ambiguous" "Zero-worker observation must reject a non-system image renamed to conhost.exe."
+  } "Windows console-host image did not match the system console host" "Zero-worker observation must reject a non-system image renamed to conhost.exe."
 
   Assert-ScriptThrowsContaining {
     Get-ZeroWorkerProcessObservation `

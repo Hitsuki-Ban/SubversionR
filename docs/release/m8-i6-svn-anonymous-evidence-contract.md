@@ -222,7 +222,12 @@ second daemon process, while its OS baseline may contain at most one direct
 a second console host, or a retained daemon/console-host identity fails the
 observation. The daemon and console host are captured while live and bound to
 their exact Windows file identities and one session; a basename alone is not
-accepted. A later reuse of either PID is not settlement residue.
+accepted. For an installed surface, the daemon identity is resolved from the
+exact extension path reported by that surface, constrained to its isolated
+extensions root, and its bytes must match the hash-locked candidate before the
+captured process identity is compared. The build-tree source file identity is
+not interchangeable with the installed copy's identity. A later reuse of
+either PID is not settlement residue.
 
 All subscribed process-tree observations bind an exact start-event identity,
 not a numeric PID for the whole subscription. The controlled probe root must
