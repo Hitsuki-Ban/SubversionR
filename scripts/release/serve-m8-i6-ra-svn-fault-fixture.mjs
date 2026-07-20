@@ -424,7 +424,7 @@ function noAuthRequest() {
 }
 
 function saslOnlyAuthRequest() {
-  return `( success ( ( CRAM-MD5 ) ${protocolString("SubversionR M8 I6 controlled SASL-only fixture")} ) ) `;
+  return `( success ( ( PLAIN ) ${protocolString("SubversionR M8 I6 controlled SASL-only fixture")} ) ) `;
 }
 
 function repositoryInfo(port, scenario) {

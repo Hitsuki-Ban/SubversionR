@@ -99,6 +99,9 @@ impl RemoteSvnAnonymousRequest {
         match self {
             Self::Checkout { request } => bridge
                 .repository_checkout_with_cancellation(&request, &mut anonymous, cancellation)
+                .map_err(|failure| {
+                    normalize_anonymous_checkout_auth_capability_failure(failure, &request)
+                })
                 .map(RemoteSvnAnonymousOutput::Checkout),
             Self::Status {
                 identity,
@@ -110,6 +113,7 @@ impl RemoteSvnAnonymousRequest {
                     &mut anonymous,
                     cancellation,
                 )
+                .map_err(normalize_anonymous_read_only_auth_capability_failure)
                 .map(RemoteSvnAnonymousOutput::Status),
             Self::Content {
                 identity,
@@ -117,12 +121,15 @@ impl RemoteSvnAnonymousRequest {
                 revision,
             } => bridge
                 .content_get(&identity, &path, &revision, &mut anonymous)
+                .map_err(normalize_anonymous_read_only_auth_capability_failure)
                 .map(RemoteSvnAnonymousOutput::Content),
             Self::Log { identity, request } => bridge
                 .history_log(&identity, &request, &mut anonymous)
+                .map_err(normalize_anonymous_read_only_auth_capability_failure)
                 .map(RemoteSvnAnonymousOutput::Log),
             Self::Blame { identity, request } => bridge
                 .history_blame(&identity, &request, &mut anonymous)
+                .map_err(normalize_anonymous_read_only_auth_capability_failure)
                 .map(RemoteSvnAnonymousOutput::Blame),
             Self::Update { identity, request } => bridge
                 .operation_update_with_cancellation(
@@ -175,6 +182,54 @@ impl RemoteSvnAnonymousRequest {
                 .map(RemoteSvnAnonymousOutput::Commit),
         }
     }
+}
+
+fn normalize_anonymous_read_only_auth_capability_failure(failure: BridgeFailure) -> BridgeFailure {
+    normalize_anonymous_auth_capability_failure(failure)
+}
+
+fn normalize_anonymous_checkout_auth_capability_failure(
+    failure: BridgeFailure,
+    request: &RepositoryCheckoutRequest,
+) -> BridgeFailure {
+    if !request.ignore_externals || !checkout_target_is_absent(&request.target_path) {
+        return failure;
+    }
+    normalize_anonymous_auth_capability_failure(failure)
+}
+
+fn checkout_target_is_absent(target_path: &str) -> bool {
+    matches!(
+        std::fs::symlink_metadata(target_path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
+fn normalize_anonymous_auth_capability_failure(failure: BridgeFailure) -> BridgeFailure {
+    let should_normalize = failure
+        .diagnostics()
+        .is_some_and(anonymous_auth_capability_diagnostics);
+    if !should_normalize {
+        return failure;
+    }
+
+    let mut normalized = anonymous_auth_challenge();
+    normalized.diagnostics = failure.diagnostics;
+    normalized
+}
+
+fn anonymous_auth_capability_diagnostics(
+    diagnostics: &subversionr_protocol::OperationFailureDiagnostics,
+) -> bool {
+    !diagnostics.svn.truncated
+        && !diagnostics.svn.entries.is_empty()
+        && diagnostics.svn.entries.len() <= 8
+        && diagnostics.svn.entries.iter().any(|entry| {
+            matches!(
+                entry.name.as_str(),
+                "SVN_ERR_RA_SVN_NO_MECHANISMS" | "SVN_ERR_AUTHN_NO_PROVIDER"
+            )
+        })
 }
 
 fn normalize_anonymous_lock_failure(
@@ -353,6 +408,128 @@ mod tests {
             code: 160034,
             name: "SVN_ERR_FS_NO_USER".to_string(),
         }]
+    }
+
+    #[test]
+    fn anonymous_auth_boundary_normalizes_only_exact_capability_diagnostics() {
+        for name in ["SVN_ERR_RA_SVN_NO_MECHANISMS", "SVN_ERR_AUTHN_NO_PROVIDER"] {
+            let normalized = normalize_anonymous_read_only_auth_capability_failure(native_failure(
+                "SVN_REPOSITORY_CHECKOUT_FAILED",
+                OperationFailureCause::AuthenticationFailed,
+                None,
+                vec![SvnErrorDiagnosticEntry {
+                    code: 170000,
+                    name: name.to_string(),
+                }],
+            ));
+            assert_eq!(normalized.code(), "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED");
+            assert_eq!(normalized.category, "unsupported");
+            assert_eq!(normalized.message_key, "error.remote.authUnsupported");
+            assert_eq!(
+                normalized.safe_args(),
+                &json!({ "scheme": "svn", "auth": "anonymous" })
+            );
+            assert_eq!(
+                normalized
+                    .diagnostics()
+                    .expect("native diagnostics must survive")
+                    .svn
+                    .entries[0]
+                    .name,
+                name
+            );
+        }
+
+        for name in ["SVN_ERR_RA_NOT_AUTHORIZED", "SVN_ERR_AUTHZ_ROOT_UNREADABLE"] {
+            let original = native_failure(
+                "SVN_REPOSITORY_CHECKOUT_FAILED",
+                OperationFailureCause::AuthorizationDenied,
+                None,
+                vec![SvnErrorDiagnosticEntry {
+                    code: 170001,
+                    name: name.to_string(),
+                }],
+            );
+            assert_eq!(
+                normalize_anonymous_read_only_auth_capability_failure(original).code(),
+                "SVN_REPOSITORY_CHECKOUT_FAILED"
+            );
+        }
+
+        let mut truncated = native_failure(
+            "SVN_REPOSITORY_CHECKOUT_FAILED",
+            OperationFailureCause::AuthenticationFailed,
+            None,
+            vec![SvnErrorDiagnosticEntry {
+                code: 170001,
+                name: "SVN_ERR_RA_SVN_NO_MECHANISMS".to_string(),
+            }],
+        );
+        truncated
+            .diagnostics
+            .as_mut()
+            .expect("fixture diagnostics")
+            .svn
+            .truncated = true;
+        assert_eq!(
+            normalize_anonymous_read_only_auth_capability_failure(truncated).code(),
+            "SVN_REPOSITORY_CHECKOUT_FAILED"
+        );
+    }
+
+    #[test]
+    fn anonymous_checkout_auth_normalization_requires_a_proven_uncreated_target() {
+        let target = std::env::temp_dir().join(format!(
+            "subversionr-anonymous-auth-boundary-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock must follow the Unix epoch")
+                .as_nanos()
+        ));
+        let request = RepositoryCheckoutRequest {
+            url: "svn://127.0.0.1/repo".to_string(),
+            target_path: target.to_string_lossy().into_owned(),
+            revision: "head".to_string(),
+            depth: "infinity".to_string(),
+            ignore_externals: true,
+        };
+        let capability_failure = || {
+            native_failure(
+                "SVN_REPOSITORY_CHECKOUT_FAILED",
+                OperationFailureCause::AuthenticationFailed,
+                None,
+                vec![SvnErrorDiagnosticEntry {
+                    code: 170000,
+                    name: "SVN_ERR_RA_SVN_NO_MECHANISMS".to_string(),
+                }],
+            )
+        };
+
+        assert_eq!(
+            normalize_anonymous_checkout_auth_capability_failure(capability_failure(), &request)
+                .code(),
+            "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"
+        );
+
+        let mut externals_allowed = request.clone();
+        externals_allowed.ignore_externals = false;
+        assert_eq!(
+            normalize_anonymous_checkout_auth_capability_failure(
+                capability_failure(),
+                &externals_allowed
+            )
+            .code(),
+            "SVN_REPOSITORY_CHECKOUT_FAILED"
+        );
+
+        std::fs::create_dir(&target).expect("checkout target fixture must be created");
+        assert_eq!(
+            normalize_anonymous_checkout_auth_capability_failure(capability_failure(), &request)
+                .code(),
+            "SVN_REPOSITORY_CHECKOUT_FAILED"
+        );
+        std::fs::remove_dir(&target).expect("checkout target fixture must be removed");
     }
 
     #[test]

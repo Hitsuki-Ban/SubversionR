@@ -38,7 +38,7 @@ test("malicious-root emits protocol-v2 greeting, anonymous auth, mismatched repo
   }
 });
 
-test("sasl-only advertises only CRAM-MD5 and never emits repository info", async () => {
+test("sasl-only advertises only unsupported PLAIN and never emits repository info", async () => {
   const fixture = await startFixture("sasl-only");
   try {
     const socket = await connect(fixture.port);
@@ -46,7 +46,8 @@ test("sasl-only advertises only CRAM-MD5 and never emits repository info", async
     await reader.read();
     socket.write(clientGreeting(fixture.port));
     const auth = (await reader.read()).toString("utf8");
-    assert.match(auth, /\( CRAM-MD5 \)/u);
+    assert.match(auth, /\( PLAIN \)/u);
+    assert.doesNotMatch(auth, /CRAM-MD5/u);
     assert.doesNotMatch(auth, /ANONYMOUS/u);
     const state = await fixture.waitFor((value) => value.authRequestSent === 1);
     assert.equal(state.reposInfoSent, 0);
