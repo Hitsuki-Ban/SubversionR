@@ -229,6 +229,19 @@ captured process identity is compared. The build-tree source file identity is
 not interchangeable with the installed copy's identity. A later reuse of
 either PID is not settlement residue.
 
+Installed zero-worker probes use a mandatory, nonce-bound ready/ack barrier.
+After the installed extension has started its daemon, the Extension Host
+atomically publishes its exact installed extension identity and remains alive
+until the elevated driver acknowledges the capture. Before that acknowledgement
+the driver must retain a Windows process handle for the single exact-path daemon
+generation, match its PID, parent, creation FILETIME, session, full image path,
+argument-free command line, installed file identity, and subscribed start event,
+and complete the bounded console-host event drain. The local-event probe cannot
+mutate its working copy before this acknowledgement, and the installed
+trust-revoked probe cannot let its Extension Host exit before it. A missing,
+stale, malformed, duplicate, timed-out, or mismatched handshake fails the cell;
+there is no post-exit PID lookup or event-only identity fallback.
+
 All subscribed process-tree observations bind an exact start-event identity,
 not a numeric PID for the whole subscription. The controlled probe root must
 match its recorded PID, still-live driver parent, and expected executable name;

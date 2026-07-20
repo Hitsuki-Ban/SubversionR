@@ -9,6 +9,10 @@ param(
   [Parameter(Mandatory = $true)] [string]$DaemonPath,
   [Parameter(Mandatory = $true)] [string]$BridgePath,
   [Parameter(Mandatory = $true)] [ValidateRange(1, 300000)] [int]$ObservationTimeoutMilliseconds,
+  [Parameter(Mandatory = $true)] [string]$ProcessCaptureReadyPath,
+  [Parameter(Mandatory = $true)] [string]$ProcessCaptureAckPath,
+  [Parameter(Mandatory = $true)] [ValidatePattern('^[0-9a-f]{32}$')] [string]$ProcessCaptureNonce,
+  [Parameter(Mandatory = $true)] [ValidateRange(1000, 300000)] [int]$ProcessCaptureTimeoutMilliseconds,
   [Parameter(Mandatory = $true)] [ValidateRange(60, 1800)] [int]$TimeoutSeconds
 )
 
@@ -204,6 +208,15 @@ Assert-True ((Split-Path -Leaf $codeResolved) -in @("code.cmd", "code.exe")) "Co
 $daemonResolved = Resolve-RequiredFile $DaemonPath "DaemonPath"
 $bridgeResolved = Resolve-RequiredFile $BridgePath "BridgePath"
 $fixtureResolved = Resolve-NewDirectoryPath $FixtureRoot "FixtureRoot"
+$processCaptureReadyResolved = [System.IO.Path]::GetFullPath($ProcessCaptureReadyPath)
+$processCaptureAckResolved = [System.IO.Path]::GetFullPath($ProcessCaptureAckPath)
+Assert-True ([System.IO.Path]::IsPathFullyQualified($ProcessCaptureReadyPath)) "ProcessCaptureReadyPath must be absolute."
+Assert-True ([System.IO.Path]::IsPathFullyQualified($ProcessCaptureAckPath)) "ProcessCaptureAckPath must be absolute."
+Assert-True (Test-PathWithin $processCaptureReadyResolved $fixtureResolved) "ProcessCaptureReadyPath must be strictly below FixtureRoot."
+Assert-True (Test-PathWithin $processCaptureAckResolved $fixtureResolved) "ProcessCaptureAckPath must be strictly below FixtureRoot."
+Assert-True (-not $processCaptureReadyResolved.Equals($processCaptureAckResolved, [System.StringComparison]::OrdinalIgnoreCase)) "Process capture ready and acknowledgement paths must be distinct."
+Assert-True (-not (Test-Path -LiteralPath $processCaptureReadyResolved)) "ProcessCaptureReadyPath must not already exist."
+Assert-True (-not (Test-Path -LiteralPath $processCaptureAckResolved)) "ProcessCaptureAckPath must not already exist."
 $workingCopyResolved = Resolve-RequiredDirectory $WorkingCopyPath "WorkingCopyPath"
 Assert-True (-not $workingCopyResolved.Equals($fixtureResolved, [System.StringComparison]::OrdinalIgnoreCase)) "FixtureRoot and WorkingCopyPath must be distinct."
 Assert-True (-not (Test-PathWithin $workingCopyResolved $fixtureResolved)) "WorkingCopyPath must not be below FixtureRoot."
@@ -280,6 +293,28 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function atomicWriteJson(filePath, value) {
+  const temporaryPath = `${filePath}.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(value), { encoding: "utf8", flag: "wx" });
+  fs.renameSync(temporaryPath, filePath);
+}
+
+async function waitForProcessCaptureAck(filePath, nonce, deadlineEpochMs) {
+  while (!fs.existsSync(filePath)) {
+    if (Date.now() >= deadlineEpochMs) throw new Error("Installed local-event process-capture acknowledgement exceeded its absolute deadline.");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (Date.now() >= deadlineEpochMs) throw new Error("Installed local-event process-capture acknowledgement arrived after its absolute deadline.");
+  const ack = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  exactKeys(ack, ["schema", "nonce", "accepted", "daemonProcessId", "daemonStartFileTime", "daemonSessionId"], "installed local-event process-capture acknowledgement");
+  assert(ack.schema === "subversionr.release.m8-i6-installed-process-capture-ack.v1", "Installed local-event process-capture acknowledgement schema was invalid.");
+  assert(ack.nonce === nonce && ack.accepted === true, "Installed local-event process-capture acknowledgement identity was invalid.");
+  assert(Number.isSafeInteger(ack.daemonProcessId) && ack.daemonProcessId > 0, "Installed local-event captured daemon PID was invalid.");
+  assert(typeof ack.daemonStartFileTime === "string" && /^[1-9][0-9]{16,18}$/.test(ack.daemonStartFileTime), "Installed local-event captured daemon start identity was invalid.");
+  assert(Number.isSafeInteger(ack.daemonSessionId) && ack.daemonSessionId >= 0, "Installed local-event captured daemon session identity was invalid.");
+  if (Date.now() >= deadlineEpochMs) throw new Error("Installed local-event process-capture acknowledgement validation exceeded its absolute deadline.");
+}
+
 async function withDeadline(promise, label, milliseconds) {
   let timer;
   try {
@@ -315,8 +350,15 @@ async function run() {
   const workingCopyPath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_WORKING_COPY_PATH");
   const relativePath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_RELATIVE_PATH");
   const timeoutText = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_TIMEOUT_MS");
+  const processCaptureReadyPath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY");
+  const processCaptureAckPath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK");
+  const processCaptureNonce = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE");
+  const processCaptureDeadlineText = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS");
   const observationTimeoutMs = Number(timeoutText);
+  const processCaptureDeadlineEpochMs = Number(processCaptureDeadlineText);
   assert(Number.isSafeInteger(observationTimeoutMs) && observationTimeoutMs >= 1 && observationTimeoutMs <= 300000, "Installed local-event observation timeout is invalid.");
+  assert(/^[0-9a-f]{32}$/.test(processCaptureNonce), "Installed local-event process-capture nonce was invalid.");
+  assert(Number.isSafeInteger(processCaptureDeadlineEpochMs) && processCaptureDeadlineEpochMs > Date.now(), "Installed local-event process-capture deadline was invalid.");
 
   const extension = vscode.extensions.getExtension("hitsuki-ban.subversionr");
   if (!extension) throw new Error("Installed SubversionR extension was not visible.");
@@ -342,6 +384,16 @@ async function run() {
   validateTarget(arm.target, relativePath, "installed local-event arm target");
   assert(typeof arm.observationId === "string" && arm.observationId.length > 0, "Installed local-event arm observationId was invalid.");
 
+  atomicWriteJson(processCaptureReadyPath, {
+    schema: "subversionr.release.m8-i6-installed-process-capture-ready.v1",
+    nonce: processCaptureNonce,
+    cell: "localEventZeroNetwork",
+    extensionId: extension.id,
+    extensionVersion: extension.packageJSON.version,
+    extensionPath: extension.extensionPath,
+    extensionHostProcessId: process.pid,
+  });
+  await waitForProcessCaptureAck(processCaptureAckPath, processCaptureNonce, processCaptureDeadlineEpochMs);
   // VS Code does not expose a readiness promise for a newly created FileSystemWatcher.
   // This bounded registration window is not evidence: the single target write below
   // must still produce the real watcher, coverage, and SCM projection observations.
@@ -408,6 +460,10 @@ $environmentNames = @(
   "SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_WORKING_COPY_PATH",
   "SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_RELATIVE_PATH",
   "SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_TIMEOUT_MS",
+  "SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY",
+  "SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK",
+  "SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE",
+  "SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS",
   "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME", "TEMP", "TMP"
 )
 $previousEnvironment = @{}
@@ -439,6 +495,11 @@ try {
   $env:SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_WORKING_COPY_PATH = $workingCopyResolved
   $env:SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_RELATIVE_PATH = $target.relativePath
   $env:SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_TIMEOUT_MS = $ObservationTimeoutMilliseconds.ToString([Globalization.CultureInfo]::InvariantCulture)
+  $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY = $processCaptureReadyResolved
+  $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK = $processCaptureAckResolved
+  $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE = $ProcessCaptureNonce
+  $processCaptureDeadlineEpochMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + $ProcessCaptureTimeoutMilliseconds
+  $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS = $processCaptureDeadlineEpochMs.ToString([Globalization.CultureInfo]::InvariantCulture)
   $env:APPDATA = $appDataRoot
   $env:LOCALAPPDATA = $localAppDataRoot
   $env:USERPROFILE = $profileRoot

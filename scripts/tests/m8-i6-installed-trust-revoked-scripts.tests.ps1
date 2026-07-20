@@ -43,7 +43,9 @@ Assert-True ($parseErrors.Count -eq 0) "Installed trust-revoked probe must parse
 $parameterNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
 $expectedParameters = @(
   "VsixPath", "CodeCliPath", "FixtureRoot", "WorkingCopyPath", "RepositoryUrl",
-  "FixtureStatePath", "OperationId", "ExpectedProductVersion", "DaemonPath", "BridgePath", "TimeoutSeconds"
+  "FixtureStatePath", "OperationId", "ExpectedProductVersion", "DaemonPath", "BridgePath",
+  "ProcessCaptureReadyPath", "ProcessCaptureAckPath", "ProcessCaptureNonce", "ProcessCaptureTimeoutMilliseconds",
+  "TimeoutSeconds"
 )
 Assert-True (($parameterNames -join ",") -ceq ($expectedParameters -join ",")) "Installed trust-revoked probe must expose only the exact required parameters."
 
@@ -53,6 +55,17 @@ foreach ($required in @(
     'SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_TRUST_REVOKED_REPORT_TOKEN',
     'SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_OPERATION_ID',
     'SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_FIXTURE_STATE_PATH',
+    'SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY',
+    'SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK',
+    'SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE',
+    'SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS',
+    'subversionr.release.m8-i6-installed-process-capture-ready.v1',
+    'subversionr.release.m8-i6-installed-process-capture-ack.v1',
+    'exactKeys(ack, ["schema", "nonce", "accepted", "daemonProcessId", "daemonStartFileTime", "daemonSessionId"]',
+    'atomicWriteJson(processCaptureReadyPath',
+    'await waitForProcessCaptureAck(',
+    'process-capture acknowledgement arrived after its absolute deadline.',
+    'process-capture acknowledgement validation exceeded its absolute deadline.',
     'externally supplied canonical UUID',
     'token, repositoryUrl, workingCopyPath, operationId, fixtureStatePath',
     'subversionr.release.m8-i6-installed-vsix-trust-revoked.v1',
@@ -74,12 +87,22 @@ foreach ($required in @(
     'Get-WorkingCopyDatabaseProof',
     'Assert-WorkingCopyPreserved',
     'Wait-CandidateProcessAbsent',
+    'ProcessCaptureReadyPath must be absolute.',
+    'ProcessCaptureAckPath must be absolute.',
+    "ValidatePattern('^[0-9a-f]{32}$')",
+    'ValidateRange(1000, 300000)',
     '$workingCopyDatabaseBefore.sizeBytes',
     '$workingCopyDatabaseBefore.sha256',
     '"u"', '"x"', '"w"', '"h"', '"e"'
-  )) {
+)) {
   Assert-True ($source.Contains($required)) "Installed trust-revoked probe is missing the contract lock: $required"
 }
+$ackWaitFunctionIndex = $source.IndexOf('async function waitForProcessCaptureAck(', [System.StringComparison]::Ordinal)
+$ackWaitLoopIndex = $source.IndexOf('while (!fs.existsSync(filePath))', $ackWaitFunctionIndex, [System.StringComparison]::Ordinal)
+$ackLateIndex = $source.IndexOf('acknowledgement arrived after its absolute deadline.', $ackWaitLoopIndex, [System.StringComparison]::Ordinal)
+$ackReadIndex = $source.IndexOf('JSON.parse(fs.readFileSync(filePath', $ackLateIndex, [System.StringComparison]::Ordinal)
+$ackValidationDeadlineIndex = $source.IndexOf('acknowledgement validation exceeded its absolute deadline.', $ackReadIndex, [System.StringComparison]::Ordinal)
+Assert-True ($ackWaitFunctionIndex -ge 0 -and $ackWaitLoopIndex -gt $ackWaitFunctionIndex -and $ackLateIndex -gt $ackWaitLoopIndex -and $ackReadIndex -gt $ackLateIndex -and $ackValidationDeadlineIndex -gt $ackReadIndex) "Installed trust-revoked ACK must be rejected when it arrives late or validation crosses the absolute deadline."
 foreach ($forbidden in @(
     'SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_CANCELLATION_REPORT_TOKEN',
     'installedSvnAnonymousCancellationReport',
@@ -128,6 +151,18 @@ $harnessHelperMatch = [regex]::Match(
   [System.Text.RegularExpressions.RegexOptions]::Multiline
 )
 Assert-True ($harnessHelperMatch.Success) "Installed trust-revoked harness redaction helper must be extractable."
+
+$trustCommandIndex = $source.IndexOf('const report = await withAbsoluteDeadline(vscode.commands.executeCommand(COMMAND', [System.StringComparison]::Ordinal)
+Assert-True ($trustCommandIndex -ge 0) "Installed trust-revoked probe must execute the diagnostic command through its absolute deadline."
+$captureReadyIndex = $source.IndexOf('atomicWriteJson(processCaptureReadyPath', $trustCommandIndex, [System.StringComparison]::Ordinal)
+$captureAckIndex = $source.IndexOf('await waitForProcessCaptureAck(', $captureReadyIndex, [System.StringComparison]::Ordinal)
+$resultWriteIndex = $source.IndexOf('fs.writeFileSync(resultPath', $captureAckIndex, [System.StringComparison]::Ordinal)
+Assert-True (
+  $trustCommandIndex -ge 0 -and
+  $captureReadyIndex -gt $trustCommandIndex -and
+  $captureAckIndex -gt $captureReadyIndex -and
+  $resultWriteIndex -gt $captureAckIndex
+) "Installed trust-revoked probe must await the exact process-capture ACK before writing its result and allowing the Extension Host to exit."
 $nodeProbe = @"
 $($harnessHelperMatch.Value)
 const value = process.argv[2];
@@ -249,6 +284,47 @@ if ($arguments -contains "--list-extensions") {
 }
 if (@($arguments | Where-Object { $_ -like "--extensionTestsPath=*" }).Count -eq 1) {
   New-Item -ItemType Directory -Force -Path (Join-Path $env:SUBVERSIONR_FAKE_HARNESS_TEMP "SubversionR\remote-workers") | Out-Null
+  $captureReadyPath = $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY
+  $captureAckPath = $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK
+  $captureNonce = $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE
+  $captureDeadlineEpochMs = [long]$env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS
+  if (-not [System.IO.Path]::IsPathFullyQualified($captureReadyPath) -or -not [System.IO.Path]::IsPathFullyQualified($captureAckPath)) {
+    throw "Fake installed trust-revoked process-capture paths were invalid."
+  }
+  if ([string]::IsNullOrWhiteSpace($captureNonce) -or $captureDeadlineEpochMs -le [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) {
+    throw "Fake installed trust-revoked process-capture nonce or deadline was invalid."
+  }
+  [ordered]@{
+    schema = "subversionr.release.m8-i6-installed-process-capture-ready.v1"
+    nonce = $captureNonce
+    cell = "trustRevoked"
+    extensionId = "hitsuki-ban.subversionr"
+    extensionVersion = "0.2.5"
+    extensionPath = $packageRoot
+    extensionHostProcessId = $PID
+  } | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $captureReadyPath -Encoding utf8 -NoNewline
+  while (-not (Test-Path -LiteralPath $captureAckPath -PathType Leaf)) {
+    if ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge $captureDeadlineEpochMs) {
+      throw "Fake installed trust-revoked process-capture ACK exceeded its absolute deadline."
+    }
+    Start-Sleep -Milliseconds 10
+  }
+  $captureAck = Get-Content -Raw -LiteralPath $captureAckPath | ConvertFrom-Json
+  $captureAckFields = @($captureAck.PSObject.Properties.Name | Sort-Object)
+  $expectedCaptureAckFields = @("accepted", "daemonProcessId", "daemonSessionId", "daemonStartFileTime", "nonce", "schema")
+  if (($captureAckFields -join ",") -cne ($expectedCaptureAckFields -join ",")) {
+    throw "Fake installed trust-revoked process-capture ACK fields were invalid."
+  }
+  if (
+    [string]$captureAck.schema -cne "subversionr.release.m8-i6-installed-process-capture-ack.v1" -or
+    [string]$captureAck.nonce -cne $captureNonce -or
+    $captureAck.accepted -ne $true -or
+    [long]$captureAck.daemonProcessId -le 0 -or
+    [long]$captureAck.daemonStartFileTime -le 0 -or
+    [long]$captureAck.daemonSessionId -lt 0
+  ) {
+    throw "Fake installed trust-revoked process-capture ACK was invalid."
+  }
   $report = [ordered]@{
     schema = "subversionr.release.m8-i6-installed-vsix-trust-revoked.v1"
     schemaVersion = 1
@@ -280,7 +356,9 @@ throw "Unexpected fake Code invocation: $($arguments -join ' ')"
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probePath `
       -VsixPath "relative.vsix" -CodeCliPath $codePath -FixtureRoot $badFixtureRoot -WorkingCopyPath $workingCopyRoot `
       -RepositoryUrl "svn://127.0.0.1:3690/repo/trunk" -FixtureStatePath $fixtureStatePath -OperationId "50000000-0000-4000-8000-000000000002" `
-      -ExpectedProductVersion "0.2.5" -DaemonPath $daemonPath -BridgePath $bridgePath -TimeoutSeconds 60
+      -ExpectedProductVersion "0.2.5" -DaemonPath $daemonPath -BridgePath $bridgePath -TimeoutSeconds 60 `
+      -ProcessCaptureReadyPath (Join-Path $badFixtureRoot "bad-ready.json") -ProcessCaptureAckPath (Join-Path $badFixtureRoot "bad-ack.json") `
+      -ProcessCaptureNonce ("a" * 32) -ProcessCaptureTimeoutMilliseconds 30000
   } "VsixPath must be an absolute path" "Installed trust-revoked probe must fail before creating its harness for a relative VSIX path."
   Assert-True (-not (Test-Path -LiteralPath $badFixtureRoot)) "Installed trust-revoked argument failure must not create the harness root."
 
@@ -289,7 +367,9 @@ throw "Unexpected fake Code invocation: $($arguments -join ' ')"
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probePath `
       -VsixPath $vsixPath -CodeCliPath $codePath -FixtureRoot $invalidStateFixtureRoot -WorkingCopyPath $workingCopyRoot `
       -RepositoryUrl "svn://127.0.0.1:3690/repo/trunk" -FixtureStatePath "relative-state.json" -OperationId "50000000-0000-4000-8000-000000000002" `
-      -ExpectedProductVersion "0.2.5" -DaemonPath $daemonPath -BridgePath $bridgePath -TimeoutSeconds 60
+      -ExpectedProductVersion "0.2.5" -DaemonPath $daemonPath -BridgePath $bridgePath -TimeoutSeconds 60 `
+      -ProcessCaptureReadyPath (Join-Path $invalidStateFixtureRoot "bad-state-ready.json") -ProcessCaptureAckPath (Join-Path $invalidStateFixtureRoot "bad-state-ack.json") `
+      -ProcessCaptureNonce ("b" * 32) -ProcessCaptureTimeoutMilliseconds 30000
   } "FixtureStatePath must be an absolute path" "Installed trust-revoked probe must reject a relative fixture state path."
   Assert-True (-not (Test-Path -LiteralPath $invalidStateFixtureRoot)) "Installed trust-revoked fixture-state rejection must not create the harness root."
 
@@ -301,7 +381,9 @@ throw "Unexpected fake Code invocation: $($arguments -join ' ')"
     & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probePath `
       -VsixPath $vsixPath -CodeCliPath $codePath -FixtureRoot $contactFixtureRoot -WorkingCopyPath $workingCopyRoot `
       -RepositoryUrl "svn://127.0.0.1:3690/repo/trunk" -FixtureStatePath $fixtureStatePath -OperationId "50000000-0000-4000-8000-000000000002" `
-      -ExpectedProductVersion "0.2.5" -DaemonPath $daemonPath -BridgePath $bridgePath -TimeoutSeconds 60
+      -ExpectedProductVersion "0.2.5" -DaemonPath $daemonPath -BridgePath $bridgePath -TimeoutSeconds 60 `
+      -ProcessCaptureReadyPath (Join-Path $contactFixtureRoot "contact-ready.json") -ProcessCaptureAckPath (Join-Path $contactFixtureRoot "contact-ack.json") `
+      -ProcessCaptureNonce ("c" * 32) -ProcessCaptureTimeoutMilliseconds 30000
   } "counter connections must remain zero" "Installed trust-revoked probe must reject any pre-existing fixture contact."
   Assert-True (-not (Test-Path -LiteralPath $contactFixtureRoot)) "Installed trust-revoked fixture-contact rejection must not create the harness root."
   $contactState.connections = 0
@@ -310,24 +392,84 @@ throw "Unexpected fake Code invocation: $($arguments -join ' ')"
   $fixtureParent = Join-Path $tempRoot "f"
   New-Item -ItemType Directory -Path $fixtureParent | Out-Null
   $fixtureRoot = Join-Path $fixtureParent "r"
+  $processCaptureRoot = Join-Path $tempRoot "process-capture"
+  New-Item -ItemType Directory -Path $processCaptureRoot | Out-Null
+  $processCaptureReadyPath = Join-Path $fixtureRoot "process-capture.ready.json"
+  $processCaptureAckPath = Join-Path $fixtureRoot "process-capture.ack.json"
+  $processCaptureNonce = "d" * 32
+  $probeStdoutPath = Join-Path $processCaptureRoot "probe.stdout.txt"
+  $probeStderrPath = Join-Path $processCaptureRoot "probe.stderr.txt"
   $previousDaemon = $env:SUBVERSIONR_FAKE_DAEMON
   $previousBridge = $env:SUBVERSIONR_FAKE_BRIDGE
   $fakeOriginalNames = @("TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME")
   $previousOriginals = @{}
   foreach ($name in $fakeOriginalNames) { $previousOriginals[$name] = [System.Environment]::GetEnvironmentVariable("SUBVERSIONR_FAKE_ORIGINAL_$name", "Process") }
+  $probeProcess = $null
   try {
     $env:SUBVERSIONR_FAKE_DAEMON = $daemonPath
     $env:SUBVERSIONR_FAKE_BRIDGE = $bridgePath
     foreach ($name in $fakeOriginalNames) {
       [System.Environment]::SetEnvironmentVariable("SUBVERSIONR_FAKE_ORIGINAL_$name", [System.Environment]::GetEnvironmentVariable($name, "Process"), "Process")
     }
-    $output = & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probePath `
-      -VsixPath $vsixPath -CodeCliPath $codePath -FixtureRoot $fixtureRoot -WorkingCopyPath $workingCopyRoot `
-      -RepositoryUrl "svn://127.0.0.1:3690/repo/trunk" -FixtureStatePath $fixtureStatePath -OperationId "50000000-0000-4000-8000-000000000002" `
-      -ExpectedProductVersion "0.2.5" -DaemonPath $daemonPath -BridgePath $bridgePath -TimeoutSeconds 60
-    Assert-True ($LASTEXITCODE -eq 0) "Installed trust-revoked fake Code CLI probe must pass."
+    $probeArguments = @(
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $probePath,
+      "-VsixPath", $vsixPath, "-CodeCliPath", $codePath, "-FixtureRoot", $fixtureRoot,
+      "-WorkingCopyPath", $workingCopyRoot, "-RepositoryUrl", "svn://127.0.0.1:3690/repo/trunk",
+      "-FixtureStatePath", $fixtureStatePath, "-OperationId", "50000000-0000-4000-8000-000000000002",
+      "-ExpectedProductVersion", "0.2.5", "-DaemonPath", $daemonPath, "-BridgePath", $bridgePath,
+      "-TimeoutSeconds", "60", "-ProcessCaptureReadyPath", $processCaptureReadyPath,
+      "-ProcessCaptureAckPath", $processCaptureAckPath, "-ProcessCaptureNonce", $processCaptureNonce,
+      "-ProcessCaptureTimeoutMilliseconds", "30000"
+    )
+    $probeProcess = Start-Process `
+      -FilePath $pwshPath `
+      -ArgumentList $probeArguments `
+      -WindowStyle Hidden `
+      -RedirectStandardOutput $probeStdoutPath `
+      -RedirectStandardError $probeStderrPath `
+      -PassThru
+    Assert-True ($null -ne $probeProcess) "Installed trust-revoked fake Code CLI probe failed to start."
+    $captureDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    while (-not (Test-Path -LiteralPath $processCaptureReadyPath -PathType Leaf)) {
+      Assert-True (-not $probeProcess.HasExited) "Installed trust-revoked probe exited before publishing process-capture readiness."
+      Assert-True ([DateTimeOffset]::UtcNow -lt $captureDeadline) "Installed trust-revoked probe did not publish process-capture readiness before the deadline."
+      Start-Sleep -Milliseconds 10
+    }
+    $processCaptureReady = Get-Content -Raw -LiteralPath $processCaptureReadyPath | ConvertFrom-Json
+    Assert-ExactProperties $processCaptureReady @(
+      "schema", "nonce", "cell", "extensionId", "extensionVersion", "extensionPath", "extensionHostProcessId"
+    ) "installed trust-revoked process-capture ready record"
+    Assert-True (
+      [string]$processCaptureReady.schema -ceq "subversionr.release.m8-i6-installed-process-capture-ready.v1" -and
+      [string]$processCaptureReady.nonce -ceq $processCaptureNonce -and
+      [string]$processCaptureReady.cell -ceq "trustRevoked" -and
+      [string]$processCaptureReady.extensionId -ceq "hitsuki-ban.subversionr" -and
+      [string]$processCaptureReady.extensionVersion -ceq "0.2.5" -and
+      [System.IO.Path]::IsPathFullyQualified([string]$processCaptureReady.extensionPath) -and
+      [long]$processCaptureReady.extensionHostProcessId -gt 0
+    ) "Installed trust-revoked process-capture ready record was invalid."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixtureRoot "result.json"))) "Installed trust-revoked probe must not write its result before the process-capture ACK."
+    Assert-True (-not $probeProcess.HasExited) "Installed trust-revoked probe must remain alive while awaiting the process-capture ACK."
+    $bindingProcess = Get-Process -Id $PID
+    [ordered]@{
+      schema = "subversionr.release.m8-i6-installed-process-capture-ack.v1"
+      nonce = $processCaptureNonce
+      accepted = $true
+      daemonProcessId = [long]$bindingProcess.Id
+      daemonStartFileTime = ([long]$bindingProcess.StartTime.ToUniversalTime().ToFileTimeUtc()).ToString([Globalization.CultureInfo]::InvariantCulture)
+      daemonSessionId = [long]$bindingProcess.SessionId
+    } | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $processCaptureAckPath -Encoding utf8 -NoNewline
+    Assert-True ($probeProcess.WaitForExit(60000)) "Installed trust-revoked fake Code CLI probe did not exit after the process-capture ACK."
+    $probeExitCode = $probeProcess.ExitCode
+    $output = @(Get-Content -LiteralPath $probeStdoutPath -ErrorAction SilentlyContinue)
+    $probeError = Get-Content -Raw -LiteralPath $probeStderrPath -ErrorAction SilentlyContinue
+    Assert-True ($probeExitCode -eq 0) "Installed trust-revoked fake Code CLI probe failed after ACK: $probeError"
   }
   finally {
+    if ($null -ne $probeProcess) {
+      if (-not $probeProcess.HasExited) { $probeProcess.Kill($true); $probeProcess.WaitForExit() }
+      $probeProcess.Dispose()
+    }
     if ($null -eq $previousDaemon) { Remove-Item Env:SUBVERSIONR_FAKE_DAEMON -ErrorAction SilentlyContinue } else { $env:SUBVERSIONR_FAKE_DAEMON = $previousDaemon }
     if ($null -eq $previousBridge) { Remove-Item Env:SUBVERSIONR_FAKE_BRIDGE -ErrorAction SilentlyContinue } else { $env:SUBVERSIONR_FAKE_BRIDGE = $previousBridge }
     foreach ($name in $fakeOriginalNames) {

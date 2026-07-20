@@ -44,7 +44,9 @@ Assert-True ($parseErrors.Count -eq 0) "Installed local-event zero-network probe
 $parameterNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
 $expectedParameters = @(
   "VsixPath", "CodeCliPath", "FixtureRoot", "WorkingCopyPath", "RelativePath",
-  "ExpectedProductVersion", "DaemonPath", "BridgePath", "ObservationTimeoutMilliseconds", "TimeoutSeconds"
+  "ExpectedProductVersion", "DaemonPath", "BridgePath", "ObservationTimeoutMilliseconds",
+  "ProcessCaptureReadyPath", "ProcessCaptureAckPath", "ProcessCaptureNonce", "ProcessCaptureTimeoutMilliseconds",
+  "TimeoutSeconds"
 )
 Assert-True (($parameterNames -join ",") -ceq ($expectedParameters -join ",")) "Installed local-event zero-network probe must expose only the exact required parameters."
 
@@ -53,6 +55,17 @@ foreach ($required in @(
     'subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm',
     'subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport',
     'SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_LOCAL_EVENT_ZERO_NETWORK_TOKEN',
+    'SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY',
+    'SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK',
+    'SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE',
+    'SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS',
+    'subversionr.release.m8-i6-installed-process-capture-ready.v1',
+    'subversionr.release.m8-i6-installed-process-capture-ack.v1',
+    'exactKeys(ack, ["schema", "nonce", "accepted", "daemonProcessId", "daemonStartFileTime", "daemonSessionId"]',
+    'atomicWriteJson(processCaptureReadyPath',
+    'await waitForProcessCaptureAck(',
+    'process-capture acknowledgement arrived after its absolute deadline.',
+    'process-capture acknowledgement validation exceeded its absolute deadline.',
     'vscode.workspace.fs.writeFile(',
     'vscode.Uri.file(targetPath)',
     'WATCHER_REGISTRATION_SETTLE_MILLISECONDS = 1_000',
@@ -79,11 +92,21 @@ foreach ($required in @(
     'Get-CandidateProcessCount $installedDaemonPath',
     'WorkingCopyPath must contain a non-empty working-copy database.',
     'RelativePath must identify a non-empty versioned ordinary file.',
+    'ProcessCaptureReadyPath must be absolute.',
+    'ProcessCaptureAckPath must be absolute.',
+    "ValidatePattern('^[0-9a-f]{32}$')",
+    'ValidateRange(1000, 300000)',
     'Installed local event triggered a remote status request.',
     'Installed local event triggered a reconciliation request.'
-  )) {
+)) {
   Assert-True ($source.Contains($required)) "Installed local-event zero-network probe is missing the contract lock: $required"
 }
+$ackWaitFunctionIndex = $source.IndexOf('async function waitForProcessCaptureAck(', [System.StringComparison]::Ordinal)
+$ackWaitLoopIndex = $source.IndexOf('while (!fs.existsSync(filePath))', $ackWaitFunctionIndex, [System.StringComparison]::Ordinal)
+$ackLateIndex = $source.IndexOf('acknowledgement arrived after its absolute deadline.', $ackWaitLoopIndex, [System.StringComparison]::Ordinal)
+$ackReadIndex = $source.IndexOf('JSON.parse(fs.readFileSync(filePath', $ackLateIndex, [System.StringComparison]::Ordinal)
+$ackValidationDeadlineIndex = $source.IndexOf('acknowledgement validation exceeded its absolute deadline.', $ackReadIndex, [System.StringComparison]::Ordinal)
+Assert-True ($ackWaitFunctionIndex -ge 0 -and $ackWaitLoopIndex -gt $ackWaitFunctionIndex -and $ackLateIndex -gt $ackWaitLoopIndex -and $ackReadIndex -gt $ackLateIndex -and $ackValidationDeadlineIndex -gt $ackReadIndex) "Installed local-event ACK must be rejected when it arrives late or validation crosses the absolute deadline."
 foreach ($isolatedEnvironment in @("TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME")) {
   Assert-True ($source.Contains("`$env:$isolatedEnvironment =")) "Installed local-event zero-network probe must isolate $isolatedEnvironment."
 }
@@ -98,6 +121,7 @@ foreach ($isolatedEnvironment in @("TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "US
     'status/refresh',
     'status/checkRemote',
     'subversionr.refreshRepository',
+    'processCaptureAck = {',
     'Remove-Item -LiteralPath $WorkingCopyPath',
     'Remove-Item -LiteralPath $workingCopyResolved',
     'Remove-Item -LiteralPath $target.fullPath'
@@ -174,6 +198,14 @@ try {
     $source.IndexOf('WATCHER_REGISTRATION_SETTLE_MILLISECONDS', [System.StringComparison]::Ordinal) -lt
     $source.IndexOf('vscode.workspace.fs.writeFile(', [System.StringComparison]::Ordinal)
   ) "Installed local-event probe must complete its bounded watcher registration window before the one-shot target write."
+  $captureReadyIndex = $source.IndexOf('atomicWriteJson(processCaptureReadyPath', [System.StringComparison]::Ordinal)
+  $captureAckIndex = $source.IndexOf('await waitForProcessCaptureAck(', $captureReadyIndex, [System.StringComparison]::Ordinal)
+  $targetMutationIndex = $source.IndexOf('vscode.workspace.fs.writeFile(', [System.StringComparison]::Ordinal)
+  Assert-True (
+    $captureReadyIndex -ge 0 -and
+    $captureAckIndex -gt $captureReadyIndex -and
+    $targetMutationIndex -gt $captureAckIndex
+  ) "Installed local-event probe must publish process-capture readiness and await the exact ACK before mutating the working copy."
   foreach ($path in $files.Values) {
     [System.IO.File]::WriteAllText($path, "fixture", [System.Text.UTF8Encoding]::new($false))
   }
@@ -189,7 +221,11 @@ try {
       -DaemonPath $files.DaemonPath `
       -BridgePath $files.BridgePath `
       -ObservationTimeoutMilliseconds 30000 `
-      -TimeoutSeconds 180
+      -TimeoutSeconds 180 `
+      -ProcessCaptureReadyPath (Join-Path $newFixtureRoot "capture-ready.json") `
+      -ProcessCaptureAckPath (Join-Path $newFixtureRoot "capture-ack.json") `
+      -ProcessCaptureNonce ("a" * 32) `
+      -ProcessCaptureTimeoutMilliseconds 30000
   } "VsixPath must be an absolute path" "Installed local-event probe must fail before creating its fixture for a relative VSIX path."
   Assert-True (-not (Test-Path -LiteralPath $newFixtureRoot)) "Installed local-event argument failure must not create the fixture root."
   Assert-True ((Get-Sha256 $target.fullPath) -ceq $snapshot.sha256) "Installed local-event argument failure must not change working-copy content."
@@ -208,10 +244,35 @@ try {
       -DaemonPath $files.DaemonPath `
       -BridgePath $files.BridgePath `
       -ObservationTimeoutMilliseconds 30000 `
-      -TimeoutSeconds 180
+      -TimeoutSeconds 180 `
+      -ProcessCaptureReadyPath (Join-Path $nestedFixtureRoot "nested-capture-ready.json") `
+      -ProcessCaptureAckPath (Join-Path $nestedFixtureRoot "nested-capture-ack.json") `
+      -ProcessCaptureNonce ("b" * 32) `
+      -ProcessCaptureTimeoutMilliseconds 30000
   } "FixtureRoot must not be below WorkingCopyPath" "Installed local-event probe must reject a fixture nested under the working copy."
   Assert-True (-not (Test-Path -LiteralPath $nestedFixtureRoot)) "Nested fixture rejection must occur before creating the fixture root."
   Assert-True ((Get-Sha256 $target.fullPath) -ceq $snapshot.sha256) "Nested fixture rejection must not change working-copy content."
+
+  $invalidCaptureFixtureRoot = Join-Path $argumentRoot "invalid-capture-fixture"
+  Assert-NativeCommandFailsContaining {
+    & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probePath `
+      -VsixPath $candidateVsix `
+      -CodeCliPath $files.CodeCliPath `
+      -FixtureRoot $invalidCaptureFixtureRoot `
+      -WorkingCopyPath $workingCopyRoot `
+      -RelativePath "nested/payload.txt" `
+      -ExpectedProductVersion "0.2.5" `
+      -DaemonPath $files.DaemonPath `
+      -BridgePath $files.BridgePath `
+      -ObservationTimeoutMilliseconds 30000 `
+      -TimeoutSeconds 180 `
+      -ProcessCaptureReadyPath "relative-capture-ready.json" `
+      -ProcessCaptureAckPath (Join-Path $argumentRoot "invalid-capture-ack.json") `
+      -ProcessCaptureNonce ("c" * 32) `
+      -ProcessCaptureTimeoutMilliseconds 30000
+  } "ProcessCaptureReadyPath must be absolute" "Installed local-event probe must fail fast on a relative process-capture ready path."
+  Assert-True (-not (Test-Path -LiteralPath $invalidCaptureFixtureRoot)) "Process-capture path rejection must occur before creating the fixture root."
+  Assert-True ((Get-Sha256 $target.fullPath) -ceq $snapshot.sha256) "Process-capture argument rejection must not mutate working-copy content."
 }
 finally {
   if (Test-Path -LiteralPath $tempRoot) {

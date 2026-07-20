@@ -1303,6 +1303,11 @@ try {
   Assert-True (
     $blackholeObserverStartIndex -ge 0 -and $blackholeProbeLaunchIndex -gt $blackholeObserverStartIndex
   ) "I6 blackhole TCP sampling must publish its observer before product probe launch."
+  $childEnumerationIndex = $driverText.IndexOf('private static List<Candidate> EnumerateChildCandidates', [System.StringComparison]::Ordinal)
+  $parentPrefilterIndex = $driverText.IndexOf('(!requireParent || entry.th32ParentProcessID == parentPid)', $childEnumerationIndex, [System.StringComparison]::Ordinal)
+  $childOpenIndex = $driverText.IndexOf('OpenRequired(entry.th32ProcessID', $parentPrefilterIndex, [System.StringComparison]::Ordinal)
+  Assert-True ($childEnumerationIndex -ge 0 -and $parentPrefilterIndex -gt $childEnumerationIndex -and $childOpenIndex -gt $parentPrefilterIndex) "Live conhost binding must prefilter Toolhelp rows by the retained daemon parent before opening same-name system processes."
+  Assert-True ([regex]::Matches($driverText, 'EnumerateChildCandidates\(').Count -eq 3) "Only the child count/bind APIs and the child enumerator definition may use parent-prefiltered candidate enumeration."
   foreach ($workerCrashContractText in @(
       'CreateToolhelp32Snapshot',
       'QueryFullProcessImageNameW',
@@ -1348,12 +1353,29 @@ try {
       'TIME_CREATED',
       'Complete-ProcessStartEventDrain',
       'Invoke-BoundedProcessWithStartEventCapture',
+      'Invoke-BoundedInstalledProcessWithRequiredLiveCapture',
+      '$installedLocalEventResult = Invoke-BoundedInstalledProcessWithRequiredLiveCapture',
+      'SubversionRM8I6SingleProcessBinding',
+      'BindExactSingle',
+      'GetExactChildCount',
+      'GetSingleBoundDescendantCount',
+      'BindExactChild',
+      'EnumerateChildCandidates',
+      'RequireSingleAlive',
+      'RequireSingleExited',
+      'ExpectedConsoleHostPath',
+      'extensionHostProcessId',
+      'eventSessionId',
+      'subversionr.release.m8-i6-installed-process-capture-ready.v1',
+      'subversionr.release.m8-i6-installed-process-capture-ack.v1',
+      'ProcessCaptureReadyPath',
+      'ProcessCaptureAckPath',
+      'ProcessCaptureNonce',
+      'ProcessCaptureTimeoutMilliseconds',
       'imageStartFileTime',
       'ExpectedConsoleHostFileIdentity',
-      'Get-InstalledDaemonFileIdentityFromHarnessResult',
       '$installedLocalEventDaemonFileIdentity',
       '$surfaceDaemonFileIdentity',
-      'installed daemon bytes did not match the candidate daemon',
       'Get-RecordedCandidateParentStartIdentity',
       'Get-PackagedNegativeProcessObservation',
       'Get-InstalledNegativeProcessObservation',
@@ -1461,16 +1483,18 @@ try {
   )
   Assert-True ($driverParseErrors.Count -eq 0) "I6 probe driver must parse after packaged-negative observation changes."
   $observationHelpers = @(
+    "Assert-ExactProperties",
     "Resolve-RequiredFile",
     "Resolve-RequiredDirectory",
     "Test-PathWithin",
-    "Get-InstalledDaemonFileIdentityFromHarnessResult",
+    "Read-InstalledProcessCaptureReady",
     "Get-DescendantProcessIds",
     "Get-ProcessSnapshotStartFileTime",
     "Get-NextRecordedProcessStartFileTime",
     "Get-ControlledProbeStartIdentity",
     "Get-RecordedProcessDescendantStarts",
     "Get-RecordedCandidateParentStartIdentity",
+    "Invoke-BoundedInstalledProcessWithRequiredLiveCapture",
     "Get-PackagedNegativeProcessObservation",
     "Get-InstalledNegativeProcessObservation",
     "Get-ZeroWorkerProcessObservation",
@@ -1498,6 +1522,77 @@ try {
   $faultFlagIndex = $readFaultHelper.IndexOf('$faultApplied = $true', [System.StringComparison]::Ordinal)
   $faultMutationIndex = $readFaultHelper.IndexOf('Set-ExactCurrentUserReadDeny $descriptor $Context', [System.StringComparison]::Ordinal)
   Assert-True ($faultFlagIndex -ge 0 -and $faultMutationIndex -gt $faultFlagIndex) "Packaged recovery-indeterminate cleanup flag must be armed before the DACL mutation."
+  $liveCaptureHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Invoke-BoundedInstalledProcessWithRequiredLiveCapture")]
+  foreach ($requiredLiveCaptureText in @(
+      '[SubversionRM8I6WorkerCrashNative]::BindExactSingle',
+      '[SubversionRM8I6WorkerCrashNative]::GetSingleBoundDescendantCount',
+      '[SubversionRM8I6WorkerCrashNative]::GetExactChildCount',
+      '[SubversionRM8I6WorkerCrashNative]::BindExactChild',
+      'Receive-ProcessStartEvents',
+      'Get-CimInstance -ClassName Win32_Process',
+      'eventFileTime',
+      'eventSessionId',
+      'StartFileTime',
+      'SessionId',
+      'ImagePath',
+      'imageFileIdentity',
+      'RequireSingleAlive',
+      'RequireSingleExited',
+      'ExpectedConsoleHostPath',
+      '$captureDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)',
+      'live process capture completed after its absolute deadline.',
+      'subversionr.release.m8-i6-installed-process-capture-ack.v1'
+    )) {
+    Assert-True ($liveCaptureHelper.Contains($requiredLiveCaptureText)) "Installed process live-capture helper must retain '$requiredLiveCaptureText'."
+  }
+  foreach ($forbiddenLiveCaptureText in @(
+      'Get-CandidateProcessIds',
+      'Get-CandidateProcessObservation',
+      '$captureDeadline = $deadline',
+      'fallback'
+    )) {
+    Assert-True (-not $liveCaptureHelper.Contains($forbiddenLiveCaptureText)) "Installed process live-capture helper must not use '$forbiddenLiveCaptureText' as a binding fallback."
+  }
+  $liveBindIndex = $liveCaptureHelper.IndexOf('[SubversionRM8I6WorkerCrashNative]::BindExactSingle', [System.StringComparison]::Ordinal)
+  $liveEventJoinIndex = $liveCaptureHelper.IndexOf('eventFileTime', [System.StringComparison]::Ordinal)
+  $liveAliveIndex = $liveCaptureHelper.IndexOf('RequireSingleAlive', $liveBindIndex, [System.StringComparison]::Ordinal)
+  $liveDescendantCountIndex = $liveCaptureHelper.IndexOf('GetSingleBoundDescendantCount', $liveBindIndex, [System.StringComparison]::Ordinal)
+  $liveConsoleHostCountIndex = $liveCaptureHelper.IndexOf('GetExactChildCount', $liveDescendantCountIndex, [System.StringComparison]::Ordinal)
+  $liveConsoleHostBindIndex = $liveCaptureHelper.IndexOf('BindExactChild', $liveConsoleHostCountIndex, [System.StringComparison]::Ordinal)
+  $liveAckIndex = $liveCaptureHelper.IndexOf('subversionr.release.m8-i6-installed-process-capture-ack.v1', $liveAliveIndex, [System.StringComparison]::Ordinal)
+  $liveExitIndex = $liveCaptureHelper.IndexOf('RequireSingleExited($binding', $liveAckIndex, [System.StringComparison]::Ordinal)
+  $liveConsoleHostExitIndex = $liveCaptureHelper.IndexOf('RequireSingleExited($consoleHostBinding', $liveExitIndex, [System.StringComparison]::Ordinal)
+  $liveCompleteIndex = $liveCaptureHelper.IndexOf('Complete-WorkerCrashProbeProcess', $liveConsoleHostExitIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $liveBindIndex -ge 0 -and
+    $liveEventJoinIndex -gt $liveBindIndex -and
+    $liveAliveIndex -gt $liveBindIndex -and
+    $liveDescendantCountIndex -gt $liveBindIndex -and
+    $liveConsoleHostCountIndex -gt $liveDescendantCountIndex -and
+    $liveConsoleHostBindIndex -gt $liveConsoleHostCountIndex -and
+    $liveAckIndex -gt $liveEventJoinIndex -and
+    $liveAckIndex -gt $liveAliveIndex -and
+    $liveAckIndex -gt $liveConsoleHostBindIndex -and
+    $liveExitIndex -gt $liveAckIndex -and
+    $liveConsoleHostExitIndex -gt $liveExitIndex -and
+    $liveCompleteIndex -gt $liveConsoleHostExitIndex
+  ) "Installed process capture must ACK only after exact retained daemon/conhost handle and WMI binding, then require retained handles to signal exit before completion."
+  $captureReadyHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Read-InstalledProcessCaptureReady")]
+  foreach ($requiredCaptureReadyText in @(
+      'Assert-ExactProperties $ready @("schema", "nonce", "cell", "extensionId", "extensionVersion", "extensionPath", "extensionHostProcessId")',
+      'subversionr.release.m8-i6-installed-process-capture-ready.v1',
+      'extensionHostProcessId',
+      'Test-PathWithin $installedExtension $extensionsRoot',
+      'Get-Sha256 $installedDaemon',
+      'SubversionRM8I6ExactFileIdentity'
+    )) {
+    Assert-True ($captureReadyHelper.Contains($requiredCaptureReadyText)) "Installed process-capture ready validation must retain '$requiredCaptureReadyText'."
+  }
+  $zeroWorkerHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-ZeroWorkerProcessObservation")]
+  Assert-True ($zeroWorkerHelper.Contains('candidate daemon live image identity was not captured')) "Zero-worker observation must still fail closed when no explicit binding and no event-carried live identity are available."
+  foreach ($forbiddenZeroWorkerFallback in @('Get-CimInstance', 'Get-Process ', 'Get-CandidateProcess')) {
+    Assert-True (-not $zeroWorkerHelper.Contains($forbiddenZeroWorkerFallback)) "Zero-worker observation must not recapture missing live identity through '$forbiddenZeroWorkerFallback'."
+  }
   Invoke-Expression ($observationHelperSources -join "`n`n")
 
   $installedIdentityRoot = Join-Path $tempRoot "installed-daemon-identity"
@@ -1509,24 +1604,61 @@ try {
   $identityInstalledPath = Join-Path $installedBackendRoot "subversionr-daemon.exe"
   [System.IO.File]::WriteAllText($identityCandidatePath, "same candidate bytes", [System.Text.UTF8Encoding]::new($false))
   Copy-Item -LiteralPath $identityCandidatePath -Destination $identityInstalledPath
-  $identityHarnessResultPath = Join-Path $installedIdentityRoot "result.json"
-  [ordered]@{
+  $processCaptureReadyPath = Join-Path $installedIdentityRoot "process-capture-ready.json"
+  $processCaptureNonce = "e" * 32
+  $processCaptureReady = [ordered]@{
+    schema = "subversionr.release.m8-i6-installed-process-capture-ready.v1"
+    nonce = $processCaptureNonce
+    cell = "localEventZeroNetwork"
     extensionId = "hitsuki-ban.subversionr"
     extensionVersion = "0.2.5"
     extensionPath = $installedPackageRoot
-    report = [ordered]@{ status = "passed" }
-  } | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $identityHarnessResultPath -Encoding utf8 -NoNewline
+    extensionHostProcessId = 123L
+  }
+  $processCaptureReady | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $processCaptureReadyPath -Encoding utf8 -NoNewline
+  $validatedProcessCaptureReady = Read-InstalledProcessCaptureReady `
+    $processCaptureReadyPath $processCaptureNonce "localEventZeroNetwork" `
+    $installedExtensionsRoot "0.2.5" $identityCandidatePath "process-capture ready test"
+  Assert-Equal ([System.IO.Path]::GetFullPath($identityInstalledPath)) $validatedProcessCaptureReady.installedDaemonPath "Process-capture ready validation must resolve the hash-bound installed daemon path."
+  Assert-Equal 123L $validatedProcessCaptureReady.extensionHostProcessId "Process-capture ready validation must retain the positive Extension Host PID."
+  Assert-ScriptThrowsContaining {
+    Read-InstalledProcessCaptureReady `
+      $processCaptureReadyPath ("f" * 32) "localEventZeroNetwork" `
+      $installedExtensionsRoot "0.2.5" $identityCandidatePath "stale process-capture ready test"
+  } "nonce was invalid or stale" "Process-capture ready validation must reject a stale nonce."
+
+  $missingProcessCaptureFieldPath = Join-Path $installedIdentityRoot "process-capture-ready-missing-field.json"
+  $missingProcessCaptureField = [ordered]@{}
+  foreach ($property in $processCaptureReady.GetEnumerator()) {
+    if ([string]$property.Key -cne "extensionHostProcessId") { $missingProcessCaptureField[[string]$property.Key] = $property.Value }
+  }
+  $missingProcessCaptureField | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $missingProcessCaptureFieldPath -Encoding utf8 -NoNewline
+  Assert-ScriptThrowsContaining {
+    Read-InstalledProcessCaptureReady `
+      $missingProcessCaptureFieldPath $processCaptureNonce "localEventZeroNetwork" `
+      $installedExtensionsRoot "0.2.5" $identityCandidatePath "missing process-capture field test"
+  } "exactly the required fields" "Process-capture ready validation must reject a missing mandatory field."
+
+  $outsideProcessCapturePath = Join-Path $installedIdentityRoot "process-capture-ready-outside.json"
+  $outsideProcessCapture = [ordered]@{}
+  foreach ($property in $processCaptureReady.GetEnumerator()) { $outsideProcessCapture[[string]$property.Key] = $property.Value }
+  $outsideProcessCapture.extensionPath = $installedIdentityRoot
+  $outsideProcessCapture | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $outsideProcessCapturePath -Encoding utf8 -NoNewline
+  Assert-ScriptThrowsContaining {
+    Read-InstalledProcessCaptureReady `
+      $outsideProcessCapturePath $processCaptureNonce "localEventZeroNetwork" `
+      $installedExtensionsRoot "0.2.5" $identityCandidatePath "outside process-capture extension test"
+  } "escaped the isolated extensions root" "Process-capture ready validation must reject an extension path outside the isolated installed root."
   $candidateFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($identityCandidatePath)
   $installedFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($identityInstalledPath)
   Assert-True ($candidateFileIdentity -cne $installedFileIdentity) "Installed identity fixture must use a copied file with a distinct exact file identity."
-  $resolvedInstalledFileIdentity = Get-InstalledDaemonFileIdentityFromHarnessResult `
-    $identityHarnessResultPath $installedExtensionsRoot "0.2.5" $identityCandidatePath "installed identity test"
-  Assert-Equal $installedFileIdentity $resolvedInstalledFileIdentity "Installed identity resolution must select the hash-bound installed copy rather than the build-tree candidate."
+  Assert-Equal $installedFileIdentity $validatedProcessCaptureReady.installedDaemonFileIdentity "Process-capture ready validation must retain the exact installed-copy file identity rather than the build-tree candidate identity."
   [System.IO.File]::AppendAllText($identityInstalledPath, "changed", [System.Text.UTF8Encoding]::new($false))
   Assert-ScriptThrowsContaining {
-    Get-InstalledDaemonFileIdentityFromHarnessResult `
-      $identityHarnessResultPath $installedExtensionsRoot "0.2.5" $identityCandidatePath "installed identity test"
-  } "installed daemon bytes did not match the candidate daemon" "Installed identity resolution must reject an installed executable whose bytes differ from the candidate."
+    Read-InstalledProcessCaptureReady `
+      $processCaptureReadyPath $processCaptureNonce "localEventZeroNetwork" `
+      $installedExtensionsRoot "0.2.5" $identityCandidatePath "changed installed process-capture ready test"
+  } "process-capture daemon bytes did not match the frozen candidate" "Process-capture ready validation must reject an installed executable whose bytes differ from the candidate."
 
   $authzAtomicPath = Join-Path $tempRoot "authz-atomic"
   Set-Content -LiteralPath $authzAtomicPath -Value "old" -NoNewline
@@ -1737,7 +1869,7 @@ try {
   $localEventDaemonStart = [pscustomobject]@{
     processId = 602L; parentProcessId = 601L; processName = "subversionr-daemon.exe"; eventFileTime = 6200L
     imagePath = "F:\candidate\subversionr-daemon.exe"; imageFileIdentity = "daemon-file-identity"
-    imageStartFileTime = 6199L; sessionId = 1L
+    imageStartFileTime = 6199L; sessionId = 1L; eventSessionId = 1L
   }
   $preLocalEventDaemonPidCollision = [pscustomobject]@{
     processId = 603L; parentProcessId = 602L; processName = "unrelated-before-daemon.exe"; eventFileTime = 6150L
@@ -1779,7 +1911,7 @@ try {
   $localEventConsoleHostStart = [pscustomobject]@{
     processId = 603L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6250L
     imagePath = "\\?\C:\Windows\System32\conhost.exe"; imageFileIdentity = "console-host-file-identity"
-    imageStartFileTime = 6249L; sessionId = 1L
+    imageStartFileTime = 6249L; sessionId = 1L; eventSessionId = 1L
   }
   $localEventConsoleObservation = Get-ZeroWorkerProcessObservation `
     -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart) `
@@ -1793,7 +1925,7 @@ try {
   $spoofedLocalEventConsoleHostStart = [pscustomobject]@{
     processId = 608L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6250L
     imagePath = "C:\attacker\conhost.exe"; imageFileIdentity = "attacker-file-identity"
-    imageStartFileTime = 6249L; sessionId = 1L
+    imageStartFileTime = 6249L; sessionId = 1L; eventSessionId = 1L
   }
   Assert-ScriptThrowsContaining {
     Get-ZeroWorkerProcessObservation `

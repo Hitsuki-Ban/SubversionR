@@ -10,6 +10,10 @@ param(
   [Parameter(Mandatory = $true)] [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')] [string]$ExpectedProductVersion,
   [Parameter(Mandatory = $true)] [string]$DaemonPath,
   [Parameter(Mandatory = $true)] [string]$BridgePath,
+  [Parameter(Mandatory = $true)] [string]$ProcessCaptureReadyPath,
+  [Parameter(Mandatory = $true)] [string]$ProcessCaptureAckPath,
+  [Parameter(Mandatory = $true)] [ValidatePattern('^[0-9a-f]{32}$')] [string]$ProcessCaptureNonce,
+  [Parameter(Mandatory = $true)] [ValidateRange(1000, 300000)] [int]$ProcessCaptureTimeoutMilliseconds,
   [Parameter(Mandatory = $true)] [ValidateRange(60, 1800)] [int]$TimeoutSeconds
 )
 
@@ -224,6 +228,15 @@ $daemonResolved = Resolve-RequiredFile $DaemonPath "DaemonPath"
 $bridgeResolved = Resolve-RequiredFile $BridgePath "BridgePath"
 $fixtureStateResolved = Resolve-RequiredFile $FixtureStatePath "FixtureStatePath"
 $fixtureResolved = Resolve-NewDirectoryPath $FixtureRoot "FixtureRoot"
+$processCaptureReadyResolved = [System.IO.Path]::GetFullPath($ProcessCaptureReadyPath)
+$processCaptureAckResolved = [System.IO.Path]::GetFullPath($ProcessCaptureAckPath)
+Assert-True ([System.IO.Path]::IsPathFullyQualified($ProcessCaptureReadyPath)) "ProcessCaptureReadyPath must be absolute."
+Assert-True ([System.IO.Path]::IsPathFullyQualified($ProcessCaptureAckPath)) "ProcessCaptureAckPath must be absolute."
+Assert-True (Test-PathWithin $processCaptureReadyResolved $fixtureResolved) "ProcessCaptureReadyPath must be strictly below FixtureRoot."
+Assert-True (Test-PathWithin $processCaptureAckResolved $fixtureResolved) "ProcessCaptureAckPath must be strictly below FixtureRoot."
+Assert-True (-not $processCaptureReadyResolved.Equals($processCaptureAckResolved, [System.StringComparison]::OrdinalIgnoreCase)) "Process capture ready and acknowledgement paths must be distinct."
+Assert-True (-not (Test-Path -LiteralPath $processCaptureReadyResolved)) "ProcessCaptureReadyPath must not already exist."
+Assert-True (-not (Test-Path -LiteralPath $processCaptureAckResolved)) "ProcessCaptureAckPath must not already exist."
 $workingCopyResolved = Resolve-RequiredDirectory $WorkingCopyPath "WorkingCopyPath"
 Assert-True (Test-Path -LiteralPath (Join-Path $workingCopyResolved ".svn\wc.db") -PathType Leaf) "WorkingCopyPath must contain an existing working-copy database."
 Assert-True (-not (Test-PathWithin $workingCopyResolved $fixtureResolved)) "WorkingCopyPath must not be below FixtureRoot."
@@ -283,6 +296,29 @@ function requiredEnvironment(name) {
   if (typeof value !== "string" || value.length === 0) throw new Error(`Missing required installed trust-revoked environment: ${name}`);
   return value;
 }
+function exactKeys(value, expected, context) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`${context} must be an object.`);
+  if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([...expected].sort())) throw new Error(`${context} must contain exactly the required fields.`);
+}
+function atomicWriteJson(filePath, value) {
+  const temporaryPath = `${filePath}.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(value), { encoding: "utf8", flag: "wx" });
+  fs.renameSync(temporaryPath, filePath);
+}
+async function waitForProcessCaptureAck(filePath, nonce, deadlineEpochMs) {
+  while (!fs.existsSync(filePath)) {
+    if (Date.now() >= deadlineEpochMs) throw new Error("Installed trust-revoked process-capture acknowledgement exceeded its absolute deadline.");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (Date.now() >= deadlineEpochMs) throw new Error("Installed trust-revoked process-capture acknowledgement arrived after its absolute deadline.");
+  const ack = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  exactKeys(ack, ["schema", "nonce", "accepted", "daemonProcessId", "daemonStartFileTime", "daemonSessionId"], "installed trust-revoked process-capture acknowledgement");
+  if (ack.schema !== "subversionr.release.m8-i6-installed-process-capture-ack.v1" || ack.nonce !== nonce || ack.accepted !== true) throw new Error("Installed trust-revoked process-capture acknowledgement identity was invalid.");
+  if (!Number.isSafeInteger(ack.daemonProcessId) || ack.daemonProcessId <= 0) throw new Error("Installed trust-revoked captured daemon PID was invalid.");
+  if (typeof ack.daemonStartFileTime !== "string" || !/^[1-9][0-9]{16,18}$/.test(ack.daemonStartFileTime)) throw new Error("Installed trust-revoked captured daemon start identity was invalid.");
+  if (!Number.isSafeInteger(ack.daemonSessionId) || ack.daemonSessionId < 0) throw new Error("Installed trust-revoked captured daemon session identity was invalid.");
+  if (Date.now() >= deadlineEpochMs) throw new Error("Installed trust-revoked process-capture acknowledgement validation exceeded its absolute deadline.");
+}
 async function withAbsoluteDeadline(promise, milliseconds) {
   let timer;
   try {
@@ -299,9 +335,15 @@ async function run() {
   const workingCopyPath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_WORKING_COPY_PATH");
   const fixtureStatePath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_FIXTURE_STATE_PATH");
   const operationId = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_OPERATION_ID");
+  const processCaptureReadyPath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY");
+  const processCaptureAckPath = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK");
+  const processCaptureNonce = requiredEnvironment("SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE");
+  const processCaptureDeadlineEpochMs = Number(requiredEnvironment("SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS"));
   if (!/^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(operationId)) {
     throw new Error("Installed trust-revoked operation ID must be an externally supplied canonical UUID.");
   }
+  if (!/^[0-9a-f]{32}$/.test(processCaptureNonce)) throw new Error("Installed trust-revoked process-capture nonce was invalid.");
+  if (!Number.isSafeInteger(processCaptureDeadlineEpochMs) || processCaptureDeadlineEpochMs <= Date.now()) throw new Error("Installed trust-revoked process-capture deadline was invalid.");
   const extension = vscode.extensions.getExtension("hitsuki-ban.subversionr");
   if (!extension) throw new Error("Installed SubversionR extension was not visible.");
   if (extension.isActive) throw new Error("Installed SubversionR extension activated before the trust-revoked command.");
@@ -320,6 +362,16 @@ async function run() {
       if (serialized.includes(sensitive.toLowerCase())) throw new Error("Installed trust-revoked report leaked request identity.");
     }
   }
+  atomicWriteJson(processCaptureReadyPath, {
+    schema: "subversionr.release.m8-i6-installed-process-capture-ready.v1",
+    nonce: processCaptureNonce,
+    cell: "trustRevoked",
+    extensionId: active.id,
+    extensionVersion: active.packageJSON.version,
+    extensionPath: active.extensionPath,
+    extensionHostProcessId: process.pid,
+  });
+  await waitForProcessCaptureAck(processCaptureAckPath, processCaptureNonce, processCaptureDeadlineEpochMs);
   fs.writeFileSync(resultPath, JSON.stringify({ extensionId: active.id, extensionVersion: active.packageJSON.version, extensionPath: active.extensionPath, report }), { encoding: "utf8", flag: "wx" });
 }
 exports.run = run;
@@ -340,6 +392,8 @@ $names = @(
   "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_RESULT", "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_EXTENSIONS_ROOT", $TrustRevokedTokenEnvironment,
   "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_REPOSITORY_URL", "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_WORKING_COPY_PATH",
   "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_OPERATION_ID", "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_FIXTURE_STATE_PATH",
+  "SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY", "SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK",
+  "SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE", "SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS",
   "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME", "TEMP", "TMP"
 )
 $previous = @{}
@@ -352,6 +406,11 @@ try {
   $env:SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_WORKING_COPY_PATH = $workingCopyResolved
   $env:SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_OPERATION_ID = $OperationId
   $env:SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_FIXTURE_STATE_PATH = $fixtureStateResolved
+  $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_READY = $processCaptureReadyResolved
+  $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_ACK = $processCaptureAckResolved
+  $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_NONCE = $ProcessCaptureNonce
+  $processCaptureDeadlineEpochMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + $ProcessCaptureTimeoutMilliseconds
+  $env:SUBVERSIONR_INSTALLED_I6_PROCESS_CAPTURE_DEADLINE_EPOCH_MS = $processCaptureDeadlineEpochMs.ToString([Globalization.CultureInfo]::InvariantCulture)
   $env:APPDATA = $appDataRoot
   $env:LOCALAPPDATA = $localAppDataRoot
   $env:USERPROFILE = $profileRoot
