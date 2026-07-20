@@ -162,8 +162,16 @@ $driverCSharpBlocks = [regex]::Matches(
   "Add-Type -TypeDefinition @'\r?\n(?<code>.*?)\r?\n'@",
   [System.Text.RegularExpressions.RegexOptions]::Singleline
 )
-Assert-True ($driverCSharpBlocks.Count -ge 2) "Aggregate probe must retain the TCP observer C# block."
-Add-Type -TypeDefinition $driverCSharpBlocks[1].Groups["code"].Value
+$tcpObserverBlocks = @(
+  $driverCSharpBlocks | Where-Object {
+    $_.Groups["code"].Value.Contains(
+      "public sealed class SubversionRM8I6BlackholeTcpObserver",
+      [StringComparison]::Ordinal
+    )
+  }
+)
+Assert-True ($tcpObserverBlocks.Count -eq 1) "Aggregate probe must retain exactly one TCP observer C# block."
+Add-Type -TypeDefinition $tcpObserverBlocks[0].Groups["code"].Value
 
 [System.IO.Directory]::CreateDirectory($tempRoot) | Out-Null
 try {

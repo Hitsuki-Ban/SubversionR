@@ -46,6 +46,83 @@ public static class SubversionRM8I6FileSecurity {
 
 Add-Type -TypeDefinition @'
 using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class SubversionRM8I6ExactFileIdentity {
+  private const uint FILE_SHARE_READ = 0x00000001;
+  private const uint FILE_SHARE_WRITE = 0x00000002;
+  private const uint FILE_SHARE_DELETE = 0x00000004;
+  private const uint OPEN_EXISTING = 3;
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FileTime {
+    public uint Low;
+    public uint High;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct ByHandleFileInformation {
+    public uint FileAttributes;
+    public FileTime CreationTime;
+    public FileTime LastAccessTime;
+    public FileTime LastWriteTime;
+    public uint VolumeSerialNumber;
+    public uint FileSizeHigh;
+    public uint FileSizeLow;
+    public uint NumberOfLinks;
+    public uint FileIndexHigh;
+    public uint FileIndexLow;
+  }
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern SafeFileHandle CreateFileW(
+    string fileName,
+    uint desiredAccess,
+    uint shareMode,
+    IntPtr securityAttributes,
+    uint creationDisposition,
+    uint flagsAndAttributes,
+    IntPtr templateFile
+  );
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetFileInformationByHandle(
+    SafeFileHandle file,
+    out ByHandleFileInformation information
+  );
+
+  public static string Get(string path) {
+    if (String.IsNullOrWhiteSpace(path)) throw new ArgumentException("File identity path is required.", "path");
+    using (SafeFileHandle file = CreateFileW(
+      path,
+      0,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      IntPtr.Zero,
+      OPEN_EXISTING,
+      0,
+      IntPtr.Zero
+    )) {
+      if (file.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the exact file identity.");
+      ByHandleFileInformation information;
+      if (!GetFileInformationByHandle(file, out information)) {
+        throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not read the exact file identity.");
+      }
+      return String.Format(
+        System.Globalization.CultureInfo.InvariantCulture,
+        "{0:X8}:{1:X8}:{2:X8}",
+        information.VolumeSerialNumber,
+        information.FileIndexHigh,
+        information.FileIndexLow
+      );
+    }
+  }
+}
+'@
+
+Add-Type -TypeDefinition @'
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -1367,8 +1444,15 @@ function Get-DescendantProcessIds([object[]]$Snapshot, [long]$RootPid) {
 function Receive-ProcessStartEvents(
   [string]$SourceIdentifier,
   [System.Collections.Generic.List[object]]$AllEvents,
-  [System.Collections.Generic.HashSet[string]]$EventKeys
+  [System.Collections.Generic.HashSet[string]]$EventKeys,
+  [string[]]$CaptureProcessNames = @()
 ) {
+  $captureNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($captureName in $CaptureProcessNames) {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($captureName)) "A process-start image-capture name was invalid."
+    $null = $captureNames.Add($captureName)
+  }
+  Assert-True ($captureNames.Count -eq $CaptureProcessNames.Count) "Process-start image-capture names must be unique."
   foreach ($queuedEvent in @(Get-Event -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue)) {
     try {
       $newEvent = $queuedEvent.SourceEventArgs.NewEvent
@@ -1382,11 +1466,31 @@ function Receive-ProcessStartEvents(
       Assert-True ($eventFileTime -gt 0) "A packaged-negative process-start event omitted its event time."
       $eventKey = "$processId`:$eventFileTime"
       Assert-True ($EventKeys.Add($eventKey)) "The packaged-negative process-start subscription delivered a duplicate event identity."
+      $imagePath = ""
+      $imageStartFileTime = 0L
+      $sessionId = -1L
+      if ($captureNames.Contains($processName)) {
+        $liveIdentity = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop)
+        if ($liveIdentity.Count -eq 1) {
+          $capturedStartFileTime = Get-ProcessSnapshotStartFileTime $liveIdentity[0]
+          if ($capturedStartFileTime -le $eventFileTime) {
+            Assert-True (-not [string]::IsNullOrWhiteSpace([string]$liveIdentity[0].ExecutablePath)) "A live process-start image capture omitted its executable path."
+            $imagePath = [System.IO.Path]::GetFullPath([string]$liveIdentity[0].ExecutablePath)
+            $imageFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($imagePath)
+            $imageStartFileTime = $capturedStartFileTime
+            $sessionId = [long]$liveIdentity[0].SessionId
+          }
+        }
+      }
       $AllEvents.Add([pscustomobject]@{
           processId = $processId
           parentProcessId = $parentProcessId
           processName = $processName
           eventFileTime = $eventFileTime
+          imagePath = $imagePath
+          imageFileIdentity = $(if ([string]::IsNullOrEmpty($imagePath)) { "" } else { $imageFileIdentity })
+          imageStartFileTime = $imageStartFileTime
+          sessionId = $sessionId
         })
     }
     finally {
@@ -1399,14 +1503,55 @@ function Complete-ProcessStartEventDrain(
   [string]$SourceIdentifier,
   [System.Collections.Generic.List[object]]$AllEvents,
   [System.Collections.Generic.HashSet[string]]$EventKeys,
-  [int]$SettlementMilliseconds
+  [int]$SettlementMilliseconds,
+  [string[]]$CaptureProcessNames = @()
 ) {
   $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds($SettlementMilliseconds)
   do {
-    Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys
+    Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
     Start-Sleep -Milliseconds 25
   } while ([DateTimeOffset]::UtcNow -lt $deadline)
-  Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys
+  Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
+}
+
+function Invoke-BoundedProcessWithStartEventCapture(
+  [string]$FilePath,
+  [string[]]$Arguments,
+  [int]$TimeoutSeconds,
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys,
+  [string[]]$CaptureProcessNames,
+  [hashtable]$Environment = @{}
+) {
+  $started = Start-WorkerCrashProbeProcess $FilePath $Arguments $Environment
+  $process = [System.Diagnostics.Process]$started.Process
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+  $completionStarted = $false
+  try {
+    while (-not $process.HasExited) {
+      Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
+      if ([DateTimeOffset]::UtcNow -ge $deadline) {
+        $process.Kill($true)
+        $process.WaitForExit()
+        throw "Controlled process with start-event capture exceeded its absolute deadline."
+      }
+      Start-Sleep -Milliseconds 25
+    }
+    Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
+    $completionStarted = $true
+    return Complete-WorkerCrashProbeProcess $started $TimeoutSeconds "Controlled start-event capture"
+  }
+  catch {
+    if (-not $completionStarted) {
+      if (-not $process.HasExited) {
+        $process.Kill($true)
+        $process.WaitForExit()
+      }
+      $process.Dispose()
+    }
+    throw
+  }
 }
 
 function Get-NextRecordedProcessStartFileTime(
@@ -1904,10 +2049,14 @@ function Get-ZeroWorkerProcessObservation(
   [long]$ProbePid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
+  [string]$ExpectedDaemonFileIdentity,
+  [string]$ExpectedConsoleHostFileIdentity,
   [string[]]$ForbiddenFixtureProcessNames,
   [object[]]$SettlementSnapshot,
   [string]$Context
 ) {
+  Assert-True (-not [string]::IsNullOrWhiteSpace($ExpectedDaemonFileIdentity)) "The expected candidate daemon file identity was invalid."
+  Assert-True (-not [string]::IsNullOrWhiteSpace($ExpectedConsoleHostFileIdentity)) "The expected Windows console-host file identity was invalid."
   $probeStarts = @($AllEvents | Where-Object {
       [long]$_.processId -eq $ProbePid -and
       ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
@@ -1925,13 +2074,41 @@ function Get-ZeroWorkerProcessObservation(
   $daemonStart = $candidateStarts[0]
   Assert-True (
     [long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime -and
-    @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1
+    @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1 -and
+    [long]$daemonStart.imageStartFileTime -gt 0 -and
+    [long]$daemonStart.imageStartFileTime -le [long]$daemonStart.eventFileTime -and
+    [long]$daemonStart.sessionId -ge 0 -and
+    [string]$daemonStart.imageFileIdentity -ceq $ExpectedDaemonFileIdentity
   ) "The $Context candidate daemon start identity was invalid or reused."
   $daemonDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$daemonStart.processId))
-  $daemonDescendantSummary = @($daemonDescendantStarts | Select-Object -First 8 | ForEach-Object {
+  $consoleHostStarts = @($daemonDescendantStarts | Where-Object {
+      [long]$_.parentProcessId -eq [long]$daemonStart.processId -and
+      ([string]$_.processName).Equals("conhost.exe", [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  Assert-True ($consoleHostStarts.Count -le 1) "The $Context candidate daemon may own at most one direct Windows console host."
+  if ($consoleHostStarts.Count -eq 1) {
+    $consoleHostStart = $consoleHostStarts[0]
+    Assert-True (
+      @($AllEvents | Where-Object {
+          [long]$_.processId -eq [long]$consoleHostStart.processId -and
+          [long]$_.eventFileTime -eq [long]$consoleHostStart.eventFileTime
+        }).Count -eq 1 -and
+      [long]$consoleHostStart.imageStartFileTime -gt 0 -and
+      [long]$consoleHostStart.imageStartFileTime -le [long]$consoleHostStart.eventFileTime -and
+      [long]$consoleHostStart.sessionId -eq [long]$daemonStart.sessionId -and
+      [string]$consoleHostStart.imageFileIdentity -ceq $ExpectedConsoleHostFileIdentity
+    ) "The $Context Windows console-host start identity was ambiguous."
+  }
+  $unexpectedDaemonDescendantStarts = @($daemonDescendantStarts | Where-Object {
+      -not (
+        [long]$_.parentProcessId -eq [long]$daemonStart.processId -and
+        ([string]$_.processName).Equals("conhost.exe", [System.StringComparison]::OrdinalIgnoreCase)
+      )
+    })
+  $daemonDescendantSummary = @($unexpectedDaemonDescendantStarts | Select-Object -First 8 | ForEach-Object {
       "$([string]$_.processName):pid=$([long]$_.processId):parent=$([long]$_.parentProcessId):time=$([long]$_.eventFileTime)"
     }) -join ","
-  Assert-True ($daemonDescendantStarts.Count -eq 0) "The $Context surface started a remote worker or another daemon descendant: $daemonDescendantSummary."
+  Assert-True ($unexpectedDaemonDescendantStarts.Count -eq 0) "The $Context surface started a remote worker or another daemon descendant: $daemonDescendantSummary."
 
   $forbiddenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($processName in $ForbiddenFixtureProcessNames) {
@@ -1941,15 +2118,22 @@ function Get-ZeroWorkerProcessObservation(
   Assert-True ($forbiddenNames.Count -eq $ForbiddenFixtureProcessNames.Count) "$Context forbidden fixture process names must be unique."
   $fixtureCliStarts = @($recordedDescendants | Where-Object { $forbiddenNames.Contains([string]$_.processName) })
 
-  $liveDaemon = @($SettlementSnapshot | Where-Object {
-      [long]$_.ProcessId -eq [long]$daemonStart.processId -and
-      (Get-ProcessSnapshotStartFileTime $_) -le [long]$daemonStart.eventFileTime
-    })
-  Assert-True ($liveDaemon.Count -eq 0) "The $Context candidate daemon remained alive at settlement."
+  $settledIdentities = @($daemonStart) + $consoleHostStarts
+  $liveSettledIds = [System.Collections.Generic.HashSet[long]]::new()
+  foreach ($settledIdentity in $settledIdentities) {
+    if (@($SettlementSnapshot | Where-Object {
+          [long]$_.ProcessId -eq [long]$settledIdentity.processId -and
+          (Get-ProcessSnapshotStartFileTime $_) -le [long]$settledIdentity.eventFileTime
+        }).Count -gt 0) {
+      $null = $liveSettledIds.Add([long]$settledIdentity.processId)
+    }
+  }
+  Assert-True ($liveSettledIds.Count -eq 0) "The $Context candidate daemon or Windows console host remained alive at settlement."
   return [pscustomobject]@{
     daemonProcessId = [long]$daemonStart.processId
-    workerStarts = $daemonDescendantStarts.Count
-    workerDescendantsAfter = $liveDaemon.Count
+    consoleHostStarts = $consoleHostStarts.Count
+    workerStarts = $unexpectedDaemonDescendantStarts.Count
+    workerDescendantsAfter = $liveSettledIds.Count
     fixtureCliInvocations = $fixtureCliStarts.Count
   }
 }
@@ -2329,6 +2513,13 @@ $svnadminResolved = Resolve-RequiredFile $SvnadminPath "SvnadminPath"
 $svnserveResolved = Resolve-RequiredFile $SvnservePath "SvnservePath"
 $vsixResolved = Resolve-RequiredFile $VsixPath "VsixPath"
 $daemonResolved = Resolve-RequiredFile $DaemonPath "DaemonPath"
+$consoleHostResolved = Resolve-RequiredFile (Join-Path ([Environment]::SystemDirectory) "conhost.exe") "Windows console host"
+$daemonFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($daemonResolved)
+$consoleHostFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($consoleHostResolved)
+$zeroWorkerCaptureProcessNames = @(
+  [System.IO.Path]::GetFileName($daemonResolved),
+  [System.IO.Path]::GetFileName($consoleHostResolved)
+)
 $bridgeResolved = Resolve-RequiredFile $BridgePath "BridgePath"
 $codeCliResolved = Resolve-RequiredFile $CodeCliPath "CodeCliPath"
 $stageManifestResolved = Resolve-RequiredFile $StageManifestPath "StageManifestPath"
@@ -3090,7 +3281,7 @@ try {
     Assert-True ($matchingSubscribers.Count -eq 1) "The installed local-event process-start subscription was not created exactly once."
     $localEventProcessSubscriber = $matchingSubscribers[0]
     Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
-    $installedLocalEventResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+    $installedLocalEventResult = Invoke-BoundedProcessWithStartEventCapture (Get-Process -Id $PID).Path @(
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-File", $installedLocalEventProbeResolved,
       "-VsixPath", $vsixResolved,
@@ -3103,7 +3294,11 @@ try {
       "-BridgePath", $bridgeResolved,
       "-ObservationTimeoutMilliseconds", "30000",
       "-TimeoutSeconds", "180"
-    ) 240
+    ) 240 `
+      $localEventProcessSourceIdentifier `
+      $localEventProcessEvents `
+      $localEventProcessEventKeys `
+      $zeroWorkerCaptureProcessNames
     $installedLocalEventFailure = $installedLocalEventResult.Stderr.Trim()
     Assert-True (
       $installedLocalEventResult.ExitCode -eq 0 -and $installedLocalEventResult.Stderr.Length -eq 0
@@ -3146,12 +3341,15 @@ try {
       $localEventProcessSourceIdentifier `
       $localEventProcessEvents `
       $localEventProcessEventKeys `
-      $ProcessStartEventSettlementMilliseconds
+      $ProcessStartEventSettlementMilliseconds `
+      $zeroWorkerCaptureProcessNames
     $localEventProcessObservation = Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProcessEvents) `
       -ProbePid ([long]$installedLocalEventResult.ProcessId) `
       -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
       -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+      -ExpectedDaemonFileIdentity $daemonFileIdentity `
+      -ExpectedConsoleHostFileIdentity $consoleHostFileIdentity `
       -ForbiddenFixtureProcessNames @(
         [System.IO.Path]::GetFileName($svnResolved),
         [System.IO.Path]::GetFileName($svnadminResolved),
@@ -4956,7 +5154,7 @@ try {
       Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
 
       if ($surfaceName -ceq "packaged-native") {
-        $probeResult = Invoke-BoundedProcess $nodeHost @(
+        $probeResult = Invoke-BoundedProcessWithStartEventCapture $nodeHost @(
           $packagedTrustRevokedProbeResolved,
           "--backend-module", $backendModulePath,
           "--daemon", $daemonResolved,
@@ -4966,7 +5164,12 @@ try {
           "--repository-url", $deniedRepositoryUrl,
           "--operation-id", $operationId,
           "--fixture-state-path", $fixtureStatePath
-        ) 90 @{ ELECTRON_RUN_AS_NODE = "1" }
+        ) 90 `
+          $processStartSourceIdentifier `
+          $processStartEvents `
+          $processStartEventKeys `
+          $zeroWorkerCaptureProcessNames `
+          @{ ELECTRON_RUN_AS_NODE = "1" }
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The packaged-native trust-revoked probe failed: $probeFailure"
         $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "packaged-native trust-revoked probe stdout"
@@ -4986,7 +5189,7 @@ try {
       }
       else {
         $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
-        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        $probeResult = Invoke-BoundedProcessWithStartEventCapture (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedTrustRevokedProbeResolved,
           "-VsixPath", $vsixResolved,
@@ -5000,7 +5203,11 @@ try {
           "-DaemonPath", $daemonResolved,
           "-BridgePath", $bridgeResolved,
           "-TimeoutSeconds", "180"
-        ) 240
+        ) 240 `
+          $processStartSourceIdentifier `
+          $processStartEvents `
+          $processStartEventKeys `
+          $zeroWorkerCaptureProcessNames
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX trust-revoked probe failed: $probeFailure"
         $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX trust-revoked probe stdout"
@@ -5048,12 +5255,19 @@ try {
         [int]$faultState.reposInfoSent -eq 0 -and [int]$faultState.commandsReceived -eq 0 -and
         [int]$faultState.followupContacts -eq 0 -and [int]$faultState.suppliedAuthorityConnections -eq 0
       ) "The $surfaceName trust-revoked network observation was not exactly zero."
-      Complete-ProcessStartEventDrain $processStartSourceIdentifier $processStartEvents $processStartEventKeys $ProcessStartEventSettlementMilliseconds
+      Complete-ProcessStartEventDrain `
+        $processStartSourceIdentifier `
+        $processStartEvents `
+        $processStartEventKeys `
+        $ProcessStartEventSettlementMilliseconds `
+        $zeroWorkerCaptureProcessNames
       $processObservation = Get-ZeroWorkerProcessObservation `
         -AllEvents @($processStartEvents) `
         -ProbePid ([long]$probeResult.ProcessId) `
         -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+        -ExpectedDaemonFileIdentity $daemonFileIdentity `
+        -ExpectedConsoleHostFileIdentity $consoleHostFileIdentity `
         -ForbiddenFixtureProcessNames @(
           [System.IO.Path]::GetFileName($svnResolved),
           [System.IO.Path]::GetFileName($svnadminResolved),

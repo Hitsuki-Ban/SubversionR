@@ -215,6 +215,15 @@ zero. The retained PID, creation-time, image-path, and ancestry binding must
 still settle to zero descendants after the probe closes; only that measured
 post-settlement zero is the residue invariant.
 
+Zero-worker process observations apply the same Windows console-host boundary
+without weakening the worker gate: the candidate executable may start no
+second daemon process, while its OS baseline may contain at most one direct
+`conhost.exe` start bound by PID, start time, and ancestry. Any other descendant,
+a second console host, or a retained daemon/console-host identity fails the
+observation. The daemon and console host are captured while live and bound to
+their exact Windows file identities and one session; a basename alone is not
+accepted. A later reuse of either PID is not settlement residue.
+
 The Safe cell's controlled `none` / `none` origin and settlement fields describe
 the successful recovery RPC recorded by the matrix. They do not claim that the
 mutation which required recovery succeeded. Each Safe product probe separately

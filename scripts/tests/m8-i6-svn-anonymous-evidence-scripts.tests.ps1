@@ -1221,6 +1221,22 @@ try {
   Assert-True (-not $runnerText.Contains("unsupportedAfterWorker")) "I6 runner must not accept the I3-I5 transport-boundary result."
 
   $driverText = Get-Content -Raw -LiteralPath $probeDriverPath
+  $fileIdentitySourceMatch = [regex]::Match(
+    $driverText,
+    "(?ms)^Add-Type -TypeDefinition @'\r?\n(?<source>using System;\r?\nusing System\.ComponentModel;.*?^public static class SubversionRM8I6ExactFileIdentity \{.*?^\})\r?\n'@$"
+  )
+  Assert-True $fileIdentitySourceMatch.Success "I6 probe driver must retain one extractable exact-file-identity implementation."
+  Add-Type -TypeDefinition $fileIdentitySourceMatch.Groups["source"].Value
+  $systemConsoleHostPath = Join-Path ([Environment]::SystemDirectory) "conhost.exe"
+  $extendedSystemConsoleHostPath = "\\?\$systemConsoleHostPath"
+  Assert-Equal `
+    ([SubversionRM8I6ExactFileIdentity]::Get($systemConsoleHostPath)) `
+    ([SubversionRM8I6ExactFileIdentity]::Get($extendedSystemConsoleHostPath)) `
+    "Exact Windows file identity must treat ordinary and extended-length conhost paths as the same file."
+  Assert-True (
+    [SubversionRM8I6ExactFileIdentity]::Get($systemConsoleHostPath) -cne
+    [SubversionRM8I6ExactFileIdentity]::Get($probeDriverPath)
+  ) "Exact Windows file identity must distinguish the system console host from a different file."
   foreach ($requiredText in @(
       'probe-vscode-packaged-native.mjs',
       'probe-m8-i6-packaged-native.mjs',
@@ -1331,6 +1347,9 @@ try {
       'Win32_ProcessStartTrace',
       'TIME_CREATED',
       'Complete-ProcessStartEventDrain',
+      'Invoke-BoundedProcessWithStartEventCapture',
+      'imageStartFileTime',
+      'ExpectedConsoleHostFileIdentity',
       'Get-PackagedNegativeProcessObservation',
       'Get-InstalledNegativeProcessObservation',
       '"i6n\$([Guid]',
@@ -1645,6 +1664,8 @@ try {
   }
   $localEventDaemonStart = [pscustomobject]@{
     processId = 602L; parentProcessId = 601L; processName = "subversionr-daemon.exe"; eventFileTime = 6200L
+    imagePath = "F:\candidate\subversionr-daemon.exe"; imageFileIdentity = "daemon-file-identity"
+    imageStartFileTime = 6199L; sessionId = 1L
   }
   $preLocalEventDaemonPidCollision = [pscustomobject]@{
     processId = 603L; parentProcessId = 602L; processName = "unrelated-before-daemon.exe"; eventFileTime = 6150L
@@ -1652,9 +1673,99 @@ try {
   $localEventObservation = Get-ZeroWorkerProcessObservation `
     -AllEvents @($localEventProbeStart, $localEventCodeStart, $preLocalEventDaemonPidCollision, $localEventDaemonStart) `
     -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
     -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
     -SettlementSnapshot @() -Context "installed local-event"
   Assert-Equal 0 $localEventObservation.workerStarts "Zero-worker observation must ignore a pre-daemon numeric parent-PID collision."
+  Assert-Equal 0 $localEventObservation.consoleHostStarts "Zero-worker observation must measure an absent Windows console-host baseline."
+
+  $localEventConsoleHostStart = [pscustomobject]@{
+    processId = 603L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6250L
+    imagePath = "\\?\C:\Windows\System32\conhost.exe"; imageFileIdentity = "console-host-file-identity"
+    imageStartFileTime = 6249L; sessionId = 1L
+  }
+  $localEventConsoleObservation = Get-ZeroWorkerProcessObservation `
+    -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart) `
+    -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+    -SettlementSnapshot @() -Context "installed local-event"
+  Assert-Equal 1 $localEventConsoleObservation.consoleHostStarts "Zero-worker observation must bind one direct Windows console host."
+  Assert-Equal 0 $localEventConsoleObservation.workerStarts "A bound Windows console host must not be counted as a remote worker."
+
+  $spoofedLocalEventConsoleHostStart = [pscustomobject]@{
+    processId = 608L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6250L
+    imagePath = "C:\attacker\conhost.exe"; imageFileIdentity = "attacker-file-identity"
+    imageStartFileTime = 6249L; sessionId = 1L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $spoofedLocalEventConsoleHostStart) `
+      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "Windows console-host start identity was ambiguous" "Zero-worker observation must reject a non-system image renamed to conhost.exe."
+
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart) `
+      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @([pscustomobject]@{
+          ProcessId = 603L; ParentProcessId = 602L; CreationDate = [DateTime]::FromFileTimeUtc(6249L)
+        }) -Context "installed local-event"
+  } "candidate daemon or Windows console host remained alive" "Zero-worker settlement must reject the live recorded console-host identity."
+
+  $secondLocalEventConsoleHostStart = [pscustomobject]@{
+    processId = 605L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6251L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $secondLocalEventConsoleHostStart) `
+      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "at most one direct Windows console host" "Zero-worker observation must reject a second direct Windows console host."
+
+  $nestedLocalEventConsoleHostStart = [pscustomobject]@{
+    processId = 606L; parentProcessId = 603L; processName = "conhost.exe"; eventFileTime = 6260L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $nestedLocalEventConsoleHostStart) `
+      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "conhost.exe:pid=606:parent=603:time=6260" "Zero-worker observation must reject a non-direct console-host descendant."
+
+  $localEventRemoteWorkerStart = [pscustomobject]@{
+    processId = 607L; parentProcessId = 602L; processName = "subversionr-daemon.exe"; eventFileTime = 6270L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $localEventRemoteWorkerStart) `
+      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "must start exactly one candidate daemon and no remote worker" "Zero-worker observation must still reject a same-executable remote worker."
+
+  $reusedLocalEventConsoleHostPid = [pscustomobject]@{
+    processId = 603L; parentProcessId = 999L; processName = "reused-after-console-host.exe"; eventFileTime = 6400L
+  }
+  $reusedConsoleHostObservation = Get-ZeroWorkerProcessObservation `
+    -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $reusedLocalEventConsoleHostPid) `
+    -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+    -SettlementSnapshot @([pscustomobject]@{
+        ProcessId = 603L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(6400L)
+      }) -Context "installed local-event"
+  Assert-Equal 0 $reusedConsoleHostObservation.workerDescendantsAfter "Zero-worker settlement must allow later reuse of the console-host PID."
 
   $realLocalEventDaemonChild = [pscustomobject]@{
     processId = 604L; parentProcessId = 602L; processName = "unexpected-child.exe"; eventFileTime = 6300L
@@ -1663,6 +1774,7 @@ try {
     Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $realLocalEventDaemonChild) `
       -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @() -Context "installed local-event"
   } "unexpected-child.exe:pid=604:parent=602:time=6300" "Zero-worker observation must reject and identify a real post-daemon descendant."
