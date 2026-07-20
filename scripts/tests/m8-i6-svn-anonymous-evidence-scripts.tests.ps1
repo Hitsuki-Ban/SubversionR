@@ -1439,9 +1439,11 @@ try {
   $observationHelpers = @(
     "Get-DescendantProcessIds",
     "Get-ProcessSnapshotStartFileTime",
+    "Get-NextRecordedProcessStartFileTime",
     "Get-RecordedProcessDescendantStarts",
     "Get-PackagedNegativeProcessObservation",
     "Get-InstalledNegativeProcessObservation",
+    "Get-ZeroWorkerProcessObservation",
     "Set-ExactAuthzAtomically",
     "Get-SvnserveAuthzObservation",
     "Get-ExactFileSecurityDescriptor",
@@ -1518,6 +1520,33 @@ try {
       @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
       300L
   ).Count "Packaged-negative event ancestry must traverse child and grandchild starts."
+  $reusedGrandchildPid = [pscustomobject]@{
+    processId = 401L; parentProcessId = 999L; processName = "reused-after-grandchild.exe"; eventFileTime = 5000L
+  }
+  Assert-Equal 2 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild, $reusedGrandchildPid) `
+      300L
+  ).Count "Recorded ancestry must allow a descendant PID to be reused after that start identity."
+  $preDaemonPidCollision = [pscustomobject]@{
+    processId = 402L; parentProcessId = 200L; processName = "unrelated-before-daemon.exe"; eventFileTime = 1500L
+  }
+  Assert-Equal 3 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $preDaemonPidCollision, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
+      200L
+  ).Count "Recorded ancestry must ignore a numeric parent-PID collision that predates the parent start identity."
+  $preProbeDaemonNameCollision = [pscustomobject]@{
+    processId = 403L; parentProcessId = 100L; processName = "subversionr-daemon.exe"; eventFileTime = 900L
+  }
+  $preDaemonWorkerNameCollision = [pscustomobject]@{
+    processId = 404L; parentProcessId = 200L; processName = "subversionr-daemon.exe"; eventFileTime = 1900L
+  }
+  $packagedCollisionObservation = Get-PackagedNegativeProcessObservation `
+    @($preProbeDaemonNameCollision, $probeStart, $preDaemonWorkerNameCollision, $daemonStart, $workerStart) `
+    100L "Code.exe" "subversionr-daemon.exe" @()
+  Assert-Equal 200L $packagedCollisionObservation.daemonProcessId "Packaged-negative observation must ignore a same-name pre-probe PID collision."
+  Assert-Equal 300L $packagedCollisionObservation.workerProcessId "Packaged-negative observation must ignore a same-name pre-daemon PID collision."
   $settledDescendantObservation = Get-PackagedNegativeProcessObservation `
     @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
     100L "Code.exe" "subversionr-daemon.exe" `
@@ -1607,6 +1636,36 @@ try {
         ProcessId = 504L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5450L)
       })
   Assert-Equal 0 $installedReusedSettlement.workerDescendantsAfter "Installed-negative settlement must allow later PID reuse."
+
+  $localEventProbeStart = [pscustomobject]@{
+    processId = 600L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 6000L
+  }
+  $localEventCodeStart = [pscustomobject]@{
+    processId = 601L; parentProcessId = 600L; processName = "Code.exe"; eventFileTime = 6100L
+  }
+  $localEventDaemonStart = [pscustomobject]@{
+    processId = 602L; parentProcessId = 601L; processName = "subversionr-daemon.exe"; eventFileTime = 6200L
+  }
+  $preLocalEventDaemonPidCollision = [pscustomobject]@{
+    processId = 603L; parentProcessId = 602L; processName = "unrelated-before-daemon.exe"; eventFileTime = 6150L
+  }
+  $localEventObservation = Get-ZeroWorkerProcessObservation `
+    -AllEvents @($localEventProbeStart, $localEventCodeStart, $preLocalEventDaemonPidCollision, $localEventDaemonStart) `
+    -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+    -SettlementSnapshot @() -Context "installed local-event"
+  Assert-Equal 0 $localEventObservation.workerStarts "Zero-worker observation must ignore a pre-daemon numeric parent-PID collision."
+
+  $realLocalEventDaemonChild = [pscustomobject]@{
+    processId = 604L; parentProcessId = 602L; processName = "unexpected-child.exe"; eventFileTime = 6300L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $realLocalEventDaemonChild) `
+      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "unexpected-child.exe:pid=604:parent=602:time=6300" "Zero-worker observation must reject and identify a real post-daemon descendant."
 
   foreach ($fixtureCliStart in @(
       [pscustomobject]@{ processId = 505L; parentProcessId = 502L; processName = "svn.exe"; eventFileTime = 5500L },

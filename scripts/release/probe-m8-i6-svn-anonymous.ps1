@@ -1409,19 +1409,44 @@ function Complete-ProcessStartEventDrain(
   Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys
 }
 
+function Get-NextRecordedProcessStartFileTime(
+  [object[]]$AllEvents,
+  [long]$ProcessId,
+  [long]$AfterFileTime
+) {
+  $next = @($AllEvents | Where-Object {
+      [long]$_.processId -eq $ProcessId -and
+      [long]$_.eventFileTime -gt $AfterFileTime
+    } | Sort-Object -Property eventFileTime | Select-Object -First 1)
+  if ($next.Count -eq 0) {
+    return [long]::MaxValue
+  }
+  return [long]$next[0].eventFileTime
+}
+
 function Get-RecordedProcessDescendantStarts([object[]]$AllEvents, [long]$RootPid) {
-  $pending = [System.Collections.Generic.Queue[long]]::new()
-  $pending.Enqueue($RootPid)
+  $rootStarts = @($AllEvents | Where-Object { [long]$_.processId -eq $RootPid })
+  Assert-True ($rootStarts.Count -eq 1) "A recorded ancestry root PID must have exactly one subscribed start identity."
+  $pending = [System.Collections.Generic.Queue[object]]::new()
+  $pending.Enqueue($rootStarts[0])
   $descendants = [System.Collections.Generic.List[object]]::new()
-  $descendantPids = [System.Collections.Generic.HashSet[long]]::new()
+  $descendantIdentities = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
   while ($pending.Count -gt 0) {
-    $parentPid = $pending.Dequeue()
-    foreach ($child in @($AllEvents | Where-Object { [long]$_.parentProcessId -eq $parentPid })) {
+    $parent = $pending.Dequeue()
+    $parentPid = [long]$parent.processId
+    $parentEventFileTime = [long]$parent.eventFileTime
+    $parentEndFileTime = Get-NextRecordedProcessStartFileTime $AllEvents $parentPid $parentEventFileTime
+    foreach ($child in @($AllEvents | Where-Object {
+          [long]$_.parentProcessId -eq $parentPid -and
+          [long]$_.eventFileTime -gt $parentEventFileTime -and
+          [long]$_.eventFileTime -lt $parentEndFileTime
+        } | Sort-Object -Property eventFileTime)) {
       $childPid = [long]$child.processId
       Assert-True ($childPid -ne $RootPid) "A packaged-negative worker PID was reused in its recorded ancestry."
-      if ($descendantPids.Add($childPid)) {
+      $childIdentity = "$childPid`:$([long]$child.eventFileTime)"
+      if ($descendantIdentities.Add($childIdentity)) {
         $descendants.Add($child)
-        $pending.Enqueue($childPid)
+        $pending.Enqueue($child)
       }
     }
   }
@@ -1445,11 +1470,12 @@ function Get-PackagedNegativeProcessObservation(
     @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
   ) "The packaged-negative probe PID was reused during its subscribed observation."
 
-  $daemonStarts = @($AllEvents | Where-Object {
+  $allProbeDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $daemonStarts = @($allProbeDescendants | Where-Object {
       [long]$_.parentProcessId -eq $ProbePid -and
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     })
-  $probeChildSummary = @($AllEvents | Where-Object { [long]$_.parentProcessId -eq $ProbePid } |
+  $probeChildSummary = @($allProbeDescendants | Where-Object { [long]$_.parentProcessId -eq $ProbePid } |
       Select-Object -First 8 | ForEach-Object { "$([string]$_.processName):$([long]$_.processId)" }) -join ","
   Assert-True ($daemonStarts.Count -eq 1) "The exact packaged-negative probe must start exactly one candidate daemon; observed $($daemonStarts.Count) candidate starts and children $probeChildSummary."
   $daemonStart = $daemonStarts[0]
@@ -1457,11 +1483,12 @@ function Get-PackagedNegativeProcessObservation(
     @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1
   ) "The packaged-negative candidate daemon PID was reused."
 
-  $workerStarts = @($AllEvents | Where-Object {
+  $daemonDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$daemonStart.processId))
+  $workerStarts = @($daemonDescendants | Where-Object {
       [long]$_.parentProcessId -eq [long]$daemonStart.processId -and
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     })
-  $daemonChildSummary = @($AllEvents | Where-Object { [long]$_.parentProcessId -eq [long]$daemonStart.processId } |
+  $daemonChildSummary = @($daemonDescendants | Where-Object { [long]$_.parentProcessId -eq [long]$daemonStart.processId } |
       Select-Object -First 8 | ForEach-Object { "$([string]$_.processName):$([long]$_.processId)" }) -join ","
   Assert-True ($workerStarts.Count -eq 1) "The packaged-negative candidate daemon must start exactly one worker; observed $($workerStarts.Count) candidate starts and children $daemonChildSummary."
   $workerStart = $workerStarts[0]
@@ -1473,7 +1500,6 @@ function Get-PackagedNegativeProcessObservation(
     @($AllEvents | Where-Object { [long]$_.processId -eq [long]$workerStart.processId }).Count -eq 1
   ) "The packaged-negative worker PID was reused."
   $descendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$workerStart.processId))
-  $allProbeDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
   $forbiddenFixtureProcessNameSet = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase
   )
@@ -1902,7 +1928,10 @@ function Get-ZeroWorkerProcessObservation(
     @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1
   ) "The $Context candidate daemon start identity was invalid or reused."
   $daemonDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$daemonStart.processId))
-  Assert-True ($daemonDescendantStarts.Count -eq 0) "The $Context surface started a remote worker or another daemon descendant."
+  $daemonDescendantSummary = @($daemonDescendantStarts | Select-Object -First 8 | ForEach-Object {
+      "$([string]$_.processName):pid=$([long]$_.processId):parent=$([long]$_.parentProcessId):time=$([long]$_.eventFileTime)"
+    }) -join ","
+  Assert-True ($daemonDescendantStarts.Count -eq 0) "The $Context surface started a remote worker or another daemon descendant: $daemonDescendantSummary."
 
   $forbiddenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($processName in $ForbiddenFixtureProcessNames) {
