@@ -71,7 +71,10 @@
         "packagedRecoveryIndeterminateProbe",
         "packagedRedactionProbe",
         "packagedWorkerCrashProbe",
+        "packagedBlackholeConnectProbe",
+        "packagedDaemonDisconnectProbe",
         "raSvnFaultFixture",
+        "blackholeConnectFixture",
         "countingProxy",
         "installedStressProbe",
         "installedNegativeProbe",
@@ -85,6 +88,8 @@
         "installedRecoveryIndeterminateProbe",
         "installedRedactionProbe",
         "installedWorkerCrashProbe",
+        "installedBlackholeConnectProbe",
+        "installedDaemonDisconnectProbe",
         "installedLocalEventProbe",
         "installedVsixProbe",
         "packagedCompatibilityProbe",
@@ -149,7 +154,16 @@
         "packagedWorkerCrashProbe": {
           "$ref": "#/$defs/artifact"
         },
+        "packagedBlackholeConnectProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "packagedDaemonDisconnectProbe": {
+          "$ref": "#/$defs/artifact"
+        },
         "raSvnFaultFixture": {
+          "$ref": "#/$defs/artifact"
+        },
+        "blackholeConnectFixture": {
           "$ref": "#/$defs/artifact"
         },
         "countingProxy": {
@@ -189,6 +203,12 @@
           "$ref": "#/$defs/artifact"
         },
         "installedWorkerCrashProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedBlackholeConnectProbe": {
+          "$ref": "#/$defs/artifact"
+        },
+        "installedDaemonDisconnectProbe": {
           "$ref": "#/$defs/artifact"
         },
         "installedLocalEventProbe": {
@@ -932,14 +952,26 @@
           "type": "integer",
           "minimum": 0
         },
+        "workerProcessesAfter": {
+          "const": 0
+        },
         "temporaryRootsAfter": {
           "const": 0
+        },
+        "checkoutJournalEntriesAfter": {
+          "const": 0
+        },
+        "workingCopyPreserved": {
+          "const": true
         },
         "diagnosticsRedacted": {
           "const": true
         },
         "deadlineTiming": {
           "$ref": "#/$defs/deadlineTiming"
+        },
+        "blackholeTiming": {
+          "$ref": "#/$defs/blackholeConnectTiming"
         },
         "cancellationSettlement": {
           "$ref": "#/$defs/cancellationSettlement"
@@ -950,9 +982,84 @@
         "workerCrashSettlement": {
           "$ref": "#/$defs/workerCrashSettlement"
         },
+        "blackholeConnectSettlement": {
+          "$ref": "#/$defs/blackholeConnectSettlement"
+        },
+        "daemonDisconnectSettlement": {
+          "$ref": "#/$defs/daemonDisconnectSettlement"
+        },
         "daemonState": {
-          "$ref": "#/$defs/workerCrashDaemonState"
+          "$ref": "#/$defs/negativeDaemonState"
         }
+      }
+    },
+    "blackholeConnectSettlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger", "operationIdSha256", "wireSettlementObserved", "daemonTerminalStateObserved", "nativeLaneReleased", "localSnapshotAfterTimeout", "conditionalAcceptEnabled", "listenerProcessBound", "acceptInvocations", "acceptedConnections", "stateArtifactUntampered", "finalFixtureStatus", "tcp"],
+      "properties": {
+        "trigger": { "const": "conditional-accept-loopback-no-accept" },
+        "operationIdSha256": { "$ref": "#/$defs/sha256" },
+        "wireSettlementObserved": { "const": true },
+        "daemonTerminalStateObserved": { "const": true },
+        "nativeLaneReleased": { "const": true },
+        "localSnapshotAfterTimeout": { "const": true },
+        "conditionalAcceptEnabled": { "const": true },
+        "listenerProcessBound": { "const": true },
+        "acceptInvocations": { "const": 0 },
+        "acceptedConnections": { "const": 0 },
+        "stateArtifactUntampered": { "const": true },
+        "finalFixtureStatus": { "const": "stopped" },
+        "tcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "workerProcessBound", "observationStartedBeforeProbeLaunch", "localAddress", "localPort", "remoteAddress", "remotePort", "distinctTcbAttempts", "establishedTcbConnections", "observationCompletedAfterProbeExit", "stableSynSentSamples", "stableSynSentMilliseconds", "observationMilliseconds", "synSentRows", "establishedRows", "finalRows"],
+          "properties": {
+            "provider": { "const": "GetExtendedTcpTable/TCP_TABLE_OWNER_PID_ALL" },
+            "workerProcessBound": { "const": true },
+            "observationStartedBeforeProbeLaunch": { "const": true },
+            "localAddress": { "const": "127.0.0.1" },
+            "localPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "remoteAddress": { "const": "127.0.0.1" },
+            "remotePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "distinctTcbAttempts": { "const": 1 },
+            "establishedTcbConnections": { "const": 0 },
+            "observationCompletedAfterProbeExit": { "const": true },
+            "stableSynSentSamples": { "type": "integer", "minimum": 3 },
+            "stableSynSentMilliseconds": { "type": "integer", "minimum": 25 },
+            "observationMilliseconds": { "type": "integer", "minimum": 25 },
+            "synSentRows": { "const": 1 },
+            "establishedRows": { "const": 0 },
+            "finalRows": { "const": 0 }
+          }
+        }
+      }
+    },
+    "blackholeConnectTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clock", "timeoutMs", "elapsedMs", "cleanupSlackMs"],
+      "properties": {
+        "clock": { "const": "monotonic" },
+        "timeoutMs": { "const": 5000 },
+        "elapsedMs": { "type": "number", "minimum": 5000, "maximum": 10000 },
+        "cleanupSlackMs": { "const": 5000 }
+      }
+    },
+    "daemonDisconnectSettlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger", "activeRequestSettlementObserved", "daemonStateObserved", "settlementBeforeShutdownAck", "shutdownAcknowledged", "workingCopyPreserved", "fixtureGreetingBarrierObserved", "shutdownTriggerExternallyCreated", "fixtureFollowupContacts"],
+      "properties": {
+        "trigger": { "const": "graceful-client-shutdown-after-greeting" },
+        "activeRequestSettlementObserved": { "const": true },
+        "daemonStateObserved": { "const": true },
+        "settlementBeforeShutdownAck": { "const": true },
+        "shutdownAcknowledged": { "const": true },
+        "workingCopyPreserved": { "const": true },
+        "fixtureGreetingBarrierObserved": { "const": true },
+        "shutdownTriggerExternallyCreated": { "const": true },
+        "fixtureFollowupContacts": { "const": 0 }
       }
     },
     "workerCrashSettlement": {
@@ -991,6 +1098,23 @@
         "recovery": { "const": "notRequired" },
         "cleanupAppropriate": { "const": false }
       }
+    },
+    "blackholeConnectDaemonState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason", "recovery", "cleanupAppropriate"],
+      "properties": {
+        "kind": { "const": "unreachable" },
+        "reason": { "const": "timeout" },
+        "recovery": { "const": "notRequired" },
+        "cleanupAppropriate": { "const": false }
+      }
+    },
+    "negativeDaemonState": {
+      "oneOf": [
+        { "$ref": "#/$defs/workerCrashDaemonState" },
+        { "$ref": "#/$defs/blackholeConnectDaemonState" }
+      ]
     },
     "recoverySurfaceObservation": {
       "type": "object",
@@ -1108,7 +1232,27 @@
     },
     "negativeBlackholeConnect": {
       "$ref": "#/$defs/negativeCell",
-      "properties": { "cell": { "const": "blackholeConnect" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" }, "reason": { "const": "operationDeadlineExceeded" } }
+      "properties": {
+        "cell": { "const": "blackholeConnect" },
+        "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" },
+        "reason": { "const": "operationDeadlineExceeded" },
+        "surfaceObservations": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/negativeSurfaceObservation" },
+              {
+                "required": ["workerProcessesAfter", "checkoutJournalEntriesAfter", "workingCopyPreserved", "blackholeTiming", "daemonState", "blackholeConnectSettlement"],
+                "properties": {
+                  "daemonState": { "$ref": "#/$defs/blackholeConnectDaemonState" }
+                }
+              }
+            ]
+          }
+        }
+      }
     },
     "negativeStalledMidRead": {
       "$ref": "#/$defs/negativeCell",
@@ -1165,7 +1309,12 @@
           "items": {
             "allOf": [
               { "$ref": "#/$defs/negativeSurfaceObservation" },
-              { "required": ["workerDescendantsAtBarrier", "workerCrashSettlement", "daemonState"] }
+              {
+                "required": ["workerDescendantsAtBarrier", "workerCrashSettlement", "daemonState"],
+                "properties": {
+                  "daemonState": { "$ref": "#/$defs/workerCrashDaemonState" }
+                }
+              }
             ]
           }
         }
@@ -1173,7 +1322,27 @@
     },
     "negativeDaemonDisconnect": {
       "$ref": "#/$defs/negativeCell",
-      "properties": { "cell": { "const": "daemonDisconnect" }, "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED" }, "reason": { "const": "workerContainmentFailed" } }
+      "properties": {
+        "cell": { "const": "daemonDisconnect" },
+        "stableCode": { "const": "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED" },
+        "reason": { "const": "workerContainmentFailed" },
+        "surfaceObservations": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/negativeSurfaceObservation" },
+              {
+                "required": ["workerDescendantsAtBarrier", "workerProcessesAfter", "checkoutJournalEntriesAfter", "workingCopyPreserved", "daemonState", "daemonDisconnectSettlement"],
+                "properties": {
+                  "daemonState": { "$ref": "#/$defs/workerCrashDaemonState" }
+                }
+              }
+            ]
+          }
+        }
+      }
     },
     "negativeTrustRevoked": {
       "$ref": "#/$defs/negativeCell",

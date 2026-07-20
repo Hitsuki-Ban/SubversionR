@@ -100,7 +100,10 @@ $expectedPackagedRecoverySafeProbePath = [System.IO.Path]::GetFullPath((Join-Pat
 $expectedPackagedRecoveryIndeterminateProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-indeterminate.mjs"))
 $expectedPackagedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-redaction.mjs"))
 $expectedPackagedWorkerCrashProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-worker-crash.mjs"))
+$expectedPackagedBlackholeConnectProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-blackholeConnect.mjs"))
+$expectedPackagedDaemonDisconnectProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-daemon-disconnect.mjs"))
 $expectedRaSvnFaultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"))
+$expectedBlackholeConnectFixturePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-blackhole-connect.ps1"))
 $expectedCountingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"))
 $expectedInstalledStressProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"))
 $expectedInstalledNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"))
@@ -114,6 +117,8 @@ $expectedInstalledRecoverySafeProbePath = [System.IO.Path]::GetFullPath((Join-Pa
 $expectedInstalledRecoveryIndeterminateProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-indeterminate.ps1"))
 $expectedInstalledRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-redaction.ps1"))
 $expectedInstalledWorkerCrashProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-worker-crash.ps1"))
+$expectedInstalledBlackholeConnectProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-blackholeConnect.ps1"))
+$expectedInstalledDaemonDisconnectProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-daemon-disconnect.ps1"))
 $expectedInstalledLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"))
 $expectedInstalledVsixProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"))
 $expectedPackagedCompatibilityProbePath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"))
@@ -336,6 +341,14 @@ function Assert-NegativeSurfaceObservation(
   if ($expectWorkerCrashSettlement) {
     $expectedProperties += @("workerDescendantsAtBarrier", "workerCrashSettlement", "daemonState")
   }
+  $expectBlackholeConnectSettlement = $ExpectedNetworkProgress -ceq "none" -and $ExpectedNetworkAttempts -eq 1 -and $ExpectedNetworkConnections -eq 0
+  if ($expectBlackholeConnectSettlement) {
+    $expectedProperties += @("workerProcessesAfter", "checkoutJournalEntriesAfter", "workingCopyPreserved", "blackholeTiming", "daemonState", "blackholeConnectSettlement")
+  }
+  $expectDaemonDisconnectSettlement = $ExpectedOriginCode -ceq "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED"
+  if ($expectDaemonDisconnectSettlement) {
+    $expectedProperties += @("workerDescendantsAtBarrier", "workerProcessesAfter", "checkoutJournalEntriesAfter", "workingCopyPreserved", "daemonState", "daemonDisconnectSettlement")
+  }
   Assert-ExactProperties $Observation $expectedProperties $Context
   Assert-Equal $ExpectedSurface ([string]$Observation.surface) "$Context surface must match."
   Assert-Equal $ExpectedOriginCode ([string]$Observation.originCode) "$Context origin code must match the controlled cell origin."
@@ -366,6 +379,45 @@ function Assert-NegativeSurfaceObservation(
     $elapsedMs = [double]$Observation.deadlineTiming.elapsedMs
     Assert-True (-not [double]::IsNaN($elapsedMs) -and -not [double]::IsInfinity($elapsedMs)) "$Context deadline elapsed time must be finite."
     Assert-True ($elapsedMs -ge 500 -and $elapsedMs -le 5500) "$Context deadline elapsed time must remain inside the reviewed timeout and cleanup bound."
+  }
+  if ($expectBlackholeConnectSettlement) {
+    foreach ($field in @("workerProcessesAfter", "checkoutJournalEntriesAfter")) { Assert-Equal 0 ([int]$Observation.$field) "$Context.$field must be zero." }
+    Assert-Equal $true ([bool]$Observation.workingCopyPreserved) "$Context must preserve the working copy."
+    Assert-ExactProperties $Observation.blackholeTiming @("clock", "timeoutMs", "elapsedMs", "cleanupSlackMs") "$Context.blackholeTiming"
+    Assert-Equal "monotonic" ([string]$Observation.blackholeTiming.clock) "$Context blackhole timing clock must be monotonic."
+    Assert-Equal 5000 ([int]$Observation.blackholeTiming.timeoutMs) "$Context blackhole timeout must be exact."
+    Assert-Equal 5000 ([int]$Observation.blackholeTiming.cleanupSlackMs) "$Context blackhole cleanup slack must be exact."
+    $elapsedMs = [double]$Observation.blackholeTiming.elapsedMs
+    Assert-True (-not [double]::IsNaN($elapsedMs) -and -not [double]::IsInfinity($elapsedMs) -and $elapsedMs -ge 5000 -and $elapsedMs -le 10000) "$Context blackhole elapsed time must remain bounded."
+    Assert-ExactProperties $Observation.daemonState @("kind", "reason", "recovery", "cleanupAppropriate") "$Context.daemonState"
+    Assert-Equal "unreachable" ([string]$Observation.daemonState.kind) "$Context blackhole daemon kind must be unreachable."
+    Assert-Equal "timeout" ([string]$Observation.daemonState.reason) "$Context blackhole daemon reason must be timeout."
+    Assert-Equal "notRequired" ([string]$Observation.daemonState.recovery) "$Context blackhole recovery must not be required."
+    Assert-Equal $false ([bool]$Observation.daemonState.cleanupAppropriate) "$Context blackhole cleanup must not be appropriate."
+    Assert-ExactProperties $Observation.blackholeConnectSettlement @("trigger", "operationIdSha256", "wireSettlementObserved", "daemonTerminalStateObserved", "nativeLaneReleased", "localSnapshotAfterTimeout", "conditionalAcceptEnabled", "listenerProcessBound", "acceptInvocations", "acceptedConnections", "stateArtifactUntampered", "finalFixtureStatus", "tcp") "$Context.blackholeConnectSettlement"
+    Assert-Equal "conditional-accept-loopback-no-accept" ([string]$Observation.blackholeConnectSettlement.trigger) "$Context blackhole trigger must be exact."
+    Assert-Hash ([string]$Observation.blackholeConnectSettlement.operationIdSha256) "$Context.blackholeConnectSettlement.operationIdSha256"
+    foreach ($field in @("wireSettlementObserved", "daemonTerminalStateObserved", "nativeLaneReleased", "localSnapshotAfterTimeout", "conditionalAcceptEnabled", "listenerProcessBound", "stateArtifactUntampered")) { Assert-Equal $true ([bool]$Observation.blackholeConnectSettlement.$field) "$Context.blackholeConnectSettlement.$field must be true." }
+    Assert-Equal 0 ([int]$Observation.blackholeConnectSettlement.acceptInvocations) "$Context fixture must never call accept."
+    Assert-Equal 0 ([int]$Observation.blackholeConnectSettlement.acceptedConnections) "$Context fixture must never accept a connection."
+    Assert-Equal "stopped" ([string]$Observation.blackholeConnectSettlement.finalFixtureStatus) "$Context fixture must stop cleanly."
+    $tcp = $Observation.blackholeConnectSettlement.tcp
+    Assert-ExactProperties $tcp @("provider", "workerProcessBound", "observationStartedBeforeProbeLaunch", "localAddress", "localPort", "remoteAddress", "remotePort", "distinctTcbAttempts", "establishedTcbConnections", "observationCompletedAfterProbeExit", "stableSynSentSamples", "stableSynSentMilliseconds", "observationMilliseconds", "synSentRows", "establishedRows", "finalRows") "$Context.blackholeConnectSettlement.tcp"
+    Assert-Equal "GetExtendedTcpTable/TCP_TABLE_OWNER_PID_ALL" ([string]$tcp.provider) "$Context must use the owner-PID TCP table."
+    Assert-Equal $true ([bool]$tcp.workerProcessBound) "$Context TCP row must bind the worker process."
+    Assert-Equal $true ([bool]$tcp.observationStartedBeforeProbeLaunch) "$Context TCP observation must start before probe launch."
+    Assert-Equal "127.0.0.1" ([string]$tcp.localAddress) "$Context TCP row must retain its loopback local address."
+    Assert-True ([int]$tcp.localPort -ge 1 -and [int]$tcp.localPort -le 65535) "$Context TCP row must retain its local ephemeral port."
+    Assert-Equal "127.0.0.1" ([string]$tcp.remoteAddress) "$Context TCP row must retain its loopback remote address."
+    Assert-True ([int]$tcp.remotePort -ge 1 -and [int]$tcp.remotePort -le 65535) "$Context TCP row must retain its remote port."
+    Assert-Equal ([int]$Observation.networkAttempts) ([int]$tcp.distinctTcbAttempts) "$Context network attempts must derive from distinct observed TCBs."
+    Assert-Equal ([int]$Observation.networkConnections) ([int]$tcp.establishedTcbConnections) "$Context network connections must derive from established observed TCBs."
+    Assert-Equal $true ([bool]$tcp.observationCompletedAfterProbeExit) "$Context TCP observation must continue through probe exit."
+    Assert-True ([int]$tcp.stableSynSentSamples -ge 3 -and [int64]$tcp.stableSynSentMilliseconds -ge 25) "$Context SYN_SENT observation was not stable."
+    Assert-True ([int64]$tcp.observationMilliseconds -ge [int64]$tcp.stableSynSentMilliseconds) "$Context total TCP observation must cover the stable SYN_SENT span."
+    Assert-Equal 1 ([int]$tcp.synSentRows) "$Context must observe exactly one SYN_SENT row."
+    Assert-Equal 0 ([int]$tcp.establishedRows) "$Context must never observe ESTABLISHED."
+    Assert-Equal 0 ([int]$tcp.finalRows) "$Context must leave no final worker TCP rows."
   }
   if ($expectCancellationSettlement) {
     Assert-ExactProperties $Observation.cancellationSettlement @("trigger", "localCode", "wireCode", "wireReason", "wireSettlementObserved") "$Context.cancellationSettlement"
@@ -413,6 +465,21 @@ function Assert-NegativeSurfaceObservation(
     Assert-Equal "workerTerminated" ([string]$Observation.daemonState.reason) "$Context daemon state reason must identify worker termination."
     Assert-Equal "notRequired" ([string]$Observation.daemonState.recovery) "$Context worker crash must not require recovery."
     Assert-Equal $false ([bool]$Observation.daemonState.cleanupAppropriate) "$Context worker crash must not request mutation cleanup."
+  }
+  if ($expectDaemonDisconnectSettlement) {
+    Assert-True ([int]$Observation.workerDescendantsAtBarrier -ge 0) "$Context daemon-disconnect barrier count must be measured."
+    foreach ($field in @("workerProcessesAfter", "checkoutJournalEntriesAfter")) { Assert-Equal 0 ([int]$Observation.$field) "$Context.$field must be zero." }
+    Assert-Equal $true ([bool]$Observation.workingCopyPreserved) "$Context must preserve the working copy."
+    Assert-ExactProperties $Observation.daemonState @("kind", "reason", "recovery", "cleanupAppropriate") "$Context.daemonState"
+    Assert-Equal "indeterminate" ([string]$Observation.daemonState.kind) "$Context daemon-disconnect state must be indeterminate."
+    Assert-Equal "workerTerminated" ([string]$Observation.daemonState.reason) "$Context daemon-disconnect reason must identify worker termination."
+    Assert-Equal "notRequired" ([string]$Observation.daemonState.recovery) "$Context daemon-disconnect must not require recovery."
+    Assert-Equal $false ([bool]$Observation.daemonState.cleanupAppropriate) "$Context daemon-disconnect must not request cleanup."
+    $settlement = $Observation.daemonDisconnectSettlement
+    Assert-ExactProperties $settlement @("trigger", "activeRequestSettlementObserved", "daemonStateObserved", "settlementBeforeShutdownAck", "shutdownAcknowledged", "workingCopyPreserved", "fixtureGreetingBarrierObserved", "shutdownTriggerExternallyCreated", "fixtureFollowupContacts") "$Context.daemonDisconnectSettlement"
+    Assert-Equal "graceful-client-shutdown-after-greeting" ([string]$settlement.trigger) "$Context daemon-disconnect trigger must be exact."
+    foreach ($field in @("activeRequestSettlementObserved", "daemonStateObserved", "settlementBeforeShutdownAck", "shutdownAcknowledged", "workingCopyPreserved", "fixtureGreetingBarrierObserved", "shutdownTriggerExternallyCreated")) { Assert-Equal $true ([bool]$settlement.$field) "$Context.daemonDisconnectSettlement.$field must be true." }
+    Assert-Equal 0 ([int]$settlement.fixtureFollowupContacts) "$Context daemon-disconnect fixture must receive no follow-up contacts."
   }
 }
 
@@ -535,7 +602,10 @@ $packagedRecoverySafeProbeResolved = Resolve-RequiredFile $expectedPackagedRecov
 $packagedRecoveryIndeterminateProbeResolved = Resolve-RequiredFile $expectedPackagedRecoveryIndeterminateProbePath "packaged-native I6 recovery-indeterminate probe"
 $packagedRedactionProbeResolved = Resolve-RequiredFile $expectedPackagedRedactionProbePath "packaged-native I6 redaction probe"
 $packagedWorkerCrashProbeResolved = Resolve-RequiredFile $expectedPackagedWorkerCrashProbePath "packaged-native I6 worker-crash probe"
+$packagedBlackholeConnectProbeResolved = Resolve-RequiredFile $expectedPackagedBlackholeConnectProbePath "packaged-native I6 blackhole-connect probe"
+$packagedDaemonDisconnectProbeResolved = Resolve-RequiredFile $expectedPackagedDaemonDisconnectProbePath "packaged-native I6 daemon-disconnect probe"
 $raSvnFaultFixtureResolved = Resolve-RequiredFile $expectedRaSvnFaultFixturePath "I6 ra_svn fault fixture"
+$blackholeConnectFixtureResolved = Resolve-RequiredFile $expectedBlackholeConnectFixturePath "I6 blackhole-connect fixture"
 $countingProxyResolved = Resolve-RequiredFile $expectedCountingProxyPath "I6 transparent counting proxy"
 $installedStressProbeResolved = Resolve-RequiredFile $expectedInstalledStressProbePath "installed VSIX I6 stress probe"
 $installedNegativeProbeResolved = Resolve-RequiredFile $expectedInstalledNegativeProbePath "installed VSIX I6 negative probe"
@@ -549,6 +619,8 @@ $installedRecoverySafeProbeResolved = Resolve-RequiredFile $expectedInstalledRec
 $installedRecoveryIndeterminateProbeResolved = Resolve-RequiredFile $expectedInstalledRecoveryIndeterminateProbePath "installed VSIX I6 recovery-indeterminate probe"
 $installedRedactionProbeResolved = Resolve-RequiredFile $expectedInstalledRedactionProbePath "installed VSIX I6 redaction probe"
 $installedWorkerCrashProbeResolved = Resolve-RequiredFile $expectedInstalledWorkerCrashProbePath "installed VSIX I6 worker-crash probe"
+$installedBlackholeConnectProbeResolved = Resolve-RequiredFile $expectedInstalledBlackholeConnectProbePath "installed VSIX I6 blackhole-connect probe"
+$installedDaemonDisconnectProbeResolved = Resolve-RequiredFile $expectedInstalledDaemonDisconnectProbePath "installed VSIX I6 daemon-disconnect probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $expectedInstalledLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $installedVsixProbeResolved = Resolve-RequiredFile $expectedInstalledVsixProbePath "installed VSIX I6 probe"
 $packagedCompatibilityProbeResolved = Resolve-RequiredFile $expectedPackagedCompatibilityProbePath "packaged-native compatibility probe"
@@ -625,7 +697,10 @@ Assert-ExactProperties $report.artifactBindings @(
   "packagedRecoveryIndeterminateProbe",
   "packagedRedactionProbe",
   "packagedWorkerCrashProbe",
+  "packagedBlackholeConnectProbe",
+  "packagedDaemonDisconnectProbe",
   "raSvnFaultFixture",
+  "blackholeConnectFixture",
   "countingProxy",
   "installedStressProbe",
   "installedNegativeProbe",
@@ -639,6 +714,8 @@ Assert-ExactProperties $report.artifactBindings @(
   "installedRecoveryIndeterminateProbe",
   "installedRedactionProbe",
   "installedWorkerCrashProbe",
+  "installedBlackholeConnectProbe",
+  "installedDaemonDisconnectProbe",
   "installedLocalEventProbe",
   "installedVsixProbe",
   "packagedCompatibilityProbe",
@@ -675,7 +752,10 @@ Assert-ArtifactBinding $report.artifactBindings.packagedRecoverySafeProbe "i6-pa
 Assert-ArtifactBinding $report.artifactBindings.packagedRecoveryIndeterminateProbe "i6-packaged-recovery-indeterminate-probe" $packagedRecoveryIndeterminateProbeResolved "I6 evidence.artifactBindings.packagedRecoveryIndeterminateProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedRedactionProbe "i6-packaged-redaction-probe" $packagedRedactionProbeResolved "I6 evidence.artifactBindings.packagedRedactionProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedWorkerCrashProbe "i6-packaged-worker-crash-probe" $packagedWorkerCrashProbeResolved "I6 evidence.artifactBindings.packagedWorkerCrashProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedBlackholeConnectProbe "i6-packaged-blackhole-connect-probe" $packagedBlackholeConnectProbeResolved "I6 evidence.artifactBindings.packagedBlackholeConnectProbe"
+Assert-ArtifactBinding $report.artifactBindings.packagedDaemonDisconnectProbe "i6-packaged-daemon-disconnect-probe" $packagedDaemonDisconnectProbeResolved "I6 evidence.artifactBindings.packagedDaemonDisconnectProbe"
 Assert-ArtifactBinding $report.artifactBindings.raSvnFaultFixture "i6-ra-svn-fault-fixture" $raSvnFaultFixtureResolved "I6 evidence.artifactBindings.raSvnFaultFixture"
+Assert-ArtifactBinding $report.artifactBindings.blackholeConnectFixture "i6-blackhole-connect-fixture" $blackholeConnectFixtureResolved "I6 evidence.artifactBindings.blackholeConnectFixture"
 Assert-ArtifactBinding $report.artifactBindings.countingProxy "i6-counting-proxy" $countingProxyResolved "I6 evidence.artifactBindings.countingProxy"
 Assert-ArtifactBinding $report.artifactBindings.installedStressProbe "i6-installed-stress-probe" $installedStressProbeResolved "I6 evidence.artifactBindings.installedStressProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedNegativeProbe "i6-installed-negative-probe" $installedNegativeProbeResolved "I6 evidence.artifactBindings.installedNegativeProbe"
@@ -689,6 +769,8 @@ Assert-ArtifactBinding $report.artifactBindings.installedRecoverySafeProbe "i6-i
 Assert-ArtifactBinding $report.artifactBindings.installedRecoveryIndeterminateProbe "i6-installed-recovery-indeterminate-probe" $installedRecoveryIndeterminateProbeResolved "I6 evidence.artifactBindings.installedRecoveryIndeterminateProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedRedactionProbe "i6-installed-redaction-probe" $installedRedactionProbeResolved "I6 evidence.artifactBindings.installedRedactionProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedWorkerCrashProbe "i6-installed-worker-crash-probe" $installedWorkerCrashProbeResolved "I6 evidence.artifactBindings.installedWorkerCrashProbe"
+Assert-ArtifactBinding $report.artifactBindings.installedBlackholeConnectProbe "i6-installed-blackhole-connect-probe" $installedBlackholeConnectProbeResolved "I6 evidence.artifactBindings.installedBlackholeConnectProbe"
+Assert-ArtifactBinding $report.artifactBindings.installedDaemonDisconnectProbe "i6-installed-daemon-disconnect-probe" $installedDaemonDisconnectProbeResolved "I6 evidence.artifactBindings.installedDaemonDisconnectProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedLocalEventProbe "i6-installed-local-event-zero-network-probe" $installedLocalEventProbeResolved "I6 evidence.artifactBindings.installedLocalEventProbe"
 Assert-ArtifactBinding $report.artifactBindings.installedVsixProbe "i6-installed-vsix-probe" $installedVsixProbeResolved "I6 evidence.artifactBindings.installedVsixProbe"
 Assert-ArtifactBinding $report.artifactBindings.packagedCompatibilityProbe "packaged-native-compatibility-probe" $packagedCompatibilityProbeResolved "I6 evidence.artifactBindings.packagedCompatibilityProbe"

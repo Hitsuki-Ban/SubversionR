@@ -33,6 +33,7 @@ const MAX_AUTH_WAIT_INBOUND_MESSAGES: usize = 64;
 const MAX_RETIRED_AUTH_REQUEST_IDS: usize = 64;
 const MAX_STDIN_FRAME_QUEUE: usize = 64;
 const MAX_PENDING_CANCEL_REQUEST_IDS: usize = 64;
+const SHUTDOWN_COMPLETION_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run_json_rpc_stdio<R, W>(reader: R, mut writer: W, bridge: &dyn BridgeApi) -> io::Result<()>
 where
@@ -261,16 +262,30 @@ where
             }
             continue;
         }
+        if result.outcome() == DispatchOutcome::Shutdown {
+            frames.disconnect_active_requests();
+            drain_remote_completions_before_shutdown(
+                &mut state,
+                &mut frames,
+                &mut pending,
+                &mut pending_broker,
+                &completion_receiver,
+                &broker_receiver,
+                &mut writer,
+            )?;
+            for notification in result.notifications() {
+                write_content_length_frame(&mut writer, notification)?;
+            }
+            write_content_length_frame(&mut writer, result.response())?;
+            writer.flush()?;
+            break;
+        }
+
         write_content_length_frame(&mut writer, result.response())?;
         for notification in result.notifications() {
             write_content_length_frame(&mut writer, notification)?;
         }
         writer.flush()?;
-
-        if result.outcome() == DispatchOutcome::Shutdown {
-            frames.disconnect_active_requests();
-            terminal = true;
-        }
     }
 
     Ok(())
@@ -756,6 +771,56 @@ fn fail_all_remote_broker_calls(
     for (_, call) in std::mem::take(pending) {
         let _ = call.responder.send(Err(failure(call.method)));
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drain_remote_completions_before_shutdown<W: Write>(
+    state: &mut DaemonState,
+    frames: &mut StdioFrameReceiver,
+    pending: &mut BTreeMap<String, PendingRemoteRequest>,
+    pending_broker: &mut BTreeMap<String, PendingRemoteBroker>,
+    completion_receiver: &Receiver<AsyncRemoteCompletion>,
+    broker_receiver: &Receiver<RemoteBrokerCall>,
+    writer: &mut W,
+) -> io::Result<()> {
+    let deadline = Instant::now() + SHUTDOWN_COMPLETION_DRAIN_TIMEOUT;
+    fail_all_remote_broker_calls(pending_broker, auth_response_unavailable);
+
+    while !pending.is_empty() {
+        while let Ok(call) = broker_receiver.try_recv() {
+            let method = call.method;
+            fail_remote_broker_call(call, auth_response_unavailable(method));
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "graceful shutdown timed out draining remote completions",
+            ));
+        };
+        match completion_receiver.recv_timeout(remaining.min(Duration::from_millis(10))) {
+            Ok(completion) => settle_async_remote_completion(
+                state,
+                frames,
+                pending,
+                pending_broker,
+                completion,
+                false,
+                writer,
+            )?,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::other(
+                    "remote completion channel closed during graceful shutdown",
+                ));
+            }
+        }
+    }
+
+    while let Ok(call) = broker_receiver.try_recv() {
+        let method = call.method;
+        fail_remote_broker_call(call, auth_response_unavailable(method));
+    }
+    Ok(())
 }
 
 fn settle_async_remote_completion<W: Write>(

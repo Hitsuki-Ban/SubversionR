@@ -3777,7 +3777,32 @@ impl RemoteWorkerSupervisor for DelayedRemoteWorker {
 #[derive(Debug, Default)]
 struct DisconnectBlockingRemoteWorker {
     started: AtomicBool,
+    active: AtomicBool,
     disconnected: AtomicBool,
+}
+
+impl DisconnectBlockingRemoteWorker {
+    fn execute_until_disconnected(&self, effect: RemoteOperationEffect) -> RemoteWorkerSettlement {
+        self.active.store(true, Ordering::SeqCst);
+        self.started.store(true, Ordering::SeqCst);
+        while !self.disconnected.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let settlement = worker_settlement(
+            effect,
+            Err(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
+                "process",
+                "error.remote.workerDisconnected",
+                serde_json::json!({}),
+                false,
+            )),
+            true,
+            true,
+        );
+        self.active.store(false, Ordering::SeqCst);
+        settlement
+    }
 }
 
 #[derive(Debug, Default)]
@@ -3972,18 +3997,22 @@ impl RemoteWorkerSupervisor for DisconnectBlockingRemoteWorker {
         _bridge: &dyn BridgeApi,
         _deadline: Instant,
     ) -> RemoteWorkerSettlement {
-        self.started.store(true, Ordering::SeqCst);
-        while !self.disconnected.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_millis(2));
-        }
-        worker_settlement(
-            effect,
-            Err(remote_worker_test_failure(
-                "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
-            )),
-            true,
-            true,
-        )
+        self.execute_until_disconnected(effect)
+    }
+
+    fn execute_svn_anonymous(
+        &self,
+        _envelope: &RemoteOperationEnvelope,
+        _plan: RemoteConfigPlan,
+        _lane_key: &str,
+        effect: RemoteOperationEffect,
+        request: RemoteSvnAnonymousRequest,
+        _cancellation: &dyn BridgeCancellationToken,
+        _deadline: Instant,
+    ) -> RemoteWorkerSettlement {
+        assert_eq!(effect, RemoteOperationEffect::ReadOnly);
+        assert!(matches!(request, RemoteSvnAnonymousRequest::Status { .. }));
+        self.execute_until_disconnected(effect)
     }
 
     fn terminate_active(&self) -> Result<(), BridgeFailure> {
@@ -3997,6 +4026,10 @@ impl RemoteWorkerSupervisor for DisconnectBlockingRemoteWorker {
     }
 
     fn capability_available(&self) -> bool {
+        true
+    }
+
+    fn svn_anonymous_available(&self) -> bool {
         true
     }
 }
@@ -4228,6 +4261,89 @@ fn stdio_anonymous_lock_identity_failures_are_typed_and_release_the_mutation_lan
 }
 
 #[test]
+fn stdio_shutdown_drains_active_read_only_remote_settlement_before_ack() {
+    let operation_id = "61234567-89ab-4def-8123-456789abcdef";
+    let worker = Arc::new(DisconnectBlockingRemoteWorker::default());
+    let first = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/cache"}}"#),
+        frame(r#"{"jsonrpc":"2.0","id":2,"method":"repository/open","params":{"path":"C:/wc-svn-anonymous-cancel"}}"#),
+        remote_svn_anonymous_status_frame(3, operation_id, 30_000),
+    ]
+    .concat();
+    let shutdown = frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}"#);
+    let reader = ShutdownAfterWorkerStartReader::new(first, shutdown, worker.clone());
+    let mut output = Vec::new();
+
+    run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
+        .expect("graceful shutdown must drain the active read-only worker settlement");
+
+    let frames = decode_frames(&output).expect("responses must remain framed");
+    let remote_index = frames
+        .iter()
+        .position(|frame| frame["id"] == 3)
+        .expect("active remote response must be emitted");
+    let state_index = frames
+        .iter()
+        .position(|frame| {
+            frame["method"] == "remoteConnection/state"
+                && frame["params"]["state"]["kind"] == "indeterminate"
+        })
+        .expect("worker termination state must be emitted");
+    let shutdown_index = frames
+        .iter()
+        .position(|frame| frame["id"] == 4)
+        .expect("shutdown acknowledgement must be emitted");
+
+    assert_eq!(state_index, remote_index + 1);
+    assert_eq!(shutdown_index, state_index + 1);
+    assert_eq!(
+        frames[remote_index]["error"],
+        serde_json::json!({
+            "code": "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED",
+            "category": "process",
+            "messageKey": "error.remote.workerDisconnected",
+            "args": {
+                "remoteFailure": {
+                    "category": "process",
+                    "reason": "workerContainmentFailed",
+                    "cleanupAppropriate": false
+                }
+            },
+            "retryable": false,
+            "diagnostics": null
+        })
+    );
+    assert_eq!(
+        frames[state_index],
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "remoteConnection/state",
+            "params": {
+                "repositoryId": "repo-uuid:C:/wc-svn-anonymous-cancel",
+                "epoch": 1,
+                "state": {
+                    "kind": "indeterminate",
+                    "reason": "workerTerminated",
+                    "originOperationId": operation_id,
+                    "recovery": "notRequired",
+                    "cleanupAppropriate": false
+                }
+            }
+        })
+    );
+    assert_eq!(
+        frames[shutdown_index],
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "result": { "accepted": true }
+        })
+    );
+    assert!(worker.disconnected.load(Ordering::SeqCst));
+    assert!(!worker.active.load(Ordering::SeqCst));
+}
+
+#[test]
 fn stdio_eof_disconnects_an_active_remote_worker_before_returning() {
     let worker = Arc::new(DisconnectBlockingRemoteWorker::default());
     let input = [
@@ -4235,7 +4351,7 @@ fn stdio_eof_disconnects_an_active_remote_worker_before_returning() {
         remote_checkout_frame(2, "21234567-89ab-cdef-0123-456789abcdef", "C:/checkout/eof"),
     ]
     .concat();
-    let reader = DelayedEofReader::new(input, Duration::from_millis(60));
+    let reader = EofAfterWorkerStartReader::new(input, worker.clone());
     let mut output = Vec::new();
 
     run_json_rpc_stdio_with_remote_worker(reader, &mut output, &FakeBridge, worker.clone())
@@ -4243,6 +4359,7 @@ fn stdio_eof_disconnects_an_active_remote_worker_before_returning() {
 
     assert!(worker.started.load(Ordering::SeqCst));
     assert!(worker.disconnected.load(Ordering::SeqCst));
+    assert!(!worker.active.load(Ordering::SeqCst));
     let responses = decode_frames(&output).expect("initialize response should remain framed");
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0]["id"], 1);
@@ -5354,6 +5471,107 @@ struct EofAfterFlagReader {
     ready: Arc<AtomicBool>,
     wait_timeout: Duration,
     waited: bool,
+}
+
+struct ShutdownAfterWorkerStartReader {
+    first: io::Cursor<Vec<u8>>,
+    shutdown: io::Cursor<Vec<u8>>,
+    worker: Arc<DisconnectBlockingRemoteWorker>,
+    phase: u8,
+}
+
+struct EofAfterWorkerStartReader {
+    payload: io::Cursor<Vec<u8>>,
+    worker: Arc<DisconnectBlockingRemoteWorker>,
+    waited: bool,
+}
+
+impl EofAfterWorkerStartReader {
+    fn new(payload: Vec<u8>, worker: Arc<DisconnectBlockingRemoteWorker>) -> Self {
+        Self {
+            payload: io::Cursor::new(payload),
+            worker,
+            waited: false,
+        }
+    }
+}
+
+impl Read for EofAfterWorkerStartReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let bytes_read = self.payload.read(buffer)?;
+        if bytes_read == 0 && !self.waited {
+            self.waited = true;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !self.worker.started.load(Ordering::SeqCst) {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "remote worker did not start before the bounded EOF gate",
+                    ));
+                }
+                thread::yield_now();
+            }
+        }
+        Ok(bytes_read)
+    }
+}
+
+impl ShutdownAfterWorkerStartReader {
+    fn new(first: Vec<u8>, shutdown: Vec<u8>, worker: Arc<DisconnectBlockingRemoteWorker>) -> Self {
+        Self {
+            first: io::Cursor::new(first),
+            shutdown: io::Cursor::new(shutdown),
+            worker,
+            phase: 0,
+        }
+    }
+
+    fn wait_for(&self, flag: &AtomicBool, failure: &'static str) -> io::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !flag.load(Ordering::SeqCst) {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, failure));
+            }
+            thread::yield_now();
+        }
+        Ok(())
+    }
+}
+
+impl Read for ShutdownAfterWorkerStartReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match self.phase {
+                0 => {
+                    let read = self.first.read(buffer)?;
+                    if read > 0 {
+                        return Ok(read);
+                    }
+                    self.wait_for(
+                        &self.worker.started,
+                        "remote worker did not start before the shutdown request",
+                    )?;
+                    self.phase = 1;
+                }
+                1 => {
+                    let read = self.shutdown.read(buffer)?;
+                    if read > 0 {
+                        return Ok(read);
+                    }
+                    self.phase = 2;
+                }
+                2 => {
+                    self.wait_for(
+                        &self.worker.disconnected,
+                        "shutdown did not disconnect the remote worker",
+                    )?;
+                    self.phase = 3;
+                    return Ok(0);
+                }
+                _ => return Ok(0),
+            }
+        }
+    }
 }
 
 impl EofAfterFlagReader {

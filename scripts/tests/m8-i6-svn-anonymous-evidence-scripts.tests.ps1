@@ -19,7 +19,10 @@ $packagedRecoverySafeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i
 $packagedRecoveryIndeterminateProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-indeterminate.mjs"
 $packagedRedactionProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-redaction.mjs"
 $packagedWorkerCrashProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-worker-crash.mjs"
+$packagedBlackholeConnectProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-blackholeConnect.mjs"
+$packagedDaemonDisconnectProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-daemon-disconnect.mjs"
 $raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
+$blackholeConnectFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-blackhole-connect.ps1"
 $countingProxyPath = Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"
 $installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
 $installedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"
@@ -33,6 +36,8 @@ $installedRecoverySafeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-
 $installedRecoveryIndeterminateProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-indeterminate.ps1"
 $installedRedactionProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-redaction.ps1"
 $installedWorkerCrashProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-worker-crash.ps1"
+$installedBlackholeConnectProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-blackholeConnect.ps1"
+$installedDaemonDisconnectProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-daemon-disconnect.ps1"
 $installedLocalEventProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"
 $installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
 $packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
@@ -266,6 +271,54 @@ function New-NegativeCell(
       }
     }
   }
+  if ($Cell -ceq "blackholeConnect") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["workerProcessesAfter"] = 0
+      $observation["checkoutJournalEntriesAfter"] = 0
+      $observation["workingCopyPreserved"] = $true
+      $observation["blackholeTiming"] = [ordered]@{ clock = "monotonic"; timeoutMs = 5000; elapsedMs = 5000; cleanupSlackMs = 5000 }
+      $observation["daemonState"] = [ordered]@{ kind = "unreachable"; reason = "timeout"; recovery = "notRequired"; cleanupAppropriate = $false }
+      $observation["blackholeConnectSettlement"] = [ordered]@{
+        trigger = "conditional-accept-loopback-no-accept"
+        operationIdSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        wireSettlementObserved = $true; daemonTerminalStateObserved = $true; nativeLaneReleased = $true; localSnapshotAfterTimeout = $true
+        conditionalAcceptEnabled = $true; listenerProcessBound = $true; acceptInvocations = 0; acceptedConnections = 0
+        stateArtifactUntampered = $true; finalFixtureStatus = "stopped"
+        tcp = [ordered]@{
+          provider = "GetExtendedTcpTable/TCP_TABLE_OWNER_PID_ALL"
+          workerProcessBound = $true
+          observationStartedBeforeProbeLaunch = $true
+          localAddress = "127.0.0.1"
+          localPort = 49152
+          remoteAddress = "127.0.0.1"
+          remotePort = 3690
+          distinctTcbAttempts = 1
+          establishedTcbConnections = 0
+          observationCompletedAfterProbeExit = $true
+          stableSynSentSamples = 3
+          stableSynSentMilliseconds = 25
+          observationMilliseconds = 50
+          synSentRows = 1
+          establishedRows = 0
+          finalRows = 0
+        }
+      }
+    }
+  }
+  if ($Cell -ceq "daemonDisconnect") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["workerDescendantsAtBarrier"] = 2
+      $observation["workerProcessesAfter"] = 0
+      $observation["checkoutJournalEntriesAfter"] = 0
+      $observation["workingCopyPreserved"] = $true
+      $observation["daemonState"] = [ordered]@{ kind = "indeterminate"; reason = "workerTerminated"; recovery = "notRequired"; cleanupAppropriate = $false }
+      $observation["daemonDisconnectSettlement"] = [ordered]@{
+        trigger = "graceful-client-shutdown-after-greeting"; activeRequestSettlementObserved = $true; daemonStateObserved = $true
+        settlementBeforeShutdownAck = $true; shutdownAcknowledged = $true; workingCopyPreserved = $true
+        fixtureGreetingBarrierObserved = $true; shutdownTriggerExternallyCreated = $true; fixtureFollowupContacts = 0
+      }
+    }
+  }
   if ($Cell -ceq "trustRevoked") {
     foreach ($observation in $surfaceObservations) {
       $observation["trustTransition"] = [ordered]@{
@@ -347,6 +400,12 @@ function Copy-Report([object]$Report) {
   return ($Report | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
 }
 
+function Assert-SchemaRejects([object]$Report, [string]$Message) {
+  $json = $Report | ConvertTo-Json -Depth 20
+  $valid = Test-Json -Json $json -SchemaFile $schemaPath -ErrorAction SilentlyContinue
+  Assert-True (-not $valid) $Message
+}
+
 function Copy-ArgumentsWithValue([object[]]$Arguments, [string]$Name, [string]$Value) {
   $copy = @($Arguments)
   $index = [Array]::IndexOf($copy, $Name)
@@ -415,7 +474,7 @@ function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [stri
 
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
-  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $packagedRecoveryBlockedProbePath, $packagedRecoverySafeProbePath, $packagedRecoveryIndeterminateProbePath, $packagedRedactionProbePath, $packagedWorkerCrashProbePath, $raSvnFaultFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedRecoveryBlockedProbePath, $installedRecoverySafeProbePath, $installedRecoveryIndeterminateProbePath, $installedRedactionProbePath, $installedWorkerCrashProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $packagedRecoveryBlockedProbePath, $packagedRecoverySafeProbePath, $packagedRecoveryIndeterminateProbePath, $packagedRedactionProbePath, $packagedWorkerCrashProbePath, $packagedBlackholeConnectProbePath, $packagedDaemonDisconnectProbePath, $raSvnFaultFixturePath, $blackholeConnectFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedRecoveryBlockedProbePath, $installedRecoverySafeProbePath, $installedRecoveryIndeterminateProbePath, $installedRedactionProbePath, $installedWorkerCrashProbePath, $installedBlackholeConnectProbePath, $installedDaemonDisconnectProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
     Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
   }
 
@@ -462,7 +521,10 @@ try {
     packagedRecoveryIndeterminateProbe = New-ArtifactBinding "i6-packaged-recovery-indeterminate-probe" $packagedRecoveryIndeterminateProbePath
     packagedRedactionProbe = New-ArtifactBinding "i6-packaged-redaction-probe" $packagedRedactionProbePath
     packagedWorkerCrashProbe = New-ArtifactBinding "i6-packaged-worker-crash-probe" $packagedWorkerCrashProbePath
+    packagedBlackholeConnectProbe = New-ArtifactBinding "i6-packaged-blackhole-connect-probe" $packagedBlackholeConnectProbePath
+    packagedDaemonDisconnectProbe = New-ArtifactBinding "i6-packaged-daemon-disconnect-probe" $packagedDaemonDisconnectProbePath
     raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
+    blackholeConnectFixture = New-ArtifactBinding "i6-blackhole-connect-fixture" $blackholeConnectFixturePath
     countingProxy = New-ArtifactBinding "i6-counting-proxy" $countingProxyPath
     installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
     installedNegativeProbe = New-ArtifactBinding "i6-installed-negative-probe" $installedNegativeProbePath
@@ -476,6 +538,8 @@ try {
     installedRecoveryIndeterminateProbe = New-ArtifactBinding "i6-installed-recovery-indeterminate-probe" $installedRecoveryIndeterminateProbePath
     installedRedactionProbe = New-ArtifactBinding "i6-installed-redaction-probe" $installedRedactionProbePath
     installedWorkerCrashProbe = New-ArtifactBinding "i6-installed-worker-crash-probe" $installedWorkerCrashProbePath
+    installedBlackholeConnectProbe = New-ArtifactBinding "i6-installed-blackhole-connect-probe" $installedBlackholeConnectProbePath
+    installedDaemonDisconnectProbe = New-ArtifactBinding "i6-installed-daemon-disconnect-probe" $installedDaemonDisconnectProbePath
     installedLocalEventProbe = New-ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbePath
     installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
     packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
@@ -599,6 +663,35 @@ try {
   Assert-True (Test-Json -Json $rawReport -SchemaFile $schemaPath) "Complete I6 evidence fixture should satisfy the strict JSON schema."
   $verifiedOutput = & pwsh @verifyArguments 2>&1
   Assert-Equal 0 $LASTEXITCODE "Complete hash-bound I6 evidence fixture should pass the executable verifier. Output: $($verifiedOutput | Out-String)"
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].daemonState.reason = "workerTerminated"
+  Assert-SchemaRejects $tampered "I6 schema must reject the unreachable/workerTerminated daemon-state cross-pair."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].daemonState.reason = "timeout"
+  Assert-SchemaRejects $tampered "I6 schema must reject the indeterminate/timeout daemon-state cross-pair."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[8].surfaceObservations[0].daemonState.kind = "unreachable"
+  $tampered.negativeCells[8].surfaceObservations[0].daemonState.reason = "timeout"
+  Assert-SchemaRejects $tampered "I6 schema must reject the blackhole daemon state in the daemon-disconnect cell."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].blackholeConnectSettlement.tcp.distinctTcbAttempts = 2
+  Assert-SchemaRejects $tampered "I6 schema must reject more than one distinct blackhole-connect TCB attempt."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[1].blackholeConnectSettlement.tcp.localAddress = "192.0.2.1"
+  Assert-SchemaRejects $tampered "I6 schema must reject a blackhole-connect TCB identity outside loopback."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].blackholeConnectSettlement.tcp.stableSynSentMilliseconds = 24
+  Assert-SchemaRejects $tampered "I6 schema must reject a blackhole-connect TCB without the required stable SYN_SENT span."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[1].blackholeConnectSettlement.tcp.observationStartedBeforeProbeLaunch = $false
+  Assert-SchemaRejects $tampered "I6 schema must reject blackhole-connect sampling that began after probe launch."
 
   $tampered = Copy-Report $report
   $tampered.surfaces[1].operations = @($tampered.surfaces[1].operations | Select-Object -Skip 1)
@@ -754,6 +847,31 @@ try {
   $tampered.negativeCells[7].surfaceObservations[0].PSObject.Properties.Remove("workerCrashSettlement")
   Write-Report $tampered $evidencePath
   Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject worker-crash evidence without the explicit settlement proof."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].blackholeConnectSettlement.tcp.establishedRows = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an established blackhole-connect TCP row."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[1].blackholeConnectSettlement.tcp.stableSynSentSamples = 2
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an unstable blackhole-connect TCP observation."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].blackholeConnectSettlement.acceptInvocations = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a blackhole fixture accept invocation."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[8].surfaceObservations[0].daemonDisconnectSettlement.settlementBeforeShutdownAck = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject daemon-disconnect settlement after shutdown acknowledgement."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[8].surfaceObservations[1].daemonDisconnectSettlement.shutdownTriggerExternallyCreated = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a non-external daemon shutdown trigger."
 
   $tampered = Copy-Report $report
   $tampered.negativeCells[5].surfaceObservations[0] | Add-Member -NotePropertyName cancellationSettlement -NotePropertyValue ([pscustomobject]@{ trigger = "abort-signal-after-greeting"; localCode = "JSON_RPC_REQUEST_CANCELLED"; wireCode = "SUBVERSIONR_REMOTE_WORKER_CANCELLED"; wireReason = "operationCancelled"; wireSettlementObserved = $true })
@@ -945,7 +1063,10 @@ try {
       @("packagedRecoveryIndeterminateProbe", $packagedRecoveryIndeterminateProbePath),
       @("packagedRedactionProbe", $packagedRedactionProbePath),
       @("packagedWorkerCrashProbe", $packagedWorkerCrashProbePath),
+      @("packagedBlackholeConnectProbe", $packagedBlackholeConnectProbePath),
+      @("packagedDaemonDisconnectProbe", $packagedDaemonDisconnectProbePath),
       @("raSvnFaultFixture", $raSvnFaultFixturePath),
+      @("blackholeConnectFixture", $blackholeConnectFixturePath),
       @("countingProxy", $countingProxyPath),
       @("installedStressProbe", $installedStressProbePath),
       @("installedNegativeProbe", $installedNegativeProbePath),
@@ -956,6 +1077,8 @@ try {
       @("installedRecoveryIndeterminateProbe", $installedRecoveryIndeterminateProbePath),
       @("installedRedactionProbe", $installedRedactionProbePath),
       @("installedWorkerCrashProbe", $installedWorkerCrashProbePath),
+      @("installedBlackholeConnectProbe", $installedBlackholeConnectProbePath),
+      @("installedDaemonDisconnectProbe", $installedDaemonDisconnectProbePath),
       @("installedLocalEventProbe", $installedLocalEventProbePath),
       @("installedVsixProbe", $installedVsixProbePath),
       @("packagedCompatibilityProbe", $packagedCompatibilityProbePath),
@@ -1108,7 +1231,10 @@ try {
       'probe-m8-i6-packaged-cancellation.mjs',
       'probe-m8-i6-packaged-recovery-blocked.mjs',
       'probe-m8-i6-packaged-worker-crash.mjs',
+      'probe-m8-i6-packaged-blackholeConnect.mjs',
+      'probe-m8-i6-packaged-daemon-disconnect.mjs',
       'serve-m8-i6-ra-svn-fault-fixture.mjs',
+      'serve-m8-i6-blackhole-connect.ps1',
       'serve-m8-i6-counting-proxy.mjs',
       'probe-m8-i6-installed-stress.ps1',
       'probe-m8-i6-installed-negative.ps1',
@@ -1118,6 +1244,8 @@ try {
       'probe-m8-i6-installed-cancellation.ps1',
       'probe-m8-i6-installed-recovery-blocked.ps1',
       'probe-m8-i6-installed-worker-crash.ps1',
+      'probe-m8-i6-installed-blackholeConnect.ps1',
+      'probe-m8-i6-installed-daemon-disconnect.ps1',
       'probe-m8-i6-installed-local-event-zero-network.ps1',
       'probe-m8-i6-installed-vsix.ps1',
       'test-vscode-installed-extension-host.ps1',
@@ -1132,14 +1260,6 @@ try {
       '[int]$cellReport.checkoutRevision -eq 3',
       'The extracted packaged VSIX daemon must match DaemonPath.',
       'The extracted packaged VSIX bridge must match BridgePath.',
-      'SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED',
-      'the four packaged-native fault cells',
-      'four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells',
-      'packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, worker-crash, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells',
-      'installed real-watcher local-event zero-network cell',
-      'installed 100+1 single-Extension-Host residue stress',
-      'remaining cross-surface blackhole-connect and daemon-disconnect cells',
-      'nine-operation anonymous svn:// matrices plus exact lock/unlock authenticationRequired boundaries',
       'SVN_OPERATION_LOCK_FAILED',
       'SVN_OPERATION_UNLOCK_FAILED',
       'anonymousIdentityRequired',
@@ -1147,7 +1267,26 @@ try {
     )) {
     Assert-True ($driverText.Contains($requiredText)) "I6 probe driver must retain real-artifact/fail-closed contract text '$requiredText'."
   }
-  Assert-True (-not $driverText.Contains('publicClaimEligible = $true')) "I6 probe driver must not synthesize a passing public claim while the installed operation harness is absent."
+  Assert-True (-not $driverText.Contains('SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED')) "I6 probe driver must not retain the final observation blocker after every cell is implemented."
+  foreach ($completedContractText in @(
+      'GetExtendedTcpTable',
+      'TCP_TABLE_OWNER_PID_ALL',
+      'GetByRemotePort',
+      'processId + "|" + LocalAddress',
+      'stableSynSentMilliseconds',
+      'networkAttempts = [int]$tcpObservation.distinctTcbAttempts',
+      'conditional-accept-loopback-no-accept',
+      'graceful-client-shutdown-after-greeting',
+      'publicClaimEligible = $true',
+      '[System.IO.File]::Move($temporaryOutputPath, $outputResolved)'
+    )) {
+    Assert-True ($driverText.Contains($completedContractText)) "I6 completed driver must retain exact aggregate contract text '$completedContractText'."
+  }
+  $blackholeObserverStartIndex = $driverText.IndexOf('$tcpObserver = [SubversionRM8I6BlackholeTcpObserver]::new($blackholePort)', [System.StringComparison]::Ordinal)
+  $blackholeProbeLaunchIndex = $driverText.IndexOf('$startedProbe = Start-WorkerCrashProbeProcess', $blackholeObserverStartIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $blackholeObserverStartIndex -ge 0 -and $blackholeProbeLaunchIndex -gt $blackholeObserverStartIndex
+  ) "I6 blackhole TCP sampling must publish its observer before product probe launch."
   foreach ($workerCrashContractText in @(
       'CreateToolhelp32Snapshot',
       'QueryFullProcessImageNameW',
@@ -1252,13 +1391,17 @@ try {
   Assert-True (
     $driverText -cmatch '(?s)try\s*\{\s*if \(\$null -ne \$unrelatedProxy\).*?\}\s*finally\s*\{\s*if \(\$null -ne \$faultFixture\) \{ Stop-FaultFixture'
   ) "The unrelated counting proxy cleanup must not prevent command-stall fixture cleanup."
+  $packagedNegativeBlockStart = $driverText.IndexOf('$packagedNegativeContracts =')
+  $packagedNegativeBlockEnd = $driverText.IndexOf('Assert-True ($packagedNegativeObservations.Count -eq 4)', $packagedNegativeBlockStart)
+  Assert-True ($packagedNegativeBlockStart -ge 0 -and $packagedNegativeBlockEnd -gt $packagedNegativeBlockStart) "The packaged-negative observation block must be uniquely delimited."
+  $packagedNegativeBlockText = $driverText.Substring($packagedNegativeBlockStart, $packagedNegativeBlockEnd - $packagedNegativeBlockStart)
   foreach ($forbiddenObservationText in @(
       'Get-WmiObject',
       'networkAttempts = 1',
       '"-FixtureRoot", (Join-Path $scenarioRoot "extension-host")',
       'workerDescendantsAfter = 0'
     )) {
-    Assert-True (-not $driverText.Contains($forbiddenObservationText)) "Packaged-negative evidence must not contain synthetic/fallback observation '$forbiddenObservationText'."
+    Assert-True (-not $packagedNegativeBlockText.Contains($forbiddenObservationText)) "Packaged-negative evidence must not contain synthetic/fallback observation '$forbiddenObservationText'."
   }
   $negativeSubscriptionIndex = $driverText.IndexOf('Register-CimIndicationEvent', [System.StringComparison]::Ordinal)
   $negativeSubscriberLookupIndex = $driverText.IndexOf('$matchingSubscribers = @(Get-EventSubscriber', $negativeSubscriptionIndex, [System.StringComparison]::Ordinal)
@@ -1542,6 +1685,11 @@ try {
   $packageJson = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "package.json") | ConvertFrom-Json
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-ra-svn-fault-fixture.tests.mjs")) "PR Fast I6 script tests must execute the controlled ra_svn fault fixture tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-counting-proxy.tests.mjs")) "PR Fast I6 script tests must execute the transparent counting proxy tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-blackhole-connect-fixture.tests.ps1")) "PR Fast I6 script tests must execute the conditional-accept fixture tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-blackholeConnect.tests.mjs")) "PR Fast I6 script tests must execute the packaged blackhole-connect tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-blackholeConnect-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed blackhole-connect tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-daemon-disconnect.tests.mjs")) "PR Fast I6 script tests must execute the packaged daemon-disconnect tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-daemon-disconnect-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed daemon-disconnect tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-negative.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native negative probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-authz-denied.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native authz-denied probe tests."
   Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-stalled-read.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native stalled-mid-read probe tests."

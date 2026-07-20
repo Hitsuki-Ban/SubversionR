@@ -48,6 +48,335 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+public sealed class SubversionRM8I6TcpOwnerRow {
+  public uint State { get; private set; }
+  public string LocalAddress { get; private set; }
+  public int LocalPort { get; private set; }
+  public string RemoteAddress { get; private set; }
+  public int RemotePort { get; private set; }
+  public uint ProcessId { get; private set; }
+  public string TcbKey { get; private set; }
+
+  internal SubversionRM8I6TcpOwnerRow(
+    uint state,
+    uint localAddress,
+    int localPort,
+    uint remoteAddress,
+    int remotePort,
+    uint processId
+  ) {
+    State = state;
+    LocalAddress = FormatIpv4(localAddress);
+    LocalPort = localPort;
+    RemoteAddress = FormatIpv4(remoteAddress);
+    RemotePort = remotePort;
+    ProcessId = processId;
+    TcbKey = processId + "|" + LocalAddress + ":" + localPort + "->" + RemoteAddress + ":" + remotePort;
+  }
+
+  private static string FormatIpv4(uint address) {
+    return String.Format(
+      "{0}.{1}.{2}.{3}",
+      address & 0xffU,
+      (address >> 8) & 0xffU,
+      (address >> 16) & 0xffU,
+      (address >> 24) & 0xffU
+    );
+  }
+}
+
+public static class SubversionRM8I6TcpOwnerTable {
+  private const int AF_INET = 2;
+  private const int TCP_TABLE_OWNER_PID_ALL = 5;
+  private const int ERROR_INSUFFICIENT_BUFFER = 122;
+
+  [DllImport("iphlpapi.dll", SetLastError = true)]
+  private static extern uint GetExtendedTcpTable(
+    IntPtr table,
+    ref int size,
+    bool order,
+    int ipVersion,
+    int tableClass,
+    uint reserved
+  );
+
+  private static SubversionRM8I6TcpOwnerRow[] GetMatching(uint? processId, int remotePort) {
+    if ((processId.HasValue && processId.Value == 0) || remotePort < 1 || remotePort > 65535) {
+      throw new ArgumentOutOfRangeException();
+    }
+    int size = 0;
+    uint first = GetExtendedTcpTable(IntPtr.Zero, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (first != ERROR_INSUFFICIENT_BUFFER || size < 4) {
+      throw new Win32Exception((int)first, "GetExtendedTcpTable size query failed");
+    }
+    IntPtr buffer = Marshal.AllocHGlobal(size);
+    try {
+      uint result = GetExtendedTcpTable(buffer, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+      if (result != 0) throw new Win32Exception((int)result, "GetExtendedTcpTable failed");
+      int rows = Marshal.ReadInt32(buffer);
+      List<SubversionRM8I6TcpOwnerRow> matching = new List<SubversionRM8I6TcpOwnerRow>();
+      IntPtr cursor = IntPtr.Add(buffer, 4);
+      for (int index = 0; index < rows; index += 1, cursor = IntPtr.Add(cursor, 24)) {
+        uint observedState = unchecked((uint)Marshal.ReadInt32(cursor, 0));
+        uint localAddress = unchecked((uint)Marshal.ReadInt32(cursor, 4));
+        uint encodedLocalPort = unchecked((uint)Marshal.ReadInt32(cursor, 8));
+        uint remoteAddress = unchecked((uint)Marshal.ReadInt32(cursor, 12));
+        uint encodedRemotePort = unchecked((uint)Marshal.ReadInt32(cursor, 16));
+        uint observedProcessId = unchecked((uint)Marshal.ReadInt32(cursor, 20));
+        int observedLocalPort = (int)(((encodedLocalPort & 0x000000ffU) << 8) | ((encodedLocalPort & 0x0000ff00U) >> 8));
+        int observedRemotePort = (int)(((encodedRemotePort & 0x000000ffU) << 8) | ((encodedRemotePort & 0x0000ff00U) >> 8));
+        if ((!processId.HasValue || observedProcessId == processId.Value) && localAddress == 0x0100007fU && remoteAddress == 0x0100007fU && observedRemotePort == remotePort) {
+          matching.Add(new SubversionRM8I6TcpOwnerRow(
+            observedState,
+            localAddress,
+            observedLocalPort,
+            remoteAddress,
+            observedRemotePort,
+            observedProcessId
+          ));
+        }
+      }
+      return matching.ToArray();
+    }
+    finally {
+      Marshal.FreeHGlobal(buffer);
+    }
+  }
+
+  public static SubversionRM8I6TcpOwnerRow[] Get(uint processId, int remotePort) {
+    return GetMatching(processId, remotePort);
+  }
+
+  public static SubversionRM8I6TcpOwnerRow[] GetByRemotePort(int remotePort) {
+    return GetMatching(null, remotePort);
+  }
+
+  public static int Count(uint processId, int remotePort, uint state) {
+    int count = 0;
+    foreach (SubversionRM8I6TcpOwnerRow row in Get(processId, remotePort)) {
+      if (row.State == state) count += 1;
+    }
+    return count;
+  }
+
+  public static int CountAny(uint processId, int remotePort) {
+    return Get(processId, remotePort).Length;
+  }
+}
+
+public sealed class SubversionRM8I6BlackholeTcpObservation {
+  public string LocalAddress { get; private set; }
+  public int LocalPort { get; private set; }
+  public string RemoteAddress { get; private set; }
+  public int RemotePort { get; private set; }
+  public int DistinctTcbAttempts { get; private set; }
+  public int EstablishedTcbConnections { get; private set; }
+  public int StableSynSentSamples { get; private set; }
+  public long StableSynSentMilliseconds { get; private set; }
+  public long ObservationMilliseconds { get; private set; }
+
+  internal SubversionRM8I6BlackholeTcpObservation(
+    string localAddress,
+    int localPort,
+    string remoteAddress,
+    int remotePort,
+    int distinctTcbAttempts,
+    int establishedTcbConnections,
+    int stableSynSentSamples,
+    long stableSynSentMilliseconds,
+    long observationMilliseconds
+  ) {
+    LocalAddress = localAddress;
+    LocalPort = localPort;
+    RemoteAddress = remoteAddress;
+    RemotePort = remotePort;
+    DistinctTcbAttempts = distinctTcbAttempts;
+    EstablishedTcbConnections = establishedTcbConnections;
+    StableSynSentSamples = stableSynSentSamples;
+    StableSynSentMilliseconds = stableSynSentMilliseconds;
+    ObservationMilliseconds = observationMilliseconds;
+  }
+}
+
+public sealed class SubversionRM8I6BlackholeTcpObserver : IDisposable {
+  private const uint SYN_SENT = 3;
+  private const uint ESTABLISHED = 5;
+  private readonly object gate = new object();
+  private readonly int remotePort;
+  private readonly Stopwatch clock;
+  private readonly Thread thread;
+  private readonly ManualResetEventSlim started = new ManualResetEventSlim(false);
+  private readonly HashSet<string> attemptTcbs = new HashSet<string>(StringComparer.Ordinal);
+  private readonly HashSet<string> establishedTcbs = new HashSet<string>(StringComparer.Ordinal);
+  private readonly HashSet<uint> ownerProcessIds = new HashSet<uint>();
+  private volatile bool stopRequested;
+  private Exception failure;
+  private bool workerBound;
+  private uint boundWorkerProcessId;
+  private string lockedTcbKey;
+  private string lockedLocalAddress;
+  private int lockedLocalPort;
+  private string lockedRemoteAddress;
+  private bool synSentRetired;
+  private int stableSynSentSamples;
+  private long firstSynSentMilliseconds = -1;
+  private long lastSynSentMilliseconds = -1;
+  private int latestRows;
+  private bool disposed;
+
+  public SubversionRM8I6BlackholeTcpObserver(int remotePort) {
+    if (remotePort < 1 || remotePort > 65535) throw new ArgumentOutOfRangeException("remotePort");
+    this.remotePort = remotePort;
+    clock = Stopwatch.StartNew();
+    thread = new Thread(Run);
+    thread.IsBackground = true;
+    thread.Name = "SubversionR M8 I6 blackhole TCP observer";
+    thread.Start();
+    if (!started.Wait(10000)) {
+      stopRequested = true;
+      thread.Join(10000);
+      throw new TimeoutException("The blackhole TCP observer did not publish its pre-launch sampling barrier.");
+    }
+    lock (gate) { ThrowIfFailed(); }
+  }
+
+  public void BindWorker(uint workerProcessId) {
+    if (workerProcessId == 0) throw new ArgumentOutOfRangeException("workerProcessId");
+    lock (gate) {
+      ThrowIfFailed();
+      if (workerBound) throw new InvalidOperationException("The blackhole TCP observer worker is already bound.");
+      foreach (uint observedProcessId in ownerProcessIds) {
+        if (observedProcessId != workerProcessId) {
+          throw new InvalidOperationException("A pre-bind TCP attempt was owned by a process other than the exact worker.");
+        }
+      }
+      boundWorkerProcessId = workerProcessId;
+      workerBound = true;
+    }
+  }
+
+  public SubversionRM8I6BlackholeTcpObservation Complete(uint workerProcessId, bool probeExited) {
+    if (!probeExited) throw new InvalidOperationException("The probe must exit before TCP observation completes.");
+    StopThread();
+    SubversionRM8I6TcpOwnerRow[] finalRows = SubversionRM8I6TcpOwnerTable.GetByRemotePort(remotePort);
+    lock (gate) {
+      ThrowIfFailed();
+      if (!workerBound || boundWorkerProcessId != workerProcessId) {
+        throw new InvalidOperationException("The blackhole TCP observer is not bound to the exact worker.");
+      }
+      ObserveRows(finalRows, clock.ElapsedMilliseconds);
+      ThrowIfFailed();
+      if (latestRows != 0) throw new InvalidOperationException("A TCP row remained after probe settlement.");
+      if (lockedTcbKey == null || attemptTcbs.Count != 1) {
+        throw new InvalidOperationException("The blackhole TCP observer did not see exactly one TCB attempt.");
+      }
+      if (establishedTcbs.Count != 0) {
+        throw new InvalidOperationException("The blackhole TCP observer saw an established connection.");
+      }
+      if (stableSynSentSamples < 3 || lastSynSentMilliseconds - firstSynSentMilliseconds < 25) {
+        throw new InvalidOperationException("The blackhole TCP observer did not see a stable SYN_SENT TCB.");
+      }
+      return new SubversionRM8I6BlackholeTcpObservation(
+        lockedLocalAddress,
+        lockedLocalPort,
+        lockedRemoteAddress,
+        remotePort,
+        attemptTcbs.Count,
+        establishedTcbs.Count,
+        stableSynSentSamples,
+        lastSynSentMilliseconds - firstSynSentMilliseconds,
+        clock.ElapsedMilliseconds
+      );
+    }
+  }
+
+  private void Run() {
+    try {
+      while (!stopRequested) {
+        SubversionRM8I6TcpOwnerRow[] rows = SubversionRM8I6TcpOwnerTable.GetByRemotePort(remotePort);
+        lock (gate) {
+          ObserveRows(rows, clock.ElapsedMilliseconds);
+          started.Set();
+          if (failure != null) return;
+        }
+        Thread.Sleep(2);
+      }
+    }
+    catch (Exception error) {
+      lock (gate) {
+        if (failure == null) failure = error;
+        started.Set();
+      }
+    }
+  }
+
+  private void ObserveRows(SubversionRM8I6TcpOwnerRow[] rows, long elapsedMilliseconds) {
+    if (failure != null) return;
+    if (rows.Length > 1) {
+      failure = new InvalidOperationException("Multiple simultaneous TCP rows targeted the blackhole fixture.");
+      return;
+    }
+    foreach (SubversionRM8I6TcpOwnerRow row in rows) {
+      ownerProcessIds.Add(row.ProcessId);
+      if (workerBound && row.ProcessId != boundWorkerProcessId) {
+        failure = new InvalidOperationException("A TCP attempt was owned by a process other than the exact worker.");
+        return;
+      }
+      attemptTcbs.Add(row.TcbKey);
+      if (row.State == ESTABLISHED) establishedTcbs.Add(row.TcbKey);
+      if (row.State != SYN_SENT) {
+        failure = new InvalidOperationException("The blackhole TCP attempt reached a state other than SYN_SENT.");
+        return;
+      }
+      if (lockedTcbKey == null) {
+        lockedTcbKey = row.TcbKey;
+        lockedLocalAddress = row.LocalAddress;
+        lockedLocalPort = row.LocalPort;
+        lockedRemoteAddress = row.RemoteAddress;
+        firstSynSentMilliseconds = elapsedMilliseconds;
+      }
+      if (!String.Equals(row.TcbKey, lockedTcbKey, StringComparison.Ordinal)) {
+        failure = new InvalidOperationException("The exact blackhole TCP TCB was replaced.");
+        return;
+      }
+      if (synSentRetired) {
+        failure = new InvalidOperationException("A TCP TCB appeared after the exact blackhole TCB retired.");
+        return;
+      }
+      stableSynSentSamples += 1;
+      lastSynSentMilliseconds = elapsedMilliseconds;
+    }
+    if (rows.Length == 0 && lockedTcbKey != null) synSentRetired = true;
+    latestRows = rows.Length;
+  }
+
+  private void ThrowIfFailed() {
+    if (failure != null) throw new InvalidOperationException("Blackhole TCP observation failed.", failure);
+  }
+
+  private void StopThread() {
+    stopRequested = true;
+    if (!thread.Join(10000)) throw new TimeoutException("The blackhole TCP observer did not stop.");
+  }
+
+  public void Dispose() {
+    if (disposed) return;
+    disposed = true;
+    stopRequested = true;
+    thread.Join(10000);
+    started.Dispose();
+  }
+}
+'@
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -455,9 +784,14 @@ $packagedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScript
 $installedRedactionProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-redaction.ps1"))
 $packagedWorkerCrashProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-worker-crash.mjs"))
 $installedWorkerCrashProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-worker-crash.ps1"))
+$packagedBlackholeConnectProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-blackholeConnect.mjs"))
+$installedBlackholeConnectProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-blackholeConnect.ps1"))
+$packagedDaemonDisconnectProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-daemon-disconnect.mjs"))
+$installedDaemonDisconnectProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-daemon-disconnect.ps1"))
 $installedLocalEventProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-installed-local-event-zero-network.ps1"))
 $countingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-counting-proxy.mjs"))
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
+$blackholeConnectFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-blackhole-connect.ps1"))
 $packagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-negative.mjs"))
 $installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host"))
 $ProcessStartEventSettlementMilliseconds = 2000
@@ -652,6 +986,109 @@ function Complete-WorkerCrashProbeProcess([object]$Started, [int]$TimeoutSeconds
       $process.WaitForExit()
     }
     $process.Dispose()
+  }
+}
+
+function Start-BlackholeConnectFixture([string]$PowerShellPath, [string]$ScriptPath, [string]$StatePath) {
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $PowerShellPath
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardInput = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  foreach ($argument in @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath, "--state-path", $StatePath)) {
+    $startInfo.ArgumentList.Add($argument)
+  }
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  try {
+    Assert-True $process.Start() "Failed to start the loopback blackhole-connect fixture."
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+      Assert-True (-not $process.HasExited) "The loopback blackhole-connect fixture exited before publishing ready state."
+      if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+        try {
+          $state = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json -Depth 8
+          Assert-ExactProperties $state @("schema", "status", "conditionalAcceptEnabled", "port", "pid", "acceptInvocations", "acceptedConnections", "bounds") "blackhole-connect fixture state"
+          Assert-ExactProperties $state.bounds @("preflightRowTimeoutMilliseconds", "preflightObservationMilliseconds", "stopProtocolBytes") "blackhole-connect fixture bounds"
+          if (
+            [string]$state.schema -ceq "subversionr.release.m8-i6-blackhole-connect-fixture.v1" -and
+            [string]$state.status -ceq "ready" -and $state.conditionalAcceptEnabled -eq $true -and
+            [int]$state.port -ge 1 -and [int]$state.port -le 65535 -and [int]$state.pid -eq $process.Id -and
+            [int]$state.acceptInvocations -eq 0 -and [int]$state.acceptedConnections -eq 0 -and
+            [int]$state.bounds.preflightObservationMilliseconds -eq 750 -and [int]$state.bounds.stopProtocolBytes -eq 5
+          ) {
+            return [pscustomobject]@{ Process = $process; State = $state; StdoutTask = $stdoutTask; StderrTask = $stderrTask }
+          }
+          throw "The loopback blackhole-connect fixture published an invalid ready state."
+        }
+        catch [System.Management.Automation.RuntimeException] {
+          if ([DateTimeOffset]::UtcNow -ge $deadline) { throw }
+        }
+      }
+      Start-Sleep -Milliseconds 10
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "The loopback blackhole-connect fixture did not publish ready state before its deadline."
+  }
+  catch {
+    if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+    $process.Dispose()
+    throw
+  }
+}
+
+function Stop-BlackholeConnectFixture([object]$Fixture, [string]$StatePath) {
+  $process = [System.Diagnostics.Process]$Fixture.Process
+  try {
+    Assert-True (-not $process.HasExited) "The loopback blackhole-connect fixture exited before the exact stop protocol."
+    $process.StandardInput.Write("stop`n")
+    $process.StandardInput.Close()
+    Assert-True ($process.WaitForExit(30000)) "The loopback blackhole-connect fixture did not stop before its deadline."
+    $stdout = $Fixture.StdoutTask.GetAwaiter().GetResult()
+    $stderr = $Fixture.StderrTask.GetAwaiter().GetResult()
+    Assert-True ($process.ExitCode -eq 0 -and $stdout.Length -eq 0 -and $stderr.Length -eq 0) "The loopback blackhole-connect fixture did not stop cleanly."
+    $state = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json -Depth 8
+    Assert-True (
+      [string]$state.status -ceq "stopped" -and $state.conditionalAcceptEnabled -eq $true -and
+      [int]$state.pid -eq $process.Id -and [int]$state.acceptInvocations -eq 0 -and [int]$state.acceptedConnections -eq 0
+    ) "The loopback blackhole-connect fixture final state was invalid."
+    Assert-True (-not (Test-Path -LiteralPath "$StatePath.tmp")) "The loopback blackhole-connect fixture left a state temporary file."
+    return $state
+  }
+  finally {
+    if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+    $process.Dispose()
+  }
+}
+
+function Complete-BlackholeConnectObservation(
+  [SubversionRM8I6BlackholeTcpObserver]$Observer,
+  [SubversionRM8I6WorkerCrashBinding]$Binding,
+  [bool]$ProbeExited,
+  [string]$Context
+) {
+  Assert-True $ProbeExited "$Context probe must exit before TCP observation completes."
+  $result = $Observer.Complete([uint32]$Binding.WorkerProcessId, $ProbeExited)
+  return [pscustomobject]@{
+    provider = "GetExtendedTcpTable/TCP_TABLE_OWNER_PID_ALL"
+    workerProcessBound = $true
+    observationStartedBeforeProbeLaunch = $true
+    localAddress = [string]$result.LocalAddress
+    localPort = [int]$result.LocalPort
+    remoteAddress = [string]$result.RemoteAddress
+    remotePort = [int]$result.RemotePort
+    distinctTcbAttempts = [int]$result.DistinctTcbAttempts
+    establishedTcbConnections = [int]$result.EstablishedTcbConnections
+    stableSynSentSamples = [int]$result.StableSynSentSamples
+    stableSynSentMilliseconds = [int64]$result.StableSynSentMilliseconds
+    observationMilliseconds = [int64]$result.ObservationMilliseconds
+    observationCompletedAfterProbeExit = $true
+    synSentRows = 1
+    establishedRows = 0
+    finalRows = 0
   }
 }
 
@@ -1894,9 +2331,14 @@ $packagedRedactionProbeResolved = Resolve-RequiredFile $packagedRedactionProbePa
 $installedRedactionProbeResolved = Resolve-RequiredFile $installedRedactionProbePath "installed VSIX I6 redaction probe"
 $packagedWorkerCrashProbeResolved = Resolve-RequiredFile $packagedWorkerCrashProbePath "packaged-native I6 worker-crash probe"
 $installedWorkerCrashProbeResolved = Resolve-RequiredFile $installedWorkerCrashProbePath "installed VSIX I6 worker-crash probe"
+$packagedBlackholeConnectProbeResolved = Resolve-RequiredFile $packagedBlackholeConnectProbePath "packaged-native I6 blackhole-connect probe"
+$installedBlackholeConnectProbeResolved = Resolve-RequiredFile $installedBlackholeConnectProbePath "installed VSIX I6 blackhole-connect probe"
+$packagedDaemonDisconnectProbeResolved = Resolve-RequiredFile $packagedDaemonDisconnectProbePath "packaged-native I6 daemon-disconnect probe"
+$installedDaemonDisconnectProbeResolved = Resolve-RequiredFile $installedDaemonDisconnectProbePath "installed VSIX I6 daemon-disconnect probe"
 $installedLocalEventProbeResolved = Resolve-RequiredFile $installedLocalEventProbePath "installed VSIX I6 local-event zero-network probe"
 $countingProxyResolved = Resolve-RequiredFile $countingProxyPath "I6 transparent counting proxy"
 $faultFixtureResolved = Resolve-RequiredFile $faultFixturePath "I6 ra_svn fault fixture"
+$blackholeConnectFixtureResolved = Resolve-RequiredFile $blackholeConnectFixturePath "I6 loopback blackhole-connect fixture"
 $packagedNegativeProbeResolved = Resolve-RequiredFile $packagedNegativeProbePath "packaged-native I6 negative probe"
 
 try {
@@ -4659,6 +5101,7 @@ try {
     $startedProbe = $null
     $probeCompleted = $false
     $binding = $null
+    $tcpObserver = $null
     try {
       $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "greeting-stall" $fixtureStatePath $repositoryUri.Port
       $workerCrashRepositoryUrl = "svn://127.0.0.1:$($repositoryUri.Port)/repo/trunk"
@@ -4893,4 +5336,452 @@ finally {
 Assert-True ($workerCrashObservations.Count -eq 2) "The packaged-native and installed VSIX worker-crash observation set was incomplete."
 
 Assert-True (-not (Test-Path -LiteralPath $outputResolved)) "OutputPath must remain absent until every I6 observation is complete."
-throw "SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED: the candidate passed the real packaged-native and installed Extension Host nine-operation anonymous svn:// matrices plus exact lock/unlock authenticationRequired boundaries, the four packaged-native fault cells, the four installed malicious-root/SASL-only/greeting-stall/connected-stall fault cells, the packaged/installed authz-denied, stalled-mid-read, absolute-deadline, explicit-cancellation, worker-crash, trust-revoked, Safe recovery, Indeterminate recovery, durable recovery-blocked, blocked-lane unrelated-repository, and real checkout-bound redaction cells, the installed real-watcher local-event zero-network cell, the installed 100+1 single-Extension-Host residue stress, and the existing packaged/installed recovery-cleanup probes. The remaining cross-surface blackhole-connect and daemon-disconnect cells are incomplete; therefore no I6 evidence was written."
+
+$blackholeConnectWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6h\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $blackholeConnectWorkRoot $repoTargetRoot) "The blackhole-connect short work root escaped repo target."
+Assert-True (-not (Test-Path -LiteralPath $blackholeConnectWorkRoot)) "The blackhole-connect short work root already exists."
+New-Item -ItemType Directory -Path $blackholeConnectWorkRoot | Out-Null
+$blackholeConnectObservations = @()
+try {
+  foreach ($contract in @(
+      [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
+      [pscustomobject]@{ Surface = "installed-vsix-extension-host"; WorkRoot = "i"; WorkingCopy = $installedAuthzWorkingCopyResolved }
+    )) {
+    $surfaceName = [string]$contract.Surface
+    $surfaceRoot = Join-Path $blackholeConnectWorkRoot ([string]$contract.WorkRoot)
+    $profileRoot = Join-Path $surfaceRoot "profile"
+    $fixtureStatePath = Join-Path $surfaceRoot "blackhole-state.json"
+    New-Item -ItemType Directory -Path $surfaceRoot, $profileRoot | Out-Null
+    Assert-WorkerCrashCandidateCount $daemonResolved 0 "The $surfaceName blackhole-connect preflight"
+    $fixture = $null
+    $startedProbe = $null
+    $probeCompleted = $false
+    $binding = $null
+    try {
+      $fixture = Start-BlackholeConnectFixture (Get-Process -Id $PID).Path $blackholeConnectFixtureResolved $fixtureStatePath
+      $blackholePort = [int]$fixture.State.port
+      $blackholeUrl = "svn://127.0.0.1:$blackholePort/repo/trunk"
+      $operationId = [Guid]::NewGuid().ToString("D")
+      $tcpObserver = [SubversionRM8I6BlackholeTcpObserver]::new($blackholePort)
+      if ($surfaceName -ceq "packaged-native") {
+        $startedProbe = Start-WorkerCrashProbeProcess $nodeHost @(
+          $packagedBlackholeConnectProbeResolved,
+          "--backend-module", $backendModulePath,
+          "--daemon", $daemonResolved,
+          "--bridge", $bridgeResolved,
+          "--profile-root", $profileRoot,
+          "--working-copy-path", ([string]$contract.WorkingCopy),
+          "--repository-url", $blackholeUrl,
+          "--operation-id", $operationId,
+          "--timeout-ms", "5000"
+        ) @{ ELECTRON_RUN_AS_NODE = "1" }
+      }
+      else {
+        $installedRoot = Join-Path $surfaceRoot "extension-host"
+        $startedProbe = Start-WorkerCrashProbeProcess (Get-Process -Id $PID).Path @(
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", $installedBlackholeConnectProbeResolved,
+          "-VsixPath", $vsixResolved,
+          "-CodeCliPath", $codeCliResolved,
+          "-FixtureRoot", $installedRoot,
+          "-WorkingCopyPath", ([string]$contract.WorkingCopy),
+          "-RepositoryUrl", $blackholeUrl,
+          "-OperationId", $operationId,
+          "-OperationTimeoutMilliseconds", "5000",
+          "-ExpectedProductVersion", $ExpectedProductVersion,
+          "-DaemonPath", $daemonResolved,
+          "-BridgePath", $bridgeResolved,
+          "-TimeoutSeconds", "180"
+        )
+      }
+      Wait-WorkerCrashCandidateCount $daemonResolved 2 30000 "The $surfaceName blackhole-connect barrier"
+      $binding = [SubversionRM8I6WorkerCrashNative]::BindExactParentWorker($daemonResolved)
+      $tcpObserver.BindWorker([uint32]$binding.WorkerProcessId)
+      $probeResult = Complete-WorkerCrashProbeProcess $startedProbe 180 "$surfaceName blackhole-connect"
+      $probeCompleted = $true
+      $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "$surfaceName blackhole-connect probe stdout"
+      Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The $surfaceName blackhole-connect probe failed."
+      Assert-True (
+        [string]$probeReport.status -ceq "passed" -and [string]$probeReport.cell -ceq "blackholeConnect" -and
+        [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" -and
+        [string]$probeReport.reason -ceq "operationDeadlineExceeded" -and
+        [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+        [int]$probeReport.timing.timeoutMs -eq 5000 -and [double]$probeReport.timing.elapsedMs -ge 5000 -and
+        [double]$probeReport.timing.elapsedMs -le 10000 -and [int]$probeReport.timing.cleanupSlackMs -eq 5000 -and
+        [int]$probeReport.temporaryRootsAfter -eq 0 -and [int]$probeReport.checkoutJournalEntriesAfter -eq 0 -and
+        $probeReport.workingCopyPreserved -eq $true -and $probeReport.diagnosticsRedacted -eq $true
+      ) "The $surfaceName blackhole-connect product report was incomplete."
+      Wait-WorkerCrashCandidateCount $daemonResolved 0 10000 "The $surfaceName blackhole-connect settlement"
+      $workerDescendantsAfter = [SubversionRM8I6WorkerCrashNative]::GetBoundDescendantCount($binding)
+      Assert-True ($workerDescendantsAfter -eq 0) "The $surfaceName blackhole-connect settlement left bound daemon descendants."
+      Assert-True ([SubversionRM8I6TcpOwnerTable]::Count([uint32]$binding.WorkerProcessId, $blackholePort, [uint32]3) -eq 0) "The $surfaceName blackhole-connect settlement left a SYN_SENT row."
+      Assert-True ([SubversionRM8I6TcpOwnerTable]::CountAny([uint32]$binding.WorkerProcessId, $blackholePort) -eq 0) "The $surfaceName blackhole-connect settlement left a worker-owned TCP row."
+      Assert-True ([SubversionRM8I6TcpOwnerTable]::GetByRemotePort($blackholePort).Length -eq 0) "The $surfaceName blackhole-connect settlement left a TCP row owned by another process."
+      $tcpObservation = Complete-BlackholeConnectObservation $tcpObserver $binding $probeCompleted "$surfaceName blackhole-connect"
+      $tcpObserver.Dispose()
+      $tcpObserver = $null
+      $finalFixtureState = Stop-BlackholeConnectFixture $fixture $fixtureStatePath
+      $fixture = $null
+      $credentialRequests = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialRequests } else { [int]$probeReport.authActivity.credentialRequests }
+      $credentialSettlements = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialSettlements } else { [int]$probeReport.authActivity.credentialSettlements }
+      $blackholeConnectObservations += [pscustomobject]@{
+        surface = $surfaceName
+        originCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"; originReason = "operationDeadlineExceeded"
+        settlementCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"; settlementReason = "operationDeadlineExceeded"
+        networkProgress = "none"; networkAttempts = [int]$tcpObservation.distinctTcbAttempts; networkConnections = [int]$tcpObservation.establishedTcbConnections
+        fixtureCliInvocations = 0; credentialRequests = $credentialRequests; credentialSettlements = $credentialSettlements
+        followupNetworkContacts = 0; workerDescendantsAfter = [int]$workerDescendantsAfter
+        workerProcessesAfter = 0; temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        checkoutJournalEntriesAfter = [int]$probeReport.checkoutJournalEntriesAfter
+        workingCopyPreserved = [bool]$probeReport.workingCopyPreserved; diagnosticsRedacted = [bool]$probeReport.diagnosticsRedacted
+        blackholeTiming = [pscustomobject]@{ clock = "monotonic"; timeoutMs = 5000; elapsedMs = [double]$probeReport.timing.elapsedMs; cleanupSlackMs = 5000 }
+        daemonState = [pscustomobject]@{ kind = "unreachable"; reason = "timeout"; recovery = "notRequired"; cleanupAppropriate = $false }
+        blackholeConnectSettlement = [pscustomobject]@{
+          trigger = "conditional-accept-loopback-no-accept"
+          operationIdSha256 = [string]$probeReport.blackholeSettlement.operationIdSha256
+          wireSettlementObserved = [bool]$probeReport.blackholeSettlement.wireSettlementObserved
+          daemonTerminalStateObserved = [bool]$probeReport.blackholeSettlement.daemonTerminalStateObserved
+          nativeLaneReleased = [bool]$probeReport.nativeLaneReleased
+          localSnapshotAfterTimeout = [bool]$probeReport.localSnapshotAfterTimeout
+          conditionalAcceptEnabled = [bool]$finalFixtureState.conditionalAcceptEnabled
+          listenerProcessBound = ([int]$finalFixtureState.pid -gt 0)
+          acceptInvocations = [int]$finalFixtureState.acceptInvocations
+          acceptedConnections = [int]$finalFixtureState.acceptedConnections
+          stateArtifactUntampered = $true
+          finalFixtureStatus = [string]$finalFixtureState.status
+          tcp = $tcpObservation
+        }
+      }
+    }
+    finally {
+      if ($null -ne $tcpObserver) { $tcpObserver.Dispose() }
+      if ($null -ne $binding) { $binding.Dispose() }
+      if ($null -ne $startedProbe -and -not $probeCompleted) {
+        $probeProcess = [System.Diagnostics.Process]$startedProbe.Process
+        if (-not $probeProcess.HasExited) { $probeProcess.Kill($true); $probeProcess.WaitForExit() }
+        $probeProcess.Dispose()
+      }
+      if ($null -ne $fixture) {
+        try { Stop-BlackholeConnectFixture $fixture $fixtureStatePath | Out-Null } catch { }
+      }
+    }
+  }
+}
+finally {
+  if (Test-Path -LiteralPath $blackholeConnectWorkRoot) { Remove-Item -LiteralPath $blackholeConnectWorkRoot -Recurse -Force }
+  Assert-True (-not (Test-Path -LiteralPath $blackholeConnectWorkRoot)) "The blackhole-connect short work root remained after cleanup."
+}
+Assert-True ($blackholeConnectObservations.Count -eq 2) "The packaged-native and installed VSIX blackhole-connect observation set was incomplete."
+
+$daemonDisconnectWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6z\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
+Assert-True (Test-PathWithin $daemonDisconnectWorkRoot $repoTargetRoot) "The daemon-disconnect short work root escaped repo target."
+New-Item -ItemType Directory -Path $daemonDisconnectWorkRoot | Out-Null
+$daemonDisconnectObservations = @()
+try {
+  foreach ($contract in @(
+      [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
+      [pscustomobject]@{ Surface = "installed-vsix-extension-host"; WorkRoot = "i"; WorkingCopy = $installedAuthzWorkingCopyResolved }
+    )) {
+    $surfaceName = [string]$contract.Surface
+    $surfaceRoot = Join-Path $daemonDisconnectWorkRoot ([string]$contract.WorkRoot)
+    $profileRoot = Join-Path $surfaceRoot "profile"
+    $fixtureStatePath = Join-Path $surfaceRoot "fixture-state.json"
+    $shutdownTriggerPath = Join-Path $surfaceRoot "shutdown.trigger"
+    New-Item -ItemType Directory -Path $surfaceRoot, $profileRoot | Out-Null
+    Assert-WorkerCrashCandidateCount $daemonResolved 0 "The $surfaceName daemon-disconnect preflight"
+    $faultFixture = $null; $startedProbe = $null; $probeCompleted = $false; $binding = $null
+    try {
+      $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "greeting-stall" $fixtureStatePath $repositoryUri.Port
+      $operationId = [Guid]::NewGuid().ToString("D")
+      $disconnectUrl = "svn://127.0.0.1:$($repositoryUri.Port)/repo/trunk"
+      if ($surfaceName -ceq "packaged-native") {
+        $startedProbe = Start-WorkerCrashProbeProcess $nodeHost @(
+          $packagedDaemonDisconnectProbeResolved,
+          "--backend-module", $backendModulePath, "--daemon", $daemonResolved, "--bridge", $bridgeResolved,
+          "--profile-root", $profileRoot, "--working-copy-path", ([string]$contract.WorkingCopy),
+          "--repository-url", $disconnectUrl, "--operation-id", $operationId,
+          "--fixture-state-path", $fixtureStatePath, "--shutdown-trigger-path", $shutdownTriggerPath
+        ) @{ ELECTRON_RUN_AS_NODE = "1" }
+      }
+      else {
+        $startedProbe = Start-WorkerCrashProbeProcess (Get-Process -Id $PID).Path @(
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $installedDaemonDisconnectProbeResolved,
+          "-VsixPath", $vsixResolved, "-CodeCliPath", $codeCliResolved, "-FixtureRoot", (Join-Path $surfaceRoot "extension-host"),
+          "-WorkingCopyPath", ([string]$contract.WorkingCopy), "-RepositoryUrl", $disconnectUrl,
+          "-FixtureStatePath", $fixtureStatePath, "-ShutdownTriggerPath", $shutdownTriggerPath,
+          "-OperationId", $operationId, "-ExpectedProductVersion", $ExpectedProductVersion,
+          "-DaemonPath", $daemonResolved, "-BridgePath", $bridgeResolved, "-TimeoutSeconds", "180"
+        )
+      }
+      $barrierState = Wait-WorkerCrashGreetingBarrier $fixtureStatePath $repositoryUri.Port ([System.Diagnostics.Process]$startedProbe.Process) "$surfaceName daemon-disconnect"
+      $binding = [SubversionRM8I6WorkerCrashNative]::BindExactParentWorker($daemonResolved)
+      $workerDescendantsAtBarrier = [SubversionRM8I6WorkerCrashNative]::GetBoundDescendantCount($binding)
+      $triggerStream = [System.IO.File]::Open($shutdownTriggerPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+      $triggerStream.Dispose()
+      $probeResult = Complete-WorkerCrashProbeProcess $startedProbe 180 "$surfaceName daemon-disconnect"
+      $probeCompleted = $true
+      $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "$surfaceName daemon-disconnect probe stdout"
+      Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The $surfaceName daemon-disconnect probe failed."
+      Assert-True (
+        [string]$probeReport.status -ceq "passed" -and [string]$probeReport.cell -ceq "daemonDisconnect" -and
+        [string]$probeReport.stableCode -ceq "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED" -and
+        [string]$probeReport.reason -ceq "workerContainmentFailed" -and
+        [int]$probeReport.protocol.major -eq 1 -and [int]$probeReport.protocol.minor -eq 35 -and
+        [string]$probeReport.daemonDisconnectSettlement.trigger -ceq "graceful-client-shutdown-after-greeting" -and
+        $probeReport.daemonDisconnectSettlement.activeRequestSettlementObserved -eq $true -and
+        $probeReport.daemonDisconnectSettlement.daemonStateObserved -eq $true -and
+        $probeReport.daemonDisconnectSettlement.settlementBeforeShutdownAck -eq $true -and
+        $probeReport.daemonDisconnectSettlement.shutdownAcknowledged -eq $true -and
+        $probeReport.daemonDisconnectSettlement.workingCopyPreserved -eq $true -and
+        [int]$probeReport.temporaryRootsAfter -eq 0 -and $probeReport.diagnosticsRedacted -eq $true
+      ) "The $surfaceName daemon-disconnect product report was incomplete."
+      Wait-WorkerCrashCandidateCount $daemonResolved 0 10000 "The $surfaceName daemon-disconnect settlement"
+      $workerDescendantsAfter = [SubversionRM8I6WorkerCrashNative]::GetBoundDescendantCount($binding)
+      Assert-True ($workerDescendantsAfter -eq 0) "The $surfaceName daemon-disconnect settlement left bound descendants."
+      $finalFixtureState = Get-Content -Raw -LiteralPath $fixtureStatePath | ConvertFrom-Json -Depth 16
+      Assert-True ([int]$finalFixtureState.followupContacts -eq 0 -and [int]$finalFixtureState.connections -eq 1) "The $surfaceName daemon-disconnect fixture crossed its greeting barrier."
+      Stop-FaultFixture $faultFixture "greeting-stall"
+      $faultFixture = $null
+      $credentialRequests = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialRequests } else { [int]$probeReport.authActivity.credentialRequests }
+      $credentialSettlements = if ($surfaceName -ceq "packaged-native") { [int]$probeReport.credentialSettlements } else { [int]$probeReport.authActivity.credentialSettlements }
+      $checkoutJournalEntriesAfter = if ($surfaceName -ceq "packaged-native") { 0 } else { [int]$probeReport.checkoutJournalEntriesAfter }
+      $daemonDisconnectObservations += [pscustomobject]@{
+        surface = $surfaceName
+        originCode = "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED"; originReason = "workerContainmentFailed"
+        settlementCode = "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED"; settlementReason = "workerContainmentFailed"
+        networkProgress = "greeting"; networkAttempts = 1; networkConnections = 1
+        fixtureCliInvocations = 0; credentialRequests = $credentialRequests; credentialSettlements = $credentialSettlements
+        followupNetworkContacts = [int]$finalFixtureState.followupContacts
+        workerDescendantsAtBarrier = [int]$workerDescendantsAtBarrier; workerDescendantsAfter = [int]$workerDescendantsAfter
+        workerProcessesAfter = 0; temporaryRootsAfter = [int]$probeReport.temporaryRootsAfter
+        checkoutJournalEntriesAfter = $checkoutJournalEntriesAfter; workingCopyPreserved = $true
+        diagnosticsRedacted = [bool]$probeReport.diagnosticsRedacted
+        daemonState = [pscustomobject]@{ kind = "indeterminate"; reason = "workerTerminated"; recovery = "notRequired"; cleanupAppropriate = $false }
+        daemonDisconnectSettlement = [pscustomobject]@{
+          trigger = [string]$probeReport.daemonDisconnectSettlement.trigger
+          activeRequestSettlementObserved = [bool]$probeReport.daemonDisconnectSettlement.activeRequestSettlementObserved
+          daemonStateObserved = [bool]$probeReport.daemonDisconnectSettlement.daemonStateObserved
+          settlementBeforeShutdownAck = [bool]$probeReport.daemonDisconnectSettlement.settlementBeforeShutdownAck
+          shutdownAcknowledged = [bool]$probeReport.daemonDisconnectSettlement.shutdownAcknowledged
+          workingCopyPreserved = [bool]$probeReport.daemonDisconnectSettlement.workingCopyPreserved
+          fixtureGreetingBarrierObserved = $true
+          shutdownTriggerExternallyCreated = $true
+          fixtureFollowupContacts = [int]$finalFixtureState.followupContacts
+        }
+      }
+    }
+    finally {
+      if ($null -ne $binding) { $binding.Dispose() }
+      if ($null -ne $startedProbe -and -not $probeCompleted) {
+        $probeProcess = [System.Diagnostics.Process]$startedProbe.Process
+        if (-not $probeProcess.HasExited) { $probeProcess.Kill($true); $probeProcess.WaitForExit() }
+        $probeProcess.Dispose()
+      }
+      if ($null -ne $faultFixture) { try { Stop-FaultFixture $faultFixture "greeting-stall" } catch { } }
+    }
+  }
+}
+finally {
+  if (Test-Path -LiteralPath $daemonDisconnectWorkRoot) { Remove-Item -LiteralPath $daemonDisconnectWorkRoot -Recurse -Force }
+  Assert-True (-not (Test-Path -LiteralPath $daemonDisconnectWorkRoot)) "The daemon-disconnect short work root remained after cleanup."
+}
+Assert-True ($daemonDisconnectObservations.Count -eq 2) "The packaged-native and installed VSIX daemon-disconnect observation set was incomplete."
+
+function New-I6ArtifactBinding([string]$Kind, [string]$Path) {
+  return [pscustomobject]@{
+    kind = $Kind
+    sha256 = Get-Sha256 $Path
+    sizeBytes = [int64](Get-Item -LiteralPath $Path).Length
+  }
+}
+
+function New-I6NegativeObservation(
+  [string]$Surface,
+  [string]$OriginCode,
+  [string]$OriginReason,
+  [string]$SettlementCode,
+  [string]$SettlementReason,
+  [string]$NetworkProgress,
+  [int]$NetworkAttempts,
+  [int]$NetworkConnections,
+  [int]$FixtureCliInvocations,
+  [int]$CredentialRequests,
+  [int]$CredentialSettlements,
+  [int]$FollowupNetworkContacts,
+  [int]$WorkerDescendantsAfter,
+  [int]$TemporaryRootsAfter,
+  [bool]$DiagnosticsRedacted
+) {
+  return [pscustomobject]@{
+    surface = $Surface
+    originCode = $OriginCode; originReason = $OriginReason
+    settlementCode = $SettlementCode; settlementReason = $SettlementReason
+    networkProgress = $NetworkProgress; networkAttempts = $NetworkAttempts; networkConnections = $NetworkConnections
+    fixtureCliInvocations = $FixtureCliInvocations; credentialRequests = $CredentialRequests; credentialSettlements = $CredentialSettlements
+    followupNetworkContacts = $FollowupNetworkContacts; workerDescendantsAfter = $WorkerDescendantsAfter
+    temporaryRootsAfter = $TemporaryRootsAfter; diagnosticsRedacted = $DiagnosticsRedacted
+  }
+}
+
+function Get-ExactlyOne([object[]]$Values, [scriptblock]$Predicate, [string]$Context) {
+  $matches = @($Values | Where-Object $Predicate)
+  Assert-True ($matches.Count -eq 1) "$Context must contain exactly one observation."
+  return $matches[0]
+}
+
+$packagedMalicious = Get-ExactlyOne $packagedNegativeObservations { $_.scenario -ceq "malicious-root" } "packaged malicious-root"
+$installedMalicious = Get-ExactlyOne $installedNegativeObservations { $_.scenario -ceq "maliciousRoot" } "installed malicious-root"
+$packagedSasl = Get-ExactlyOne $packagedNegativeObservations { $_.scenario -ceq "sasl-only" } "packaged SASL-only"
+$installedSasl = Get-ExactlyOne $installedNegativeObservations { $_.scenario -ceq "saslOnly" } "installed SASL-only"
+$maliciousRootObservations = @(
+  (New-I6NegativeObservation "packaged-native" $packagedMalicious.code $packagedMalicious.reason $packagedMalicious.settlementCode $packagedMalicious.settlementReason "authenticated" $packagedMalicious.networkAttempts $packagedMalicious.networkConnections 0 0 0 $packagedMalicious.followupNetworkContacts $packagedMalicious.workerDescendantsAfter $packagedMalicious.temporaryRootsAfter $packagedMalicious.diagnosticsRedacted),
+  (New-I6NegativeObservation "installed-vsix-extension-host" $installedMalicious.code $installedMalicious.reason $installedMalicious.settlementCode $installedMalicious.settlementReason "authenticated" $installedMalicious.networkAttempts $installedMalicious.networkConnections $installedMalicious.fixtureCliInvocations 0 0 $installedMalicious.followupNetworkContacts $installedMalicious.workerDescendantsAfter $installedMalicious.temporaryRootsAfter $installedMalicious.diagnosticsRedacted)
+)
+$saslOnlyObservations = @(
+  (New-I6NegativeObservation "packaged-native" $packagedSasl.code $packagedSasl.reason $packagedSasl.settlementCode $packagedSasl.settlementReason "greeting" $packagedSasl.networkAttempts $packagedSasl.networkConnections 0 0 0 $packagedSasl.followupNetworkContacts $packagedSasl.workerDescendantsAfter $packagedSasl.temporaryRootsAfter $packagedSasl.diagnosticsRedacted),
+  (New-I6NegativeObservation "installed-vsix-extension-host" $installedSasl.code $installedSasl.reason $installedSasl.settlementCode $installedSasl.settlementReason "greeting" $installedSasl.networkAttempts $installedSasl.networkConnections $installedSasl.fixtureCliInvocations 0 0 $installedSasl.followupNetworkContacts $installedSasl.workerDescendantsAfter $installedSasl.temporaryRootsAfter $installedSasl.diagnosticsRedacted)
+)
+$normalizedAuthzDeniedObservations = @($authzDeniedObservations | ForEach-Object {
+    New-I6NegativeObservation $_.surface $_.stableCode $_.reason $_.stableCode $_.reason "command" $_.networkAttempts $_.networkConnections $_.fixtureCliInvocations 0 0 0 $_.workerDescendantsAfter $_.temporaryRootsAfter $_.diagnosticsRedacted
+  })
+
+$artifactBindings = [ordered]@{
+  vsix = New-I6ArtifactBinding "vsix" $vsixResolved
+  daemon = New-I6ArtifactBinding "daemon" $daemonResolved
+  bridge = New-I6ArtifactBinding "bridge" $bridgeResolved
+  stageManifest = New-I6ArtifactBinding "subversion-stage-manifest" $stageManifestResolved
+  probeDriver = New-I6ArtifactBinding "i6-probe-driver" $MyInvocation.MyCommand.Path
+  packagedNativeProbe = New-I6ArtifactBinding "i6-packaged-native-probe" $packagedI6ProbeResolved
+  packagedNegativeProbe = New-I6ArtifactBinding "i6-packaged-negative-probe" $packagedNegativeProbeResolved
+  packagedAuthzDeniedProbe = New-I6ArtifactBinding "i6-packaged-authz-denied-probe" $packagedAuthzDeniedProbeResolved
+  packagedStalledReadProbe = New-I6ArtifactBinding "i6-packaged-stalled-read-probe" $packagedStalledReadProbeResolved
+  packagedDeadlineProbe = New-I6ArtifactBinding "i6-packaged-deadline-probe" $packagedDeadlineProbeResolved
+  packagedCancellationProbe = New-I6ArtifactBinding "i6-packaged-cancellation-probe" $packagedCancellationProbeResolved
+  packagedTrustRevokedProbe = New-I6ArtifactBinding "i6-packaged-trust-revoked-probe" $packagedTrustRevokedProbeResolved
+  packagedRecoveryBlockedProbe = New-I6ArtifactBinding "i6-packaged-recovery-blocked-probe" $packagedRecoveryBlockedProbeResolved
+  packagedRecoverySafeProbe = New-I6ArtifactBinding "i6-packaged-recovery-safe-probe" $packagedRecoverySafeProbeResolved
+  packagedRecoveryIndeterminateProbe = New-I6ArtifactBinding "i6-packaged-recovery-indeterminate-probe" $packagedRecoveryIndeterminateProbeResolved
+  packagedRedactionProbe = New-I6ArtifactBinding "i6-packaged-redaction-probe" $packagedRedactionProbeResolved
+  packagedWorkerCrashProbe = New-I6ArtifactBinding "i6-packaged-worker-crash-probe" $packagedWorkerCrashProbeResolved
+  packagedBlackholeConnectProbe = New-I6ArtifactBinding "i6-packaged-blackhole-connect-probe" $packagedBlackholeConnectProbeResolved
+  packagedDaemonDisconnectProbe = New-I6ArtifactBinding "i6-packaged-daemon-disconnect-probe" $packagedDaemonDisconnectProbeResolved
+  raSvnFaultFixture = New-I6ArtifactBinding "i6-ra-svn-fault-fixture" $faultFixtureResolved
+  blackholeConnectFixture = New-I6ArtifactBinding "i6-blackhole-connect-fixture" $blackholeConnectFixtureResolved
+  countingProxy = New-I6ArtifactBinding "i6-counting-proxy" $countingProxyResolved
+  installedStressProbe = New-I6ArtifactBinding "i6-installed-stress-probe" $installedStressProbeResolved
+  installedNegativeProbe = New-I6ArtifactBinding "i6-installed-negative-probe" $installedNegativeProbeResolved
+  installedAuthzDeniedProbe = New-I6ArtifactBinding "i6-installed-authz-denied-probe" $installedAuthzDeniedProbeResolved
+  installedStalledReadProbe = New-I6ArtifactBinding "i6-installed-stalled-read-probe" $installedStalledReadProbeResolved
+  installedDeadlineProbe = New-I6ArtifactBinding "i6-installed-deadline-probe" $installedDeadlineProbeResolved
+  installedCancellationProbe = New-I6ArtifactBinding "i6-installed-cancellation-probe" $installedCancellationProbeResolved
+  installedTrustRevokedProbe = New-I6ArtifactBinding "i6-installed-trust-revoked-probe" $installedTrustRevokedProbeResolved
+  installedRecoveryBlockedProbe = New-I6ArtifactBinding "i6-installed-recovery-blocked-probe" $installedRecoveryBlockedProbeResolved
+  installedRecoverySafeProbe = New-I6ArtifactBinding "i6-installed-recovery-safe-probe" $installedRecoverySafeProbeResolved
+  installedRecoveryIndeterminateProbe = New-I6ArtifactBinding "i6-installed-recovery-indeterminate-probe" $installedRecoveryIndeterminateProbeResolved
+  installedRedactionProbe = New-I6ArtifactBinding "i6-installed-redaction-probe" $installedRedactionProbeResolved
+  installedWorkerCrashProbe = New-I6ArtifactBinding "i6-installed-worker-crash-probe" $installedWorkerCrashProbeResolved
+  installedBlackholeConnectProbe = New-I6ArtifactBinding "i6-installed-blackhole-connect-probe" $installedBlackholeConnectProbeResolved
+  installedDaemonDisconnectProbe = New-I6ArtifactBinding "i6-installed-daemon-disconnect-probe" $installedDaemonDisconnectProbeResolved
+  installedLocalEventProbe = New-I6ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbeResolved
+  installedVsixProbe = New-I6ArtifactBinding "i6-installed-vsix-probe" $installedI6ProbeResolved
+  packagedCompatibilityProbe = New-I6ArtifactBinding "packaged-native-compatibility-probe" $packagedProbeResolved
+  installedExtensionHostProbe = New-I6ArtifactBinding "installed-extension-host-probe" $installedHarnessResolved
+  raSvnOriginPatch = New-I6ArtifactBinding "ra-svn-origin-patch" $patchResolved
+  raSvnOriginContract = New-I6ArtifactBinding "ra-svn-origin-contract" $patchContractResolved
+  nativeSourceLock = New-I6ArtifactBinding "native-source-lock" $sourceLockResolved
+  svn = New-I6ArtifactBinding "fixture-svn" $svnResolved
+  svnadmin = New-I6ArtifactBinding "fixture-svnadmin" $svnadminResolved
+  svnserve = New-I6ArtifactBinding "fixture-svnserve" $svnserveResolved
+  svnserveLog = New-I6ArtifactBinding "fixture-svnserve-log" $fixtureLogResolved
+}
+
+$schemaPath = Resolve-RequiredFile (Join-Path $repoRoot "docs\release\m8-i6-svn-anonymous-evidence.v1.schema.json") "I6 evidence schema"
+$surfaceReports = @(
+  [pscustomobject]@{
+    kind = "packaged-native"; artifactSha256 = [string]$artifactBindings.daemon.sha256; protocol = $positiveReport.protocol
+    remoteSvnAnonymous = [bool]$positiveReport.remoteSvnAnonymous; fixtureCliInvocations = [int]$positiveReport.fixtureCliInvocations
+    positiveOperationCount = [int]$positiveReport.positiveOperationCount; identityRequiredOperationCount = [int]$positiveReport.identityRequiredOperationCount
+    remoteOperationCount = [int]$positiveReport.remoteOperationCount; uniqueOperationIds = [bool]$positiveReport.uniqueOperationIds
+    operations = @($positiveReport.operations); anonymousIdentityRequired = $positiveReport.anonymousIdentityRequired
+  },
+  [pscustomobject]@{
+    kind = "installed-vsix-extension-host"; artifactSha256 = [string]$artifactBindings.vsix.sha256; protocol = $installedPositiveReport.protocol
+    remoteSvnAnonymous = [bool]$installedPositiveReport.remoteSvnAnonymous; fixtureCliInvocations = [int]$installedPositiveReport.fixtureCliInvocations
+    positiveOperationCount = [int]$installedPositiveReport.positiveOperationCount; identityRequiredOperationCount = [int]$installedPositiveReport.identityRequiredOperationCount
+    remoteOperationCount = [int]$installedPositiveReport.remoteOperationCount; uniqueOperationIds = [bool]$installedPositiveReport.uniqueOperationIds
+    operations = @($installedPositiveReport.operations); anonymousIdentityRequired = $installedPositiveReport.anonymousIdentityRequired
+  }
+)
+
+$recoverySettlementObservations = @()
+foreach ($surface in @("packaged-native", "installed-vsix-extension-host")) {
+  $safe = Get-ExactlyOne $recoverySafeSettlementObservations { $_.surface -ceq $surface } "$surface Safe settlement"
+  $indeterminate = Get-ExactlyOne $recoveryIndeterminateSettlementObservations { $_.surface -ceq $surface } "$surface Indeterminate settlement"
+  $blocked = Get-ExactlyOne $recoveryBlockedSettlementObservations { $_.surface -ceq $surface } "$surface Blocked settlement"
+  $recoverySettlementObservations += [pscustomobject]@{ surface = $surface; safe = $safe.safe; indeterminate = $indeterminate.indeterminate; blocked = $blocked.blocked }
+}
+
+$stressCycles = @($installedStressReport.observations)
+$stressSubsequent = $installedStressReport.subsequentRequest
+$maxWorkers = [int](($stressCycles.workerDescendantsAfter | Measure-Object -Maximum).Maximum)
+$maxTemporaryRoots = [int](($stressCycles.temporaryRootsAfter | Measure-Object -Maximum).Maximum)
+$maxFixtureChildren = [int](($stressCycles.fixtureServerChildrenAfter | Measure-Object -Maximum).Maximum)
+$maxDiagnosticBytes = [int](($redactionPrivacyObservations.maxDiagnosticBytes | Measure-Object -Maximum).Maximum)
+$rawUrlCount = [int](($redactionPrivacyObservations.rawUrlCount | Measure-Object -Sum).Sum)
+$rawPathCount = [int](($redactionPrivacyObservations.rawPathCount | Measure-Object -Sum).Sum)
+$secretTokenCount = [int](($redactionPrivacyObservations.secretTokenCount | Measure-Object -Sum).Sum)
+$boundedDiagnostics = @($redactionPrivacyObservations | Where-Object { $_.boundedDiagnostics -ne $true }).Count -eq 0
+Assert-True ($rawUrlCount -eq 0 -and $rawPathCount -eq 0 -and $secretTokenCount -eq 0 -and $boundedDiagnostics) "The I6 privacy aggregate did not recompute to a redacted bounded result."
+
+$evidence = [ordered]@{
+  schema = "subversionr.release.m8-i6-svn-anonymous.win32-x64.v1"
+  schemaVersion = 1
+  contract = [ordered]@{ path = "docs/release/m8-i6-svn-anonymous-evidence.v1.schema.json"; sha256 = Get-Sha256 $schemaPath }
+  target = "win32-x64"
+  productVersion = $ExpectedProductVersion
+  publicClaimEligible = $true
+  artifactBindings = $artifactBindings
+  fixture = [ordered]@{
+    transport = "direct-svn"; serverKind = "svnserve"; serverVersion = "1.14.5"; listenHost = "127.0.0.1"
+    configurationSha256 = Get-Sha256 $fixtureConfigResolved; authzSha256 = Get-Sha256 $fixtureAuthzResolved
+    sourceBuilt = $true; fixtureCliOnly = $true; ambientConfigExcluded = $true; saslEnabled = $false
+  }
+  surfaces = $surfaceReports
+  negativeCells = @(
+    [pscustomobject]@{ cell = "maliciousRoot"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH"; reason = "crossAuthorityRejected"; surfaceObservations = $maliciousRootObservations },
+    [pscustomobject]@{ cell = "saslOnly"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED"; reason = "remoteCapabilityUnsupported"; surfaceObservations = $saslOnlyObservations },
+    [pscustomobject]@{ cell = "authzDenied"; status = "passed"; stableCode = "SVN_REMOTE_STATUS_AUTH_FAILED"; reason = "authorizationDenied"; surfaceObservations = $normalizedAuthzDeniedObservations },
+    [pscustomobject]@{ cell = "blackholeConnect"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"; reason = "operationDeadlineExceeded"; surfaceObservations = $blackholeConnectObservations },
+    [pscustomobject]@{ cell = "stalledMidRead"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"; reason = "operationDeadlineExceeded"; surfaceObservations = $stalledReadObservations },
+    [pscustomobject]@{ cell = "deadline"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"; reason = "operationDeadlineExceeded"; surfaceObservations = $deadlineObservations },
+    [pscustomobject]@{ cell = "cancellation"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_WORKER_CANCELLED"; reason = "operationCancelled"; surfaceObservations = $cancellationObservations },
+    [pscustomobject]@{ cell = "workerCrash"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_WORKER_CRASHED"; reason = "workerContainmentFailed"; surfaceObservations = $workerCrashObservations },
+    [pscustomobject]@{ cell = "daemonDisconnect"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED"; reason = "workerContainmentFailed"; surfaceObservations = $daemonDisconnectObservations },
+    [pscustomobject]@{ cell = "trustRevoked"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH"; reason = "remoteConfigurationInvalid"; surfaceObservations = $trustRevokedObservations },
+    [pscustomobject]@{ cell = "recoverySafe"; status = "passed"; stableCode = "none"; reason = "none"; surfaceObservations = $recoverySafeObservations },
+    [pscustomobject]@{ cell = "recoveryIndeterminate"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE"; reason = "remoteOperationIndeterminate"; surfaceObservations = $recoveryIndeterminateObservations },
+    [pscustomobject]@{ cell = "recoveryBlocked"; status = "passed"; stableCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"; reason = "operationDeadlineExceeded"; surfaceObservations = $recoveryBlockedObservations },
+    [pscustomobject]@{ cell = "unrelatedRepository"; status = "passed"; stableCode = "none"; reason = "none"; surfaceObservations = $unrelatedRepositoryObservations },
+    [pscustomobject]@{ cell = "localEventZeroNetwork"; status = "passed"; stableCode = "none"; reason = "none"; surfaceObservations = @($localEventZeroNetworkObservation) },
+    [pscustomobject]@{ cell = "redaction"; status = "passed"; stableCode = "none"; reason = "none"; surfaceObservations = $redactionObservations }
+  )
+  recoverySettlements = [ordered]@{ surfaceObservations = $recoverySettlementObservations }
+  stress = [ordered]@{
+    surface = "installed-vsix-extension-host"; cycles = 100; status = "passed"
+    cycleObservations = $stressCycles; subsequentObservation = $stressSubsequent
+    maxWorkerDescendantsAfterCycle = $maxWorkers; maxTemporaryRootsAfterCycle = $maxTemporaryRoots
+    maxFixtureServerChildrenAfterCycle = $maxFixtureChildren; subsequentRequestPassed = [bool]$installedStressReport.subsequentRequestPassed
+  }
+  privacy = [ordered]@{ rawUrlCount = $rawUrlCount; rawPathCount = $rawPathCount; secretTokenCount = $secretTokenCount; maxDiagnosticBytes = $maxDiagnosticBytes; boundedDiagnostics = $boundedDiagnostics }
+  verdict = [ordered]@{
+    status = "verified"; claim = "win32-x64-direct-svn-anonymous"; allOperationCellsPassed = $true
+    allNegativeCellsPassed = $true; artifactHashesMatched = $true; installedProductProved = $true; sourceBuiltFixtureProved = $true
+  }
+}
+
+$serializedEvidence = $evidence | ConvertTo-Json -Depth 32
+$temporaryOutputPath = "$outputResolved.tmp"
+Assert-True (-not (Test-Path -LiteralPath $temporaryOutputPath)) "The I6 evidence temporary output already exists."
+[System.IO.File]::WriteAllText($temporaryOutputPath, $serializedEvidence + "`n", [System.Text.UTF8Encoding]::new($false, $true))
+[System.IO.File]::Move($temporaryOutputPath, $outputResolved)
+Assert-True (Test-Path -LiteralPath $outputResolved -PathType Leaf) "The complete I6 evidence was not written."

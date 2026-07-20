@@ -63,12 +63,14 @@ import { collectInstalledSvnAnonymousNegativeReport } from "./diagnostics/instal
 import { collectInstalledSvnAnonymousAuthzDeniedReport } from "./diagnostics/installedSvnAnonymousAuthzDeniedReport";
 import { collectInstalledSvnAnonymousStalledReadReport } from "./diagnostics/installedSvnAnonymousStalledReadReport";
 import { collectInstalledSvnAnonymousDeadlineReport } from "./diagnostics/installedSvnAnonymousDeadlineReport";
+import { collectInstalledSvnAnonymousBlackholeConnectReport } from "./diagnostics/installedSvnAnonymousBlackholeConnectReport";
 import { collectInstalledSvnAnonymousCancellationReport } from "./diagnostics/installedSvnAnonymousCancellationReport";
 import { collectInstalledSvnAnonymousTrustRevokedReport } from "./diagnostics/installedSvnAnonymousTrustRevokedReport";
 import { collectInstalledSvnAnonymousRecoveryBlockedReport } from "./diagnostics/installedSvnAnonymousRecoveryBlockedReport";
 import { collectInstalledSvnAnonymousRecoveryIndeterminateReport } from "./diagnostics/installedSvnAnonymousRecoveryIndeterminateReport";
 import { collectInstalledSvnAnonymousRecoverySafeReport } from "./diagnostics/installedSvnAnonymousRecoverySafeReport";
 import { collectInstalledSvnAnonymousWorkerCrashReport } from "./diagnostics/installedSvnAnonymousWorkerCrashReport";
+import { collectInstalledSvnAnonymousDaemonDisconnectReport } from "./diagnostics/installedSvnAnonymousDaemonDisconnectReport";
 import { collectInstalledSvnAnonymousRedactionReport } from "./diagnostics/installedSvnAnonymousRedactionReport";
 import { InstalledSvnAnonymousLocalEventZeroNetworkObserver } from "./diagnostics/installedSvnAnonymousLocalEventZeroNetwork";
 import { redactDiagnosticValue } from "./diagnostics/diagnosticsRedaction";
@@ -329,6 +331,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const installedSvnAnonymousAuthzDeniedReportToken = consumeInstalledSvnAnonymousAuthzDeniedReportToken();
   const installedSvnAnonymousStalledReadReportToken = consumeInstalledSvnAnonymousStalledReadReportToken();
   const installedSvnAnonymousDeadlineReportToken = consumeInstalledSvnAnonymousDeadlineReportToken();
+  const installedSvnAnonymousBlackholeConnectReportToken =
+    consumeInstalledSvnAnonymousBlackholeConnectReportToken();
   const installedSvnAnonymousCancellationReportToken = consumeInstalledSvnAnonymousCancellationReportToken();
   const installedSvnAnonymousTrustRevokedReportToken = consumeInstalledSvnAnonymousTrustRevokedReportToken();
   const installedSvnAnonymousRecoveryBlockedReportToken = consumeInstalledSvnAnonymousRecoveryBlockedReportToken();
@@ -336,6 +340,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     consumeInstalledSvnAnonymousRecoveryIndeterminateReportToken();
   const installedSvnAnonymousRecoverySafeReportToken = consumeInstalledSvnAnonymousRecoverySafeReportToken();
   const installedSvnAnonymousWorkerCrashReportToken = consumeInstalledSvnAnonymousWorkerCrashReportToken();
+  const installedSvnAnonymousDaemonDisconnectReportToken =
+    consumeInstalledSvnAnonymousDaemonDisconnectReportToken();
   const installedSvnAnonymousRedactionReportToken = consumeInstalledSvnAnonymousRedactionReportToken();
   const installedSvnAnonymousLocalEventZeroNetworkToken =
     consumeInstalledSvnAnonymousLocalEventZeroNetworkToken();
@@ -415,12 +421,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       installedSvnAnonymousAuthzDeniedReportToken !== undefined ||
       installedSvnAnonymousStalledReadReportToken !== undefined ||
       installedSvnAnonymousDeadlineReportToken !== undefined ||
+      installedSvnAnonymousBlackholeConnectReportToken !== undefined ||
       installedSvnAnonymousCancellationReportToken !== undefined ||
       installedSvnAnonymousTrustRevokedReportToken !== undefined ||
       installedSvnAnonymousRecoveryBlockedReportToken !== undefined ||
       installedSvnAnonymousRecoveryIndeterminateReportToken !== undefined ||
       installedSvnAnonymousRecoverySafeReportToken !== undefined ||
       installedSvnAnonymousWorkerCrashReportToken !== undefined ||
+      installedSvnAnonymousDaemonDisconnectReportToken !== undefined ||
       installedSvnAnonymousRedactionReportToken !== undefined ||
       installedSvnAnonymousLocalEventZeroNetworkToken !== undefined
     ) {
@@ -488,6 +496,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     new Set<(mark: StatusStaleMark) => void>();
   const installedSvnAnonymousWorkerCrashDaemonStateObservers =
     new Set<(state: RemoteConnectionNotification) => void>();
+  const installedSvnAnonymousBlackholeConnectDaemonStateObservers =
+    new Set<(state: RemoteConnectionNotification) => void>();
+  const installedSvnAnonymousDaemonDisconnectDaemonStateObservers =
+    new Set<(state: RemoteConnectionNotification) => void>();
   let remoteRecoveryService: RemoteRecoveryService | undefined;
   const remoteConnectionNotificationHandler = createRemoteConnectionNotificationHandler({
     store: remoteConnectionStateStore,
@@ -506,6 +518,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (method === "remoteConnection/state" && installedSvnAnonymousWorkerCrashReportToken !== undefined) {
         const notification = parseRemoteConnectionStateNotification(params);
         for (const observer of installedSvnAnonymousWorkerCrashDaemonStateObservers) {
+          observer(notification);
+        }
+      }
+      if (
+        method === "remoteConnection/state" &&
+        installedSvnAnonymousBlackholeConnectReportToken !== undefined
+      ) {
+        const notification = parseRemoteConnectionStateNotification(params);
+        for (const observer of installedSvnAnonymousBlackholeConnectDaemonStateObservers) {
+          observer(notification);
+        }
+      }
+      if (
+        method === "remoteConnection/state" &&
+        installedSvnAnonymousDaemonDisconnectReportToken !== undefined
+      ) {
+        const notification = parseRemoteConnectionStateNotification(params);
+        for (const observer of installedSvnAnonymousDaemonDisconnectDaemonStateObservers) {
           observer(notification);
         }
       }
@@ -1553,6 +1583,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               monotonicNowMs: () => performance.now(),
             }),
         );
+  const installedSvnAnonymousBlackholeConnectReportCommand =
+    installedSvnAnonymousBlackholeConnectReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousBlackholeConnectReport({
+              expectedToken: installedSvnAnonymousBlackholeConnectReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              onDaemonRemoteStateChange: (listener) => {
+                installedSvnAnonymousBlackholeConnectDaemonStateObservers.add(listener);
+                return {
+                  dispose: () => installedSvnAnonymousBlackholeConnectDaemonStateObservers.delete(listener),
+                };
+              },
+              getRemoteState: (repositoryId) => remoteConnectionStateStore.getState(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              monotonicNowMs: () => performance.now(),
+            }),
+        );
   const installedSvnAnonymousCancellationReportCommand =
     installedSvnAnonymousCancellationReportToken === undefined
       ? undefined
@@ -1667,6 +1720,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 installedSvnAnonymousWorkerCrashDaemonStateObservers.add(listener);
                 return {
                   dispose: () => installedSvnAnonymousWorkerCrashDaemonStateObservers.delete(listener),
+                };
+              },
+              getRemoteState: (repositoryId) => remoteConnectionStateStore.getState(repositoryId),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousDaemonDisconnectReportCommand =
+    installedSvnAnonymousDaemonDisconnectReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousDaemonDisconnectReport({
+              expectedToken: installedSvnAnonymousDaemonDisconnectReportToken,
+              request,
+              initialize: () => service.initialize(),
+              shutdownBackend: () => service.shutdown(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              onDaemonRemoteStateChange: (listener) => {
+                installedSvnAnonymousDaemonDisconnectDaemonStateObservers.add(listener);
+                return {
+                  dispose: () => installedSvnAnonymousDaemonDisconnectDaemonStateObservers.delete(listener),
                 };
               },
               getRemoteState: (repositoryId) => remoteConnectionStateStore.getState(repositoryId),
@@ -2519,6 +2595,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (installedSvnAnonymousDeadlineReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousDeadlineReportCommand);
   }
+  if (installedSvnAnonymousBlackholeConnectReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousBlackholeConnectReportCommand);
+  }
   if (installedSvnAnonymousCancellationReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousCancellationReportCommand);
   }
@@ -2536,6 +2615,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   if (installedSvnAnonymousWorkerCrashReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousWorkerCrashReportCommand);
+  }
+  if (installedSvnAnonymousDaemonDisconnectReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousDaemonDisconnectReportCommand);
   }
   if (installedSvnAnonymousRedactionReportCommand !== undefined) {
     context.subscriptions.push(installedSvnAnonymousRedactionReportCommand);
@@ -4538,6 +4620,12 @@ function consumeInstalledSvnAnonymousDeadlineReportToken(): string | undefined {
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 
+function consumeInstalledSvnAnonymousBlackholeConnectReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_BLACKHOLE_CONNECT_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_BLACKHOLE_CONNECT_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
 function consumeInstalledSvnAnonymousCancellationReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_CANCELLATION_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_CANCELLATION_REPORT_TOKEN;
@@ -4571,6 +4659,12 @@ function consumeInstalledSvnAnonymousRecoveryIndeterminateReportToken(): string 
 function consumeInstalledSvnAnonymousWorkerCrashReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_WORKER_CRASH_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_WORKER_CRASH_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousDaemonDisconnectReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DAEMON_DISCONNECT_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DAEMON_DISCONNECT_REPORT_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 

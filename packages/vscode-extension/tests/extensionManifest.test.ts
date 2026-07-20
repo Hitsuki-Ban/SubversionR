@@ -67,8 +67,10 @@ describe("extension manifest", () => {
       "onCommand:subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
       "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",
@@ -191,8 +193,14 @@ describe("extension manifest", () => {
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousStalledReadReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousDeadlineReport");
+    expect(contributedCommands).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
+    );
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousCancellationReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport");
+    expect(contributedCommands).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
+    );
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport");
     expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport");
@@ -213,10 +221,16 @@ describe("extension manifest", () => {
       "subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousCancellationReport",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
     );
     expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
       "subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",

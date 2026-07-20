@@ -37,6 +37,8 @@ The evidence binds the exact bytes of:
 - the packaged-native and installed-VSIX negative probes, the dedicated
   packaged-native and installed-VSIX authz-denied and recovery-indeterminate
   probes, the dedicated packaged-native and installed-VSIX worker-crash probes,
+  the dedicated packaged-native and installed-VSIX blackhole-connect and
+  daemon-disconnect probes, the no-accept conditional-listener fixture,
   controlled ra_svn fault fixture, and installed-VSIX 100+1 stress probe;
 - the exact source-built `svn.exe`, `svnadmin.exe`, and `svnserve.exe`; and
 - the positive fixture `svnserve.conf` and restored `authz` files; and
@@ -335,8 +337,42 @@ with a monotonic clock, and require the owned timeout plus cleanup to settle no
 later than the 5,000 ms cleanup slack before proving the same-session local lane
 is available. The evidence schema requires those timing values only for the
 `deadline` cell, so an existing stalled-mid-read observation cannot be
-relabelled. The remaining controlled negative/recovery cells are
-`blackholeConnect` and `daemonDisconnect`. The reviewed `workerCrash` cell runs
+relabelled.
+
+The reviewed `blackholeConnect` cell starts a loopback-only Winsock listener
+with `SO_CONDITIONAL_ACCEPT` enabled and read back before `listen`; neither the
+fixture nor the aggregate calls `accept` or `WSAAccept`. A mandatory provider
+preflight and each product observation show one stable owner-PID `SYN_SENT` row
+through `GetExtendedTcpTable(TCP_TABLE_OWNER_PID_ALL)`. The product observation
+locks its loopback local address and ephemeral port together with the remote
+address and port. A background owner-table observer publishes an initial sample
+barrier before the product probe launches, then samples the fixture port across
+every owner PID without pausing for process discovery or identity binding and
+continues through probe exit and TCP cleanup. The evidence carries the actual stable `SYN_SENT`
+span separately from the total observation duration. It requires at least three
+samples spanning 25 ms, rejects a replacement worker identity, replacement TCB,
+or any state other than `SYN_SENT`, and derives exactly one
+network attempt and zero established connections from the complete observation;
+no final row may remain. Both surfaces use the
+exact 5,000 ms operation deadline, report
+`SUBVERSIONR_REMOTE_WORKER_TIMED_OUT` / `operationDeadlineExceeded`, preserve
+the working copy, release the native lane, retain no journal entry or temporary
+root, and terminate all daemon candidates. The tamper-detecting fixture proves
+zero accept invocations and accepted connections and reaches `stopped`. No
+external address, firewall rule, backlog saturation, or alternate fixture is
+permitted.
+
+The reviewed `daemonDisconnect` cell runs an active request to the exact
+greeting barrier, binds the unique daemon/worker process pair, and creates an
+empty shutdown trigger from the aggregate observer. Production graceful
+shutdown must expose the active request's
+`SUBVERSIONR_REMOTE_WORKER_DISCONNECTED` / `workerContainmentFailed` settlement
+and daemon `indeterminate` / `workerTerminated` state before acknowledging
+shutdown. Recovery remains `notRequired`; the fixture receives no follow-up
+contact, the working copy and empty journal are preserved, and no daemon
+process, bound descendant, or temporary root remains.
+
+The reviewed `workerCrash` cell runs
 one real packaged-native probe and one real installed-VSIX Extension Host probe
 against separate `greeting-stall` fixtures. The driver starts each probe with
 redirected stdout/stderr and asynchronous drains, waits for exactly one accepted
@@ -363,11 +399,11 @@ ambiguous ancestry, identity drift, unexpected exit code, daemon exit, extra
 network contact, or cleanup residue fails closed.
 
 The lock/unlock boundary is closed as nine positive anonymous operations plus two
-exact authentication-required negative cells. No complete candidate report has
-passed the executable verifier. Missing controlled observations may not be represented as `verified`
-by synthetic evidence. The I6 readiness/public-claim aggregation must be wired
-only after one real report passes the executable verifier against the candidate
-artifacts.
+exact authentication-required negative cells. The aggregate writes evidence
+only after every real packaged-native and installed-VSIX observation passes;
+the exact schema and candidate/helper artifact hashes are bound before the
+report is public-claim eligible. Missing or synthetic observations may not be represented as
+`verified`.
 
 The two earlier checkout-stall probes establish only the installed surface's exact
 timeout origin, recovery-blocked settlement, and one durable blocked entry bound
@@ -431,8 +467,8 @@ similarly use a bounded disposable work root under repository `target/i6r`.
 The fault fixture state remains in the evidence tree. The driver verifies the
 original svnserve process identity before the one-way handoff, binds each
 surface's greeting-stall fixture to the original port, then removes the short
-root in `finally` and rejects residue. Because the driver still terminates at
-the incomplete-matrix blocker, it does not start an unowned replacement server.
+root in `finally` and rejects residue. The driver starts no unowned replacement
+server.
 
 The absolute-deadline product probes use a separate bounded disposable work root
 under repository `target/i6d`. They reuse the preserved read-only working-copy
