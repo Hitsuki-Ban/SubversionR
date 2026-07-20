@@ -224,6 +224,20 @@ observation. The daemon and console host are captured while live and bound to
 their exact Windows file identities and one session; a basename alone is not
 accepted. A later reuse of either PID is not settlement residue.
 
+All subscribed process-tree observations bind an exact start-event identity,
+not a numeric PID for the whole subscription. The controlled probe root must
+match its recorded PID, still-live driver parent, and expected executable name;
+every descendant root is the unique `(PID, start-event time)` selected from that
+tree. Its ancestry lifetime ends at the next recorded start of the same PID.
+A later unrelated PID reuse, and children of that later lifetime, are therefore
+outside the original product tree. Settlement still compares the live CIM
+creation time with the selected start-event boundary and fails if the original
+generation or any bound descendant remains alive. Missing or duplicate exact
+start identities fail the observation.
+Multi-phase recovery observations bind each daemon-to-worker edge to the exact
+parent lifetime. Parent and child cannot share one live PID, while sequential
+workers or a restarted daemon may reuse a PID after the earlier lifetime ends.
+
 The Safe cell's controlled `none` / `none` origin and settlement fields describe
 the successful recovery RPC recorded by the matrix. They do not claim that the
 mutation which required recovery succeeded. Each Safe product probe separately

@@ -1569,9 +1569,33 @@ function Get-NextRecordedProcessStartFileTime(
   return [long]$next[0].eventFileTime
 }
 
-function Get-RecordedProcessDescendantStarts([object[]]$AllEvents, [long]$RootPid) {
-  $rootStarts = @($AllEvents | Where-Object { [long]$_.processId -eq $RootPid })
-  Assert-True ($rootStarts.Count -eq 1) "A recorded ancestry root PID must have exactly one subscribed start identity."
+function Get-ControlledProbeStartIdentity(
+  [object[]]$AllEvents,
+  [long]$ProbePid,
+  [long]$ProbeParentPid,
+  [string]$ExpectedProbeProcessName,
+  [string]$Context
+) {
+  Assert-True ($ProbePid -gt 0 -and $ProbeParentPid -gt 0) "The $Context controlled probe identity was invalid."
+  $probeStarts = @($AllEvents | Where-Object {
+      [long]$_.processId -eq $ProbePid -and
+      [long]$_.parentProcessId -eq $ProbeParentPid -and
+      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+  Assert-True ($probeStarts.Count -eq 1) "The $Context controlled probe must have exactly one subscribed start identity."
+  return $probeStarts[0]
+}
+
+function Get-RecordedProcessDescendantStarts([object[]]$AllEvents, [object]$RootStart) {
+  Assert-True ($null -ne $RootStart) "A recorded ancestry root start identity was missing."
+  $rootPid = [long]$RootStart.processId
+  $rootEventFileTime = [long]$RootStart.eventFileTime
+  Assert-True ($rootPid -gt 0 -and $rootEventFileTime -gt 0) "A recorded ancestry root start identity was invalid."
+  $rootStarts = @($AllEvents | Where-Object {
+      [long]$_.processId -eq $rootPid -and
+      [long]$_.eventFileTime -eq $rootEventFileTime
+    })
+  Assert-True ($rootStarts.Count -eq 1) "A recorded ancestry root start identity must occur exactly once."
   $pending = [System.Collections.Generic.Queue[object]]::new()
   $pending.Enqueue($rootStarts[0])
   $descendants = [System.Collections.Generic.List[object]]::new()
@@ -1587,7 +1611,7 @@ function Get-RecordedProcessDescendantStarts([object[]]$AllEvents, [long]$RootPi
           [long]$_.eventFileTime -lt $parentEndFileTime
         } | Sort-Object -Property eventFileTime)) {
       $childPid = [long]$child.processId
-      Assert-True ($childPid -ne $RootPid) "A packaged-negative worker PID was reused in its recorded ancestry."
+      Assert-True ($childPid -ne $rootPid) "A recorded descendant reused its live ancestry root PID."
       $childIdentity = "$childPid`:$([long]$child.eventFileTime)"
       if ($descendantIdentities.Add($childIdentity)) {
         $descendants.Add($child)
@@ -1598,24 +1622,45 @@ function Get-RecordedProcessDescendantStarts([object[]]$AllEvents, [long]$RootPi
   return @($descendants)
 }
 
+function Get-RecordedCandidateParentStartIdentity(
+  [object[]]$AllEvents,
+  [object[]]$CandidateStarts,
+  [object]$ChildStart,
+  [string]$Context
+) {
+  Assert-True ($null -ne $ChildStart) "A $Context child start identity was missing."
+  $childEventFileTime = [long]$ChildStart.eventFileTime
+  $parentStarts = @($CandidateStarts | Where-Object {
+      $parentEventFileTime = [long]$_.eventFileTime
+      [long]$_.processId -eq [long]$ChildStart.parentProcessId -and
+      $parentEventFileTime -lt $childEventFileTime -and
+      $childEventFileTime -lt (
+        Get-NextRecordedProcessStartFileTime $AllEvents ([long]$_.processId) $parentEventFileTime
+      )
+    })
+  Assert-True ($parentStarts.Count -le 1) "A $Context child start matched multiple live candidate parent identities."
+  if ($parentStarts.Count -eq 0) {
+    return $null
+  }
+  Assert-True (
+    [long]$parentStarts[0].processId -ne [long]$ChildStart.processId
+  ) "A $Context parent and child reused one PID within the same live lifetime."
+  return $parentStarts[0]
+}
+
 function Get-PackagedNegativeProcessObservation(
   [object[]]$AllEvents,
   [long]$ProbePid,
+  [long]$ProbeParentPid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
   [object[]]$SettlementSnapshot,
   [string[]]$ForbiddenFixtureProcessNames = @("svn.exe", "svnadmin.exe", "svnserve.exe")
 ) {
-  $probeStarts = @($AllEvents | Where-Object {
-      [long]$_.processId -eq $ProbePid -and
-      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
-    })
-  Assert-True ($probeStarts.Count -eq 1) "The packaged-negative probe PID must have exactly one subscribed start identity."
-  Assert-True (
-    @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
-  ) "The packaged-negative probe PID was reused during its subscribed observation."
+  $probeStart = Get-ControlledProbeStartIdentity `
+    $AllEvents $ProbePid $ProbeParentPid $ExpectedProbeProcessName "packaged-negative"
 
-  $allProbeDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $allProbeDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $probeStart)
   $daemonStarts = @($allProbeDescendants | Where-Object {
       [long]$_.parentProcessId -eq $ProbePid -and
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
@@ -1624,11 +1669,7 @@ function Get-PackagedNegativeProcessObservation(
       Select-Object -First 8 | ForEach-Object { "$([string]$_.processName):$([long]$_.processId)" }) -join ","
   Assert-True ($daemonStarts.Count -eq 1) "The exact packaged-negative probe must start exactly one candidate daemon; observed $($daemonStarts.Count) candidate starts and children $probeChildSummary."
   $daemonStart = $daemonStarts[0]
-  Assert-True (
-    @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1
-  ) "The packaged-negative candidate daemon PID was reused."
-
-  $daemonDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$daemonStart.processId))
+  $daemonDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $daemonStart)
   $workerStarts = @($daemonDescendants | Where-Object {
       [long]$_.parentProcessId -eq [long]$daemonStart.processId -and
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
@@ -1638,13 +1679,10 @@ function Get-PackagedNegativeProcessObservation(
   Assert-True ($workerStarts.Count -eq 1) "The packaged-negative candidate daemon must start exactly one worker; observed $($workerStarts.Count) candidate starts and children $daemonChildSummary."
   $workerStart = $workerStarts[0]
   Assert-True (
-    [long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime -and
+    [long]$probeStart.eventFileTime -lt [long]$daemonStart.eventFileTime -and
     [long]$daemonStart.eventFileTime -lt [long]$workerStart.eventFileTime
   ) "The packaged-negative probe, daemon, and worker start identities are not strictly ordered."
-  Assert-True (
-    @($AllEvents | Where-Object { [long]$_.processId -eq [long]$workerStart.processId }).Count -eq 1
-  ) "The packaged-negative worker PID was reused."
-  $descendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$workerStart.processId))
+  $descendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents $workerStart)
   $forbiddenFixtureProcessNameSet = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase
   )
@@ -1656,7 +1694,7 @@ function Get-PackagedNegativeProcessObservation(
   $fixtureCliStarts = @($allProbeDescendants | Where-Object {
       $forbiddenFixtureProcessNameSet.Contains([string]$_.processName)
     })
-  foreach ($settledStart in @($probeStarts[0], $daemonStart, $workerStart)) {
+  foreach ($settledStart in @($probeStart, $daemonStart, $workerStart)) {
     $liveSettledIdentity = @(
       $SettlementSnapshot | Where-Object {
         [long]$_.ProcessId -eq [long]$settledStart.processId -and
@@ -1741,21 +1779,16 @@ function Get-SvnserveAuthzObservation([string]$LogPath, [long]$Offset, [string]$
 function Get-InstalledNegativeProcessObservation(
   [object[]]$AllEvents,
   [long]$ProbePid,
+  [long]$ProbeParentPid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
   [string[]]$ForbiddenFixtureProcessNames,
   [object[]]$SettlementSnapshot
 ) {
-  $probeStarts = @($AllEvents | Where-Object {
-      [long]$_.processId -eq $ProbePid -and
-      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
-    })
-  Assert-True ($probeStarts.Count -eq 1) "The installed-negative probe PID must have exactly one subscribed start identity."
-  Assert-True (
-    @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
-  ) "The installed-negative probe PID was reused during its subscribed observation."
+  $probeStart = Get-ControlledProbeStartIdentity `
+    $AllEvents $ProbePid $ProbeParentPid $ExpectedProbeProcessName "installed-negative"
 
-  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $probeStart)
   $forbiddenFixtureProcessNameSet = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase
   )
@@ -1771,16 +1804,11 @@ function Get-InstalledNegativeProcessObservation(
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     })
   Assert-True ($candidateStarts.Count -eq 2) "The installed-negative Extension Host must start exactly one candidate daemon and one worker."
-  foreach ($candidateStart in $candidateStarts) {
-    Assert-True (
-      @($AllEvents | Where-Object { [long]$_.processId -eq [long]$candidateStart.processId }).Count -eq 1
-    ) "An installed-negative candidate process PID was reused."
-  }
-
   $candidatePids = [System.Collections.Generic.HashSet[long]]::new()
   foreach ($candidateStart in $candidateStarts) {
     $null = $candidatePids.Add([long]$candidateStart.processId)
   }
+  Assert-True ($candidatePids.Count -eq $candidateStarts.Count) "Installed-negative candidate start identities must use distinct live PIDs."
   $daemonStarts = @($candidateStarts | Where-Object {
       -not $candidatePids.Contains([long]$_.parentProcessId)
     })
@@ -1792,11 +1820,11 @@ function Get-InstalledNegativeProcessObservation(
   Assert-True ($workerStarts.Count -eq 1) "The installed-negative candidate daemon must start exactly one direct worker."
   $workerStart = $workerStarts[0]
   Assert-True (
-    [long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime -and
+    [long]$probeStart.eventFileTime -lt [long]$daemonStart.eventFileTime -and
     [long]$daemonStart.eventFileTime -lt [long]$workerStart.eventFileTime
   ) "The installed-negative probe, daemon, and worker start identities are not strictly ordered."
 
-  $workerDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$workerStart.processId))
+  $workerDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents $workerStart)
   $settledIdentities = @($daemonStart, $workerStart) + $workerDescendantStarts
   $liveSettledIds = [System.Collections.Generic.HashSet[long]]::new()
   foreach ($settledStart in $settledIdentities) {
@@ -1820,22 +1848,17 @@ function Get-InstalledNegativeProcessObservation(
 function Get-RecoveryBlockedProcessObservation(
   [object[]]$AllEvents,
   [long]$ProbePid,
+  [long]$ProbeParentPid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
   [string[]]$ForbiddenFixtureProcessNames,
   [object[]]$SettlementSnapshot,
   [string]$Context
 ) {
-  $probeStarts = @($AllEvents | Where-Object {
-      [long]$_.processId -eq $ProbePid -and
-      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
-    })
-  Assert-True ($probeStarts.Count -eq 1) "The $Context probe PID must have exactly one subscribed start identity."
-  Assert-True (
-    @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
-  ) "The $Context probe PID was reused during its subscribed observation."
+  $probeStart = Get-ControlledProbeStartIdentity `
+    $AllEvents $ProbePid $ProbeParentPid $ExpectedProbeProcessName $Context
 
-  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $probeStart)
   $forbiddenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($processName in $ForbiddenFixtureProcessNames) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "A $Context forbidden fixture process name was invalid."
@@ -1848,26 +1871,25 @@ function Get-RecoveryBlockedProcessObservation(
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     } | Sort-Object -Property eventFileTime)
   Assert-True ($candidateStarts.Count -eq 5) "The $Context surface must start exactly two candidate daemons and three direct workers."
-  $candidatePids = [System.Collections.Generic.HashSet[long]]::new()
-  foreach ($candidateStart in $candidateStarts) {
-    Assert-True (
-      @($AllEvents | Where-Object { [long]$_.processId -eq [long]$candidateStart.processId }).Count -eq 1
-    ) "A $Context candidate process PID was reused."
-    $null = $candidatePids.Add([long]$candidateStart.processId)
-  }
-  $daemonStarts = @($candidateStarts | Where-Object {
-      -not $candidatePids.Contains([long]$_.parentProcessId)
-    } | Sort-Object -Property eventFileTime)
+  $candidateBindings = @($candidateStarts | ForEach-Object {
+      $parentStarts = @(Get-RecordedCandidateParentStartIdentity $AllEvents $candidateStarts $_ $Context)
+      [pscustomobject]@{
+        Start = $_
+        ParentStart = $(if ($parentStarts.Count -eq 1) { $parentStarts[0] } else { $null })
+      }
+    })
+  $daemonStarts = @($candidateBindings | Where-Object { $null -eq $_.ParentStart } |
+      ForEach-Object { $_.Start } | Sort-Object -Property eventFileTime)
   Assert-True ($daemonStarts.Count -eq 2) "The $Context candidate daemon ancestry was ambiguous."
-  $workerStarts = @($candidateStarts | Where-Object {
-      $candidatePids.Contains([long]$_.parentProcessId)
-    } | Sort-Object -Property eventFileTime)
+  $workerBindings = @($candidateBindings | Where-Object { $null -ne $_.ParentStart })
+  $workerStarts = @($workerBindings | ForEach-Object { $_.Start } | Sort-Object -Property eventFileTime)
   Assert-True ($workerStarts.Count -eq 3) "The $Context surface must start exactly three direct workers."
   for ($index = 0; $index -lt 2; $index += 1) {
     $daemonStart = $daemonStarts[$index]
-    $directWorkers = @($workerStarts | Where-Object {
-        [long]$_.parentProcessId -eq [long]$daemonStart.processId
-      })
+    $directWorkers = @($workerBindings | Where-Object {
+          [long]$_.ParentStart.processId -eq [long]$daemonStart.processId -and
+          [long]$_.ParentStart.eventFileTime -eq [long]$daemonStart.eventFileTime
+        } | ForEach-Object { $_.Start })
     $expectedWorkerCount = if ($index -eq 0) { 1 } else { 2 }
     Assert-True ($directWorkers.Count -eq $expectedWorkerCount) "The $Context candidate daemon owned an unexpected number of direct workers."
     foreach ($directWorker in $directWorkers) {
@@ -1877,14 +1899,14 @@ function Get-RecoveryBlockedProcessObservation(
     }
   }
   Assert-True (
-    [long]$probeStarts[0].eventFileTime -lt [long]$daemonStarts[0].eventFileTime -and
+    [long]$probeStart.eventFileTime -lt [long]$daemonStarts[0].eventFileTime -and
     [long]$workerStarts[0].eventFileTime -lt [long]$daemonStarts[1].eventFileTime
   ) "The $Context restart boundary was not strictly ordered."
 
   $settledStarts = [System.Collections.Generic.List[object]]::new()
   foreach ($candidateStart in $candidateStarts) {
     $settledStarts.Add($candidateStart)
-    foreach ($descendant in @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$candidateStart.processId))) {
+    foreach ($descendant in @(Get-RecordedProcessDescendantStarts $AllEvents $candidateStart)) {
       $settledStarts.Add($descendant)
     }
   }
@@ -1909,20 +1931,17 @@ function Get-RecoveryBlockedProcessObservation(
 function Get-RecoverySafeProcessObservation(
   [object[]]$AllEvents,
   [long]$ProbePid,
+  [long]$ProbeParentPid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
   [string[]]$ForbiddenFixtureProcessNames,
   [object[]]$SettlementSnapshot,
   [string]$Context
 ) {
-  $probeStarts = @($AllEvents | Where-Object {
-      [long]$_.processId -eq $ProbePid -and
-      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
-    })
-  Assert-True ($probeStarts.Count -eq 1) "The $Context probe PID must have exactly one subscribed start identity."
-  Assert-True (@($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1) "The $Context probe PID was reused."
+  $probeStart = Get-ControlledProbeStartIdentity `
+    $AllEvents $ProbePid $ProbeParentPid $ExpectedProbeProcessName $Context
 
-  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $probeStart)
   $forbiddenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($processName in $ForbiddenFixtureProcessNames) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "A $Context forbidden fixture process name was invalid."
@@ -1935,17 +1954,23 @@ function Get-RecoverySafeProcessObservation(
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     } | Sort-Object -Property eventFileTime)
   Assert-True ($candidateStarts.Count -eq 4) "The $Context surface must start exactly one candidate daemon and three direct workers."
-  $candidatePids = [System.Collections.Generic.HashSet[long]]::new()
-  foreach ($candidateStart in $candidateStarts) {
-    Assert-True (@($AllEvents | Where-Object { [long]$_.processId -eq [long]$candidateStart.processId }).Count -eq 1) "A $Context candidate PID was reused."
-    $null = $candidatePids.Add([long]$candidateStart.processId)
-  }
-  $daemonStarts = @($candidateStarts | Where-Object { -not $candidatePids.Contains([long]$_.parentProcessId) })
+  $candidateBindings = @($candidateStarts | ForEach-Object {
+      $parentStarts = @(Get-RecordedCandidateParentStartIdentity $AllEvents $candidateStarts $_ $Context)
+      [pscustomobject]@{
+        Start = $_
+        ParentStart = $(if ($parentStarts.Count -eq 1) { $parentStarts[0] } else { $null })
+      }
+    })
+  $daemonStarts = @($candidateBindings | Where-Object { $null -eq $_.ParentStart } | ForEach-Object { $_.Start })
   Assert-True ($daemonStarts.Count -eq 1) "The $Context candidate daemon ancestry was ambiguous."
   $daemonStart = $daemonStarts[0]
-  $workerStarts = @($candidateStarts | Where-Object { [long]$_.parentProcessId -eq [long]$daemonStart.processId })
+  $workerStarts = @($candidateBindings | Where-Object {
+        $null -ne $_.ParentStart -and
+        [long]$_.ParentStart.processId -eq [long]$daemonStart.processId -and
+        [long]$_.ParentStart.eventFileTime -eq [long]$daemonStart.eventFileTime
+      } | ForEach-Object { $_.Start })
   Assert-True ($workerStarts.Count -eq 3) "The $Context candidate daemon must start exactly three direct workers."
-  Assert-True ([long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime) "The $Context probe/daemon ordering was invalid."
+  Assert-True ([long]$probeStart.eventFileTime -lt [long]$daemonStart.eventFileTime) "The $Context probe/daemon ordering was invalid."
   foreach ($workerStart in $workerStarts) {
     Assert-True ([long]$daemonStart.eventFileTime -lt [long]$workerStart.eventFileTime) "The $Context daemon/worker ordering was invalid."
   }
@@ -1953,7 +1978,7 @@ function Get-RecoverySafeProcessObservation(
   $settledStarts = [System.Collections.Generic.List[object]]::new()
   foreach ($candidateStart in $candidateStarts) {
     $settledStarts.Add($candidateStart)
-    foreach ($descendant in @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$candidateStart.processId))) {
+    foreach ($descendant in @(Get-RecordedProcessDescendantStarts $AllEvents $candidateStart)) {
       $settledStarts.Add($descendant)
     }
   }
@@ -1978,20 +2003,17 @@ function Get-RecoverySafeProcessObservation(
 function Get-RecoveryIndeterminateProcessObservation(
   [object[]]$AllEvents,
   [long]$ProbePid,
+  [long]$ProbeParentPid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
   [string[]]$ForbiddenFixtureProcessNames,
   [object[]]$SettlementSnapshot,
   [string]$Context
 ) {
-  $probeStarts = @($AllEvents | Where-Object {
-      [long]$_.processId -eq $ProbePid -and
-      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
-    })
-  Assert-True ($probeStarts.Count -eq 1) "The $Context probe PID must have exactly one subscribed start identity."
-  Assert-True (@($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1) "The $Context probe PID was reused."
+  $probeStart = Get-ControlledProbeStartIdentity `
+    $AllEvents $ProbePid $ProbeParentPid $ExpectedProbeProcessName $Context
 
-  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $probeStart)
   $forbiddenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($processName in $ForbiddenFixtureProcessNames) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($processName)) "A $Context forbidden fixture process name was invalid."
@@ -2004,17 +2026,23 @@ function Get-RecoveryIndeterminateProcessObservation(
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     } | Sort-Object -Property eventFileTime)
   Assert-True ($candidateStarts.Count -eq 3) "The $Context surface must start exactly one candidate daemon and two direct workers."
-  $candidatePids = [System.Collections.Generic.HashSet[long]]::new()
-  foreach ($candidateStart in $candidateStarts) {
-    Assert-True (@($AllEvents | Where-Object { [long]$_.processId -eq [long]$candidateStart.processId }).Count -eq 1) "A $Context candidate PID was reused."
-    $null = $candidatePids.Add([long]$candidateStart.processId)
-  }
-  $daemonStarts = @($candidateStarts | Where-Object { -not $candidatePids.Contains([long]$_.parentProcessId) })
+  $candidateBindings = @($candidateStarts | ForEach-Object {
+      $parentStarts = @(Get-RecordedCandidateParentStartIdentity $AllEvents $candidateStarts $_ $Context)
+      [pscustomobject]@{
+        Start = $_
+        ParentStart = $(if ($parentStarts.Count -eq 1) { $parentStarts[0] } else { $null })
+      }
+    })
+  $daemonStarts = @($candidateBindings | Where-Object { $null -eq $_.ParentStart } | ForEach-Object { $_.Start })
   Assert-True ($daemonStarts.Count -eq 1) "The $Context candidate daemon ancestry was ambiguous."
   $daemonStart = $daemonStarts[0]
-  $workerStarts = @($candidateStarts | Where-Object { [long]$_.parentProcessId -eq [long]$daemonStart.processId })
+  $workerStarts = @($candidateBindings | Where-Object {
+        $null -ne $_.ParentStart -and
+        [long]$_.ParentStart.processId -eq [long]$daemonStart.processId -and
+        [long]$_.ParentStart.eventFileTime -eq [long]$daemonStart.eventFileTime
+      } | ForEach-Object { $_.Start })
   Assert-True ($workerStarts.Count -eq 2) "The $Context candidate daemon must start exactly two direct workers."
-  Assert-True ([long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime) "The $Context probe/daemon ordering was invalid."
+  Assert-True ([long]$probeStart.eventFileTime -lt [long]$daemonStart.eventFileTime) "The $Context probe/daemon ordering was invalid."
   foreach ($workerStart in $workerStarts) {
     Assert-True ([long]$daemonStart.eventFileTime -lt [long]$workerStart.eventFileTime) "The $Context daemon/worker ordering was invalid."
   }
@@ -2022,7 +2050,7 @@ function Get-RecoveryIndeterminateProcessObservation(
   $settledStarts = [System.Collections.Generic.List[object]]::new()
   foreach ($candidateStart in $candidateStarts) {
     $settledStarts.Add($candidateStart)
-    foreach ($descendant in @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$candidateStart.processId))) {
+    foreach ($descendant in @(Get-RecordedProcessDescendantStarts $AllEvents $candidateStart)) {
       $settledStarts.Add($descendant)
     }
   }
@@ -2047,6 +2075,7 @@ function Get-RecoveryIndeterminateProcessObservation(
 function Get-ZeroWorkerProcessObservation(
   [object[]]$AllEvents,
   [long]$ProbePid,
+  [long]$ProbeParentPid,
   [string]$ExpectedProbeProcessName,
   [string]$ExpectedDaemonProcessName,
   [string]$ExpectedDaemonFileIdentity,
@@ -2057,30 +2086,27 @@ function Get-ZeroWorkerProcessObservation(
 ) {
   Assert-True (-not [string]::IsNullOrWhiteSpace($ExpectedDaemonFileIdentity)) "The expected candidate daemon file identity was invalid."
   Assert-True (-not [string]::IsNullOrWhiteSpace($ExpectedConsoleHostFileIdentity)) "The expected Windows console-host file identity was invalid."
-  $probeStarts = @($AllEvents | Where-Object {
-      [long]$_.processId -eq $ProbePid -and
-      ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
-    })
-  Assert-True ($probeStarts.Count -eq 1) "The $Context probe PID must have exactly one subscribed start identity."
-  Assert-True (
-    @($AllEvents | Where-Object { [long]$_.processId -eq $ProbePid }).Count -eq 1
-  ) "The $Context probe PID was reused during its subscribed observation."
+  $probeStart = Get-ControlledProbeStartIdentity `
+    $AllEvents $ProbePid $ProbeParentPid $ExpectedProbeProcessName $Context
 
-  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $ProbePid)
+  $recordedDescendants = @(Get-RecordedProcessDescendantStarts $AllEvents $probeStart)
   $candidateStarts = @($recordedDescendants | Where-Object {
       ([string]$_.processName).Equals($ExpectedDaemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
     })
   Assert-True ($candidateStarts.Count -eq 1) "The $Context surface must start exactly one candidate daemon and no remote worker."
   $daemonStart = $candidateStarts[0]
   Assert-True (
-    [long]$probeStarts[0].eventFileTime -lt [long]$daemonStart.eventFileTime -and
-    @($AllEvents | Where-Object { [long]$_.processId -eq [long]$daemonStart.processId }).Count -eq 1 -and
+    [long]$probeStart.eventFileTime -lt [long]$daemonStart.eventFileTime -and
+    @($AllEvents | Where-Object {
+        [long]$_.processId -eq [long]$daemonStart.processId -and
+        [long]$_.eventFileTime -eq [long]$daemonStart.eventFileTime
+      }).Count -eq 1 -and
     [long]$daemonStart.imageStartFileTime -gt 0 -and
     [long]$daemonStart.imageStartFileTime -le [long]$daemonStart.eventFileTime -and
     [long]$daemonStart.sessionId -ge 0 -and
     [string]$daemonStart.imageFileIdentity -ceq $ExpectedDaemonFileIdentity
   ) "The $Context candidate daemon start identity was invalid or reused."
-  $daemonDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents ([long]$daemonStart.processId))
+  $daemonDescendantStarts = @(Get-RecordedProcessDescendantStarts $AllEvents $daemonStart)
   $consoleHostStarts = @($daemonDescendantStarts | Where-Object {
       [long]$_.parentProcessId -eq [long]$daemonStart.processId -and
       ([string]$_.processName).Equals("conhost.exe", [System.StringComparison]::OrdinalIgnoreCase)
@@ -2817,6 +2843,7 @@ foreach ($contract in $packagedNegativeContracts) {
     $processObservation = Get-PackagedNegativeProcessObservation `
       @($processStartEvents) `
       ([long]$negativeResult.ProcessId) `
+      ([long]$PID) `
       ([System.IO.Path]::GetFileName($nodeHost)) `
       ([System.IO.Path]::GetFileName($daemonResolved)) `
       $settlementSnapshot `
@@ -3013,6 +3040,7 @@ try {
       $processObservation = Get-InstalledNegativeProcessObservation `
         -AllEvents @($processStartEvents) `
         -ProbePid ([long]$installedNegativeResult.ProcessId) `
+        -ProbeParentPid ([long]$PID) `
         -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
         -ForbiddenFixtureProcessNames @(
@@ -3120,6 +3148,7 @@ try {
     $packagedProcess = Get-PackagedNegativeProcessObservation `
       @($packagedEvents) `
       ([long]$packagedAuthzResult.ProcessId) `
+      ([long]$PID) `
       ([System.IO.Path]::GetFileName($nodeHost)) `
       ([System.IO.Path]::GetFileName($daemonResolved)) `
       (Get-CimProcessSnapshot) `
@@ -3196,6 +3225,7 @@ try {
     $installedProcess = Get-InstalledNegativeProcessObservation `
       -AllEvents @($installedEvents) `
       -ProbePid ([long]$installedAuthzResult.ProcessId) `
+      -ProbeParentPid ([long]$PID) `
       -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
       -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
       -ForbiddenFixtureProcessNames @(
@@ -3346,6 +3376,7 @@ try {
     $localEventProcessObservation = Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProcessEvents) `
       -ProbePid ([long]$installedLocalEventResult.ProcessId) `
+      -ProbeParentPid ([long]$PID) `
       -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
       -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
       -ExpectedDaemonFileIdentity $daemonFileIdentity `
@@ -3760,6 +3791,7 @@ try {
       $processObservation = Get-RecoveryBlockedProcessObservation `
         -AllEvents @($processStartEvents) `
         -ProbePid ([long]$probeResult.ProcessId) `
+        -ProbeParentPid ([long]$PID) `
         -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
         -ForbiddenFixtureProcessNames @(
@@ -4026,6 +4058,7 @@ try {
         $processObservation = Get-PackagedNegativeProcessObservation `
           -AllEvents @($processStartEvents) `
           -ProbePid ([long]$probeResult.ProcessId) `
+          -ProbeParentPid ([long]$PID) `
           -ExpectedProbeProcessName ([System.IO.Path]::GetFileName($nodeHost)) `
           -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($surfaceDaemonPath)) `
           -ForbiddenFixtureProcessNames @(
@@ -4039,6 +4072,7 @@ try {
         $processObservation = Get-InstalledNegativeProcessObservation `
           -AllEvents @($processStartEvents) `
           -ProbePid ([long]$probeResult.ProcessId) `
+          -ProbeParentPid ([long]$PID) `
           -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
           -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($surfaceDaemonPath)) `
           -ForbiddenFixtureProcessNames @(
@@ -4248,6 +4282,7 @@ try {
       $processObservation = Get-RecoverySafeProcessObservation `
         -AllEvents @($processStartEvents) `
         -ProbePid ([long]$probeResult.ProcessId) `
+        -ProbeParentPid ([long]$PID) `
         -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
         -ForbiddenFixtureProcessNames @([System.IO.Path]::GetFileName($svnResolved), [System.IO.Path]::GetFileName($svnadminResolved), [System.IO.Path]::GetFileName($svnserveResolved)) `
@@ -4472,6 +4507,7 @@ try {
       $processObservation = Get-RecoveryIndeterminateProcessObservation `
         -AllEvents @($processStartEvents) `
         -ProbePid ([long]$probeResult.ProcessId) `
+        -ProbeParentPid ([long]$PID) `
         -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
         -ForbiddenFixtureProcessNames @([System.IO.Path]::GetFileName($svnResolved), [System.IO.Path]::GetFileName($svnadminResolved), [System.IO.Path]::GetFileName($svnserveResolved)) `
@@ -4666,6 +4702,7 @@ try {
         $processObservation = Get-PackagedNegativeProcessObservation `
           @($processStartEvents) `
           ([long]$probeResult.ProcessId) `
+          ([long]$PID) `
           ([System.IO.Path]::GetFileName($nodeHost)) `
           ([System.IO.Path]::GetFileName($daemonResolved)) `
           (Get-CimProcessSnapshot) `
@@ -4679,6 +4716,7 @@ try {
         $processObservation = Get-InstalledNegativeProcessObservation `
           -AllEvents @($processStartEvents) `
           -ProbePid ([long]$probeResult.ProcessId) `
+          -ProbeParentPid ([long]$PID) `
           -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
           -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
           -ForbiddenFixtureProcessNames @(
@@ -4855,7 +4893,7 @@ try {
       Complete-ProcessStartEventDrain $processStartSourceIdentifier $processStartEvents $processStartEventKeys $ProcessStartEventSettlementMilliseconds
       if ($surfaceName -ceq "packaged-native") {
         $processObservation = Get-PackagedNegativeProcessObservation `
-          @($processStartEvents) ([long]$probeResult.ProcessId) `
+          @($processStartEvents) ([long]$probeResult.ProcessId) ([long]$PID) `
           ([System.IO.Path]::GetFileName($nodeHost)) ([System.IO.Path]::GetFileName($daemonResolved)) `
           (Get-CimProcessSnapshot) @(
             [System.IO.Path]::GetFileName($svnResolved),
@@ -4867,6 +4905,7 @@ try {
         $processObservation = Get-InstalledNegativeProcessObservation `
           -AllEvents @($processStartEvents) `
           -ProbePid ([long]$probeResult.ProcessId) `
+          -ProbeParentPid ([long]$PID) `
           -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
           -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
           -ForbiddenFixtureProcessNames @(
@@ -5046,7 +5085,7 @@ try {
       Complete-ProcessStartEventDrain $processStartSourceIdentifier $processStartEvents $processStartEventKeys $ProcessStartEventSettlementMilliseconds
       if ($surfaceName -ceq "packaged-native") {
         $processObservation = Get-PackagedNegativeProcessObservation `
-          @($processStartEvents) ([long]$probeResult.ProcessId) `
+          @($processStartEvents) ([long]$probeResult.ProcessId) ([long]$PID) `
           ([System.IO.Path]::GetFileName($nodeHost)) ([System.IO.Path]::GetFileName($daemonResolved)) `
           (Get-CimProcessSnapshot) @(
             [System.IO.Path]::GetFileName($svnResolved),
@@ -5058,6 +5097,7 @@ try {
         $processObservation = Get-InstalledNegativeProcessObservation `
           -AllEvents @($processStartEvents) `
           -ProbePid ([long]$probeResult.ProcessId) `
+          -ProbeParentPid ([long]$PID) `
           -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
           -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
           -ForbiddenFixtureProcessNames @(
@@ -5264,6 +5304,7 @@ try {
       $processObservation = Get-ZeroWorkerProcessObservation `
         -AllEvents @($processStartEvents) `
         -ProbePid ([long]$probeResult.ProcessId) `
+        -ProbeParentPid ([long]$PID) `
         -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
         -ExpectedDaemonFileIdentity $daemonFileIdentity `

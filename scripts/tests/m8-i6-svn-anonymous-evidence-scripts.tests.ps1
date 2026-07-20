@@ -1350,6 +1350,7 @@ try {
       'Invoke-BoundedProcessWithStartEventCapture',
       'imageStartFileTime',
       'ExpectedConsoleHostFileIdentity',
+      'Get-RecordedCandidateParentStartIdentity',
       'Get-PackagedNegativeProcessObservation',
       'Get-InstalledNegativeProcessObservation',
       '"i6n\$([Guid]',
@@ -1459,10 +1460,14 @@ try {
     "Get-DescendantProcessIds",
     "Get-ProcessSnapshotStartFileTime",
     "Get-NextRecordedProcessStartFileTime",
+    "Get-ControlledProbeStartIdentity",
     "Get-RecordedProcessDescendantStarts",
+    "Get-RecordedCandidateParentStartIdentity",
     "Get-PackagedNegativeProcessObservation",
     "Get-InstalledNegativeProcessObservation",
     "Get-ZeroWorkerProcessObservation",
+    "Get-RecoveryBlockedProcessObservation",
+    "Get-RecoverySafeProcessObservation",
     "Set-ExactAuthzAtomically",
     "Get-SvnserveAuthzObservation",
     "Get-ExactFileSecurityDescriptor",
@@ -1513,7 +1518,7 @@ try {
     processId = 300L; parentProcessId = 200L; processName = "subversionr-daemon.exe"; eventFileTime = 3000L
   }
   $measuredBaseline = Get-PackagedNegativeProcessObservation `
-    @($probeStart, $daemonStart, $workerStart) 100L "Code.exe" "subversionr-daemon.exe" @()
+    @($probeStart, $daemonStart, $workerStart) 100L 10L "Code.exe" "subversionr-daemon.exe" @()
   Assert-Equal 0 $measuredBaseline.workerDescendantsAfter "Packaged-negative baseline must derive zero descendants from an empty settlement snapshot."
   Assert-Equal 0 $measuredBaseline.fixtureCliInvocations "Packaged-negative baseline must derive zero fixture CLI starts from subscribed process events."
 
@@ -1524,7 +1529,7 @@ try {
     )) {
     $measuredFixtureCli = Get-PackagedNegativeProcessObservation `
       @($probeStart, $daemonStart, $workerStart, $fixtureCliStart) `
-      100L "Code.exe" "subversionr-daemon.exe" @()
+      100L 10L "Code.exe" "subversionr-daemon.exe" @()
     Assert-Equal 1 $measuredFixtureCli.fixtureCliInvocations "Packaged-negative process evidence must count fixture CLI starts under every product ancestor."
   }
 
@@ -1537,7 +1542,7 @@ try {
   Assert-Equal 2 @(
     Get-RecordedProcessDescendantStarts `
       @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
-      300L
+      $workerStart
   ).Count "Packaged-negative event ancestry must traverse child and grandchild starts."
   $reusedGrandchildPid = [pscustomobject]@{
     processId = 401L; parentProcessId = 999L; processName = "reused-after-grandchild.exe"; eventFileTime = 5000L
@@ -1545,7 +1550,7 @@ try {
   Assert-Equal 2 @(
     Get-RecordedProcessDescendantStarts `
       @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild, $reusedGrandchildPid) `
-      300L
+      $workerStart
   ).Count "Recorded ancestry must allow a descendant PID to be reused after that start identity."
   $preDaemonPidCollision = [pscustomobject]@{
     processId = 402L; parentProcessId = 200L; processName = "unrelated-before-daemon.exe"; eventFileTime = 1500L
@@ -1553,8 +1558,19 @@ try {
   Assert-Equal 3 @(
     Get-RecordedProcessDescendantStarts `
       @($probeStart, $preDaemonPidCollision, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
-      200L
+      $daemonStart
   ).Count "Recorded ancestry must ignore a numeric parent-PID collision that predates the parent start identity."
+  $preWorkerLifetimeStart = [pscustomobject]@{
+    processId = 300L; parentProcessId = 999L; processName = "previous-worker-pid-owner.exe"; eventFileTime = 1200L
+  }
+  $preWorkerLifetimeChild = [pscustomobject]@{
+    processId = 405L; parentProcessId = 300L; processName = "previous-worker-child.exe"; eventFileTime = 1300L
+  }
+  Assert-Equal 2 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $preWorkerLifetimeStart, $preWorkerLifetimeChild, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
+      $workerStart
+  ).Count "Recorded ancestry must exclude children from a prior lifetime of the root PID."
   $preProbeDaemonNameCollision = [pscustomobject]@{
     processId = 403L; parentProcessId = 100L; processName = "subversionr-daemon.exe"; eventFileTime = 900L
   }
@@ -1563,41 +1579,58 @@ try {
   }
   $packagedCollisionObservation = Get-PackagedNegativeProcessObservation `
     @($preProbeDaemonNameCollision, $probeStart, $preDaemonWorkerNameCollision, $daemonStart, $workerStart) `
-    100L "Code.exe" "subversionr-daemon.exe" @()
+    100L 10L "Code.exe" "subversionr-daemon.exe" @()
   Assert-Equal 200L $packagedCollisionObservation.daemonProcessId "Packaged-negative observation must ignore a same-name pre-probe PID collision."
   Assert-Equal 300L $packagedCollisionObservation.workerProcessId "Packaged-negative observation must ignore a same-name pre-daemon PID collision."
   $settledDescendantObservation = Get-PackagedNegativeProcessObservation `
     @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
-    100L "Code.exe" "subversionr-daemon.exe" `
+    100L 10L "Code.exe" "subversionr-daemon.exe" `
     @()
   Assert-Equal 0 $settledDescendantObservation.workerDescendantsAfter "Exited Windows helper descendants must not be reported as settlement residue."
 
   $reusedWorkerPid = [pscustomobject]@{
     processId = 300L; parentProcessId = 999L; processName = "reused.exe"; eventFileTime = 5000L
   }
-  Assert-ScriptThrowsContaining {
-    Get-PackagedNegativeProcessObservation `
-      @($probeStart, $daemonStart, $workerStart, $reusedWorkerPid) `
-      100L "Code.exe" "subversionr-daemon.exe" `
-      @()
-  } "worker PID was reused" "Packaged-negative observation must reject worker PID reuse."
+  $reusedWorkerChild = [pscustomobject]@{
+    processId = 406L; parentProcessId = 300L; processName = "reused-worker-child.exe"; eventFileTime = 5100L
+  }
+  Assert-Equal 0 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $daemonStart, $workerStart, $reusedWorkerPid, $reusedWorkerChild) `
+      $workerStart
+  ).Count "Recorded ancestry must exclude a child started by a later owner of the root PID."
 
   Assert-ScriptThrowsContaining {
     Get-PackagedNegativeProcessObservation `
       @($probeStart, $daemonStart, $workerStart) `
-      100L "Code.exe" "subversionr-daemon.exe" `
+      100L 10L "Code.exe" "subversionr-daemon.exe" `
       @([pscustomobject]@{
           ProcessId = 300L; ParentProcessId = 200L; CreationDate = [DateTime]::FromFileTimeUtc(2900L)
         })
   } "worker identity remained alive" "Packaged-negative settlement must reject the live recorded worker identity."
 
   $reusedSettlement = Get-PackagedNegativeProcessObservation `
-    @($probeStart, $daemonStart, $workerStart) `
-    100L "Code.exe" "subversionr-daemon.exe" `
+    @($probeStart, $daemonStart, $workerStart, $reusedWorkerPid, $reusedWorkerChild) `
+    100L 10L "Code.exe" "subversionr-daemon.exe" `
     @([pscustomobject]@{
-        ProcessId = 300L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(3100L)
+        ProcessId = 300L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5000L)
       })
-  Assert-Equal 0 $reusedSettlement.workerDescendantsAfter "Packaged-negative settlement must allow a later process to reuse the recorded worker PID."
+  Assert-Equal 0 $reusedSettlement.workerDescendantsAfter "Packaged-negative settlement must allow an observed later process to reuse the recorded worker PID."
+
+  Assert-ScriptThrowsContaining {
+    Get-RecordedProcessDescendantStarts `
+      @($workerStart, $workerStart) `
+      $workerStart
+  } "must occur exactly once" "Recorded ancestry must reject a duplicate exact PID and event-time identity."
+
+  $extraPackagedDaemonStart = [pscustomobject]@{
+    processId = 407L; parentProcessId = 100L; processName = "subversionr-daemon.exe"; eventFileTime = 2500L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-PackagedNegativeProcessObservation `
+      @($probeStart, $daemonStart, $extraPackagedDaemonStart, $workerStart) `
+      100L 10L "Code.exe" "subversionr-daemon.exe" @()
+  } "start exactly one candidate daemon" "Packaged-negative observation must still reject a real extra candidate daemon."
 
   $orphanSnapshot = @([pscustomobject]@{
       ProcessId = 401L; ParentProcessId = 400L; CreationDate = [DateTime]::FromFileTimeUtc(3900L)
@@ -1605,13 +1638,13 @@ try {
   Assert-ScriptThrowsContaining {
     Get-PackagedNegativeProcessObservation `
       @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
-      100L "Code.exe" "subversionr-daemon.exe" `
+      100L 10L "Code.exe" "subversionr-daemon.exe" `
       $orphanSnapshot
   } "live orphan descendants" "Packaged-negative settlement must bind a live orphan to recorded start ancestry."
 
   $reusedDescendantSettlement = Get-PackagedNegativeProcessObservation `
     @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
-    100L "Code.exe" "subversionr-daemon.exe" `
+    100L 10L "Code.exe" "subversionr-daemon.exe" `
     @([pscustomobject]@{
         ProcessId = 401L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(4100L)
       })
@@ -1634,27 +1667,30 @@ try {
   }
   $installedMeasuredBaseline = Get-InstalledNegativeProcessObservation `
     -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
-    -ProbePid 500L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
     -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") -SettlementSnapshot @()
   Assert-Equal 0 $installedMeasuredBaseline.workerDescendantsAfter "Installed-negative baseline must derive zero descendants from the settlement snapshot."
   Assert-Equal 0 $installedMeasuredBaseline.fixtureCliInvocations "Installed-negative baseline must derive zero fixture CLI invocations from process events."
   Assert-ScriptThrowsContaining {
     Get-InstalledNegativeProcessObservation `
       -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
-      -ProbePid 500L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @([pscustomobject]@{
           ProcessId = 504L; ParentProcessId = 503L; CreationDate = [DateTime]::FromFileTimeUtc(5350L)
         })
   } "remained alive at settlement" "Installed-negative settlement must reject the live recorded worker identity."
+  $installedReusedWorkerPid = [pscustomobject]@{
+    processId = 504L; parentProcessId = 999L; processName = "reused.exe"; eventFileTime = 5600L
+  }
   $installedReusedSettlement = Get-InstalledNegativeProcessObservation `
-    -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
-    -ProbePid 500L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart, $installedReusedWorkerPid) `
+    -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
     -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
     -SettlementSnapshot @([pscustomobject]@{
-        ProcessId = 504L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5450L)
+        ProcessId = 504L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5600L)
       })
-  Assert-Equal 0 $installedReusedSettlement.workerDescendantsAfter "Installed-negative settlement must allow later PID reuse."
+  Assert-Equal 0 $installedReusedSettlement.workerDescendantsAfter "Installed-negative settlement must allow observed later PID reuse."
 
   $localEventProbeStart = [pscustomobject]@{
     processId = 600L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 6000L
@@ -1672,7 +1708,7 @@ try {
   }
   $localEventObservation = Get-ZeroWorkerProcessObservation `
     -AllEvents @($localEventProbeStart, $localEventCodeStart, $preLocalEventDaemonPidCollision, $localEventDaemonStart) `
-    -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
     -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
     -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
     -SettlementSnapshot @() -Context "installed local-event"
@@ -1686,7 +1722,7 @@ try {
   }
   $localEventConsoleObservation = Get-ZeroWorkerProcessObservation `
     -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart) `
-    -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
     -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
     -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
     -SettlementSnapshot @() -Context "installed local-event"
@@ -1701,7 +1737,7 @@ try {
   Assert-ScriptThrowsContaining {
     Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $spoofedLocalEventConsoleHostStart) `
-      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
       -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @() -Context "installed local-event"
@@ -1710,7 +1746,7 @@ try {
   Assert-ScriptThrowsContaining {
     Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart) `
-      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
       -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @([pscustomobject]@{
@@ -1724,7 +1760,7 @@ try {
   Assert-ScriptThrowsContaining {
     Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $secondLocalEventConsoleHostStart) `
-      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
       -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @() -Context "installed local-event"
@@ -1736,7 +1772,7 @@ try {
   Assert-ScriptThrowsContaining {
     Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $nestedLocalEventConsoleHostStart) `
-      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
       -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @() -Context "installed local-event"
@@ -1748,7 +1784,7 @@ try {
   Assert-ScriptThrowsContaining {
     Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $localEventRemoteWorkerStart) `
-      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
       -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @() -Context "installed local-event"
@@ -1759,7 +1795,7 @@ try {
   }
   $reusedConsoleHostObservation = Get-ZeroWorkerProcessObservation `
     -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $reusedLocalEventConsoleHostPid) `
-    -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
     -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
     -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
     -SettlementSnapshot @([pscustomobject]@{
@@ -1773,7 +1809,7 @@ try {
   Assert-ScriptThrowsContaining {
     Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $realLocalEventDaemonChild) `
-      -ProbePid 600L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
       -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
       -SettlementSnapshot @() -Context "installed local-event"
@@ -1786,10 +1822,120 @@ try {
     )) {
     $measuredFixtureCli = Get-InstalledNegativeProcessObservation `
       -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart, $fixtureCliStart) `
-      -ProbePid 500L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
       -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") -SettlementSnapshot @()
     Assert-Equal 1 $measuredFixtureCli.fixtureCliInvocations "Installed-negative process evidence must count fixture CLI starts under every product ancestor."
   }
+
+  $recoveryForbiddenProcessNames = @("svn.exe", "svnadmin.exe", "svnserve.exe")
+  $recoverySafeProbeStart = [pscustomobject]@{
+    processId = 700L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 7000L
+  }
+  $recoverySafeDaemonStart = [pscustomobject]@{
+    processId = 701L; parentProcessId = 700L; processName = "subversionr-daemon.exe"; eventFileTime = 7100L
+  }
+  $recoverySafeWorkerStart1 = [pscustomobject]@{
+    processId = 702L; parentProcessId = 701L; processName = "subversionr-daemon.exe"; eventFileTime = 7200L
+  }
+  $recoverySafeWorkerStart2 = [pscustomobject]@{
+    processId = 702L; parentProcessId = 701L; processName = "subversionr-daemon.exe"; eventFileTime = 7300L
+  }
+  $recoverySafeWorkerStart3 = [pscustomobject]@{
+    processId = 703L; parentProcessId = 701L; processName = "subversionr-daemon.exe"; eventFileTime = 7400L
+  }
+  $recoverySafeObservation = Get-RecoverySafeProcessObservation `
+    -AllEvents @(
+      $recoverySafeProbeStart,
+      $recoverySafeDaemonStart,
+      $recoverySafeWorkerStart1,
+      $recoverySafeWorkerStart2,
+      $recoverySafeWorkerStart3
+    ) `
+    -ProbePid 700L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" `
+    -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames $recoveryForbiddenProcessNames -SettlementSnapshot @() `
+    -Context "recovery-safe sequential worker PID reuse"
+  Assert-Equal 1 $recoverySafeObservation.daemonStarts "Recovery-safe observation must retain one daemon across sequential worker PID reuse."
+  Assert-Equal 3 $recoverySafeObservation.workerStarts "Recovery-safe observation must bind three worker lifetimes when two sequential workers reuse one PID."
+
+  $extraRecoverySafeCandidate = [pscustomobject]@{
+    processId = 704L; parentProcessId = 700L; processName = "subversionr-daemon.exe"; eventFileTime = 7150L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-RecoverySafeProcessObservation `
+      -AllEvents @(
+        $recoverySafeProbeStart,
+        $recoverySafeDaemonStart,
+        $extraRecoverySafeCandidate,
+        $recoverySafeWorkerStart1,
+        $recoverySafeWorkerStart2,
+        $recoverySafeWorkerStart3
+      ) `
+      -ProbePid 700L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" `
+      -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ForbiddenFixtureProcessNames $recoveryForbiddenProcessNames -SettlementSnapshot @() `
+      -Context "recovery-safe extra candidate"
+  } "start exactly one candidate daemon and three direct workers" "Recovery-safe observation must still reject a real extra candidate."
+
+  $recoveryIndeterminateProbeStart = [pscustomobject]@{
+    processId = 720L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 8000L
+  }
+  $recoveryIndeterminateDaemonStart = [pscustomobject]@{
+    processId = 721L; parentProcessId = 720L; processName = "subversionr-daemon.exe"; eventFileTime = 8100L
+  }
+  $recoveryIndeterminateWorkerStart1 = [pscustomobject]@{
+    processId = 722L; parentProcessId = 721L; processName = "subversionr-daemon.exe"; eventFileTime = 8200L
+  }
+  $recoveryIndeterminateWorkerStart2 = [pscustomobject]@{
+    processId = 722L; parentProcessId = 721L; processName = "subversionr-daemon.exe"; eventFileTime = 8300L
+  }
+  $recoveryIndeterminateObservation = Get-RecoveryIndeterminateProcessObservation `
+    -AllEvents @(
+      $recoveryIndeterminateProbeStart,
+      $recoveryIndeterminateDaemonStart,
+      $recoveryIndeterminateWorkerStart1,
+      $recoveryIndeterminateWorkerStart2
+    ) `
+    -ProbePid 720L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" `
+    -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames $recoveryForbiddenProcessNames -SettlementSnapshot @() `
+    -Context "recovery-indeterminate sequential worker PID reuse"
+  Assert-Equal 1 $recoveryIndeterminateObservation.daemonStarts "Recovery-indeterminate observation must retain one daemon across sequential worker PID reuse."
+  Assert-Equal 2 $recoveryIndeterminateObservation.workerStarts "Recovery-indeterminate observation must bind two worker lifetimes that reuse one PID."
+
+  $recoveryBlockedProbeStart = [pscustomobject]@{
+    processId = 740L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 9000L
+  }
+  $recoveryBlockedDaemonStart1 = [pscustomobject]@{
+    processId = 741L; parentProcessId = 740L; processName = "subversionr-daemon.exe"; eventFileTime = 9100L
+  }
+  $recoveryBlockedWorkerStart1 = [pscustomobject]@{
+    processId = 742L; parentProcessId = 741L; processName = "subversionr-daemon.exe"; eventFileTime = 9200L
+  }
+  $recoveryBlockedDaemonStart2 = [pscustomobject]@{
+    processId = 741L; parentProcessId = 740L; processName = "subversionr-daemon.exe"; eventFileTime = 9300L
+  }
+  $recoveryBlockedWorkerStart2 = [pscustomobject]@{
+    processId = 742L; parentProcessId = 741L; processName = "subversionr-daemon.exe"; eventFileTime = 9400L
+  }
+  $recoveryBlockedWorkerStart3 = [pscustomobject]@{
+    processId = 743L; parentProcessId = 741L; processName = "subversionr-daemon.exe"; eventFileTime = 9500L
+  }
+  $recoveryBlockedObservation = Get-RecoveryBlockedProcessObservation `
+    -AllEvents @(
+      $recoveryBlockedProbeStart,
+      $recoveryBlockedDaemonStart1,
+      $recoveryBlockedWorkerStart1,
+      $recoveryBlockedDaemonStart2,
+      $recoveryBlockedWorkerStart2,
+      $recoveryBlockedWorkerStart3
+    ) `
+    -ProbePid 740L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" `
+    -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames $recoveryForbiddenProcessNames -SettlementSnapshot @() `
+    -Context "recovery-blocked sequential daemon and worker PID reuse"
+  Assert-Equal 2 $recoveryBlockedObservation.daemonStarts "Recovery-blocked observation must bind both daemon lifetimes when the restart reuses the first daemon PID."
+  Assert-Equal 3 $recoveryBlockedObservation.workerStarts "Recovery-blocked observation must bind workers to the exact daemon lifetime when the restart reuses the first worker PID."
 
   $installedNegativeProbeText = Get-Content -Raw -LiteralPath $installedNegativeProbePath
   foreach ($requiredText in @(
