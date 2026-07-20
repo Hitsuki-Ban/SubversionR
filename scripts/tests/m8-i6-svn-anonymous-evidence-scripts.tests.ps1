@@ -1221,6 +1221,63 @@ try {
   Assert-True (-not $runnerText.Contains("unsupportedAfterWorker")) "I6 runner must not accept the I3-I5 transport-boundary result."
 
   $driverText = Get-Content -Raw -LiteralPath $probeDriverPath
+  $workerNativeSourceMatch = [regex]::Match(
+    $driverText,
+    "(?ms)^Add-Type -TypeDefinition @'\r?\n(?<source>using System;\r?\nusing System\.Collections\.Generic;\r?\nusing System\.ComponentModel;\r?\nusing System\.IO;\r?\nusing System\.Runtime\.InteropServices;\r?\nusing System\.Text;\r?\nusing Microsoft\.Win32\.SafeHandles;.*?^public static class SubversionRM8I6WorkerCrashNative \{.*?^\})\r?\n'@$"
+  )
+  Assert-True $workerNativeSourceMatch.Success "I6 probe driver must retain one extractable retained-process native implementation."
+  $workerNativeSource = $workerNativeSourceMatch.Groups["source"].Value
+  $requireAliveSourceMatch = [regex]::Match(
+    $workerNativeSource,
+    "(?ms)^  public static void RequireSingleAlive\(.*?^  \}"
+  )
+  Assert-True $requireAliveSourceMatch.Success "Retained-process native implementation must retain one RequireSingleAlive method."
+  $requireAliveSource = $requireAliveSourceMatch.Value
+  $aliveFirstWaitIndex = $requireAliveSource.IndexOf('RequireWait(', [System.StringComparison]::Ordinal)
+  $aliveIdentityIndex = $requireAliveSource.IndexOf('RequireIdentity(', [System.StringComparison]::Ordinal)
+  $aliveSecondWaitIndex = $requireAliveSource.IndexOf('RequireWait(', $aliveIdentityIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $aliveFirstWaitIndex -ge 0 -and
+    $aliveIdentityIndex -gt $aliveFirstWaitIndex -and
+    $aliveSecondWaitIndex -gt $aliveIdentityIndex
+  ) "Retained daemon liveness must bracket image identity queries with zero-time handle waits."
+  Assert-True ($workerNativeSource.Contains('GetProcessTimes(exited live-capture process) failed')) "Exited retained-process lifetime capture must use the original handle rather than reopen a PID."
+  Add-Type -TypeDefinition $workerNativeSource
+  $retainedExecutablePath = Join-Path $tempRoot "retained-process-fixture.exe"
+  Copy-Item -LiteralPath (Join-Path ([Environment]::SystemDirectory) "cmd.exe") -Destination $retainedExecutablePath
+  $retainedFixtureProcess = $null
+  $retainedFixtureBinding = $null
+  try {
+    $retainedFixtureStart = [System.Diagnostics.ProcessStartInfo]::new()
+    $retainedFixtureStart.FileName = $retainedExecutablePath
+    $retainedFixtureStart.UseShellExecute = $false
+    $retainedFixtureStart.CreateNoWindow = $true
+    foreach ($argument in @("/d", "/q", "/c", "ping.exe -n 30 127.0.0.1 >nul")) {
+      $retainedFixtureStart.ArgumentList.Add($argument)
+    }
+    $retainedFixtureProcess = [System.Diagnostics.Process]::Start($retainedFixtureStart)
+    Assert-True ($null -ne $retainedFixtureProcess) "Retained-process native fixture failed to start."
+    $retainedFixtureBinding = [SubversionRM8I6WorkerCrashNative]::BindExactSingle($retainedExecutablePath)
+    [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($retainedFixtureBinding)
+    $retainedFixtureProcess.Kill($true)
+    $retainedFixtureProcess.WaitForExit()
+    [SubversionRM8I6WorkerCrashNative]::RequireSingleExited($retainedFixtureBinding, 10000)
+    $retainedExitFileTime = [SubversionRM8I6WorkerCrashNative]::GetSingleExitFileTime($retainedFixtureBinding)
+    Assert-True ($retainedExitFileTime -gt [long]$retainedFixtureBinding.StartFileTime) "Retained-process native fixture did not expose an exact exit FILETIME."
+    Assert-ScriptThrowsContaining {
+      [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($retainedFixtureBinding)
+    } "exited before acknowledgement" "Exited retained-process liveness must fail before querying its image path."
+  }
+  finally {
+    if ($null -ne $retainedFixtureProcess) {
+      if (-not $retainedFixtureProcess.HasExited) {
+        $retainedFixtureProcess.Kill($true)
+        $retainedFixtureProcess.WaitForExit()
+      }
+      $retainedFixtureProcess.Dispose()
+    }
+    if ($null -ne $retainedFixtureBinding) { $retainedFixtureBinding.Dispose() }
+  }
   $fileIdentitySourceMatch = [regex]::Match(
     $driverText,
     "(?ms)^Add-Type -TypeDefinition @'\r?\n(?<source>using System;\r?\nusing System\.ComponentModel;.*?^public static class SubversionRM8I6ExactFileIdentity \{.*?^\})\r?\n'@$"
@@ -1303,11 +1360,6 @@ try {
   Assert-True (
     $blackholeObserverStartIndex -ge 0 -and $blackholeProbeLaunchIndex -gt $blackholeObserverStartIndex
   ) "I6 blackhole TCP sampling must publish its observer before product probe launch."
-  $childEnumerationIndex = $driverText.IndexOf('private static List<Candidate> EnumerateChildCandidates', [System.StringComparison]::Ordinal)
-  $parentPrefilterIndex = $driverText.IndexOf('(!requireParent || entry.th32ParentProcessID == parentPid)', $childEnumerationIndex, [System.StringComparison]::Ordinal)
-  $childOpenIndex = $driverText.IndexOf('OpenRequired(entry.th32ProcessID', $parentPrefilterIndex, [System.StringComparison]::Ordinal)
-  Assert-True ($childEnumerationIndex -ge 0 -and $parentPrefilterIndex -gt $childEnumerationIndex -and $childOpenIndex -gt $parentPrefilterIndex) "Live conhost binding must prefilter Toolhelp rows by the retained daemon parent before opening same-name system processes."
-  Assert-True ([regex]::Matches($driverText, 'EnumerateChildCandidates\(').Count -eq 3) "Only the child count/bind APIs and the child enumerator definition may use parent-prefiltered candidate enumeration."
   foreach ($workerCrashContractText in @(
       'CreateToolhelp32Snapshot',
       'QueryFullProcessImageNameW',
@@ -1357,13 +1409,11 @@ try {
       '$installedLocalEventResult = Invoke-BoundedInstalledProcessWithRequiredLiveCapture',
       'SubversionRM8I6SingleProcessBinding',
       'BindExactSingle',
-      'GetExactChildCount',
       'GetSingleBoundDescendantCount',
-      'BindExactChild',
-      'EnumerateChildCandidates',
       'RequireSingleAlive',
       'RequireSingleExited',
-      'ExpectedConsoleHostPath',
+      'GetSingleExitFileTime',
+      'Set-RecordedProcessStartIdentityFromRetainedBinding',
       'extensionHostProcessId',
       'eventSessionId',
       'subversionr.release.m8-i6-installed-process-capture-ready.v1',
@@ -1494,6 +1544,7 @@ try {
     "Get-ControlledProbeStartIdentity",
     "Get-RecordedProcessDescendantStarts",
     "Get-RecordedCandidateParentStartIdentity",
+    "Set-RecordedProcessStartIdentityFromRetainedBinding",
     "Invoke-BoundedInstalledProcessWithRequiredLiveCapture",
     "Get-PackagedNegativeProcessObservation",
     "Get-InstalledNegativeProcessObservation",
@@ -1526,19 +1577,16 @@ try {
   foreach ($requiredLiveCaptureText in @(
       '[SubversionRM8I6WorkerCrashNative]::BindExactSingle',
       '[SubversionRM8I6WorkerCrashNative]::GetSingleBoundDescendantCount',
-      '[SubversionRM8I6WorkerCrashNative]::GetExactChildCount',
-      '[SubversionRM8I6WorkerCrashNative]::BindExactChild',
       'Receive-ProcessStartEvents',
       'Get-CimInstance -ClassName Win32_Process',
-      'eventFileTime',
-      'eventSessionId',
+      'GetSingleExitFileTime',
+      'RetainedDaemonIdentity',
       'StartFileTime',
       'SessionId',
       'ImagePath',
       'imageFileIdentity',
       'RequireSingleAlive',
       'RequireSingleExited',
-      'ExpectedConsoleHostPath',
       '$captureDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)',
       'live process capture completed after its absolute deadline.',
       'subversionr.release.m8-i6-installed-process-capture-ack.v1'
@@ -1549,34 +1597,39 @@ try {
       'Get-CandidateProcessIds',
       'Get-CandidateProcessObservation',
       '$captureDeadline = $deadline',
+      'Get-RecordedProcessDescendantStarts',
+      'RetainedConsoleHostIdentity',
+      'BindExactChild',
       'fallback'
     )) {
     Assert-True (-not $liveCaptureHelper.Contains($forbiddenLiveCaptureText)) "Installed process live-capture helper must not use '$forbiddenLiveCaptureText' as a binding fallback."
   }
   $liveBindIndex = $liveCaptureHelper.IndexOf('[SubversionRM8I6WorkerCrashNative]::BindExactSingle', [System.StringComparison]::Ordinal)
-  $liveEventJoinIndex = $liveCaptureHelper.IndexOf('eventFileTime', [System.StringComparison]::Ordinal)
-  $liveAliveIndex = $liveCaptureHelper.IndexOf('RequireSingleAlive', $liveBindIndex, [System.StringComparison]::Ordinal)
+  $livePreSnapshotAliveIndex = $liveCaptureHelper.IndexOf('RequireSingleAlive', $liveBindIndex, [System.StringComparison]::Ordinal)
   $liveDescendantCountIndex = $liveCaptureHelper.IndexOf('GetSingleBoundDescendantCount', $liveBindIndex, [System.StringComparison]::Ordinal)
-  $liveConsoleHostCountIndex = $liveCaptureHelper.IndexOf('GetExactChildCount', $liveDescendantCountIndex, [System.StringComparison]::Ordinal)
-  $liveConsoleHostBindIndex = $liveCaptureHelper.IndexOf('BindExactChild', $liveConsoleHostCountIndex, [System.StringComparison]::Ordinal)
-  $liveAckIndex = $liveCaptureHelper.IndexOf('subversionr.release.m8-i6-installed-process-capture-ack.v1', $liveAliveIndex, [System.StringComparison]::Ordinal)
+  $livePostSnapshotAliveIndex = $liveCaptureHelper.IndexOf('RequireSingleAlive', $liveDescendantCountIndex, [System.StringComparison]::Ordinal)
+  $liveAckIndex = $liveCaptureHelper.IndexOf('subversionr.release.m8-i6-installed-process-capture-ack.v1', $livePostSnapshotAliveIndex, [System.StringComparison]::Ordinal)
   $liveExitIndex = $liveCaptureHelper.IndexOf('RequireSingleExited($binding', $liveAckIndex, [System.StringComparison]::Ordinal)
-  $liveConsoleHostExitIndex = $liveCaptureHelper.IndexOf('RequireSingleExited($consoleHostBinding', $liveExitIndex, [System.StringComparison]::Ordinal)
-  $liveCompleteIndex = $liveCaptureHelper.IndexOf('Complete-WorkerCrashProbeProcess', $liveConsoleHostExitIndex, [System.StringComparison]::Ordinal)
+  $liveCompleteIndex = $liveCaptureHelper.IndexOf('Complete-WorkerCrashProbeProcess', $liveExitIndex, [System.StringComparison]::Ordinal)
   Assert-True (
     $liveBindIndex -ge 0 -and
-    $liveEventJoinIndex -gt $liveBindIndex -and
-    $liveAliveIndex -gt $liveBindIndex -and
-    $liveDescendantCountIndex -gt $liveBindIndex -and
-    $liveConsoleHostCountIndex -gt $liveDescendantCountIndex -and
-    $liveConsoleHostBindIndex -gt $liveConsoleHostCountIndex -and
-    $liveAckIndex -gt $liveEventJoinIndex -and
-    $liveAckIndex -gt $liveAliveIndex -and
-    $liveAckIndex -gt $liveConsoleHostBindIndex -and
+    $livePreSnapshotAliveIndex -gt $liveBindIndex -and
+    $liveDescendantCountIndex -gt $livePreSnapshotAliveIndex -and
+    $livePostSnapshotAliveIndex -gt $liveDescendantCountIndex -and
+    $liveAckIndex -gt $livePostSnapshotAliveIndex -and
     $liveExitIndex -gt $liveAckIndex -and
-    $liveConsoleHostExitIndex -gt $liveExitIndex -and
-    $liveCompleteIndex -gt $liveConsoleHostExitIndex
-  ) "Installed process capture must ACK only after exact retained daemon/conhost handle and WMI binding, then require retained handles to signal exit before completion."
+    $liveCompleteIndex -gt $liveExitIndex
+  ) "Installed process capture must bracket its live descendant census with retained daemon liveness, ACK without waiting for WMI, and require the retained daemon to signal exit before completion."
+  $retainedEventJoinHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Set-RecordedProcessStartIdentityFromRetainedBinding")]
+  foreach ($requiredRetainedJoinText in @(
+      'eventFileTime -ge [long]$Identity.startFileTime',
+      'eventFileTime -le [long]$Identity.exitFileTime',
+      '$generationStarts.Count -eq 1',
+      'eventSessionId',
+      'imageFileIdentity'
+    )) {
+    Assert-True ($retainedEventJoinHelper.Contains($requiredRetainedJoinText)) "Retained process event join must retain '$requiredRetainedJoinText'."
+  }
   $captureReadyHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Read-InstalledProcessCaptureReady")]
   foreach ($requiredCaptureReadyText in @(
       'Assert-ExactProperties $ready @("schema", "nonce", "cell", "extensionId", "extensionVersion", "extensionPath", "extensionHostProcessId")',
@@ -1594,6 +1647,30 @@ try {
     Assert-True (-not $zeroWorkerHelper.Contains($forbiddenZeroWorkerFallback)) "Zero-worker observation must not recapture missing live identity through '$forbiddenZeroWorkerFallback'."
   }
   Invoke-Expression ($observationHelperSources -join "`n`n")
+
+  $retainedJoinEvent = [pscustomobject]@{
+    processId = 42L; parentProcessId = 7L; processName = "subversionr-daemon.exe"
+    eventFileTime = 150L; eventSessionId = 3L
+    imagePath = ""; imageFileIdentity = ""; imageStartFileTime = 0L; sessionId = -1L
+  }
+  $retainedJoinIdentity = [pscustomobject]@{
+    processId = 42L; parentProcessId = 7L; startFileTime = 100L; exitFileTime = 200L; sessionId = 3L
+    imagePath = "C:\candidate\subversionr-daemon.exe"; imageFileIdentity = "volume:1:file:2"
+  }
+  $retainedJoinResult = Set-RecordedProcessStartIdentityFromRetainedBinding `
+    @($retainedJoinEvent) $retainedJoinIdentity "subversionr-daemon.exe" "retained event join test"
+  Assert-Equal $retainedJoinEvent $retainedJoinResult "Retained event join must enrich the exact in-lifetime start record."
+  Assert-Equal 100L $retainedJoinEvent.imageStartFileTime "Retained event join must preserve the handle-captured creation FILETIME."
+  Assert-Equal "volume:1:file:2" $retainedJoinEvent.imageFileIdentity "Retained event join must preserve the handle-captured file identity."
+  $postExitReuseEvent = [pscustomobject]@{
+    processId = 42L; parentProcessId = 7L; processName = "subversionr-daemon.exe"
+    eventFileTime = 250L; eventSessionId = 3L
+    imagePath = ""; imageFileIdentity = ""; imageStartFileTime = 0L; sessionId = -1L
+  }
+  Assert-ScriptThrowsContaining {
+    Set-RecordedProcessStartIdentityFromRetainedBinding `
+      @($postExitReuseEvent) $retainedJoinIdentity "subversionr-daemon.exe" "post-exit reuse test"
+  } "exactly one subscribed start identity" "Retained event join must reject a same-PID start after the retained lifetime ended."
 
   $installedIdentityRoot = Join-Path $tempRoot "installed-daemon-identity"
   $installedExtensionsRoot = Join-Path $installedIdentityRoot "extensions"

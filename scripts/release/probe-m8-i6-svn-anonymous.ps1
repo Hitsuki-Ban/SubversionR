@@ -644,6 +644,7 @@ public static class SubversionRM8I6WorkerCrashNative {
         "live-capture candidate"
       );
       try {
+        RequireWait(retained, WAIT_TIMEOUT, "live-capture candidate must be alive while binding");
         RequireIdentity(
           retained,
           candidate.ProcessId,
@@ -651,7 +652,7 @@ public static class SubversionRM8I6WorkerCrashNative {
           candidate.CreationFileTime,
           "live-capture candidate"
         );
-        RequireWait(retained, WAIT_TIMEOUT, "live-capture candidate must be alive while binding");
+        RequireWait(retained, WAIT_TIMEOUT, "live-capture candidate exited while binding");
         uint sessionId;
         if (!ProcessIdToSessionId(candidate.ProcessId, out sessionId)) {
           ThrowWin32("ProcessIdToSessionId(live-capture candidate) failed");
@@ -681,15 +682,6 @@ public static class SubversionRM8I6WorkerCrashNative {
     }
   }
 
-  public static int GetExactChildCount(string executablePath, uint parentPid) {
-    List<Candidate> candidates = EnumerateChildCandidates(executablePath, parentPid);
-    try {
-      return candidates.Count;
-    } finally {
-      DisposeCandidates(candidates);
-    }
-  }
-
   public static int GetSingleBoundDescendantCount(SubversionRM8I6SingleProcessBinding binding) {
     if (binding == null) throw new ArgumentNullException("binding");
     List<ProcessLink> links = EnumerateProcessLinks();
@@ -710,45 +702,9 @@ public static class SubversionRM8I6WorkerCrashNative {
     return descendants.Count;
   }
 
-  public static SubversionRM8I6SingleProcessBinding BindExactChild(string executablePath, uint parentPid) {
-    string expectedPath = Canonicalize(executablePath);
-    List<Candidate> candidates = EnumerateChildCandidates(expectedPath, parentPid);
-    try {
-      if (candidates.Count != 1) throw new InvalidOperationException("Live-capture child identity was not unique or present.");
-      Candidate child = candidates[0];
-      SafeProcessHandle retained = OpenRequired(
-        child.ProcessId,
-        PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
-        "live-capture child"
-      );
-      try {
-        RequireIdentity(retained, child.ProcessId, expectedPath, child.CreationFileTime, "live-capture child");
-        RequireWait(retained, WAIT_TIMEOUT, "live-capture child must be alive while binding");
-        uint sessionId;
-        if (!ProcessIdToSessionId(child.ProcessId, out sessionId)) {
-          ThrowWin32("ProcessIdToSessionId(live-capture child) failed");
-        }
-        RequireIdentity(retained, child.ProcessId, expectedPath, child.CreationFileTime, "retained live-capture child");
-        RequireWait(retained, WAIT_TIMEOUT, "live-capture child exited while binding");
-        return new SubversionRM8I6SingleProcessBinding(
-          expectedPath,
-          child.ProcessId,
-          child.ParentProcessId,
-          child.CreationFileTime,
-          sessionId,
-          retained
-        );
-      } catch {
-        retained.Dispose();
-        throw;
-      }
-    } finally {
-      DisposeCandidates(candidates);
-    }
-  }
-
   public static void RequireSingleAlive(SubversionRM8I6SingleProcessBinding binding) {
     if (binding == null) throw new ArgumentNullException("binding");
+    RequireWait(binding.BoundHandle, WAIT_TIMEOUT, "retained live-capture daemon exited before acknowledgement");
     RequireIdentity(
       binding.BoundHandle,
       binding.BoundPid,
@@ -756,12 +712,28 @@ public static class SubversionRM8I6WorkerCrashNative {
       binding.BoundCreationFileTime,
       "retained live-capture candidate"
     );
-    RequireWait(binding.BoundHandle, WAIT_TIMEOUT, "retained live-capture candidate exited before acknowledgement");
+    RequireWait(binding.BoundHandle, WAIT_TIMEOUT, "retained live-capture daemon exited before acknowledgement");
   }
 
   public static void RequireSingleExited(SubversionRM8I6SingleProcessBinding binding, uint waitMilliseconds) {
     if (binding == null) throw new ArgumentNullException("binding");
     RequireWait(binding.BoundHandle, WAIT_OBJECT_0, waitMilliseconds, "retained live-capture process did not exit");
+  }
+
+  public static long GetSingleExitFileTime(SubversionRM8I6SingleProcessBinding binding) {
+    if (binding == null) throw new ArgumentNullException("binding");
+    RequireWait(binding.BoundHandle, WAIT_OBJECT_0, "retained live-capture process must be exited before reading its exit time");
+    long creation;
+    long exit;
+    long kernel;
+    long user;
+    if (!GetProcessTimes(binding.BoundHandle, out creation, out exit, out kernel, out user)) {
+      ThrowWin32("GetProcessTimes(exited live-capture process) failed");
+    }
+    if (creation != binding.BoundCreationFileTime || exit <= creation) {
+      throw new InvalidOperationException("Retained live-capture process lifetime was invalid.");
+    }
+    return exit;
   }
 
   public static int GetBoundDescendantCount(SubversionRM8I6WorkerCrashBinding binding) {
@@ -878,14 +850,6 @@ public static class SubversionRM8I6WorkerCrashNative {
   }
 
   private static List<Candidate> EnumerateCandidates(string executablePath) {
-    return EnumerateCandidates(executablePath, false, 0);
-  }
-
-  private static List<Candidate> EnumerateChildCandidates(string executablePath, uint parentPid) {
-    return EnumerateCandidates(executablePath, true, parentPid);
-  }
-
-  private static List<Candidate> EnumerateCandidates(string executablePath, bool requireParent, uint parentPid) {
     string expectedPath = Canonicalize(executablePath);
     string expectedName = Path.GetFileName(expectedPath);
     IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -896,8 +860,7 @@ public static class SubversionRM8I6WorkerCrashNative {
       entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
       if (!Process32FirstW(snapshot, ref entry)) ThrowWin32("Process32FirstW failed");
       do {
-        if (string.Equals(entry.szExeFile, expectedName, StringComparison.OrdinalIgnoreCase) &&
-            (!requireParent || entry.th32ParentProcessID == parentPid)) {
+        if (string.Equals(entry.szExeFile, expectedName, StringComparison.OrdinalIgnoreCase)) {
           SafeProcessHandle handle = OpenRequired(entry.th32ProcessID, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, "candidate");
           try {
             string observedPath = QueryPath(handle);
@@ -1821,6 +1784,41 @@ function Write-AtomicJson([string]$Path, [object]$Value, [string]$Context) {
   Move-Item -LiteralPath $temporaryPath -Destination $Path
 }
 
+function Set-RecordedProcessStartIdentityFromRetainedBinding(
+  [object[]]$AllEvents,
+  [object]$Identity,
+  [string]$ExpectedProcessName,
+  [string]$Context
+) {
+  Assert-True ($null -ne $Identity) "The $Context retained process identity was missing."
+  Assert-True (
+    [long]$Identity.processId -gt 0 -and
+    [long]$Identity.parentProcessId -gt 0 -and
+    [long]$Identity.startFileTime -gt 0 -and
+    [long]$Identity.exitFileTime -gt [long]$Identity.startFileTime -and
+    [long]$Identity.sessionId -ge 0 -and
+    -not [string]::IsNullOrWhiteSpace([string]$Identity.imagePath) -and
+    -not [string]::IsNullOrWhiteSpace([string]$Identity.imageFileIdentity)
+  ) "The $Context retained process lifetime was invalid."
+  $generationStarts = @($AllEvents | Where-Object {
+      [long]$_.processId -eq [long]$Identity.processId -and
+      [long]$_.eventFileTime -ge [long]$Identity.startFileTime -and
+      [long]$_.eventFileTime -le [long]$Identity.exitFileTime
+    })
+  Assert-True ($generationStarts.Count -eq 1) "The $Context retained process generation did not have exactly one subscribed start identity."
+  $start = $generationStarts[0]
+  Assert-True (
+    [long]$start.parentProcessId -eq [long]$Identity.parentProcessId -and
+    ([string]$start.processName).Equals($ExpectedProcessName, [System.StringComparison]::OrdinalIgnoreCase) -and
+    [long]$start.eventSessionId -eq [long]$Identity.sessionId
+  ) "The $Context retained process generation did not match its subscribed start identity."
+  $start.imagePath = [string]$Identity.imagePath
+  $start.imageFileIdentity = [string]$Identity.imageFileIdentity
+  $start.imageStartFileTime = [long]$Identity.startFileTime
+  $start.sessionId = [long]$Identity.sessionId
+  return $start
+}
+
 function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
   [string]$FilePath,
   [string[]]$Arguments,
@@ -1836,12 +1834,7 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
   [string]$ExpectedExtensionsRoot,
   [string]$ExpectedProductVersion,
   [string]$ExpectedCandidateDaemonPath,
-  [string]$ExpectedConsoleHostPath,
-  [string]$ExpectedConsoleHostFileIdentity,
-  [long]$ProbeParentPid,
-  [string]$ExpectedProbeProcessName,
   [int]$ProcessCaptureTimeoutMilliseconds,
-  [int]$SettlementMilliseconds,
   [hashtable]$Environment = @{}
 ) {
   Assert-True ($Nonce -cmatch '^[0-9a-f]{32}$') "The $ExpectedCell process-capture nonce was invalid."
@@ -1852,7 +1845,6 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
   $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
   $captureDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)
   $binding = $null
-  $consoleHostBinding = $null
   $completionStarted = $false
   try {
     while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf)) {
@@ -1885,122 +1877,12 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
       [long]$liveDaemon[0].ParentProcessId -eq [long]$binding.ParentProcessId -and
       [long]$liveDaemon[0].SessionId -eq [long]$binding.SessionId
     ) "The $ExpectedCell native and CIM daemon generations did not match."
-    $daemonProcessName = [System.IO.Path]::GetFileName([string]$ready.installedDaemonPath)
-    $boundDaemonStart = $null
-    do {
-      Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
-      Update-ProcessStartEventLiveCaptures @($AllEvents) $CaptureProcessNames
-      [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($binding)
-      $probeStarts = @($AllEvents | Where-Object {
-          [long]$_.processId -eq [long]$started.ProcessId -and
-          [long]$_.parentProcessId -eq $ProbeParentPid -and
-          ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
-        })
-      Assert-True ($probeStarts.Count -le 1) "The $ExpectedCell controlled probe start identity was not unique."
-      if ($probeStarts.Count -eq 1) {
-        $descendants = @(Get-RecordedProcessDescendantStarts @($AllEvents) $probeStarts[0])
-        $daemonStarts = @($descendants | Where-Object {
-            [long]$_.processId -eq [long]$binding.ProcessId -and
-            ([string]$_.processName).Equals($daemonProcessName, [System.StringComparison]::OrdinalIgnoreCase)
-          })
-        Assert-True ($daemonStarts.Count -le 1) "The $ExpectedCell bound daemon start identity was not unique."
-        if ($daemonStarts.Count -eq 1) { $boundDaemonStart = $daemonStarts[0] }
-      }
-      Assert-True (-not $process.HasExited) "The $ExpectedCell installed probe exited before live process capture completed."
-      Assert-True ([DateTimeOffset]::UtcNow -lt $captureDeadline) "The $ExpectedCell live process capture exceeded its absolute deadline."
-      if ($null -eq $boundDaemonStart) { Start-Sleep -Milliseconds 25 }
-    } while ($null -eq $boundDaemonStart)
-
-    $boundDaemonStart.imagePath = [string]$binding.ImagePath
-    $boundDaemonStart.imageFileIdentity = [string]$ready.installedDaemonFileIdentity
-    $boundDaemonStart.imageStartFileTime = [long]$binding.StartFileTime
-    $boundDaemonStart.sessionId = [long]$binding.SessionId
-    Assert-True ([long]$binding.StartFileTime -le [long]$boundDaemonStart.eventFileTime) "The $ExpectedCell bound daemon generation did not match its WMI start event."
-    Assert-True ([long]$boundDaemonStart.parentProcessId -eq [long]$binding.ParentProcessId) "The $ExpectedCell bound daemon parent did not match its WMI start event."
-    Assert-True ([long]$boundDaemonStart.eventSessionId -eq [long]$binding.SessionId) "The $ExpectedCell bound daemon session did not match its WMI start event."
-
-    $consoleHostPath = Resolve-RequiredFile $ExpectedConsoleHostPath "$ExpectedCell Windows console host"
-    Assert-True ([SubversionRM8I6ExactFileIdentity]::Get($consoleHostPath) -ceq $ExpectedConsoleHostFileIdentity) "The $ExpectedCell expected Windows console-host identity was invalid."
+    [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($binding)
     $liveDescendantCount = [SubversionRM8I6WorkerCrashNative]::GetSingleBoundDescendantCount($binding)
-    $liveConsoleHostCount = [SubversionRM8I6WorkerCrashNative]::GetExactChildCount(
-      $consoleHostPath,
-      [uint32]$binding.ProcessId
-    )
-    Assert-True ($liveConsoleHostCount -le 1) "The $ExpectedCell bound daemon owned more than one live Windows console host."
-    Assert-True ($liveDescendantCount -eq $liveConsoleHostCount) "The $ExpectedCell bound daemon owned a worker or another live descendant."
-    if ($liveConsoleHostCount -eq 1) {
-      $consoleHostBinding = [SubversionRM8I6WorkerCrashNative]::BindExactChild(
-        $consoleHostPath,
-        [uint32]$binding.ProcessId
-      )
-      Assert-True (
-        [long]$consoleHostBinding.ParentProcessId -eq [long]$binding.ProcessId -and
-        [long]$consoleHostBinding.SessionId -eq [long]$binding.SessionId
-      ) "The $ExpectedCell retained Windows console-host binding was invalid."
-    }
-
-    $settlementDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($SettlementMilliseconds)
-    $boundConsoleHostStart = $null
-    do {
-      Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
-      Update-ProcessStartEventLiveCaptures @($AllEvents) $CaptureProcessNames
-      [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($binding)
-      if ($null -ne $consoleHostBinding) {
-        [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($consoleHostBinding)
-        $consoleHostMatches = @($AllEvents | Where-Object {
-            [long]$_.processId -eq [long]$consoleHostBinding.ProcessId -and
-            [long]$_.parentProcessId -eq [long]$binding.ProcessId -and
-            ([string]$_.processName).Equals("conhost.exe", [System.StringComparison]::OrdinalIgnoreCase)
-          })
-        Assert-True ($consoleHostMatches.Count -le 1) "The $ExpectedCell retained Windows console-host start identity was not unique."
-        if ($consoleHostMatches.Count -eq 1) { $boundConsoleHostStart = $consoleHostMatches[0] }
-      }
-      Assert-True (-not $process.HasExited) "The $ExpectedCell installed probe exited during live process-event settlement."
-      Assert-True ([DateTimeOffset]::UtcNow -lt $captureDeadline) "The $ExpectedCell live process-event settlement exceeded its absolute deadline."
-      Start-Sleep -Milliseconds 25
-    } while (
-      [DateTimeOffset]::UtcNow -lt $settlementDeadline -or
-      ($null -ne $consoleHostBinding -and $null -eq $boundConsoleHostStart)
-    )
+    Assert-True ($liveDescendantCount -le 1) "The $ExpectedCell bound daemon owned more than one live descendant before acknowledgement."
     Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
     Update-ProcessStartEventLiveCaptures @($AllEvents) $CaptureProcessNames
     [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($binding)
-    if ($null -ne $consoleHostBinding) {
-      [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($consoleHostBinding)
-      $boundConsoleHostStart.imagePath = [string]$consoleHostBinding.ImagePath
-      $boundConsoleHostStart.imageFileIdentity = $ExpectedConsoleHostFileIdentity
-      $boundConsoleHostStart.imageStartFileTime = [long]$consoleHostBinding.StartFileTime
-      $boundConsoleHostStart.sessionId = [long]$consoleHostBinding.SessionId
-      Assert-True (
-        [long]$consoleHostBinding.StartFileTime -le [long]$boundConsoleHostStart.eventFileTime -and
-        [long]$boundConsoleHostStart.eventSessionId -eq [long]$consoleHostBinding.SessionId
-      ) "The $ExpectedCell retained Windows console-host generation did not match its WMI start event."
-    }
-
-    $daemonDescendants = @(Get-RecordedProcessDescendantStarts @($AllEvents) $boundDaemonStart)
-    $consoleHostStarts = @($daemonDescendants | Where-Object {
-        [long]$_.parentProcessId -eq [long]$binding.ProcessId -and
-        ([string]$_.processName).Equals("conhost.exe", [System.StringComparison]::OrdinalIgnoreCase)
-      })
-    Assert-True ($consoleHostStarts.Count -le 1) "The $ExpectedCell bound daemon owned more than one Windows console host."
-    Assert-True ($consoleHostStarts.Count -eq $(if ($null -eq $consoleHostBinding) { 0 } else { 1 })) "The $ExpectedCell live and subscribed Windows console-host identities did not match."
-    $unexpectedDescendants = @($daemonDescendants | Where-Object {
-        -not (
-          [long]$_.parentProcessId -eq [long]$binding.ProcessId -and
-          ([string]$_.processName).Equals("conhost.exe", [System.StringComparison]::OrdinalIgnoreCase)
-        )
-      })
-    Assert-True ($unexpectedDescendants.Count -eq 0) "The $ExpectedCell live process-capture barrier observed a worker or another daemon descendant."
-    if ($consoleHostStarts.Count -eq 1) {
-      $consoleHostStart = $consoleHostStarts[0]
-      Assert-True (
-        [long]$consoleHostStart.imageStartFileTime -gt 0 -and
-        [long]$consoleHostStart.imageStartFileTime -le [long]$consoleHostStart.eventFileTime -and
-        [long]$consoleHostStart.sessionId -eq [long]$binding.SessionId -and
-        [long]$consoleHostStart.eventSessionId -eq [long]$binding.SessionId -and
-        [string]$consoleHostStart.imageFileIdentity -ceq $ExpectedConsoleHostFileIdentity
-      ) "The $ExpectedCell Windows console-host live identity was not captured exactly."
-    }
 
     Assert-True ([DateTimeOffset]::UtcNow -lt $captureDeadline) "The $ExpectedCell live process capture completed after its absolute deadline."
     Write-AtomicJson $AckPath ([ordered]@{
@@ -2023,8 +1905,15 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
       Start-Sleep -Milliseconds 25
     }
     [SubversionRM8I6WorkerCrashNative]::RequireSingleExited($binding, 10000)
-    if ($null -ne $consoleHostBinding) {
-      [SubversionRM8I6WorkerCrashNative]::RequireSingleExited($consoleHostBinding, 10000)
+    $daemonExitFileTime = [SubversionRM8I6WorkerCrashNative]::GetSingleExitFileTime($binding)
+    $daemonIdentity = [pscustomobject]@{
+      processId = [long]$binding.ProcessId
+      parentProcessId = [long]$binding.ParentProcessId
+      startFileTime = [long]$binding.StartFileTime
+      exitFileTime = [long]$daemonExitFileTime
+      sessionId = [long]$binding.SessionId
+      imagePath = [string]$binding.ImagePath
+      imageFileIdentity = [string]$ready.installedDaemonFileIdentity
     }
     Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
     $completionStarted = $true
@@ -2036,6 +1925,7 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
     Assert-True (-not (Test-Path -LiteralPath "$ReadyPath.tmp")) "The $ExpectedCell process-capture ready temporary file remained."
     Assert-True (-not (Test-Path -LiteralPath "$AckPath.tmp")) "The $ExpectedCell process-capture acknowledgement temporary file remained."
     $result | Add-Member -NotePropertyName InstalledDaemonFileIdentity -NotePropertyValue ([string]$ready.installedDaemonFileIdentity)
+    $result | Add-Member -NotePropertyName RetainedDaemonIdentity -NotePropertyValue $daemonIdentity
     return $result
   }
   catch {
@@ -2049,7 +1939,6 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
     throw
   }
   finally {
-    if ($null -ne $consoleHostBinding) { $consoleHostBinding.Dispose() }
     if ($null -ne $binding) { $binding.Dispose() }
   }
 }
@@ -3867,12 +3756,7 @@ try {
       (Join-Path $localEventProbeRoot "extensions") `
       $ExpectedProductVersion `
       $daemonResolved `
-      $consoleHostResolved `
-      $consoleHostFileIdentity `
-      ([long]$PID) `
-      ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
-      240000 `
-      $ProcessStartEventSettlementMilliseconds
+      240000
     $installedLocalEventFailure = $installedLocalEventResult.Stderr.Trim()
     Assert-True (
       $installedLocalEventResult.ExitCode -eq 0 -and $installedLocalEventResult.Stderr.Length -eq 0
@@ -3918,6 +3802,11 @@ try {
       $localEventProcessEventKeys `
       $ProcessStartEventSettlementMilliseconds `
       $zeroWorkerCaptureProcessNames
+    $null = Set-RecordedProcessStartIdentityFromRetainedBinding `
+      -AllEvents @($localEventProcessEvents) `
+      -Identity $installedLocalEventResult.RetainedDaemonIdentity `
+      -ExpectedProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+      -Context "installed local-event daemon"
     $localEventProcessObservation = Get-ZeroWorkerProcessObservation `
       -AllEvents @($localEventProcessEvents) `
       -ProbePid ([long]$installedLocalEventResult.ProcessId) `
@@ -5808,12 +5697,7 @@ try {
           (Join-Path $installedFixtureRoot "x") `
           $ExpectedProductVersion `
           $daemonResolved `
-          $consoleHostResolved `
-          $consoleHostFileIdentity `
-          ([long]$PID) `
-          ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
-          240000 `
-          $ProcessStartEventSettlementMilliseconds
+          240000
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX trust-revoked probe failed: $probeFailure"
         $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX trust-revoked probe stdout"
@@ -5868,6 +5752,13 @@ try {
         $processStartEventKeys `
         $ProcessStartEventSettlementMilliseconds `
         $zeroWorkerCaptureProcessNames
+      if ($surfaceName -ceq "installed-vsix-extension-host") {
+        $null = Set-RecordedProcessStartIdentityFromRetainedBinding `
+          -AllEvents @($processStartEvents) `
+          -Identity $probeResult.RetainedDaemonIdentity `
+          -ExpectedProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
+          -Context "installed trust-revoked daemon"
+      }
       $processObservation = Get-ZeroWorkerProcessObservation `
         -AllEvents @($processStartEvents) `
         -ProbePid ([long]$probeResult.ProcessId) `
