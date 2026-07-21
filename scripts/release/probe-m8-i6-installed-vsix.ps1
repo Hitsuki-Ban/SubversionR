@@ -122,6 +122,7 @@ function Find-InstalledPackage([string]$ExtensionsRoot, [string]$Version) {
   return [System.IO.Path]::GetFullPath($matches[0])
 }
 
+try {
 $vsixResolved = Resolve-RequiredFile $VsixPath "VsixPath"
 $codeResolved = Resolve-RequiredFile $CodeCliPath "CodeCliPath"
 Assert-True ([System.IO.Path]::IsPathFullyQualified($FixtureRoot)) "FixtureRoot must be an absolute path."
@@ -153,6 +154,16 @@ $resultPath = Join-Path $fixtureResolved "installed-result.json"
 foreach ($directory in @($userDataRoot, $extensionsRoot, $workspaceRoot, $harnessDistRoot, (Split-Path -Parent $checkoutResolved))) {
   New-Item -ItemType Directory -Force -Path $directory | Out-Null
 }
+$userSettingsRoot = Join-Path $userDataRoot "User"
+New-Item -ItemType Directory -Force -Path $userSettingsRoot | Out-Null
+@'
+{
+  "update.mode": "none",
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "telemetry.telemetryLevel": "off"
+}
+'@ | Set-Content -LiteralPath (Join-Path $userSettingsRoot "settings.json") -Encoding utf8 -NoNewline
 
 @'
 {
@@ -353,3 +364,20 @@ Assert-True (-not $reportText.Contains($RepositoryUrl) -and -not $reportText.Con
   }
   anonymousIdentityRequired = $report.anonymousIdentityRequired
 } | ConvertTo-Json -Depth 12 -Compress
+}
+catch {
+  $localFailure = [string]$_.Exception.Message
+  if ($localFailure.Length -gt 4096) {
+    $localFailure = $localFailure.Substring(0, 4096)
+  }
+  [Console]::Error.WriteLine($localFailure)
+  [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-installed-vsix-positive.v1"
+    status = "failed"
+    error = [pscustomobject]@{
+      code = "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED"
+      diagnostics = $null
+    }
+  } | ConvertTo-Json -Depth 4 -Compress
+  exit 1
+}

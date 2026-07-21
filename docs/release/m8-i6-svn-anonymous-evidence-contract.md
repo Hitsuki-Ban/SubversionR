@@ -76,6 +76,13 @@ The generated fixture root must remain under `target/i6-evidence` and may be at
 most 110 characters after absolute-path resolution. This reviewed Windows path
 budget is enforced before fixture creation so nested VS Code profiles and
 Extension Host IPC paths cannot silently cross the legacy path limit.
+Every separately installed VS Code child fixture is subject to the same
+110-character absolute-root budget. The installed positive/compatibility block
+uses a per-run short root below `target/i6p`; it must fail before launch if that
+root escapes `target` or exceeds the budget. A successful block removes its
+short root. A failed block retains its isolated VS Code logs and the bounded
+child stdout/stderr locally under that root for diagnosis; those failure files
+are not evidence inputs and cannot appear in a passing aggregate.
 
 The report binds the exact bytes of the main driver and every source-controlled
 helper it executes: the I6 packaged-native positive/negative probes, the

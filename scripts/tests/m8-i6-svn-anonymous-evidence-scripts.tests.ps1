@@ -1464,6 +1464,13 @@ try {
       'const environment = Object.freeze({',
       'reportToken: process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN',
       'token: environment.reportToken',
+      '"update.mode": "none"',
+      '"extensions.autoUpdate": false',
+      '"extensions.autoCheckUpdates": false',
+      '"telemetry.telemetryLevel": "off"',
+      'status = "failed"',
+      'code = "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED"',
+      'diagnostics = $null',
       'repositoryUrl: environment.repositoryUrl',
       'checkoutPath: environment.checkoutPath',
       'checkoutRevision: Number(environment.checkoutRevision)',
@@ -1622,6 +1629,8 @@ try {
     "Assert-ExactProperties",
     "Get-PackagedNativePositiveFailureDetail",
     "Assert-PackagedNativePositiveProcessContract",
+    "Get-InstalledVsixPositiveFailureDetail",
+    "Assert-InstalledVsixPositiveProcessContract",
     "Resolve-RequiredFile",
     "Resolve-RequiredDirectory",
     "Test-PathWithin",
@@ -1851,6 +1860,67 @@ try {
         status = "passed"
       })
   } "must contain exactly the required fields" "Packaged-native positive failure inspection must fail closed when the error field is absent."
+
+  $installedPositiveReportIndex = $driverText.IndexOf('$installedPositiveReport = Convert-JsonObject', [System.StringComparison]::Ordinal)
+  $installedPositiveContractIndex = $driverText.IndexOf('Assert-InstalledVsixPositiveProcessContract $installedPositive.ExitCode $installedPositiveReport', $installedPositiveReportIndex, [System.StringComparison]::Ordinal)
+  $installedPositiveSuccessValidationIndex = $driverText.IndexOf('$installedPositiveReport.operations.operation', $installedPositiveContractIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $installedPositiveReportIndex -ge 0 -and
+    $installedPositiveContractIndex -gt $installedPositiveReportIndex -and
+    $installedPositiveSuccessValidationIndex -gt $installedPositiveContractIndex
+  ) "Installed VSIX positive reports must be discriminated by exit status before exact success-shape validation."
+  $installedPositiveBeforeContract = $driverText.Substring($installedPositiveReportIndex, $installedPositiveContractIndex - $installedPositiveReportIndex)
+  Assert-True (-not $installedPositiveBeforeContract.Contains('.error')) "An installed VSIX positive report must not access branch-specific fields before contract discrimination."
+  foreach ($requiredShortRootText in @(
+      '$installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6p"))',
+      '$installedRunId = [Guid]::NewGuid().ToString("N").Substring(0, 8)',
+      '$installedPositiveRoot = [System.IO.Path]::GetFullPath((Join-Path $installedFixtureRoot "p"))',
+      '$installedFixtureRoot.Length -le 110',
+      '$installedPositiveRoot.Length -le 110',
+      '$installedBlockPassed = $true',
+      'positive.stdout.txt',
+      'positive.stderr.txt',
+      '$installedBlockPassed -and (Test-Path -LiteralPath $installedFixtureRoot)',
+      'The installed-positive short work root remained after successful cleanup.'
+    )) {
+    Assert-True ($driverText.Contains($requiredShortRootText)) "Installed-positive driver must retain short-root/failure-artifact text '$requiredShortRootText'."
+  }
+
+  $installedPositiveSuccessReport = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-installed-vsix-positive.v1"
+    status = "passed"
+    protocol = [pscustomobject]@{ major = 1; minor = 35 }
+    remoteSvnAnonymous = $true
+    fixtureCliInvocations = 0
+    operations = @()
+    positiveOperationCount = 9
+    identityRequiredOperationCount = 2
+    remoteOperationCount = 11
+    uniqueOperationIds = $true
+    anonymousIdentityRequired = [pscustomobject]@{ lock = [pscustomobject]@{}; unlock = [pscustomobject]@{} }
+  }
+  Assert-InstalledVsixPositiveProcessContract 0 $installedPositiveSuccessReport
+  $installedPositiveFailure = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-installed-vsix-positive.v1"
+    status = "failed"
+    error = [pscustomobject]@{ code = "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED"; diagnostics = $null }
+  }
+  Assert-Equal "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED" `
+    (Get-InstalledVsixPositiveFailureDetail $installedPositiveFailure) `
+    "Installed VSIX positive failure details must preserve the stable failure code."
+  Assert-ScriptThrowsContaining {
+    Assert-InstalledVsixPositiveProcessContract 1 $installedPositiveSuccessReport
+  } "failure report must contain exactly the required fields" "A nonzero installed VSIX positive exit must reject the success schema."
+  Assert-ScriptThrowsContaining {
+    Assert-InstalledVsixPositiveProcessContract 0 $installedPositiveFailure
+  } "success report must contain exactly the required fields" "A zero installed VSIX positive exit must reject the failure schema."
+  Assert-ScriptThrowsContaining {
+    Get-InstalledVsixPositiveFailureDetail ([pscustomobject]@{
+        schema = "subversionr.release.m8-i6-installed-vsix-positive.v1"
+        status = "failed"
+        error = [pscustomobject]@{ code = "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED"; diagnostics = [pscustomobject]@{} }
+      })
+  } "diagnostics must be null" "Installed VSIX positive failure inspection must reject an unbounded diagnostics object."
 
   $retainedJoinEvent = [pscustomobject]@{
     processId = 42L; parentProcessId = 7L; processName = "subversionr-daemon.exe"

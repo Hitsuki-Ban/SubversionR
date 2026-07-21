@@ -81,6 +81,23 @@ $extensionsDir = $argsList[($argsList.IndexOf("--extensions-dir") + 1)]
 if ([string]::IsNullOrWhiteSpace($extensionsDir)) {
   throw "--extensions-dir is required by this fixture."
 }
+$userDataDir = $argsList[($argsList.IndexOf("--user-data-dir") + 1)]
+if ([string]::IsNullOrWhiteSpace($userDataDir)) {
+  throw "--user-data-dir is required by this fixture."
+}
+$settingsPath = Join-Path $userDataDir "User\settings.json"
+if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {
+  throw "isolated user settings are required by this fixture."
+}
+$settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
+if (
+  [string]$settings.'update.mode' -cne "none" -or
+  $settings.'extensions.autoUpdate' -ne $false -or
+  $settings.'extensions.autoCheckUpdates' -ne $false -or
+  [string]$settings.'telemetry.telemetryLevel' -cne "off"
+) {
+  throw "isolated user settings did not disable updates and telemetry."
+}
 if ($argsList -contains "--install-extension") {
   $vsixPath = $argsList[($argsList.IndexOf("--install-extension") + 1)]
   Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -361,6 +378,24 @@ try {
   Assert-Equal $report.workingCopySentinel.svnTreeBeforeSha256 $report.workingCopySentinel.svnTreeAfterSha256 "Installed-host smoke should prove recursive .svn tree non-mutation."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "TST-024" }).Count -eq 1) "Installed-host evidence should trace TST-024."
   Assert-True (@($report.traceIds | Where-Object { $_ -eq "MIG-009" }).Count -eq 1) "Installed-host evidence should trace MIG-009."
+
+  $i6FixtureRoot = Join-Path $repoRoot "target\i6p\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+  $i6EvidencePath = Join-Path $i6FixtureRoot "evidence.json"
+  try {
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $installedHostScript `
+      -Target win32-x64 `
+      -VsixPath $vsixPath `
+      -CodeCliPath $fakeCodeCliPath `
+      -FixtureRoot $i6FixtureRoot `
+      -EvidencePath $i6EvidencePath
+    Assert-Equal 0 $LASTEXITCODE "Installed-host gate should accept a dedicated target/i6p child root."
+    Assert-True (Test-Path -LiteralPath $i6EvidencePath -PathType Leaf) "Installed-host gate should write evidence below the dedicated target/i6p child root."
+  }
+  finally {
+    if (Test-Path -LiteralPath $i6FixtureRoot) {
+      Remove-Item -LiteralPath $i6FixtureRoot -Recurse -Force
+    }
+  }
 
   Assert-NativeCommandFailsContaining {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $installedHostScript `

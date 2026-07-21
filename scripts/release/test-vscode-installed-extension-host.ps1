@@ -598,16 +598,22 @@ $vsixResolved = Assert-File $vsixResolved "VsixPath"
 $codeCliResolved = Assert-CodeCliPath $CodeCliPath
 $fixtureRootResolved = Assert-GeneratedPath -Path $FixtureRoot -Name "FixtureRoot" -AllowedRoots @(
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host")),
+  [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\i6p")),
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\tests\release-installed-extension-host-scripts"))
-) -Description "the repository target directory (target/release-evidence/installed-extension-host or target/tests/release-installed-extension-host-scripts)"
+) -Description "the repository target directory (target/release-evidence/installed-extension-host, target/i6p, or target/tests/release-installed-extension-host-scripts)"
 $aggregateFixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host"))
 if (Test-IsSamePath -Left $fixtureRootResolved -Right $aggregateFixtureRoot) {
   throw "FixtureRoot must include a dedicated child directory below target/release-evidence/installed-extension-host."
 }
+$i6PositiveFixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\i6p"))
+if (Test-IsSamePath -Left $fixtureRootResolved -Right $i6PositiveFixtureRoot) {
+  throw "FixtureRoot must include a dedicated child directory below target/i6p."
+}
 $evidencePathResolved = Assert-GeneratedPath -Path $EvidencePath -Name "EvidencePath" -AllowedRoots @(
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence")),
+  [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\i6p")),
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\tests\release-installed-extension-host-scripts"))
-) -Description "target/release-evidence or target/tests/release-installed-extension-host-scripts"
+) -Description "target/release-evidence, target/i6p, or target/tests/release-installed-extension-host-scripts"
 
 if (Test-Path -LiteralPath $fixtureRootResolved) {
   Remove-Item -LiteralPath $fixtureRootResolved -Recurse -Force
@@ -623,6 +629,16 @@ $harnessResultPath = Join-Path $fixtureRootResolved "installed-host-result.json"
 New-Item -ItemType Directory -Force -Path $userDataRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $extensionsRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $workspaceRoot | Out-Null
+$userSettingsRoot = Join-Path $userDataRoot "User"
+New-Item -ItemType Directory -Force -Path $userSettingsRoot | Out-Null
+@'
+{
+  "update.mode": "none",
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "telemetry.telemetryLevel": "off"
+}
+'@ | Set-Content -LiteralPath (Join-Path $userSettingsRoot "settings.json") -Encoding utf8 -NoNewline
 $sentinel = New-WorkingCopySentinel -Root $workingCopySentinelRoot
 
 $packageJson = Get-VsixPackageJson $vsixResolved

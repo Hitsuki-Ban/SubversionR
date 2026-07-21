@@ -1350,7 +1350,8 @@ $countingProxyPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "ser
 $faultFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-ra-svn-fault-fixture.mjs"))
 $blackholeConnectFixturePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "serve-m8-i6-blackhole-connect.ps1"))
 $packagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "probe-m8-i6-packaged-negative.mjs"))
-$installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host"))
+$repoTargetRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target"))
+$installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6p"))
 $ProcessStartEventSettlementMilliseconds = 2000
 
 function Assert-True([bool]$Condition, [string]$Message) {
@@ -3266,6 +3267,41 @@ function Assert-PackagedNativePositiveProcessContract([int]$ExitCode, [object]$R
   ) "The packaged-native I6 positive probe did not preserve its exact protocol and diagnostics contract."
 }
 
+function Get-InstalledVsixPositiveFailureDetail([object]$Report) {
+  $context = "installed VSIX I6 positive failure report"
+  Assert-ExactProperties $Report @("schema", "status", "error") $context
+  Assert-True (
+    [string]$Report.schema -ceq "subversionr.release.m8-i6-installed-vsix-positive.v1" -and
+    [string]$Report.status -ceq "failed"
+  ) "The $context had an invalid schema or status."
+  Assert-ExactProperties $Report.error @("code", "diagnostics") "$context error"
+  $rawCode = $Report.error.code
+  Assert-True ($rawCode -is [string] -and $rawCode -cmatch '^[A-Z0-9_]+$') "The $context error code was invalid."
+  Assert-True ($null -eq $Report.error.diagnostics) "The $context diagnostics must be null."
+  return [string]$rawCode
+}
+
+function Assert-InstalledVsixPositiveProcessContract([int]$ExitCode, [object]$Report) {
+  if ($ExitCode -ne 0) {
+    $failure = Get-InstalledVsixPositiveFailureDetail $Report
+    throw "The installed Extension Host I6 positive operation matrix failed against the installed candidate: $failure."
+  }
+  Assert-ExactProperties $Report @(
+    "schema", "status", "protocol", "remoteSvnAnonymous", "fixtureCliInvocations", "operations",
+    "positiveOperationCount", "identityRequiredOperationCount", "remoteOperationCount", "uniqueOperationIds",
+    "anonymousIdentityRequired"
+  ) "installed VSIX I6 positive success report"
+  Assert-True (
+    [string]$Report.schema -ceq "subversionr.release.m8-i6-installed-vsix-positive.v1" -and
+    [string]$Report.status -ceq "passed"
+  ) "The installed VSIX I6 positive success report had an invalid schema or status."
+  Assert-ExactProperties $Report.protocol @("major", "minor") "installed VSIX I6 positive protocol"
+  Assert-True (
+    [int]$Report.protocol.major -eq 1 -and
+    [int]$Report.protocol.minor -eq 35
+  ) "The installed VSIX I6 positive probe did not preserve its exact protocol contract."
+}
+
 function Assert-AnonymousIdentityRequiredObservation(
   [object]$Observation,
   [string]$ExpectedOperation,
@@ -3747,7 +3783,6 @@ $installedNegativeContracts = @(
     ReposInfoSent = 0
   }
 )
-$repoTargetRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target"))
 $installedNegativeWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6n\$([Guid]::NewGuid().ToString('N').Substring(0, 8))"))
 Assert-True (Test-PathWithin $installedNegativeWorkRoot $repoTargetRoot) "The installed-negative short work root escaped repo target."
 Assert-True ($installedNegativeWorkRoot.Length -le 120) "The installed-negative short work root exceeds the reviewed 120-character budget."
@@ -4344,12 +4379,19 @@ Assert-True ([string]$packagedReport.workerIsolation.resultCode -ceq "SUBVERSION
 Assert-True ([int]$packagedReport.workerIsolation.tempRootCleanup.residualEntryCount -eq 0) "The packaged-native failure observation left worker temporary roots."
 Assert-True ([string]$packagedReport.workerIsolation.sameLaneSubsequent.resultCode -ceq "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED") "The packaged-native failure observation did not release its native lane."
 
-$installedRunId = "m8-i6-$([Guid]::NewGuid().ToString('N'))"
-$installedFixtureRoot = Join-Path $installedHarnessRoot $installedRunId
+$installedRunId = [Guid]::NewGuid().ToString("N").Substring(0, 8)
+$installedFixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $installedHarnessRoot $installedRunId))
+$installedPositive = $null
+$installedResult = $null
+$installedBlockPassed = $false
+Assert-True (Test-PathWithin $installedFixtureRoot $repoTargetRoot) "The installed-positive short work root escaped repo target."
+Assert-True ($installedFixtureRoot.Length -le 110) "The installed-positive short work root exceeds the reviewed 110-character budget."
+$installedPositiveRoot = [System.IO.Path]::GetFullPath((Join-Path $installedFixtureRoot "p"))
+Assert-True (Test-PathWithin $installedPositiveRoot $installedFixtureRoot) "The installed-positive child root escaped its short work root."
+Assert-True ($installedPositiveRoot.Length -le 110) "The installed-positive child root exceeds the reviewed 110-character budget."
 $installedEvidencePath = Join-Path $installedFixtureRoot "evidence.json"
 try {
   New-Item -ItemType Directory -Force -Path $installedFixtureRoot | Out-Null
-  $installedPositiveRoot = Join-Path $installedFixtureRoot "i6-positive"
   $installedPositive = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
@@ -4363,10 +4405,9 @@ try {
     "-ExpectedProductVersion", $ExpectedProductVersion,
     "-TimeoutSeconds", "600"
   ) 720
-  Assert-True ($installedPositive.ExitCode -eq 0) "The installed Extension Host I6 positive operation matrix failed against the installed candidate."
   $installedPositiveReport = Convert-JsonObject $installedPositive.Stdout.Trim() "installed Extension Host I6 positive probe stdout"
-  Assert-True ([string]$installedPositiveReport.schema -ceq "subversionr.release.m8-i6-installed-vsix-positive.v1") "The installed Extension Host I6 positive probe returned an unexpected schema."
-  Assert-True ([string]$installedPositiveReport.status -ceq "passed") "The installed Extension Host I6 positive probe did not pass."
+  Assert-InstalledVsixPositiveProcessContract $installedPositive.ExitCode $installedPositiveReport
+  Assert-True ($installedPositive.Stderr.Length -eq 0) "The installed Extension Host I6 positive probe wrote to stderr."
   Assert-True ((@($installedPositiveReport.operations.operation) -join ",") -ceq ($expectedPositiveOperations -join ",")) "The installed Extension Host I6 positive probe did not execute the exact operation matrix."
   Assert-True (
     [int]$installedPositiveReport.positiveOperationCount -eq 9 -and
@@ -4405,10 +4446,26 @@ try {
   Assert-True ([int]$installedReport.installedRemoteWorkerReport.protocol.major -eq 1 -and [int]$installedReport.installedRemoteWorkerReport.protocol.minor -eq 35) "Installed Extension Host did not execute protocol 1.35."
   Assert-True ([string]$installedReport.installedRemoteWorkerReport.transportResult -ceq "unsupportedAfterWorker") "Installed Extension Host did not produce the expected current transport-boundary observation."
   Assert-True ($installedReport.installedRemoteWorkerReport.remoteConnectionState.separateRecoveryOperation -eq $true) "Installed Extension Host did not prove the current recovery-operation boundary."
+  $installedBlockPassed = $true
+}
+catch {
+  $installedFailure = $_
+  if (Test-Path -LiteralPath $installedFixtureRoot -PathType Container) {
+    if ($null -ne $installedPositive) {
+      [System.IO.File]::WriteAllText((Join-Path $installedFixtureRoot "positive.stdout.txt"), [string]$installedPositive.Stdout)
+      [System.IO.File]::WriteAllText((Join-Path $installedFixtureRoot "positive.stderr.txt"), [string]$installedPositive.Stderr)
+    }
+    if ($null -ne $installedResult) {
+      [System.IO.File]::WriteAllText((Join-Path $installedFixtureRoot "compatibility.stdout.txt"), [string]$installedResult.Stdout)
+      [System.IO.File]::WriteAllText((Join-Path $installedFixtureRoot "compatibility.stderr.txt"), [string]$installedResult.Stderr)
+    }
+  }
+  throw "$($installedFailure.Exception.Message) Failure artifacts were retained at '$installedFixtureRoot'."
 }
 finally {
-  if (Test-Path -LiteralPath $installedFixtureRoot) {
-    Remove-Item -LiteralPath $installedFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+  if ($installedBlockPassed -and (Test-Path -LiteralPath $installedFixtureRoot)) {
+    Remove-Item -LiteralPath $installedFixtureRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $installedFixtureRoot)) "The installed-positive short work root remained after successful cleanup."
   }
 }
 
