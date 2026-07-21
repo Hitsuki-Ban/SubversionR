@@ -3217,6 +3217,55 @@ function Convert-JsonObject([string]$Text, [string]$Name) {
   return $value
 }
 
+function Get-PackagedNativePositiveFailureDetail([object]$Report) {
+  $context = "packaged-native I6 positive failure report"
+  Assert-ExactProperties $Report @("schema", "status", "error") $context
+  Assert-True (
+    [string]$Report.schema -ceq "subversionr.release.m8-i6-packaged-native-positive.v1" -and
+    [string]$Report.status -ceq "failed"
+  ) "The $context had an invalid schema or status."
+  Assert-ExactProperties $Report.error @("code", "diagnostics") "$context error"
+  $rawCode = $Report.error.code
+  Assert-True ($rawCode -is [string] -and $rawCode -cmatch '^[A-Z0-9_]+$') "The $context error code was invalid."
+  $code = [string]$rawCode
+  if ($null -eq $Report.error.diagnostics) {
+    return $code
+  }
+  Assert-ExactProperties $Report.error.diagnostics @("cause", "names") "$context diagnostics"
+  $rawCause = $Report.error.diagnostics.cause
+  $rawNames = $Report.error.diagnostics.names
+  Assert-True ($rawCause -is [string]) "The $context diagnostics cause was invalid."
+  Assert-True (
+    $rawNames -is [System.Array] -and
+    @($rawNames | Where-Object { $_ -isnot [string] -or $_ -cnotmatch '^SVN_ERR_[A-Z0-9_]+$' }).Count -eq 0
+  ) "The $context diagnostic names were invalid."
+  $cause = [string]$rawCause
+  $names = @($rawNames)
+  return "$code / $cause / $($names -join ',')"
+}
+
+function Assert-PackagedNativePositiveProcessContract([int]$ExitCode, [object]$Report) {
+  if ($ExitCode -ne 0) {
+    $failure = Get-PackagedNativePositiveFailureDetail $Report
+    throw "The packaged-native I6 positive operation matrix failed against the candidate artifacts: $failure."
+  }
+  Assert-ExactProperties $Report @(
+    "schema", "status", "protocol", "remoteSvnAnonymous", "fixtureCliInvocations", "operations",
+    "positiveOperationCount", "identityRequiredOperationCount", "remoteOperationCount", "uniqueOperationIds",
+    "anonymousIdentityRequired", "subsequentDiagnostics"
+  ) "packaged-native I6 positive success report"
+  Assert-True (
+    [string]$Report.schema -ceq "subversionr.release.m8-i6-packaged-native-positive.v1" -and
+    [string]$Report.status -ceq "passed"
+  ) "The packaged-native I6 positive success report had an invalid schema or status."
+  Assert-ExactProperties $Report.protocol @("major", "minor") "packaged-native I6 positive protocol"
+  Assert-True (
+    [int]$Report.protocol.major -eq 1 -and
+    [int]$Report.protocol.minor -eq 35 -and
+    $Report.subsequentDiagnostics -eq $true
+  ) "The packaged-native I6 positive probe did not preserve its exact protocol and diagnostics contract."
+}
+
 function Assert-AnonymousIdentityRequiredObservation(
   [object]$Observation,
   [string]$ExpectedOperation,
@@ -4253,19 +4302,8 @@ $positiveResult = Invoke-BoundedProcess $nodeHost @(
   "--checkout-revision", "2"
 ) 300 @{ ELECTRON_RUN_AS_NODE = "1" }
 $positiveReport = Convert-JsonObject $positiveResult.Stdout.Trim() "packaged-native I6 positive probe stdout"
-$positiveFailure = if ($null -ne $positiveReport.error -and $null -ne $positiveReport.error.diagnostics) {
-  "$([string]$positiveReport.error.code) / $([string]$positiveReport.error.diagnostics.cause) / $(@($positiveReport.error.diagnostics.names) -join ',')"
-}
-elseif ($null -ne $positiveReport.error) {
-  [string]$positiveReport.error.code
-}
-else {
-  "unknown"
-}
-Assert-True ($positiveResult.ExitCode -eq 0) "The packaged-native I6 positive operation matrix failed against the candidate artifacts: $positiveFailure."
+Assert-PackagedNativePositiveProcessContract $positiveResult.ExitCode $positiveReport
 $expectedPositiveOperations = @("checkoutOpen", "remoteStatus", "content", "historyLog", "historyBlame", "update", "commit", "branchCopy", "switch")
-Assert-True ([string]$positiveReport.schema -ceq "subversionr.release.m8-i6-packaged-native-positive.v1") "The packaged-native I6 positive probe returned an unexpected schema."
-Assert-True ([string]$positiveReport.status -ceq "passed") "The packaged-native I6 positive probe did not pass."
 Assert-True ((@($positiveReport.operations.operation) -join ",") -ceq ($expectedPositiveOperations -join ",")) "The packaged-native I6 positive probe did not execute the exact operation matrix."
 Assert-True (
   [int]$positiveReport.positiveOperationCount -eq 9 -and

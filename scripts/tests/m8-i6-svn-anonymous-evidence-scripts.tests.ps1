@@ -1620,6 +1620,8 @@ try {
   Assert-True ($driverParseErrors.Count -eq 0) "I6 probe driver must parse after packaged-negative observation changes."
   $observationHelpers = @(
     "Assert-ExactProperties",
+    "Get-PackagedNativePositiveFailureDetail",
+    "Assert-PackagedNativePositiveProcessContract",
     "Resolve-RequiredFile",
     "Resolve-RequiredDirectory",
     "Test-PathWithin",
@@ -1790,6 +1792,65 @@ try {
     Assert-True (-not $zeroWorkerHelper.Contains($forbiddenZeroWorkerFallback)) "Zero-worker observation must not recapture missing live identity through '$forbiddenZeroWorkerFallback'."
   }
   Invoke-Expression ($observationHelperSources -join "`n`n")
+
+  $positiveReportIndex = $driverText.IndexOf('$positiveReport = Convert-JsonObject', [System.StringComparison]::Ordinal)
+  $positiveContractIndex = $driverText.IndexOf('Assert-PackagedNativePositiveProcessContract $positiveResult.ExitCode $positiveReport', $positiveReportIndex, [System.StringComparison]::Ordinal)
+  $positiveSuccessValidationIndex = $driverText.IndexOf('$expectedPositiveOperations = @(', $positiveContractIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $positiveReportIndex -ge 0 -and
+    $positiveContractIndex -gt $positiveReportIndex -and
+    $positiveSuccessValidationIndex -gt $positiveContractIndex
+  ) "Packaged-native positive reports must be discriminated by exit status before exact success-shape validation."
+  $positiveBeforeContract = $driverText.Substring($positiveReportIndex, $positiveContractIndex - $positiveReportIndex)
+  Assert-True (-not $positiveBeforeContract.Contains('.error')) "A packaged-native positive report must not access branch-specific fields before contract discrimination."
+
+  $positiveSuccessReport = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-packaged-native-positive.v1"
+    status = "passed"
+    protocol = [pscustomobject]@{ major = 1; minor = 35 }
+    remoteSvnAnonymous = $true
+    fixtureCliInvocations = 0
+    operations = @()
+    positiveOperationCount = 9
+    identityRequiredOperationCount = 2
+    remoteOperationCount = 11
+    uniqueOperationIds = $true
+    anonymousIdentityRequired = [pscustomobject]@{ lock = [pscustomobject]@{}; unlock = [pscustomobject]@{} }
+    subsequentDiagnostics = $true
+  }
+  Assert-PackagedNativePositiveProcessContract 0 $positiveSuccessReport
+
+  $positiveFailureWithoutDiagnostics = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-packaged-native-positive.v1"
+    status = "failed"
+    error = [pscustomobject]@{ code = "SUBVERSIONR_I6_PACKAGED_PROBE_FAILED"; diagnostics = $null }
+  }
+  Assert-Equal "SUBVERSIONR_I6_PACKAGED_PROBE_FAILED" `
+    (Get-PackagedNativePositiveFailureDetail $positiveFailureWithoutDiagnostics) `
+    "Packaged-native positive failure details must preserve a failure without diagnostics."
+  $positiveFailureWithDiagnostics = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-packaged-native-positive.v1"
+    status = "failed"
+    error = [pscustomobject]@{
+      code = "SVN_OPERATION_LOCK_FAILED"
+      diagnostics = [pscustomobject]@{ cause = "authenticationFailed"; names = @("SVN_ERR_RA_NOT_AUTHORIZED") }
+    }
+  }
+  Assert-Equal "SVN_OPERATION_LOCK_FAILED / authenticationFailed / SVN_ERR_RA_NOT_AUTHORIZED" `
+    (Get-PackagedNativePositiveFailureDetail $positiveFailureWithDiagnostics) `
+    "Packaged-native positive failure details must preserve bounded symbolic diagnostics."
+  Assert-ScriptThrowsContaining {
+    Assert-PackagedNativePositiveProcessContract 1 $positiveSuccessReport
+  } "failure report must contain exactly the required fields" "A nonzero packaged-native positive exit must reject the success schema."
+  Assert-ScriptThrowsContaining {
+    Assert-PackagedNativePositiveProcessContract 0 $positiveFailureWithoutDiagnostics
+  } "success report must contain exactly the required fields" "A zero packaged-native positive exit must reject the failure schema."
+  Assert-ScriptThrowsContaining {
+    Get-PackagedNativePositiveFailureDetail ([pscustomobject]@{
+        schema = "subversionr.release.m8-i6-packaged-native-positive.v1"
+        status = "passed"
+      })
+  } "must contain exactly the required fields" "Packaged-native positive failure inspection must fail closed when the error field is absent."
 
   $retainedJoinEvent = [pscustomobject]@{
     processId = 42L; parentProcessId = 7L; processName = "subversionr-daemon.exe"
