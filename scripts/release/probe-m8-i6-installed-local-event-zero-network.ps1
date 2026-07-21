@@ -167,21 +167,6 @@ function Find-InstalledPackage([string]$ExtensionsRoot, [string]$Version) {
   return [System.IO.Path]::GetFullPath($matches[0])
 }
 
-function Get-CandidateProcessCount([string]$ExecutablePath) {
-  try {
-    return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
-        -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
-        ([System.IO.Path]::GetFullPath([string]$_.ExecutablePath)).Equals(
-          $ExecutablePath,
-          [System.StringComparison]::OrdinalIgnoreCase
-        )
-      }).Count
-  }
-  catch {
-    throw "Installed local-event candidate process cleanup observation through Win32_Process failed."
-  }
-}
-
 function Get-TemporaryRootCount([string]$RemoteWorkersRoot) {
   Assert-True (Test-Path -LiteralPath $RemoteWorkersRoot -PathType Container) "The installed local-event remote-workers root was not created."
   return @(Get-ChildItem -LiteralPath $RemoteWorkersRoot -Force).Count
@@ -487,8 +472,6 @@ try {
   $installedBridgePath = Resolve-RequiredFile (Join-Path $installedPackageRoot "resources\backend\win32-x64\subversionr_svn_bridge.dll") "installed candidate bridge"
   Assert-True ((Get-Sha256 $installedDaemonPath) -ceq (Get-Sha256 $daemonResolved)) "Installed local-event daemon bytes did not match the candidate daemon."
   Assert-True ((Get-Sha256 $installedBridgePath) -ceq (Get-Sha256 $bridgeResolved)) "Installed local-event bridge bytes did not match the candidate bridge."
-  Assert-True ((Get-CandidateProcessCount $installedDaemonPath) -eq 0) "The installed local-event candidate daemon was already running before the Extension Host probe."
-
   $env:SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_RESULT = $resultPath
   $env:SUBVERSIONR_INSTALLED_I6_LOCAL_EVENT_EXTENSIONS_ROOT = $extensionsRoot
   Set-Item -LiteralPath "Env:$TokenEnvironment" -Value ([Guid]::NewGuid().ToString("N"))
@@ -523,13 +506,9 @@ finally {
     Restore-ProcessEnvironmentValue $name $previousEnvironment[$name]
   }
   Restore-WorkingCopyFileSnapshot $target.fullPath $targetSnapshot
-  if ($null -ne $installedDaemonPath) {
-    Assert-True ((Get-CandidateProcessCount $installedDaemonPath) -eq 0) "The installed local-event candidate daemon remained alive after the Extension Host exited."
-  }
 }
 
 Assert-True ($null -ne $installedDaemonPath) "Installed local-event candidate daemon identity was not resolved."
-Assert-True ((Get-CandidateProcessCount $installedDaemonPath) -eq 0) "The installed local-event candidate daemon remained alive after the Extension Host exited."
 Assert-True (Test-Path -LiteralPath $resultPath -PathType Leaf) "Installed local-event harness did not write its bounded result."
 $result = Get-Content -Raw -LiteralPath $resultPath | ConvertFrom-Json -Depth 64
 Assert-ExactProperties $result @("extensionId", "extensionVersion", "extensionPath", "report") "installed local-event harness result"

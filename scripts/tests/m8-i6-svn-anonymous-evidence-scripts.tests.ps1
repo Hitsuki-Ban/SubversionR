@@ -1221,6 +1221,15 @@ try {
   Assert-True (-not $runnerText.Contains("unsupportedAfterWorker")) "I6 runner must not accept the I3-I5 transport-boundary result."
 
   $driverText = Get-Content -Raw -LiteralPath $probeDriverPath
+  $fileIdentitySourceMatch = [regex]::Match(
+    $driverText,
+    "(?ms)^Add-Type -TypeDefinition @'\r?\n(?<source>using System;\r?\nusing System\.ComponentModel;.*?^public static class SubversionRM8I6ExactFileIdentity \{.*?^\})\r?\n'@$"
+  )
+  Assert-True $fileIdentitySourceMatch.Success "I6 probe driver must retain one extractable exact-file-identity implementation."
+  $fileIdentitySource = $fileIdentitySourceMatch.Groups["source"].Value
+  Assert-True ($null -eq ('SubversionRM8I6ExactFileIdentity' -as [type])) "Exact-file-identity native type must compile from a fresh test process."
+  Add-Type -TypeDefinition $fileIdentitySource -ErrorAction Stop
+  Assert-True ($null -ne ('SubversionRM8I6ExactFileIdentity' -as [type])) "Exact-file-identity native source did not compile into its required type."
   $workerNativeSourceMatch = [regex]::Match(
     $driverText,
     "(?ms)^Add-Type -TypeDefinition @'\r?\n(?<source>using System;\r?\nusing System\.Collections\.Generic;\r?\nusing System\.ComponentModel;\r?\nusing System\.IO;\r?\nusing System\.Runtime\.InteropServices;\r?\nusing System\.Text;\r?\nusing Microsoft\.Win32\.SafeHandles;.*?^public static class SubversionRM8I6WorkerCrashNative \{.*?^\})\r?\n'@$"
@@ -1242,7 +1251,24 @@ try {
     $aliveSecondWaitIndex -gt $aliveIdentityIndex
   ) "Retained daemon liveness must bracket image identity queries with zero-time handle waits."
   Assert-True ($workerNativeSource.Contains('GetProcessTimes(exited live-capture process) failed')) "Exited retained-process lifetime capture must use the original handle rather than reopen a PID."
-  Add-Type -TypeDefinition $workerNativeSource
+  foreach ($requiredWorkerNativeText in @(
+      'SubversionRM8I6EventProcessBinding',
+      'TryBindEventProcess',
+      'CompleteEventProcessCapture',
+      'PROCESS_QUERY_INFORMATION',
+      'PROCESS_VM_READ',
+      'IsWow64Process2',
+      'IMAGE_FILE_MACHINE_AMD64',
+      'NtQueryInformationProcess',
+      'ReadProcessMemory',
+      'QueryCommandLine',
+      'public string CommandLine'
+    )) {
+    Assert-True ($workerNativeSource.Contains($requiredWorkerNativeText)) "Retained-process native implementation must retain '$requiredWorkerNativeText'."
+  }
+  Assert-True ($null -eq ('SubversionRM8I6WorkerCrashNative' -as [type])) "Retained-process native type must compile from a fresh test process."
+  Add-Type -TypeDefinition $workerNativeSource -ErrorAction Stop
+  Assert-True ($null -ne ('SubversionRM8I6WorkerCrashNative' -as [type])) "Retained-process native source did not compile into its required type."
   $retainedExecutablePath = Join-Path $tempRoot "retained-process-fixture.exe"
   Copy-Item -LiteralPath (Join-Path ([Environment]::SystemDirectory) "cmd.exe") -Destination $retainedExecutablePath
   $retainedFixtureProcess = $null
@@ -1259,8 +1285,65 @@ try {
     Assert-True ($null -ne $retainedFixtureProcess) "Retained-process native fixture failed to start."
     $retainedFixtureBinding = [SubversionRM8I6WorkerCrashNative]::BindExactSingle($retainedExecutablePath)
     [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($retainedFixtureBinding)
+    $retainedCommandLine = [string]$retainedFixtureBinding.CommandLine
+    Assert-True (
+      -not [string]::IsNullOrWhiteSpace($retainedCommandLine) -and
+      $retainedCommandLine.IndexOf($retainedExecutablePath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+      $retainedCommandLine.IndexOf('ping.exe -n 30 127.0.0.1 >nul', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    ) "Retained-process native binding must capture the live PEB command line including its executable and arguments."
+    $eventCaptureFileTime = [DateTime]::UtcNow.ToFileTimeUtc()
+    $eventCaptureSessionId = [uint32]$retainedFixtureProcess.SessionId
+    $liveEventBinding = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+      [uint32]$retainedFixtureProcess.Id,
+      $eventCaptureFileTime,
+      $eventCaptureSessionId
+    )
+    Assert-True ($null -ne $liveEventBinding) "Native event capture must retain the exact live event process before file-identity lookup."
+    try {
+      $liveEventFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get([string]$liveEventBinding.ImagePath)
+      $liveEventIdentity = [SubversionRM8I6WorkerCrashNative]::CompleteEventProcessCapture(
+        $liveEventBinding,
+        $liveEventFileIdentity
+      )
+      Assert-True (
+        $null -ne $liveEventIdentity -and
+        [long]$liveEventIdentity.ProcessId -eq [long]$retainedFixtureProcess.Id -and
+        [long]$liveEventIdentity.StartFileTime -eq [long]$retainedFixtureBinding.StartFileTime -and
+        [long]$liveEventIdentity.SessionId -eq [long]$eventCaptureSessionId -and
+        ([System.IO.Path]::GetFullPath([string]$liveEventIdentity.ImagePath)).Equals(
+          [System.IO.Path]::GetFullPath($retainedExecutablePath),
+          [System.StringComparison]::OrdinalIgnoreCase
+        ) -and
+        [string]$liveEventIdentity.ImageFileIdentity -ceq [SubversionRM8I6ExactFileIdentity]::Get($retainedExecutablePath)
+      ) "Native event capture must return the exact live process generation, session, image path, and file identity."
+    }
+    finally {
+      $liveEventBinding.Dispose()
+    }
+    $wrongGenerationIdentity = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+      [uint32]$retainedFixtureProcess.Id,
+      ([long]$retainedFixtureBinding.StartFileTime - 1L),
+      $eventCaptureSessionId
+    )
+    if ($null -ne $wrongGenerationIdentity) { $wrongGenerationIdentity.Dispose() }
+    Assert-True ($null -eq $wrongGenerationIdentity) "Native event capture must return null when the live process generation starts after the subscribed event time."
+    $wrongEventSessionId = if ($eventCaptureSessionId -eq [uint32]::MaxValue) { [uint32]0 } else { [uint32]($eventCaptureSessionId + 1) }
+    $wrongSessionIdentity = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+      [uint32]$retainedFixtureProcess.Id,
+      $eventCaptureFileTime,
+      $wrongEventSessionId
+    )
+    if ($null -ne $wrongSessionIdentity) { $wrongSessionIdentity.Dispose() }
+    Assert-True ($null -eq $wrongSessionIdentity) "Native event capture must return null when the subscribed event session does not match the live process."
     $retainedFixtureProcess.Kill($true)
     $retainedFixtureProcess.WaitForExit()
+    $postExitEventIdentity = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+      [uint32]$retainedFixtureProcess.Id,
+      $eventCaptureFileTime,
+      $eventCaptureSessionId
+    )
+    if ($null -ne $postExitEventIdentity) { $postExitEventIdentity.Dispose() }
+    Assert-True ($null -eq $postExitEventIdentity) "Native event capture must return null after the exact process has exited."
     [SubversionRM8I6WorkerCrashNative]::RequireSingleExited($retainedFixtureBinding, 10000)
     $retainedExitFileTime = [SubversionRM8I6WorkerCrashNative]::GetSingleExitFileTime($retainedFixtureBinding)
     Assert-True ($retainedExitFileTime -gt [long]$retainedFixtureBinding.StartFileTime) "Retained-process native fixture did not expose an exact exit FILETIME."
@@ -1278,12 +1361,6 @@ try {
     }
     if ($null -ne $retainedFixtureBinding) { $retainedFixtureBinding.Dispose() }
   }
-  $fileIdentitySourceMatch = [regex]::Match(
-    $driverText,
-    "(?ms)^Add-Type -TypeDefinition @'\r?\n(?<source>using System;\r?\nusing System\.ComponentModel;.*?^public static class SubversionRM8I6ExactFileIdentity \{.*?^\})\r?\n'@$"
-  )
-  Assert-True $fileIdentitySourceMatch.Success "I6 probe driver must retain one extractable exact-file-identity implementation."
-  Add-Type -TypeDefinition $fileIdentitySourceMatch.Groups["source"].Value
   $systemConsoleHostPath = Join-Path ([Environment]::SystemDirectory) "conhost.exe"
   $extendedSystemConsoleHostPath = "\\?\$systemConsoleHostPath"
   Assert-Equal `
@@ -1408,11 +1485,20 @@ try {
       'Invoke-BoundedInstalledProcessWithRequiredLiveCapture',
       '$installedLocalEventResult = Invoke-BoundedInstalledProcessWithRequiredLiveCapture',
       'SubversionRM8I6SingleProcessBinding',
+      'SubversionRM8I6EventProcessBinding',
       'BindExactSingle',
+      'TryBindEventProcess',
+      'CompleteEventProcessCapture',
+      'Get-NativeProcessStartEventLiveIdentity',
       'GetSingleBoundDescendantCount',
       'RequireSingleAlive',
       'RequireSingleExited',
       'GetSingleExitFileTime',
+      'ReadProcessMemory',
+      '$binding.CommandLine',
+      '[Environment]::Is64BitOperatingSystem',
+      '[Environment]::Is64BitProcess',
+      'requires an x64 PowerShell process on x64 Windows.',
       'Set-RecordedProcessStartIdentityFromRetainedBinding',
       'extensionHostProcessId',
       'eventSessionId',
@@ -1538,6 +1624,9 @@ try {
     "Resolve-RequiredDirectory",
     "Test-PathWithin",
     "Read-InstalledProcessCaptureReady",
+    "Get-NativeProcessStartEventLiveIdentity",
+    "Receive-ProcessStartEvents",
+    "Update-ProcessStartEventLiveCaptures",
     "Get-DescendantProcessIds",
     "Get-ProcessSnapshotStartFileTime",
     "Get-NextRecordedProcessStartFileTime",
@@ -1578,7 +1667,7 @@ try {
       '[SubversionRM8I6WorkerCrashNative]::BindExactSingle',
       '[SubversionRM8I6WorkerCrashNative]::GetSingleBoundDescendantCount',
       'Receive-ProcessStartEvents',
-      'Get-CimInstance -ClassName Win32_Process',
+      '[string]$binding.CommandLine',
       'GetSingleExitFileTime',
       'RetainedDaemonIdentity',
       'StartFileTime',
@@ -1587,8 +1676,8 @@ try {
       'imageFileIdentity',
       'RequireSingleAlive',
       'RequireSingleExited',
-      '$captureDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)',
-      'live process capture completed after its absolute deadline.',
+      '$readyDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)',
+      'did not publish its process-capture ready report before the absolute deadline.',
       'subversionr.release.m8-i6-installed-process-capture-ack.v1'
     )) {
     Assert-True ($liveCaptureHelper.Contains($requiredLiveCaptureText)) "Installed process live-capture helper must retain '$requiredLiveCaptureText'."
@@ -1597,6 +1686,7 @@ try {
       'Get-CandidateProcessIds',
       'Get-CandidateProcessObservation',
       '$captureDeadline = $deadline',
+      'Get-CimInstance',
       'Get-RecordedProcessDescendantStarts',
       'RetainedConsoleHostIdentity',
       'BindExactChild',
@@ -1605,21 +1695,74 @@ try {
     Assert-True (-not $liveCaptureHelper.Contains($forbiddenLiveCaptureText)) "Installed process live-capture helper must not use '$forbiddenLiveCaptureText' as a binding fallback."
   }
   $liveBindIndex = $liveCaptureHelper.IndexOf('[SubversionRM8I6WorkerCrashNative]::BindExactSingle', [System.StringComparison]::Ordinal)
+  $liveParentIndex = $liveCaptureHelper.IndexOf('$binding.ParentProcessId', $liveBindIndex, [System.StringComparison]::Ordinal)
+  $liveCommandLineIndex = $liveCaptureHelper.IndexOf('[string]$binding.CommandLine', $liveParentIndex, [System.StringComparison]::Ordinal)
   $livePreSnapshotAliveIndex = $liveCaptureHelper.IndexOf('RequireSingleAlive', $liveBindIndex, [System.StringComparison]::Ordinal)
   $liveDescendantCountIndex = $liveCaptureHelper.IndexOf('GetSingleBoundDescendantCount', $liveBindIndex, [System.StringComparison]::Ordinal)
   $livePostSnapshotAliveIndex = $liveCaptureHelper.IndexOf('RequireSingleAlive', $liveDescendantCountIndex, [System.StringComparison]::Ordinal)
+  $liveAckDeadlineIndex = $liveCaptureHelper.IndexOf('retained daemon acknowledgement exceeded its 20-second deadline.', $livePostSnapshotAliveIndex, [System.StringComparison]::Ordinal)
   $liveAckIndex = $liveCaptureHelper.IndexOf('subversionr.release.m8-i6-installed-process-capture-ack.v1', $livePostSnapshotAliveIndex, [System.StringComparison]::Ordinal)
+  Assert-True ($liveBindIndex -ge 0 -and $liveAckIndex -gt $liveBindIndex) "Installed process capture binding and acknowledgement block must be uniquely delimited."
+  $liveReadyWaitIndex = $liveCaptureHelper.IndexOf('while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf))', [System.StringComparison]::Ordinal)
+  Assert-True ($liveReadyWaitIndex -ge 0 -and $liveReadyWaitIndex -lt $liveBindIndex) "Installed process capture ready wait and binding block must be uniquely delimited."
+  $livePreAckSlice = $liveCaptureHelper.Substring($liveReadyWaitIndex, $liveAckIndex - $liveReadyWaitIndex)
+  foreach ($forbiddenPreAckDrain in @('Receive-ProcessStartEvents', 'Update-ProcessStartEventLiveCaptures', 'Get-CimInstance', 'Get-Event', 'Wait-Event')) {
+    Assert-True (-not $livePreAckSlice.Contains($forbiddenPreAckDrain)) "Installed process capture must not execute '$forbiddenPreAckDrain' while waiting for ready or before acknowledgement."
+  }
+  $livePostAckLoopIndex = $liveCaptureHelper.IndexOf('while (-not $process.HasExited)', $liveAckIndex, [System.StringComparison]::Ordinal)
+  $livePostAckDeadlineIndex = $liveCaptureHelper.IndexOf('if ([DateTimeOffset]::UtcNow -ge $deadline)', $livePostAckLoopIndex, [System.StringComparison]::Ordinal)
+  $livePostAckDrainIndex = $liveCaptureHelper.IndexOf('Receive-ProcessStartEvents', $livePostAckLoopIndex, [System.StringComparison]::Ordinal)
+  $livePostAckUpdateIndex = $liveCaptureHelper.IndexOf('Update-ProcessStartEventLiveCaptures', $livePostAckLoopIndex, [System.StringComparison]::Ordinal)
   $liveExitIndex = $liveCaptureHelper.IndexOf('RequireSingleExited($binding', $liveAckIndex, [System.StringComparison]::Ordinal)
   $liveCompleteIndex = $liveCaptureHelper.IndexOf('Complete-WorkerCrashProbeProcess', $liveExitIndex, [System.StringComparison]::Ordinal)
   Assert-True (
     $liveBindIndex -ge 0 -and
-    $livePreSnapshotAliveIndex -gt $liveBindIndex -and
+    $liveParentIndex -gt $liveBindIndex -and
+    $liveCommandLineIndex -gt $liveParentIndex -and
+    $livePreSnapshotAliveIndex -gt $liveCommandLineIndex -and
     $liveDescendantCountIndex -gt $livePreSnapshotAliveIndex -and
     $livePostSnapshotAliveIndex -gt $liveDescendantCountIndex -and
-    $liveAckIndex -gt $livePostSnapshotAliveIndex -and
+    $liveAckDeadlineIndex -gt $livePostSnapshotAliveIndex -and
+    $liveAckIndex -gt $liveAckDeadlineIndex -and
+    $livePostAckLoopIndex -gt $liveAckIndex -and
+    $livePostAckDeadlineIndex -gt $livePostAckLoopIndex -and
+    $livePostAckDrainIndex -gt $livePostAckDeadlineIndex -and
+    $livePostAckUpdateIndex -gt $livePostAckDrainIndex -and
     $liveExitIndex -gt $liveAckIndex -and
     $liveCompleteIndex -gt $liveExitIndex
-  ) "Installed process capture must bracket its live descendant census with retained daemon liveness, ACK without waiting for WMI, and require the retained daemon to signal exit before completion."
+  ) "Installed process capture must validate retained native parent/command line/session and descendants before ACK, perform no event drain between bind and ACK, then check the post-ACK deadline before each drain and require retained exit before completion."
+  Assert-True ($liveCaptureHelper.Contains('installed probe exceeded its post-acknowledgement exit deadline.')) "Installed process capture must report the post-acknowledgement phase on exit deadline failure."
+  Assert-True (-not $liveCaptureHelper.Contains('Controlled installed process with required live capture exceeded its absolute deadline.')) "Installed process capture must not retain the ambiguous pre/post-acknowledgement deadline error."
+  $nativeEventCaptureHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-NativeProcessStartEventLiveIdentity")]
+  foreach ($requiredNativeEventCaptureText in @(
+      '[SubversionRM8I6WorkerCrashNative]::TryBindEventProcess',
+      '[SubversionRM8I6ExactFileIdentity]::Get([string]$binding.ImagePath)',
+      '[SubversionRM8I6WorkerCrashNative]::CompleteEventProcessCapture',
+      'finally',
+      '$binding.Dispose()'
+    )) {
+    Assert-True ($nativeEventCaptureHelper.Contains($requiredNativeEventCaptureText)) "Native event-capture helper must retain '$requiredNativeEventCaptureText'."
+  }
+  foreach ($forbiddenNativeEventFallback in @('Get-CimInstance', 'Get-Process ', 'Get-WmiObject', 'fallback')) {
+    Assert-True (-not $nativeEventCaptureHelper.Contains($forbiddenNativeEventFallback)) "Native event-capture helper must not use '$forbiddenNativeEventFallback'."
+  }
+  $nativeEventBindIndex = $nativeEventCaptureHelper.IndexOf('TryBindEventProcess', [System.StringComparison]::Ordinal)
+  $nativeEventFileIdentityIndex = $nativeEventCaptureHelper.IndexOf('SubversionRM8I6ExactFileIdentity', $nativeEventBindIndex, [System.StringComparison]::Ordinal)
+  $nativeEventCompleteIndex = $nativeEventCaptureHelper.IndexOf('CompleteEventProcessCapture', $nativeEventFileIdentityIndex, [System.StringComparison]::Ordinal)
+  $nativeEventDisposeIndex = $nativeEventCaptureHelper.IndexOf('$binding.Dispose()', $nativeEventCompleteIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $nativeEventBindIndex -ge 0 -and
+    $nativeEventFileIdentityIndex -gt $nativeEventBindIndex -and
+    $nativeEventCompleteIndex -gt $nativeEventFileIdentityIndex -and
+    $nativeEventDisposeIndex -gt $nativeEventCompleteIndex
+  ) "Native event capture must retain a handle across exact file-identity lookup, revalidate, and dispose it afterward."
+  foreach ($eventCaptureFunctionName in @("Receive-ProcessStartEvents", "Update-ProcessStartEventLiveCaptures")) {
+    $eventCaptureFunction = $observationHelperSources[[Array]::IndexOf($observationHelpers, $eventCaptureFunctionName)]
+    Assert-True ($eventCaptureFunction.Contains('Get-NativeProcessStartEventLiveIdentity')) "$eventCaptureFunctionName must use the retained native event-capture helper."
+    foreach ($forbiddenEventCaptureFallback in @('Get-CimInstance', 'Get-Process ', 'Get-WmiObject')) {
+      Assert-True (-not $eventCaptureFunction.Contains($forbiddenEventCaptureFallback)) "$eventCaptureFunctionName must not use '$forbiddenEventCaptureFallback' for event identity capture."
+    }
+  }
   $retainedEventJoinHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Set-RecordedProcessStartIdentityFromRetainedBinding")]
   foreach ($requiredRetainedJoinText in @(
       'eventFileTime -ge [long]$Identity.startFileTime',

@@ -167,25 +167,6 @@ function Find-InstalledPackage([string]$ExtensionsRoot, [string]$Version) {
   return [System.IO.Path]::GetFullPath($matches[0])
 }
 
-function Get-CandidateProcessCount([string]$ExecutablePath) {
-  try {
-    return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
-        -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
-        ([System.IO.Path]::GetFullPath([string]$_.ExecutablePath)).Equals($ExecutablePath, [System.StringComparison]::OrdinalIgnoreCase)
-      }).Count
-  }
-  catch { throw "Installed trust-revoked candidate process cleanup observation through Win32_Process failed." }
-}
-
-function Wait-CandidateProcessAbsent([string]$ExecutablePath, [int]$DeadlineMilliseconds) {
-  $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds($DeadlineMilliseconds)
-  do {
-    if ((Get-CandidateProcessCount $ExecutablePath) -eq 0) { return }
-    Start-Sleep -Milliseconds 50
-  } while ([DateTimeOffset]::UtcNow -lt $deadline)
-  throw "The installed trust-revoked candidate daemon or worker remained alive after the Extension Host exited."
-}
-
 function Get-TemporaryRootCount([string]$RemoteWorkersRoot) {
   Assert-True (Test-Path -LiteralPath $RemoteWorkersRoot -PathType Container) "The installed trust-revoked remote-workers root was not created."
   return @(Get-ChildItem -LiteralPath $RemoteWorkersRoot -Force).Count
@@ -386,8 +367,6 @@ $installedDaemonPath = Resolve-RequiredFile (Join-Path $installedPackageRoot "re
 $installedBridgePath = Resolve-RequiredFile (Join-Path $installedPackageRoot "resources\backend\win32-x64\subversionr_svn_bridge.dll") "installed candidate bridge"
 Assert-True ((Get-Sha256 $installedDaemonPath) -ceq (Get-Sha256 $daemonResolved)) "Installed trust-revoked daemon bytes did not match the candidate daemon."
 Assert-True ((Get-Sha256 $installedBridgePath) -ceq (Get-Sha256 $bridgeResolved)) "Installed trust-revoked bridge bytes did not match the candidate bridge."
-Assert-True ((Get-CandidateProcessCount $installedDaemonPath) -eq 0) "The installed trust-revoked candidate daemon or worker was already running before the Extension Host probe."
-
 $names = @(
   "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_RESULT", "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_EXTENSIONS_ROOT", $TrustRevokedTokenEnvironment,
   "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_REPOSITORY_URL", "SUBVERSIONR_INSTALLED_I6_TRUST_REVOKED_WORKING_COPY_PATH",
@@ -424,7 +403,6 @@ try {
 }
 finally { foreach ($name in $names) { Restore-ProcessEnvironmentValue $name $previous[$name] } }
 
-Wait-CandidateProcessAbsent $installedDaemonPath 10000
 Assert-True (Test-Path -LiteralPath $resultPath -PathType Leaf) "Installed trust-revoked harness did not write its bounded result."
 $result = Get-Content -Raw -LiteralPath $resultPath | ConvertFrom-Json -Depth 64
 Assert-ExactProperties $result @("extensionId", "extensionVersion", "extensionPath", "report") "installed trust-revoked harness result"

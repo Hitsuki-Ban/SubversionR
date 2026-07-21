@@ -235,20 +235,24 @@ atomically publishes its exact installed extension identity and remains alive
 until the elevated driver acknowledges the capture. Before that acknowledgement
 the driver must retain a Windows process handle for the single exact-path daemon
 generation, match its PID, parent, creation FILETIME, session, full image path,
-argument-free command line, installed file identity, and exact live descendant
-count, bracketed by retained-handle liveness checks. This acknowledgement is a
-daemon identity/liveness barrier; descendant classification does not block on
-asynchronous WMI delivery. The driver keeps the retained daemon handle until
-exit, then binds its subscribed start event to the captured `(PID, creation
-FILETIME, exit FILETIME, parent, session, path, file identity)` lifetime. The
-optional Windows console host is instead an asynchronous start-event identity:
-it must be captured while live with the exact system file identity, direct parent,
-creation time, and session. A missing live capture or any other daemon descendant
-fails the final observation. The local-event probe cannot mutate its working copy
-before the acknowledgement, and the installed trust-revoked probe cannot let its
-Extension Host exit before it. A missing, stale, malformed, duplicate, timed-out,
-or mismatched handshake or post-ACK event join fails the cell; there is no
-post-exit PID lookup or event-only daemon identity fallback.
+argument-free command line read through that handle, installed file identity,
+and exact live descendant count, bracketed by retained-handle liveness checks.
+Once the driver observes the atomically published ready file, acknowledgement
+has a 20-second bound. The ready-file wait and pre-acknowledgement phase contain
+no synchronous CIM query or process-start event drain. This acknowledgement is a daemon
+identity/liveness barrier; asynchronous WMI delivery cannot delay product work.
+The driver keeps the retained daemon handle until exit, then binds its subscribed
+start event to the captured `(PID, creation FILETIME, exit FILETIME, parent,
+session, path, file identity)` lifetime. The optional Windows console host is
+instead an asynchronous start-event identity: when its WMI start metadata is
+received, the driver opens that exact live PID and captures its path, system file
+identity, creation time, and session through native process APIs. A missing live
+capture or any other daemon descendant fails the final observation. The
+local-event probe cannot mutate its working copy before the acknowledgement, and
+the installed trust-revoked probe cannot let its Extension Host exit before it.
+A missing, stale, malformed, duplicate, timed-out, or mismatched handshake or
+post-ACK event join fails the cell; there is no post-exit PID lookup, synchronous
+CIM enrichment, or event-only daemon identity fallback.
 
 All subscribed process-tree observations bind an exact start-event identity,
 not a numeric PID for the whole subscription. The controlled probe root must

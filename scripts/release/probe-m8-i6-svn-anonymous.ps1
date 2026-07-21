@@ -499,6 +499,7 @@ public sealed class SubversionRM8I6WorkerCrashBinding : IDisposable {
 
 public sealed class SubversionRM8I6SingleProcessBinding : IDisposable {
   internal readonly string ExpectedPath;
+  internal readonly string ExpectedCommandLine;
   internal readonly uint BoundPid;
   internal readonly uint BoundParentPid;
   internal readonly long BoundCreationFileTime;
@@ -507,6 +508,7 @@ public sealed class SubversionRM8I6SingleProcessBinding : IDisposable {
 
   internal SubversionRM8I6SingleProcessBinding(
     string expectedPath,
+    string expectedCommandLine,
     uint pid,
     uint parentPid,
     long creationFileTime,
@@ -514,6 +516,7 @@ public sealed class SubversionRM8I6SingleProcessBinding : IDisposable {
     SafeProcessHandle handle
   ) {
     ExpectedPath = expectedPath;
+    ExpectedCommandLine = expectedCommandLine;
     BoundPid = pid;
     BoundParentPid = parentPid;
     BoundCreationFileTime = creationFileTime;
@@ -522,6 +525,7 @@ public sealed class SubversionRM8I6SingleProcessBinding : IDisposable {
   }
 
   public string ImagePath { get { return ExpectedPath; } }
+  public string CommandLine { get { return ExpectedCommandLine; } }
   public uint ProcessId { get { return BoundPid; } }
   public uint ParentProcessId { get { return BoundParentPid; } }
   public long StartFileTime { get { return BoundCreationFileTime; } }
@@ -530,15 +534,110 @@ public sealed class SubversionRM8I6SingleProcessBinding : IDisposable {
   public void Dispose() { BoundHandle.Dispose(); }
 }
 
+public sealed class SubversionRM8I6LiveProcessIdentity {
+  internal SubversionRM8I6LiveProcessIdentity(
+    uint processId,
+    long startFileTime,
+    uint sessionId,
+    string imagePath,
+    string imageFileIdentity
+  ) {
+    ProcessId = processId;
+    StartFileTime = startFileTime;
+    SessionId = sessionId;
+    ImagePath = imagePath;
+    ImageFileIdentity = imageFileIdentity;
+  }
+
+  public uint ProcessId { get; private set; }
+  public long StartFileTime { get; private set; }
+  public uint SessionId { get; private set; }
+  public string ImagePath { get; private set; }
+  public string ImageFileIdentity { get; private set; }
+}
+
+public sealed class SubversionRM8I6EventProcessBinding : IDisposable {
+  internal readonly uint BoundProcessId;
+  internal readonly long BoundStartFileTime;
+  internal readonly uint BoundSessionId;
+  internal readonly string BoundImagePath;
+  internal readonly SafeProcessHandle BoundHandle;
+
+  internal SubversionRM8I6EventProcessBinding(
+    uint processId,
+    long startFileTime,
+    uint sessionId,
+    string imagePath,
+    SafeProcessHandle handle
+  ) {
+    BoundProcessId = processId;
+    BoundStartFileTime = startFileTime;
+    BoundSessionId = sessionId;
+    BoundImagePath = imagePath;
+    BoundHandle = handle;
+  }
+
+  public uint ProcessId { get { return BoundProcessId; } }
+  public long StartFileTime { get { return BoundStartFileTime; } }
+  public uint SessionId { get { return BoundSessionId; } }
+  public string ImagePath { get { return BoundImagePath; } }
+  public void Dispose() { BoundHandle.Dispose(); }
+}
+
 public static class SubversionRM8I6WorkerCrashNative {
   private const uint TH32CS_SNAPPROCESS = 0x00000002;
   private const uint PROCESS_TERMINATE = 0x0001;
+  private const uint PROCESS_VM_READ = 0x0010;
+  private const uint PROCESS_QUERY_INFORMATION = 0x0400;
   private const uint SYNCHRONIZE = 0x00100000;
   private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+  private const ushort IMAGE_FILE_MACHINE_UNKNOWN = 0x0000;
+  private const ushort IMAGE_FILE_MACHINE_AMD64 = 0x8664;
   private const uint WAIT_OBJECT_0 = 0x00000000;
   private const uint WAIT_TIMEOUT = 0x00000102;
   private const uint WAIT_FAILED = 0xFFFFFFFF;
   private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
+
+  // These matching-architecture layouts are the public Windows SDK winternl.h
+  // definitions used to read the retained candidate's own command line.
+  [StructLayout(LayoutKind.Sequential)]
+  private struct PROCESS_BASIC_INFORMATION {
+    public IntPtr Reserved1;
+    public IntPtr PebBaseAddress;
+    public IntPtr Reserved2_0;
+    public IntPtr Reserved2_1;
+    public IntPtr UniqueProcessId;
+    public IntPtr InheritedFromUniqueProcessId;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct PEB {
+    public byte Reserved1_0;
+    public byte Reserved1_1;
+    public byte BeingDebugged;
+    public byte Reserved2;
+    public IntPtr Reserved3_0;
+    public IntPtr Reserved3_1;
+    public IntPtr Ldr;
+    public IntPtr ProcessParameters;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct UNICODE_STRING {
+    public ushort Length;
+    public ushort MaximumLength;
+    public IntPtr Buffer;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct RTL_USER_PROCESS_PARAMETERS {
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+    public byte[] Reserved1;
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 10)]
+    public IntPtr[] Reserved2;
+    public UNICODE_STRING ImagePathName;
+    public UNICODE_STRING CommandLine;
+  }
 
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   private struct PROCESSENTRY32W {
@@ -624,10 +723,151 @@ public static class SubversionRM8I6WorkerCrashNative {
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
 
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool IsWow64Process2(
+    SafeProcessHandle process,
+    out ushort processMachine,
+    out ushort nativeMachine
+  );
+
+  [DllImport("ntdll.dll")]
+  private static extern int NtQueryInformationProcess(
+    SafeProcessHandle process,
+    int processInformationClass,
+    ref PROCESS_BASIC_INFORMATION processInformation,
+    int processInformationLength,
+    out int returnLength
+  );
+
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "ReadProcessMemory")]
+  private static extern bool ReadProcessPeb(
+    SafeProcessHandle process,
+    IntPtr address,
+    out PEB value,
+    int size,
+    out IntPtr bytesRead
+  );
+
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "ReadProcessMemory")]
+  private static extern bool ReadProcessParameters(
+    SafeProcessHandle process,
+    IntPtr address,
+    out RTL_USER_PROCESS_PARAMETERS value,
+    int size,
+    out IntPtr bytesRead
+  );
+
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "ReadProcessMemory")]
+  private static extern bool ReadProcessBytes(
+    SafeProcessHandle process,
+    IntPtr address,
+    byte[] value,
+    int size,
+    out IntPtr bytesRead
+  );
+
   public static int GetExactCandidateCount(string executablePath) {
     List<Candidate> candidates = EnumerateCandidates(executablePath);
     try { return candidates.Count; }
     finally { DisposeCandidates(candidates); }
+  }
+
+  public static SubversionRM8I6EventProcessBinding TryBindEventProcess(
+    uint processId,
+    long eventFileTime,
+    uint eventSessionId
+  ) {
+    if (processId == 0) throw new ArgumentOutOfRangeException("processId");
+    if (eventFileTime <= 0) throw new ArgumentOutOfRangeException("eventFileTime");
+    SafeProcessHandle handle = OpenProcess(
+      PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+      false,
+      processId
+    );
+    if (handle == null || handle.IsInvalid) {
+      int error = Marshal.GetLastWin32Error();
+      if (handle != null) handle.Dispose();
+      if (error == 87) return null;
+      throw new Win32Exception(error, "OpenProcess(event live capture) failed");
+    }
+    try {
+      if (HasExited(handle)) return null;
+      try {
+        uint observedPid = GetProcessId(handle);
+        if (observedPid == 0) ThrowWin32("GetProcessId(event live capture) failed");
+        if (observedPid != processId) {
+          throw new InvalidOperationException("Event live capture process ID changed.");
+        }
+        string imagePath = QueryPath(handle);
+        long startFileTime = QueryCreationFileTime(handle);
+        uint sessionId;
+        if (!ProcessIdToSessionId(processId, out sessionId)) {
+          ThrowWin32("ProcessIdToSessionId(event live capture) failed");
+        }
+        if (HasExited(handle)) return null;
+        if (startFileTime > eventFileTime || sessionId != eventSessionId) return null;
+        if (HasExited(handle)) return null;
+        if (GetProcessId(handle) != processId ||
+            QueryCreationFileTime(handle) != startFileTime ||
+            !SamePath(QueryPath(handle), imagePath)) {
+          throw new InvalidOperationException("Event live capture process identity changed.");
+        }
+        if (HasExited(handle)) return null;
+        SubversionRM8I6EventProcessBinding binding = new SubversionRM8I6EventProcessBinding(
+          processId,
+          startFileTime,
+          sessionId,
+          imagePath,
+          handle
+        );
+        handle = null;
+        return binding;
+      } catch (Win32Exception) {
+        if (HasExited(handle)) return null;
+        throw;
+      }
+    } finally {
+      if (handle != null) handle.Dispose();
+    }
+  }
+
+  public static SubversionRM8I6LiveProcessIdentity CompleteEventProcessCapture(
+    SubversionRM8I6EventProcessBinding binding,
+    string imageFileIdentity
+  ) {
+    if (binding == null) throw new ArgumentNullException("binding");
+    if (string.IsNullOrWhiteSpace(imageFileIdentity)) {
+      throw new ArgumentException("Event live-capture file identity was invalid.", "imageFileIdentity");
+    }
+    if (HasExited(binding.BoundHandle)) return null;
+    try {
+      RequireIdentity(
+        binding.BoundHandle,
+        binding.BoundProcessId,
+        binding.BoundImagePath,
+        binding.BoundStartFileTime,
+        "event live capture"
+      );
+      uint sessionId;
+      if (!ProcessIdToSessionId(binding.BoundProcessId, out sessionId)) {
+        ThrowWin32("ProcessIdToSessionId(event live-capture completion) failed");
+      }
+      if (HasExited(binding.BoundHandle)) return null;
+      if (sessionId != binding.BoundSessionId) {
+        throw new InvalidOperationException("Event live-capture session identity changed.");
+      }
+      if (HasExited(binding.BoundHandle)) return null;
+      return new SubversionRM8I6LiveProcessIdentity(
+        binding.BoundProcessId,
+        binding.BoundStartFileTime,
+        binding.BoundSessionId,
+        binding.BoundImagePath,
+        imageFileIdentity
+      );
+    } catch (Win32Exception) {
+      if (HasExited(binding.BoundHandle)) return null;
+      throw;
+    }
   }
 
   public static SubversionRM8I6SingleProcessBinding BindExactSingle(string executablePath) {
@@ -640,10 +880,11 @@ public static class SubversionRM8I6WorkerCrashNative {
       Candidate candidate = candidates[0];
       SafeProcessHandle retained = OpenRequired(
         candidate.ProcessId,
-        PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+        PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ | SYNCHRONIZE,
         "live-capture candidate"
       );
       try {
+        RequireAmd64Process(retained);
         RequireWait(retained, WAIT_TIMEOUT, "live-capture candidate must be alive while binding");
         RequireIdentity(
           retained,
@@ -665,8 +906,26 @@ public static class SubversionRM8I6WorkerCrashNative {
           "retained live-capture candidate"
         );
         RequireWait(retained, WAIT_TIMEOUT, "live-capture candidate exited while binding");
+        string commandLine;
+        try {
+          commandLine = QueryCommandLine(retained);
+        } catch {
+          if (HasExited(retained)) {
+            throw new InvalidOperationException("Live-capture candidate exited during command-line capture.");
+          }
+          throw;
+        }
+        RequireIdentity(
+          retained,
+          candidate.ProcessId,
+          expectedPath,
+          candidate.CreationFileTime,
+          "retained live-capture candidate after command-line capture"
+        );
+        RequireWait(retained, WAIT_TIMEOUT, "live-capture candidate exited during command-line capture");
         return new SubversionRM8I6SingleProcessBinding(
           expectedPath,
+          commandLine,
           candidate.ProcessId,
           candidate.ParentProcessId,
           candidate.CreationFileTime,
@@ -946,6 +1205,85 @@ public static class SubversionRM8I6WorkerCrashNative {
     return creation;
   }
 
+  private static string QueryCommandLine(SafeProcessHandle handle) {
+    PROCESS_BASIC_INFORMATION basic = new PROCESS_BASIC_INFORMATION();
+    int returnLength;
+    int status = NtQueryInformationProcess(
+      handle,
+      0,
+      ref basic,
+      Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION)),
+      out returnLength
+    );
+    if (status < 0 || basic.PebBaseAddress == IntPtr.Zero) {
+      throw new InvalidOperationException(
+        "NtQueryInformationProcess(ProcessBasicInformation) failed with NTSTATUS 0x" +
+        status.ToString("X8") + "."
+      );
+    }
+    PEB peb;
+    IntPtr bytesRead;
+    int pebSize = Marshal.SizeOf(typeof(PEB));
+    if (!ReadProcessPeb(handle, basic.PebBaseAddress, out peb, pebSize, out bytesRead) ||
+        bytesRead.ToInt64() != pebSize || peb.ProcessParameters == IntPtr.Zero) {
+      ThrowWin32("ReadProcessMemory(PEB) failed");
+    }
+    RTL_USER_PROCESS_PARAMETERS parameters;
+    int parametersSize = Marshal.SizeOf(typeof(RTL_USER_PROCESS_PARAMETERS));
+    if (!ReadProcessParameters(
+          handle,
+          peb.ProcessParameters,
+          out parameters,
+          parametersSize,
+          out bytesRead
+        ) || bytesRead.ToInt64() != parametersSize) {
+      ThrowWin32("ReadProcessMemory(RTL_USER_PROCESS_PARAMETERS) failed");
+    }
+    if (parameters.CommandLine.Length == 0 ||
+        parameters.CommandLine.Length > parameters.CommandLine.MaximumLength ||
+        (parameters.CommandLine.Length & 1) != 0 ||
+        parameters.CommandLine.Buffer == IntPtr.Zero) {
+      throw new InvalidOperationException("Process command line was invalid.");
+    }
+    byte[] commandLineBytes = new byte[parameters.CommandLine.Length];
+    if (!ReadProcessBytes(
+          handle,
+          parameters.CommandLine.Buffer,
+          commandLineBytes,
+          commandLineBytes.Length,
+          out bytesRead
+        ) || bytesRead.ToInt64() != commandLineBytes.Length) {
+      ThrowWin32("ReadProcessMemory(command line) failed");
+    }
+    string commandLine = Encoding.Unicode.GetString(commandLineBytes);
+    if (string.IsNullOrWhiteSpace(commandLine) || commandLine.IndexOf('\0') >= 0) {
+      throw new InvalidOperationException("Process command line was invalid.");
+    }
+    return commandLine;
+  }
+
+  private static void RequireAmd64Process(SafeProcessHandle handle) {
+    if (!Environment.Is64BitOperatingSystem || !Environment.Is64BitProcess) {
+      throw new PlatformNotSupportedException("Retained command-line capture requires an x64 host process on x64 Windows.");
+    }
+    ushort processMachine;
+    ushort nativeMachine;
+    if (!IsWow64Process2(handle, out processMachine, out nativeMachine)) {
+      ThrowWin32("IsWow64Process2(live-capture candidate) failed");
+    }
+    if (processMachine != IMAGE_FILE_MACHINE_UNKNOWN || nativeMachine != IMAGE_FILE_MACHINE_AMD64) {
+      throw new PlatformNotSupportedException("Retained command-line capture requires an AMD64 candidate process.");
+    }
+  }
+
+  private static bool HasExited(SafeProcessHandle handle) {
+    uint observed = WaitForSingleObject(handle, 0);
+    if (observed == WAIT_OBJECT_0) return true;
+    if (observed == WAIT_TIMEOUT) return false;
+    if (observed == WAIT_FAILED) ThrowWin32("WaitForSingleObject(event live capture) failed");
+    throw new InvalidOperationException("Event live-capture wait returned an unexpected value.");
+  }
+
   private static void RequireWait(SafeProcessHandle handle, uint expected, string context) {
     RequireWait(handle, expected, 0, context);
   }
@@ -1020,6 +1358,10 @@ function Assert-True([bool]$Condition, [string]$Message) {
     throw $Message
   }
 }
+
+Assert-True (
+  [Environment]::Is64BitOperatingSystem -and [Environment]::Is64BitProcess
+) "The M8 I6 Windows evidence driver requires an x64 PowerShell process on x64 Windows."
 
 function Assert-ExactProperties([object]$Value, [string[]]$Expected, [string]$Context) {
   Assert-True ($null -ne $Value) "$Context must be present."
@@ -1590,6 +1932,29 @@ function Get-DescendantProcessIds([object[]]$Snapshot, [long]$RootPid) {
   return @($descendants)
 }
 
+function Get-NativeProcessStartEventLiveIdentity(
+  [long]$ProcessId,
+  [long]$EventFileTime,
+  [long]$EventSessionId
+) {
+  $binding = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+    [uint32]$ProcessId,
+    $EventFileTime,
+    [uint32]$EventSessionId
+  )
+  if ($null -eq $binding) { return $null }
+  try {
+    $fileIdentity = [SubversionRM8I6ExactFileIdentity]::Get([string]$binding.ImagePath)
+    return [SubversionRM8I6WorkerCrashNative]::CompleteEventProcessCapture(
+      $binding,
+      $fileIdentity
+    )
+  }
+  finally {
+    $binding.Dispose()
+  }
+}
+
 function Receive-ProcessStartEvents(
   [string]$SourceIdentifier,
   [System.Collections.Generic.List[object]]$AllEvents,
@@ -1621,16 +1986,15 @@ function Receive-ProcessStartEvents(
       $imageStartFileTime = 0L
       $sessionId = -1L
       if ($captureNames.Contains($processName)) {
-        $liveIdentity = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop)
-        if ($liveIdentity.Count -eq 1) {
-          $capturedStartFileTime = Get-ProcessSnapshotStartFileTime $liveIdentity[0]
-          if ($capturedStartFileTime -le $eventFileTime) {
-            Assert-True (-not [string]::IsNullOrWhiteSpace([string]$liveIdentity[0].ExecutablePath)) "A live process-start image capture omitted its executable path."
-            $imagePath = [System.IO.Path]::GetFullPath([string]$liveIdentity[0].ExecutablePath)
-            $imageFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($imagePath)
-            $imageStartFileTime = $capturedStartFileTime
-            $sessionId = [long]$liveIdentity[0].SessionId
-          }
+        $liveIdentity = Get-NativeProcessStartEventLiveIdentity `
+          -ProcessId $processId `
+          -EventFileTime $eventFileTime `
+          -EventSessionId $eventSessionId
+        if ($null -ne $liveIdentity) {
+          $imagePath = [string]$liveIdentity.ImagePath
+          $imageFileIdentity = [string]$liveIdentity.ImageFileIdentity
+          $imageStartFileTime = [long]$liveIdentity.StartFileTime
+          $sessionId = [long]$liveIdentity.SessionId
         }
       }
       $AllEvents.Add([pscustomobject]@{
@@ -1719,21 +2083,15 @@ function Update-ProcessStartEventLiveCaptures(
     ) {
       continue
     }
-    $live = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $([long]$recordedEvent.processId)" -ErrorAction Stop)
-    if ($live.Count -ne 1) { continue }
-    $startFileTime = Get-ProcessSnapshotStartFileTime $live[0]
-    if (
-      $startFileTime -gt [long]$recordedEvent.eventFileTime -or
-      [long]$live[0].SessionId -ne [long]$recordedEvent.eventSessionId
-    ) {
-      continue
-    }
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$live[0].ExecutablePath)) "A required live process-start recapture omitted its executable path."
-    $imagePath = [System.IO.Path]::GetFullPath([string]$live[0].ExecutablePath)
-    $recordedEvent.imagePath = $imagePath
-    $recordedEvent.imageFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($imagePath)
-    $recordedEvent.imageStartFileTime = $startFileTime
-    $recordedEvent.sessionId = [long]$live[0].SessionId
+    $liveIdentity = Get-NativeProcessStartEventLiveIdentity `
+      -ProcessId ([long]$recordedEvent.processId) `
+      -EventFileTime ([long]$recordedEvent.eventFileTime) `
+      -EventSessionId ([long]$recordedEvent.eventSessionId)
+    if ($null -eq $liveIdentity) { continue }
+    $recordedEvent.imagePath = [string]$liveIdentity.ImagePath
+    $recordedEvent.imageFileIdentity = [string]$liveIdentity.ImageFileIdentity
+    $recordedEvent.imageStartFileTime = [long]$liveIdentity.StartFileTime
+    $recordedEvent.sessionId = [long]$liveIdentity.SessionId
   }
 }
 
@@ -1843,48 +2201,32 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
   $started = Start-WorkerCrashProbeProcess $FilePath $Arguments $Environment
   $process = [System.Diagnostics.Process]$started.Process
   $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
-  $captureDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)
+  $readyDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)
   $binding = $null
   $completionStarted = $false
   try {
     while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf)) {
-      Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
-      Update-ProcessStartEventLiveCaptures @($AllEvents) $CaptureProcessNames
       Assert-True (-not $process.HasExited) "The $ExpectedCell installed probe exited before publishing its process-capture ready report."
-      Assert-True ([DateTimeOffset]::UtcNow -lt $captureDeadline) "The $ExpectedCell installed probe did not publish its process-capture ready report before the absolute deadline."
+      Assert-True ([DateTimeOffset]::UtcNow -lt $readyDeadline) "The $ExpectedCell installed probe did not publish its process-capture ready report before the absolute deadline."
       Start-Sleep -Milliseconds 25
     }
+    $ackDeadline = [DateTimeOffset]::UtcNow.AddSeconds(20)
     $ready = Read-InstalledProcessCaptureReady `
       $ReadyPath $Nonce $ExpectedCell $ExpectedExtensionsRoot $ExpectedProductVersion `
       $ExpectedCandidateDaemonPath $ExpectedCell
     $binding = [SubversionRM8I6WorkerCrashNative]::BindExactSingle([string]$ready.installedDaemonPath)
     Assert-True ([long]$binding.ParentProcessId -eq [long]$ready.extensionHostProcessId) "The $ExpectedCell bound daemon was not a direct child of the reported Extension Host."
-    $liveDaemon = @(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $([long]$binding.ProcessId)" -ErrorAction Stop)
-    Assert-True ($liveDaemon.Count -eq 1) "The $ExpectedCell bound daemon was not present in the required CIM snapshot."
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$liveDaemon[0].ExecutablePath)) "The $ExpectedCell bound daemon CIM path was missing."
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$liveDaemon[0].CommandLine)) "The $ExpectedCell bound daemon CIM command line was missing."
-    $liveDaemonPath = [System.IO.Path]::GetFullPath([string]$liveDaemon[0].ExecutablePath)
-    $plainDaemonCommand = [string]$liveDaemon[0].CommandLine
-    Assert-True ($liveDaemonPath.Equals([string]$binding.ImagePath, [System.StringComparison]::OrdinalIgnoreCase)) "The $ExpectedCell native and CIM daemon paths did not match."
+    $plainDaemonCommand = [string]$binding.CommandLine
     Assert-True (
       $plainDaemonCommand.Equals([string]$binding.ImagePath, [System.StringComparison]::OrdinalIgnoreCase) -or
       $plainDaemonCommand.Equals(('"' + [string]$binding.ImagePath + '"'), [System.StringComparison]::OrdinalIgnoreCase)
     ) "The $ExpectedCell bound daemon command line must contain no arguments."
-    # Win32_Process exposes DMTF microseconds; the retained handle exposes 100 ns FILETIME ticks.
-    $cimDaemonStartFileTime = Get-ProcessSnapshotStartFileTime $liveDaemon[0]
-    Assert-True (
-      [Math]::Abs($cimDaemonStartFileTime - [long]$binding.StartFileTime) -le 9 -and
-      [long]$liveDaemon[0].ParentProcessId -eq [long]$binding.ParentProcessId -and
-      [long]$liveDaemon[0].SessionId -eq [long]$binding.SessionId
-    ) "The $ExpectedCell native and CIM daemon generations did not match."
     [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($binding)
     $liveDescendantCount = [SubversionRM8I6WorkerCrashNative]::GetSingleBoundDescendantCount($binding)
     Assert-True ($liveDescendantCount -le 1) "The $ExpectedCell bound daemon owned more than one live descendant before acknowledgement."
-    Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
-    Update-ProcessStartEventLiveCaptures @($AllEvents) $CaptureProcessNames
     [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($binding)
 
-    Assert-True ([DateTimeOffset]::UtcNow -lt $captureDeadline) "The $ExpectedCell live process capture completed after its absolute deadline."
+    Assert-True ([DateTimeOffset]::UtcNow -lt $ackDeadline) "The $ExpectedCell retained daemon acknowledgement exceeded its 20-second deadline."
     Write-AtomicJson $AckPath ([ordered]@{
         schema = "subversionr.release.m8-i6-installed-process-capture-ack.v1"
         nonce = $Nonce
@@ -1895,13 +2237,13 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
       }) "$ExpectedCell process-capture acknowledgement"
 
     while (-not $process.HasExited) {
-      Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
-      Update-ProcessStartEventLiveCaptures @($AllEvents) $CaptureProcessNames
       if ([DateTimeOffset]::UtcNow -ge $deadline) {
         $process.Kill($true)
         $process.WaitForExit()
-        throw "Controlled installed process with required live capture exceeded its absolute deadline."
+        throw "The $ExpectedCell installed probe exceeded its post-acknowledgement exit deadline."
       }
+      Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
+      Update-ProcessStartEventLiveCaptures @($AllEvents) $CaptureProcessNames
       Start-Sleep -Milliseconds 25
     }
     [SubversionRM8I6WorkerCrashNative]::RequireSingleExited($binding, 10000)
