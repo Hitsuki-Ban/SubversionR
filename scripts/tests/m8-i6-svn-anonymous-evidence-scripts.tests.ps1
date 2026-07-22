@@ -1522,18 +1522,30 @@ try {
       'Get-RecordedCandidateParentStartIdentity',
       'Get-PackagedNegativeProcessObservation',
       'Get-InstalledNegativeProcessObservation',
+      'Get-LiveRecordedProcessTreeStarts',
+      'Wait-RecordedProcessTreeSettlement',
+      'Get-DeadlineBoundCimProcessSnapshot',
+      'New-InstalledProbeProcessTreeCapture',
+      'Close-InstalledProbeProcessTreeCapture',
+      'Complete-BoundedInstalledProcessTreeRun',
+      'Stop-StartedInstalledProcessTreeRun',
+      'SubversionR.AsyncProcessTreeLifecycleFailure',
+      'SubversionR.FixtureCleanupFailure',
+      'Invoke-BoundedProcessWithExistingInstalledTreeCapture',
+      'Invoke-BoundedProcessWithOwnedInstalledTreeCapture',
+      'did not settle to stable zero before its absolute deadline',
       '"i6n\$([Guid]',
       'installedNegativeWorkRoot.Length -le 120',
       '"-FixtureRoot", $scenarioWorkRoot',
       '"-CheckoutPath", (Join-Path $scenarioWorkRoot "checkout")',
-      'The installed-negative short work root remained after cleanup.',
+      'The installed-negative short work root remained after successful cleanup.',
       'Stop-ControlledSvnserve',
       'The controlled svnserve identity changed before the stalled-mid-read phase.',
       'ra_svn fault fixture did not bind the required port.',
       'The packaged-native and installed VSIX stalled-mid-read observation set was incomplete.',
-      'The stalled-mid-read short work root remained after cleanup.',
+      'The stalled-mid-read short work root remained after successful cleanup.',
       'The packaged-native and installed VSIX cancellation observation set was incomplete.',
-      'The cancellation short work root remained after cleanup.',
+      'The cancellation short work root remained after successful cleanup.',
       'abort-signal-after-greeting',
       'wireSettlementObserved',
       'Get-ZeroWorkerProcessObservation',
@@ -1604,18 +1616,18 @@ try {
     $negativeFinalDrainIndex -gt $negativeProbeLaunchIndex -and
     $negativeUnregisterIndex -gt $negativeFinalDrainIndex
   ) "Packaged-negative process observation must subscribe before launch, drain after completion, and then unregister."
-  $installedNegativeLaunchIndex = $driverText.IndexOf('$installedNegativeResult = Invoke-BoundedProcess', [System.StringComparison]::Ordinal)
+  $installedNegativeLaunchIndex = $driverText.IndexOf('$installedNegativeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture', [System.StringComparison]::Ordinal)
   $installedNegativeSubscriptionIndex = $driverText.LastIndexOf('Register-CimIndicationEvent', $installedNegativeLaunchIndex, [System.StringComparison]::Ordinal)
-  $installedNegativeDrainIndex = $driverText.IndexOf('Complete-ProcessStartEventDrain', $installedNegativeLaunchIndex, [System.StringComparison]::Ordinal)
-  $installedNegativeObservationIndex = $driverText.IndexOf('Get-InstalledNegativeProcessObservation', $installedNegativeDrainIndex, [System.StringComparison]::Ordinal)
+  $installedNegativeObservationIndex = $driverText.IndexOf('Get-InstalledNegativeProcessObservation', $installedNegativeLaunchIndex, [System.StringComparison]::Ordinal)
+  $installedNegativeSnapshotIndex = $driverText.IndexOf('-SettlementSnapshot $installedNegativeResult.SettlementSnapshot', $installedNegativeObservationIndex, [System.StringComparison]::Ordinal)
   $installedNegativeUnregisterIndex = $driverText.IndexOf('Unregister-Event', $installedNegativeObservationIndex, [System.StringComparison]::Ordinal)
   Assert-True (
     $installedNegativeSubscriptionIndex -ge 0 -and
     $installedNegativeLaunchIndex -gt $installedNegativeSubscriptionIndex -and
-    $installedNegativeDrainIndex -gt $installedNegativeLaunchIndex -and
-    $installedNegativeObservationIndex -gt $installedNegativeDrainIndex -and
+    $installedNegativeObservationIndex -gt $installedNegativeLaunchIndex -and
+    $installedNegativeSnapshotIndex -gt $installedNegativeObservationIndex -and
     $installedNegativeUnregisterIndex -gt $installedNegativeObservationIndex
-  ) "Installed-negative process observation must subscribe before launch, drain and measure after completion, and then unregister."
+  ) "Installed-negative process observation must subscribe before its exact-PID sync wrapper, measure from the returned settlement snapshot, and then unregister."
 
   $driverTokens = $null
   $driverParseErrors = $null
@@ -1639,10 +1651,20 @@ try {
     "Receive-ProcessStartEvents",
     "Update-ProcessStartEventLiveCaptures",
     "Get-DescendantProcessIds",
+    "Get-CimProcessSnapshot",
     "Get-ProcessSnapshotStartFileTime",
     "Get-NextRecordedProcessStartFileTime",
     "Get-ControlledProbeStartIdentity",
     "Get-RecordedProcessDescendantStarts",
+    "Get-LiveRecordedProcessTreeStarts",
+    "Wait-RecordedProcessTreeSettlement",
+    "Get-DeadlineBoundCimProcessSnapshot",
+    "New-InstalledProbeProcessTreeCapture",
+    "Close-InstalledProbeProcessTreeCapture",
+    "Complete-BoundedInstalledProcessTreeRun",
+    "Stop-StartedInstalledProcessTreeRun",
+    "Invoke-BoundedProcessWithExistingInstalledTreeCapture",
+    "Invoke-BoundedProcessWithOwnedInstalledTreeCapture",
     "Get-RecordedCandidateParentStartIdentity",
     "Set-RecordedProcessStartIdentityFromRetainedBinding",
     "Invoke-BoundedInstalledProcessWithRequiredLiveCapture",
@@ -1744,6 +1766,22 @@ try {
   ) "Installed process capture must validate retained native parent/command line/session and descendants before ACK, perform no event drain between bind and ACK, then check the post-ACK deadline before each drain and require retained exit before completion."
   Assert-True ($liveCaptureHelper.Contains('installed probe exceeded its post-acknowledgement exit deadline.')) "Installed process capture must report the post-acknowledgement phase on exit deadline failure."
   Assert-True (-not $liveCaptureHelper.Contains('Controlled installed process with required live capture exceeded its absolute deadline.')) "Installed process capture must not retain the ambiguous pre/post-acknowledgement deadline error."
+  $liveSuccessSettlementIndex = $liveCaptureHelper.IndexOf('$settlementAttempted = $true', $liveCompleteIndex, [System.StringComparison]::Ordinal)
+  $liveSuccessWaitIndex = $liveCaptureHelper.IndexOf('$settlementSnapshot = Wait-RecordedProcessTreeSettlement', $liveSuccessSettlementIndex, [System.StringComparison]::Ordinal)
+  $liveReturnedSnapshotIndex = $liveCaptureHelper.IndexOf('-NotePropertyName SettlementSnapshot', $liveSuccessWaitIndex, [System.StringComparison]::Ordinal)
+  $livePrimaryErrorIndex = $liveCaptureHelper.IndexOf('$primaryError = $_', $liveReturnedSnapshotIndex, [System.StringComparison]::Ordinal)
+  $liveFailureWaitIndex = $liveCaptureHelper.IndexOf('$null = Wait-RecordedProcessTreeSettlement', $livePrimaryErrorIndex, [System.StringComparison]::Ordinal)
+  $liveAttachedSettlementIndex = $liveCaptureHelper.IndexOf('SubversionR.ProcessTreeSettlementFailure', $liveFailureWaitIndex, [System.StringComparison]::Ordinal)
+  $liveThrowPrimaryIndex = $liveCaptureHelper.IndexOf('throw $primaryError', $liveAttachedSettlementIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $liveSuccessSettlementIndex -gt $liveCompleteIndex -and
+    $liveSuccessWaitIndex -gt $liveSuccessSettlementIndex -and
+    $liveReturnedSnapshotIndex -gt $liveSuccessWaitIndex -and
+    $livePrimaryErrorIndex -gt $liveReturnedSnapshotIndex -and
+    $liveFailureWaitIndex -gt $livePrimaryErrorIndex -and
+    $liveAttachedSettlementIndex -gt $liveFailureWaitIndex -and
+    $liveThrowPrimaryIndex -gt $liveAttachedSettlementIndex
+  ) "Required live capture must settle on success, return SettlementSnapshot, and preserve a primary failure while attaching settlement failure."
   $nativeEventCaptureHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-NativeProcessStartEventLiveIdentity")]
   foreach ($requiredNativeEventCaptureText in @(
       '[SubversionRM8I6WorkerCrashNative]::TryBindEventProcess',
@@ -1800,7 +1838,456 @@ try {
   foreach ($forbiddenZeroWorkerFallback in @('Get-CimInstance', 'Get-Process ', 'Get-CandidateProcess')) {
     Assert-True (-not $zeroWorkerHelper.Contains($forbiddenZeroWorkerFallback)) "Zero-worker observation must not recapture missing live identity through '$forbiddenZeroWorkerFallback'."
   }
+
+  $cimSnapshotHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-CimProcessSnapshot")]
+  Assert-True ($cimSnapshotHelper.Contains('-OperationTimeoutSec ([uint32]$OperationTimeoutSeconds)')) "CIM process snapshots must use the caller's bounded operation timeout."
+  $deadlineSnapshotHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-DeadlineBoundCimProcessSnapshot")]
+  foreach ($requiredDeadlineSnapshotText in @(
+      '$DeadlineMilliseconds - [long]$Clock.ElapsedMilliseconds',
+      '[Math]::Floor($remainingMilliseconds / 1000.0)',
+      'Get-CimProcessSnapshot ([int]$operationTimeoutSeconds)',
+      '[long]$Clock.ElapsedMilliseconds -lt $DeadlineMilliseconds'
+    )) {
+    Assert-True ($deadlineSnapshotHelper.Contains($requiredDeadlineSnapshotText)) "Deadline-bound CIM snapshots must retain '$requiredDeadlineSnapshotText'."
+  }
+  $recordedTreeWaitHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Wait-RecordedProcessTreeSettlement")]
+  Assert-True ($recordedTreeWaitHelper.Contains('[System.Diagnostics.Stopwatch]::StartNew()')) "Recorded-tree settlement must use a monotonic Stopwatch deadline."
+  Assert-Equal 2 ([regex]::Matches($recordedTreeWaitHelper, 'Get-DeadlineBoundCimProcessSnapshot').Count) "Recorded-tree settlement must bound both ordinary and final CIM snapshots to its deadline."
+
+  $installedCaptureNewHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "New-InstalledProbeProcessTreeCapture")]
+  foreach ($requiredCaptureNewText in @(
+      'Register-CimIndicationEvent',
+      'Win32_ProcessStartTrace',
+      'Get-EventSubscriber',
+      'Events = [System.Collections.Generic.List[object]]::new()',
+      'EventKeys = [System.Collections.Generic.HashSet[string]]::new'
+    )) {
+    Assert-True ($installedCaptureNewHelper.Contains($requiredCaptureNewText)) "Owned installed-tree capture creation must retain '$requiredCaptureNewText'."
+  }
+  $installedCaptureCloseHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Close-InstalledProbeProcessTreeCapture")]
+  foreach ($requiredCaptureCloseText in @('Unregister-Event', 'Remove-Event', '$Capture.Closed = $true')) {
+    Assert-True ($installedCaptureCloseHelper.Contains($requiredCaptureCloseText)) "Owned installed-tree capture close must retain '$requiredCaptureCloseText'."
+  }
+
+  $ownedInstalledTreeWrapper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Invoke-BoundedProcessWithOwnedInstalledTreeCapture")]
+  $ownedCaptureNewIndex = $ownedInstalledTreeWrapper.IndexOf('$capture = New-InstalledProbeProcessTreeCapture', [System.StringComparison]::Ordinal)
+  $ownedInvokeIndex = $ownedInstalledTreeWrapper.IndexOf('Invoke-BoundedProcessWithExistingInstalledTreeCapture', $ownedCaptureNewIndex, [System.StringComparison]::Ordinal)
+  $ownedCloseIndex = $ownedInstalledTreeWrapper.IndexOf('Close-InstalledProbeProcessTreeCapture $capture', $ownedInvokeIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $ownedCaptureNewIndex -ge 0 -and
+    $ownedInvokeIndex -gt $ownedCaptureNewIndex -and
+    $ownedCloseIndex -gt $ownedInvokeIndex
+  ) "Owned installed-tree wrapper must create capture, delegate one exact-PID run through the existing capture, and close in finally."
+  $existingInstalledTreeWrapper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Invoke-BoundedProcessWithExistingInstalledTreeCapture")]
+  $existingStartIndex = $existingInstalledTreeWrapper.IndexOf('$started = Start-WorkerCrashProbeProcess', [System.StringComparison]::Ordinal)
+  $existingCompleteIndex = $existingInstalledTreeWrapper.IndexOf('Complete-BoundedInstalledProcessTreeRun', $existingStartIndex, [System.StringComparison]::Ordinal)
+  Assert-True ($existingStartIndex -ge 0 -and $existingCompleteIndex -gt $existingStartIndex) "Existing installed-tree wrapper must start once and complete the exact started process."
+  $boundedInstalledTreeComplete = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Complete-BoundedInstalledProcessTreeRun")]
+  $boundedProcessCompleteIndex = $boundedInstalledTreeComplete.IndexOf('$processResult = Complete-WorkerCrashProbeProcess $Started', [System.StringComparison]::Ordinal)
+  $boundedTreeSettlementIndex = $boundedInstalledTreeComplete.IndexOf('$settlementSnapshot = Wait-RecordedProcessTreeSettlement', $boundedProcessCompleteIndex, [System.StringComparison]::Ordinal)
+  $boundedExactPidIndex = $boundedInstalledTreeComplete.IndexOf('-ProbePid ([long]$Started.ProcessId)', $boundedTreeSettlementIndex, [System.StringComparison]::Ordinal)
+  $boundedPrimaryErrorIndex = $boundedInstalledTreeComplete.IndexOf('if ($null -ne $primaryError)', $boundedExactPidIndex, [System.StringComparison]::Ordinal)
+  $boundedAttachedSettlementIndex = $boundedInstalledTreeComplete.IndexOf('SubversionR.ProcessTreeSettlementFailure', $boundedPrimaryErrorIndex, [System.StringComparison]::Ordinal)
+  $boundedThrowPrimaryIndex = $boundedInstalledTreeComplete.IndexOf('throw $primaryError', $boundedAttachedSettlementIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $boundedProcessCompleteIndex -ge 0 -and
+    $boundedTreeSettlementIndex -gt $boundedProcessCompleteIndex -and
+    $boundedExactPidIndex -gt $boundedTreeSettlementIndex -and
+    $boundedPrimaryErrorIndex -gt $boundedExactPidIndex -and
+    $boundedAttachedSettlementIndex -gt $boundedPrimaryErrorIndex -and
+    $boundedThrowPrimaryIndex -gt $boundedAttachedSettlementIndex
+  ) "Bounded installed-tree completion must settle Started.ProcessId on success or failure while preserving the primary error and attaching settlement failure."
+  $stopStartedInstalledTreeHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Stop-StartedInstalledProcessTreeRun")]
+  $stopKillIndex = $stopStartedInstalledTreeHelper.IndexOf('$process.Kill($true)', [System.StringComparison]::Ordinal)
+  $stopWaitForExitIndex = $stopStartedInstalledTreeHelper.IndexOf('$process.WaitForExit()', $stopKillIndex, [System.StringComparison]::Ordinal)
+  $stopDisposeIndex = $stopStartedInstalledTreeHelper.IndexOf('$process.Dispose()', $stopWaitForExitIndex, [System.StringComparison]::Ordinal)
+  $stopSettlementIndex = $stopStartedInstalledTreeHelper.IndexOf('$null = Wait-RecordedProcessTreeSettlement', $stopDisposeIndex, [System.StringComparison]::Ordinal)
+  $stopExactPidIndex = $stopStartedInstalledTreeHelper.IndexOf('-ProbePid ([long]$Started.ProcessId)', $stopSettlementIndex, [System.StringComparison]::Ordinal)
+  $stopTerminationPriorityIndex = $stopStartedInstalledTreeHelper.IndexOf('if ($null -ne $terminationError)', $stopExactPidIndex, [System.StringComparison]::Ordinal)
+  $stopAttachedSettlementIndex = $stopStartedInstalledTreeHelper.IndexOf('SubversionR.ProcessTreeSettlementFailure', $stopTerminationPriorityIndex, [System.StringComparison]::Ordinal)
+  $stopThrowTerminationIndex = $stopStartedInstalledTreeHelper.IndexOf('throw $terminationError', $stopAttachedSettlementIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $stopKillIndex -ge 0 -and
+    $stopWaitForExitIndex -gt $stopKillIndex -and
+    $stopDisposeIndex -gt $stopWaitForExitIndex -and
+    $stopSettlementIndex -gt $stopDisposeIndex -and
+    $stopExactPidIndex -gt $stopSettlementIndex -and
+    $stopTerminationPriorityIndex -gt $stopExactPidIndex -and
+    $stopAttachedSettlementIndex -gt $stopTerminationPriorityIndex -and
+    $stopThrowTerminationIndex -gt $stopAttachedSettlementIndex
+  ) "Pre-completion async cleanup must terminate and dispose before exact-PID settlement, preserving termination failure and attaching settlement failure."
+
+  $stressBlockStart = $driverText.IndexOf('$installedStressRoot =', [System.StringComparison]::Ordinal)
+  $stressBlockEnd = $driverText.IndexOf('$installedStressReport =', $stressBlockStart, [System.StringComparison]::Ordinal)
+  Assert-True ($stressBlockStart -ge 0 -and $stressBlockEnd -gt $stressBlockStart) "The installed stress launch block must be uniquely delimited."
+  $stressLaunchBlock = $driverText.Substring($stressBlockStart, $stressBlockEnd - $stressBlockStart)
+  Assert-Equal 1 ([regex]::Matches($stressLaunchBlock, 'Invoke-BoundedProcessWithOwnedInstalledTreeCapture').Count) "Installed stress must use one owned exact-PID tree wrapper."
+
+  $positiveLaunchBlockStart = $driverText.IndexOf('$installedRunId =', [System.StringComparison]::Ordinal)
+  $positiveLaunchBlockEnd = $driverText.IndexOf('$recoveryBlockedWorkRoot =', $positiveLaunchBlockStart, [System.StringComparison]::Ordinal)
+  Assert-True ($positiveLaunchBlockStart -ge 0 -and $positiveLaunchBlockEnd -gt $positiveLaunchBlockStart) "The installed-positive launch block must be uniquely delimited."
+  $positiveLaunchBlock = $driverText.Substring($positiveLaunchBlockStart, $positiveLaunchBlockEnd - $positiveLaunchBlockStart)
+  Assert-Equal 2 ([regex]::Matches($positiveLaunchBlock, 'Invoke-BoundedProcessWithOwnedInstalledTreeCapture').Count) "Installed-positive must use the owned exact-PID tree wrapper for both direct pwsh probes."
+  Assert-Equal 0 ([regex]::Matches($positiveLaunchBlock, '(?m)^\s*\$installed(?:Positive|Result)\s*=\s*Invoke-BoundedProcess\s+').Count) "Installed-positive must not bypass owned capture with a raw bounded launch."
+
+  $installedAuthzOwnedLaunchIndex = $driverText.IndexOf('$installedAuthzResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture', [System.StringComparison]::Ordinal)
+  $installedAuthzBusinessAssertIndex = $driverText.IndexOf('Assert-True', $installedAuthzOwnedLaunchIndex, [System.StringComparison]::Ordinal)
+  Assert-True ($installedAuthzOwnedLaunchIndex -ge 0 -and $installedAuthzBusinessAssertIndex -gt $installedAuthzOwnedLaunchIndex) "Installed authz-denied must reuse its existing subscription wrapper and settle before business assertions."
+
+  $existingCaptureSurfaceSpecs = @(
+    [pscustomobject]@{ Context = "recovery-blocked"; Start = '$recoveryBlockedWorkRoot ='; End = '$redactionWorkRoot =' },
+    [pscustomobject]@{ Context = "redaction"; Start = '$redactionWorkRoot ='; End = '$recoverySafeWorkRoot =' },
+    [pscustomobject]@{ Context = "recovery-safe"; Start = '$recoverySafeWorkRoot ='; End = '$recoveryIndeterminateWorkRoot =' },
+    [pscustomobject]@{ Context = "recovery-indeterminate"; Start = '$recoveryIndeterminateWorkRoot ='; End = '$stalledReadWorkRoot =' },
+    [pscustomobject]@{ Context = "stalled-mid-read"; Start = '$stalledReadWorkRoot ='; End = '$deadlineWorkRoot =' },
+    [pscustomobject]@{ Context = "absolute-deadline"; Start = '$deadlineWorkRoot ='; End = '$cancellationWorkRoot =' },
+    [pscustomobject]@{ Context = "cancellation"; Start = '$cancellationWorkRoot ='; End = '$trustRevokedWorkRoot =' }
+  )
+  foreach ($surfaceSpec in $existingCaptureSurfaceSpecs) {
+    $surfaceBlockStart = $driverText.IndexOf([string]$surfaceSpec.Start, [System.StringComparison]::Ordinal)
+    $surfaceBlockEnd = $driverText.IndexOf([string]$surfaceSpec.End, $surfaceBlockStart + 1, [System.StringComparison]::Ordinal)
+    Assert-True ($surfaceBlockStart -ge 0 -and $surfaceBlockEnd -gt $surfaceBlockStart) "The installed $($surfaceSpec.Context) block must be uniquely delimited."
+    $surfaceBlock = $driverText.Substring($surfaceBlockStart, $surfaceBlockEnd - $surfaceBlockStart)
+    $installedLaunchMatch = [regex]::Match(
+      $surfaceBlock,
+      '(?m)^\s*\$probeResult\s*=\s*Invoke-BoundedProcessWithExistingInstalledTreeCapture\s+\(Get-Process -Id \$PID\)\.Path\s+@\('
+    )
+    Assert-True ($installedLaunchMatch.Success) "Installed $($surfaceSpec.Context) must use one existing-subscription exact-PID wrapper."
+    $surfaceBusinessAssertIndex = $surfaceBlock.IndexOf('Assert-True', $installedLaunchMatch.Index, [System.StringComparison]::Ordinal)
+    Assert-True ($surfaceBusinessAssertIndex -gt $installedLaunchMatch.Index) "Installed $($surfaceSpec.Context) must complete exact-PID settlement before any business assertion."
+  }
+
+  $startedProbeCaptureSpecs = @(
+    [pscustomobject]@{ Context = "worker-crash"; Start = '$workerCrashWorkRoot ='; End = '$blackholeConnectWorkRoot =' },
+    [pscustomobject]@{ Context = "blackhole-connect"; Start = '$blackholeConnectWorkRoot ='; End = '$daemonDisconnectWorkRoot =' },
+    [pscustomobject]@{ Context = "daemon-disconnect"; Start = '$daemonDisconnectWorkRoot ='; End = 'function New-I6ArtifactBinding' }
+  )
+  foreach ($captureSpec in $startedProbeCaptureSpecs) {
+    $captureBlockStart = $driverText.IndexOf([string]$captureSpec.Start, [System.StringComparison]::Ordinal)
+    $captureBlockEnd = $driverText.IndexOf([string]$captureSpec.End, $captureBlockStart + 1, [System.StringComparison]::Ordinal)
+    Assert-True ($captureBlockStart -ge 0 -and $captureBlockEnd -gt $captureBlockStart) "The installed $($captureSpec.Context) started-probe block must be uniquely delimited."
+    $captureBlock = $driverText.Substring($captureBlockStart, $captureBlockEnd - $captureBlockStart)
+    $captureNewIndex = $captureBlock.IndexOf('$installedProcessTreeCapture = New-InstalledProbeProcessTreeCapture', [System.StringComparison]::Ordinal)
+    $captureStartIndex = $captureBlock.IndexOf('$startedProbe = Start-WorkerCrashProbeProcess (Get-Process -Id $PID).Path', $captureNewIndex, [System.StringComparison]::Ordinal)
+    $captureSettlementIndex = $captureBlock.IndexOf('$probeResult = Complete-BoundedInstalledProcessTreeRun', $captureStartIndex, [System.StringComparison]::Ordinal)
+    $captureBusinessAssertIndex = $captureBlock.IndexOf('Assert-True', $captureSettlementIndex, [System.StringComparison]::Ordinal)
+    $captureCloseIndex = $captureBlock.IndexOf('Close-InstalledProbeProcessTreeCapture $installedProcessTreeCapture', $captureBusinessAssertIndex, [System.StringComparison]::Ordinal)
+    $captureFinallyIndex = $captureBlock.LastIndexOf('finally {', $captureCloseIndex, [System.StringComparison]::Ordinal)
+    Assert-True (
+      $captureNewIndex -ge 0 -and
+      $captureStartIndex -gt $captureNewIndex -and
+      $captureSettlementIndex -gt $captureStartIndex -and
+      $captureBusinessAssertIndex -gt $captureSettlementIndex -and
+      $captureFinallyIndex -gt $captureBusinessAssertIndex -and
+      $captureCloseIndex -gt $captureFinallyIndex
+    ) "Installed $($captureSpec.Context) must capture before start, complete the bounded exact-PID run before business assertions, and close capture in finally."
+    $scenarioPrimaryInitIndex = $captureBlock.IndexOf('$scenarioPrimaryError = $null', [System.StringComparison]::Ordinal)
+    $scenarioPrimaryCaptureIndex = $captureBlock.IndexOf('$scenarioPrimaryError = $_', $captureBusinessAssertIndex, [System.StringComparison]::Ordinal)
+    $scenarioStopIndex = $captureBlock.IndexOf('Stop-StartedInstalledProcessTreeRun', $scenarioPrimaryCaptureIndex, [System.StringComparison]::Ordinal)
+    $scenarioLifecycleCaptureIndex = $captureBlock.IndexOf('$scenarioLifecycleError = $_', $scenarioStopIndex, [System.StringComparison]::Ordinal)
+    $scenarioFailureCloseIndex = $captureBlock.IndexOf('Close-InstalledProbeProcessTreeCapture $installedProcessTreeCapture', $scenarioLifecycleCaptureIndex, [System.StringComparison]::Ordinal)
+    $scenarioPrimaryCheckIndex = $captureBlock.IndexOf('if ($null -ne $scenarioPrimaryError)', $scenarioFailureCloseIndex, [System.StringComparison]::Ordinal)
+    $scenarioLifecycleAttachmentIndex = $captureBlock.IndexOf('SubversionR.AsyncProcessTreeLifecycleFailure', $scenarioPrimaryCheckIndex, [System.StringComparison]::Ordinal)
+    $scenarioThrowPrimaryIndex = $captureBlock.IndexOf('throw $scenarioPrimaryError', $scenarioLifecycleAttachmentIndex, [System.StringComparison]::Ordinal)
+    $scenarioThrowLifecycleIndex = $captureBlock.IndexOf('throw $scenarioLifecycleError', $scenarioThrowPrimaryIndex, [System.StringComparison]::Ordinal)
+    Assert-True (
+      $scenarioPrimaryInitIndex -ge 0 -and
+      $scenarioPrimaryCaptureIndex -gt $captureBusinessAssertIndex -and
+      $scenarioStopIndex -gt $scenarioPrimaryCaptureIndex -and
+      $scenarioLifecycleCaptureIndex -gt $scenarioStopIndex -and
+      $scenarioFailureCloseIndex -gt $scenarioLifecycleCaptureIndex -and
+      $scenarioPrimaryCheckIndex -gt $scenarioFailureCloseIndex -and
+      $scenarioLifecycleAttachmentIndex -gt $scenarioPrimaryCheckIndex -and
+      $scenarioThrowPrimaryIndex -gt $scenarioLifecycleAttachmentIndex -and
+      $scenarioThrowLifecycleIndex -gt $scenarioThrowPrimaryIndex
+    ) "Installed $($captureSpec.Context) pre-completion failure must stop and settle before capture close, then preserve the scenario error while attaching lifecycle failure."
+    if ([string]$captureSpec.Context -ceq "worker-crash") {
+      $fixtureCleanupTryIndex = $captureBlock.IndexOf('try { Stop-FaultFixture $faultFixture "greeting-stall" }', $scenarioFailureCloseIndex, [System.StringComparison]::Ordinal)
+      $fixtureLifecycleAdoptIndex = $captureBlock.IndexOf('if ($null -eq $scenarioLifecycleError) { $scenarioLifecycleError = $_ }', $fixtureCleanupTryIndex, [System.StringComparison]::Ordinal)
+      $fixtureCleanupAttachmentIndex = $captureBlock.IndexOf('SubversionR.FixtureCleanupFailure', $fixtureLifecycleAdoptIndex, [System.StringComparison]::Ordinal)
+      Assert-True (
+        $fixtureCleanupTryIndex -gt $scenarioFailureCloseIndex -and
+        $fixtureLifecycleAdoptIndex -gt $fixtureCleanupTryIndex -and
+        $fixtureCleanupAttachmentIndex -gt $fixtureLifecycleAdoptIndex -and
+        $scenarioPrimaryCheckIndex -gt $fixtureCleanupAttachmentIndex
+      ) "Worker-crash fixture cleanup failure must become or attach to lifecycle failure before the preserved scenario primary error is rethrown."
+    }
+  }
+  $blackholeCaptureBlock = $driverText.Substring(
+    $driverText.IndexOf('$blackholeConnectWorkRoot =', [System.StringComparison]::Ordinal),
+    $driverText.IndexOf('$daemonDisconnectWorkRoot =', [System.StringComparison]::Ordinal) -
+      $driverText.IndexOf('$blackholeConnectWorkRoot =', [System.StringComparison]::Ordinal)
+  )
+  Assert-True ($blackholeCaptureBlock.Contains('-Started $startedProbe')) "Blackhole installed capture must pass the exact started probe to bounded completion."
+  Assert-True (-not $blackholeCaptureBlock.Contains('-Started $fixture')) "Blackhole installed capture must not infer its root from the PowerShell fixture process."
+
+  $shortRootCleanupSpecs = @(
+    [pscustomobject]@{ Context = "installed-negative"; Start = '$installedNegativeWorkRoot ='; End = 'Assert-True ($installedNegativeObservations.Count -eq 4)'; Passed = '$installedNegativeBlockPassed'; Root = '$installedNegativeWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "installed-positive"; Start = '$installedRunId ='; End = '$recoveryBlockedWorkRoot ='; Passed = '$installedBlockPassed'; Root = '$installedFixtureRoot'; Settlement = 'Invoke-BoundedProcessWithOwnedInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "recovery-blocked"; Start = '$recoveryBlockedWorkRoot ='; End = '$redactionWorkRoot ='; Passed = '$recoveryBlockedBlockPassed'; Root = '$recoveryBlockedWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "redaction"; Start = '$redactionWorkRoot ='; End = '$recoverySafeWorkRoot ='; Passed = '$redactionBlockPassed'; Root = '$redactionWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "recovery-safe"; Start = '$recoverySafeWorkRoot ='; End = '$recoveryIndeterminateWorkRoot ='; Passed = '$recoverySafeBlockPassed'; Root = '$recoverySafeWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "recovery-indeterminate"; Start = '$recoveryIndeterminateWorkRoot ='; End = '$stalledReadWorkRoot ='; Passed = '$recoveryIndeterminateBlockPassed'; Root = '$recoveryIndeterminateWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "stalled-mid-read"; Start = '$stalledReadWorkRoot ='; End = '$deadlineWorkRoot ='; Passed = '$stalledReadBlockPassed'; Root = '$stalledReadWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "absolute-deadline"; Start = '$deadlineWorkRoot ='; End = '$cancellationWorkRoot ='; Passed = '$deadlineBlockPassed'; Root = '$deadlineWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "cancellation"; Start = '$cancellationWorkRoot ='; End = '$trustRevokedWorkRoot ='; Passed = '$cancellationBlockPassed'; Root = '$cancellationWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "trust-revoked"; Start = '$trustRevokedWorkRoot ='; End = '$workerCrashWorkRoot ='; Passed = '$trustRevokedBlockPassed'; Root = '$trustRevokedWorkRoot'; Settlement = 'Invoke-BoundedInstalledProcessWithRequiredLiveCapture' },
+    [pscustomobject]@{ Context = "worker-crash"; Start = '$workerCrashWorkRoot ='; End = '$blackholeConnectWorkRoot ='; Passed = '$workerCrashBlockPassed'; Root = '$workerCrashWorkRoot'; Settlement = 'Complete-BoundedInstalledProcessTreeRun' },
+    [pscustomobject]@{ Context = "blackhole-connect"; Start = '$blackholeConnectWorkRoot ='; End = '$daemonDisconnectWorkRoot ='; Passed = '$blackholeConnectBlockPassed'; Root = '$blackholeConnectWorkRoot'; Settlement = 'Complete-BoundedInstalledProcessTreeRun' },
+    [pscustomobject]@{ Context = "daemon-disconnect"; Start = '$daemonDisconnectWorkRoot ='; End = 'function New-I6ArtifactBinding'; Passed = '$daemonDisconnectBlockPassed'; Root = '$daemonDisconnectWorkRoot'; Settlement = 'Complete-BoundedInstalledProcessTreeRun' }
+  )
+  foreach ($cleanupSpec in $shortRootCleanupSpecs) {
+    $cleanupBlockStart = $driverText.IndexOf([string]$cleanupSpec.Start, [System.StringComparison]::Ordinal)
+    $cleanupBlockEnd = $driverText.IndexOf([string]$cleanupSpec.End, $cleanupBlockStart + 1, [System.StringComparison]::Ordinal)
+    Assert-True ($cleanupBlockStart -ge 0 -and $cleanupBlockEnd -gt $cleanupBlockStart) "The $($cleanupSpec.Context) short-root cleanup block must be uniquely delimited."
+    $cleanupBlock = $driverText.Substring($cleanupBlockStart, $cleanupBlockEnd - $cleanupBlockStart)
+    $cleanupInitiallyFailedIndex = $cleanupBlock.IndexOf("$($cleanupSpec.Passed) = `$false", [System.StringComparison]::Ordinal)
+    $cleanupSettlementIndex = $cleanupBlock.IndexOf([string]$cleanupSpec.Settlement, $cleanupInitiallyFailedIndex, [System.StringComparison]::Ordinal)
+    $cleanupPassedIndex = $cleanupBlock.IndexOf("$($cleanupSpec.Passed) = `$true", $cleanupSettlementIndex, [System.StringComparison]::Ordinal)
+    $cleanupGuardText = "if ($($cleanupSpec.Passed) -and (Test-Path -LiteralPath $($cleanupSpec.Root)))"
+    $cleanupGuardIndex = $cleanupBlock.IndexOf($cleanupGuardText, $cleanupPassedIndex, [System.StringComparison]::Ordinal)
+    $cleanupDeleteIndex = $cleanupBlock.IndexOf("Remove-Item -LiteralPath $($cleanupSpec.Root)", $cleanupGuardIndex, [System.StringComparison]::Ordinal)
+    Assert-True (
+      $cleanupInitiallyFailedIndex -ge 0 -and
+      $cleanupSettlementIndex -gt $cleanupInitiallyFailedIndex -and
+      $cleanupPassedIndex -gt $cleanupSettlementIndex -and
+      $cleanupGuardIndex -gt $cleanupPassedIndex -and
+      $cleanupDeleteIndex -gt $cleanupGuardIndex
+    ) "The $($cleanupSpec.Context) short root must settle before success is armed and must never delete on business failure."
+  }
   Invoke-Expression ($observationHelperSources -join "`n`n")
+
+  $stopStartedInjectionPrefix = @'
+function Assert-InjectedTrue([bool]$Condition, [string]$Message) {
+  if (-not $Condition) { throw $Message }
+}
+function Wait-InjectedRecordedProcessTreeSettlement(
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys,
+  [long]$ProbePid,
+  [long]$ProbeParentPid,
+  [string]$ExpectedProbeProcessName,
+  [int]$DeadlineSeconds,
+  [int]$SettlementMilliseconds,
+  [string]$Context
+) {
+  $script:SettlementProbePids.Add($ProbePid)
+  if ($script:SettlementFails) { throw "injected process-tree settlement failure" }
+  return @()
+}
+function Invoke-InjectedStopStartedRun([object]$Started, [object]$Capture, [bool]$SettlementFails) {
+  $script:SettlementProbePids = [System.Collections.Generic.List[long]]::new()
+  $script:SettlementFails = $SettlementFails
+  Stop-StartedInstalledProcessTreeRun $Started $Capture 1 1 "injected async cleanup"
+  return @($script:SettlementProbePids)
+}
+'@
+  $stopStartedInjectionHelper = $stopStartedInstalledTreeHelper.Replace(
+    'Assert-True',
+    'Assert-InjectedTrue'
+  ).Replace(
+    'Wait-RecordedProcessTreeSettlement',
+    'Wait-InjectedRecordedProcessTreeSettlement'
+  )
+  $stopStartedInjectionModule = New-Module `
+    -Name "SubversionRM8I6StopStartedInjection$([Guid]::NewGuid().ToString('N'))" `
+    -ScriptBlock ([scriptblock]::Create("$stopStartedInjectionPrefix`n`n$stopStartedInjectionHelper"))
+  $injectedHostPath = (Get-Process -Id $PID).Path
+  $injectedSleeperPid = 0L
+  try {
+    $injectedSleeper = Start-Process `
+      -FilePath $injectedHostPath `
+      -ArgumentList @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30") `
+      -PassThru -WindowStyle Hidden
+    $injectedSleeperPid = [long]$injectedSleeper.Id
+    $injectedCapture = [pscustomobject]@{
+      SourceIdentifier = "injected-async-capture"
+      Events = [System.Collections.Generic.List[object]]::new()
+      EventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+      Closed = $false
+    }
+    $injectedSettlementPids = @(& $stopStartedInjectionModule {
+      param($Started, $Capture)
+      Invoke-InjectedStopStartedRun $Started $Capture $false
+    } ([pscustomobject]@{ Process = $injectedSleeper; ProcessId = $injectedSleeperPid }) $injectedCapture)
+    Assert-Equal 1 $injectedSettlementPids.Count "Injected pre-completion cleanup must attempt settlement exactly once after termination."
+    Assert-Equal $injectedSleeperPid $injectedSettlementPids[0] "Injected pre-completion cleanup must settle the exact started PID."
+    Assert-True ($null -eq (Get-Process -Id $injectedSleeperPid -ErrorAction SilentlyContinue)) "Injected pre-completion cleanup must terminate its started process before returning."
+
+    $disposedProcess = Start-Process `
+      -FilePath $injectedHostPath `
+      -ArgumentList @("-NoProfile", "-NonInteractive", "-Command", "exit 0") `
+      -PassThru -WindowStyle Hidden
+    $disposedProcess.WaitForExit()
+    $disposedProcessPid = [long]$disposedProcess.Id
+    $disposedProcess.Dispose()
+    $injectedPrimaryError = $null
+    try {
+      & $stopStartedInjectionModule {
+        param($Started, $Capture)
+        Invoke-InjectedStopStartedRun $Started $Capture $true
+      } ([pscustomobject]@{ Process = $disposedProcess; ProcessId = $disposedProcessPid }) $injectedCapture
+    }
+    catch {
+      $injectedPrimaryError = $_
+    }
+    Assert-True ($null -ne $injectedPrimaryError) "Injected termination and settlement failures must throw."
+    Assert-True (-not $injectedPrimaryError.Exception.Message.Contains("injected process-tree settlement failure")) "Injected cleanup must preserve termination failure as the primary error."
+    Assert-Equal "injected process-tree settlement failure" `
+      ([string]$injectedPrimaryError.Exception.Data["SubversionR.ProcessTreeSettlementFailure"]) `
+      "Injected cleanup must attach settlement failure to the primary termination error."
+
+    $injectedScenarioError = try { throw "injected worker-crash scenario failure" } catch { $_ }
+    $injectedLifecycleError = try { throw "injected async lifecycle failure" } catch { $_ }
+    $injectedFixtureCleanupError = try { throw "injected fixture cleanup failure" } catch { $_ }
+    $injectedLifecycleError.Exception.Data["SubversionR.FixtureCleanupFailure"] = [string]$injectedFixtureCleanupError.Exception.Message
+    $injectedScenarioError.Exception.Data["SubversionR.AsyncProcessTreeLifecycleFailure"] = [string]$injectedLifecycleError.Exception.Message
+    Assert-Equal "injected worker-crash scenario failure" $injectedScenarioError.Exception.Message "Fixture cleanup injection must not replace the worker-crash primary error."
+    Assert-Equal "injected async lifecycle failure" `
+      ([string]$injectedScenarioError.Exception.Data["SubversionR.AsyncProcessTreeLifecycleFailure"]) `
+      "Worker-crash primary error must retain the lifecycle failure attachment."
+    Assert-Equal "injected fixture cleanup failure" `
+      ([string]$injectedLifecycleError.Exception.Data["SubversionR.FixtureCleanupFailure"]) `
+      "Existing worker-crash lifecycle failure must retain the fixture cleanup failure attachment."
+  }
+  finally {
+    $remainingInjectedSleeper = if ($injectedSleeperPid -gt 0) { Get-Process -Id $injectedSleeperPid -ErrorAction SilentlyContinue } else { $null }
+    if ($null -ne $remainingInjectedSleeper) { Stop-Process -Id $injectedSleeperPid -Force -ErrorAction SilentlyContinue }
+    Remove-Module $stopStartedInjectionModule -Force
+  }
+
+  $syntheticSettlementModulePrefix = @'
+Set-StrictMode -Version Latest
+
+function Assert-SyntheticTrue([bool]$Condition, [string]$Message) {
+  if (-not $Condition) { throw $Message }
+}
+
+function Receive-SyntheticProcessStartEvents(
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys
+) {
+  $script:ReceiveCount += 1
+  if ($null -ne $script:LateStart -and $script:ReceiveCount -eq $script:LateStartOnReceive) {
+    $AllEvents.Add($script:LateStart)
+  }
+}
+
+function Get-SyntheticCimProcessSnapshot([int]$OperationTimeoutSeconds) {
+  $script:OperationTimeoutSeconds.Add($OperationTimeoutSeconds)
+  return @($script:SettlementSnapshot)
+}
+
+function Invoke-SyntheticRecordedTreeSettlement([object]$Case) {
+  $events = [System.Collections.Generic.List[object]]::new()
+  foreach ($eventRecord in @($Case.InitialEvents)) { $events.Add($eventRecord) }
+  $script:ReceiveCount = 0
+  $script:LateStart = $Case.LateStart
+  $script:LateStartOnReceive = [int]$Case.LateStartOnReceive
+  $script:SettlementSnapshot = @($Case.SettlementSnapshot)
+  $script:OperationTimeoutSeconds = [System.Collections.Generic.List[int]]::new()
+  $null = Wait-RecordedProcessTreeSettlement `
+    -SourceIdentifier "synthetic-owned-installed-tree" `
+    -AllEvents $events `
+    -EventKeys ([System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)) `
+    -ProbePid ([long]$Case.ProbePid) `
+    -ProbeParentPid ([long]$Case.ProbeParentPid) `
+    -ExpectedProbeProcessName ([string]$Case.ExpectedProbeProcessName) `
+    -DeadlineSeconds ([int]$Case.DeadlineSeconds) `
+    -SettlementMilliseconds ([int]$Case.SettlementMilliseconds) `
+    -Context ([string]$Case.Context)
+  return [pscustomobject]@{
+    ReceiveCount = $script:ReceiveCount
+    EventCount = $events.Count
+    OperationTimeoutSeconds = @($script:OperationTimeoutSeconds)
+  }
+}
+'@
+  $syntheticSettlementHelperNames = @(
+    "Get-ProcessSnapshotStartFileTime",
+    "Get-NextRecordedProcessStartFileTime",
+    "Get-RecordedProcessDescendantStarts",
+    "Get-LiveRecordedProcessTreeStarts",
+    "Get-DeadlineBoundCimProcessSnapshot",
+    "Wait-RecordedProcessTreeSettlement"
+  )
+  $syntheticSettlementHelperSources = foreach ($functionName in $syntheticSettlementHelperNames) {
+    $source = $observationHelperSources[[Array]::IndexOf($observationHelpers, $functionName)]
+    $source = $source.Replace('Assert-True', 'Assert-SyntheticTrue')
+    if ($functionName -ceq "Wait-RecordedProcessTreeSettlement") {
+      $source = $source.Replace('Receive-ProcessStartEvents', 'Receive-SyntheticProcessStartEvents')
+    }
+    if ($functionName -ceq "Get-DeadlineBoundCimProcessSnapshot") {
+      $source = $source.Replace('Get-CimProcessSnapshot', 'Get-SyntheticCimProcessSnapshot')
+    }
+    $source
+  }
+  $syntheticSettlementModuleSource = ((@($syntheticSettlementModulePrefix) + @($syntheticSettlementHelperSources)) -join "`n`n")
+  $syntheticSettlementModule = New-Module `
+    -Name "SubversionRM8I6SyntheticSettlement$([Guid]::NewGuid().ToString('N'))" `
+    -ScriptBlock ([scriptblock]::Create($syntheticSettlementModuleSource))
+  try {
+    $syntheticProbeStart = [pscustomobject]@{
+      processId = 900L; parentProcessId = 90L; processName = "pwsh.exe"; eventFileTime = 9000L
+    }
+    $syntheticLateUtilityStart = [pscustomobject]@{
+      processId = 901L; parentProcessId = 900L; processName = "utility.exe"; eventFileTime = 9100L
+    }
+    $lateStartSettlement = & $syntheticSettlementModule {
+      param($Case)
+      Invoke-SyntheticRecordedTreeSettlement $Case
+    } ([pscustomobject]@{
+        Context = "late-start stable-window reset"
+        InitialEvents = @($syntheticProbeStart)
+        LateStart = $syntheticLateUtilityStart
+        LateStartOnReceive = 3
+        SettlementSnapshot = @([pscustomobject]@{ ProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(1L) })
+        ProbePid = 900L
+        ProbeParentPid = 90L
+        ExpectedProbeProcessName = "pwsh.exe"
+        DeadlineSeconds = 1
+        SettlementMilliseconds = 1
+      })
+    Assert-True ($lateStartSettlement.ReceiveCount -ge 6) "A late recorded utility descendant must reset the stable-zero window before exact-PID settlement returns."
+    Assert-Equal 2 $lateStartSettlement.EventCount "Exact-PID settlement must retain the late descendant start in its recorded tree."
+    Assert-True (
+      $lateStartSettlement.OperationTimeoutSeconds.Count -ge 2 -and
+      @($lateStartSettlement.OperationTimeoutSeconds | Where-Object { $_ -ne 1 }).Count -eq 0
+    ) "A one-second process-tree deadline must bound every synthetic CIM observation to one second."
+
+    Assert-ScriptThrowsContaining {
+      & $syntheticSettlementModule {
+        param($Case)
+        Invoke-SyntheticRecordedTreeSettlement $Case
+      } ([pscustomobject]@{
+          Context = "missing exact probe root"
+          InitialEvents = @()
+          LateStart = $null
+          LateStartOnReceive = 0
+          SettlementSnapshot = @([pscustomobject]@{ ProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(1L) })
+          ProbePid = 900L
+          ProbeParentPid = 90L
+          ExpectedProbeProcessName = "pwsh.exe"
+          DeadlineSeconds = 1
+          SettlementMilliseconds = 1
+        })
+    } "did not settle to stable zero before its absolute deadline" "Exact-PID settlement must fail closed at its deadline when the expected probe start was never recorded."
+  }
+  finally {
+    Remove-Module $syntheticSettlementModule -Force
+  }
+  $activeProcessSnapshotStartHelper = (Get-Command Get-ProcessSnapshotStartFileTime -CommandType Function -ErrorAction Stop).Definition
+  Assert-True (
+    $activeProcessSnapshotStartHelper.Contains('$Process.CreationDate') -and
+    -not $activeProcessSnapshotStartHelper.Contains('$Process.CreationFileTime')
+  ) "Synthetic settlement module removal must restore the production CIM creation-time helper without stub pollution."
+  $activeCimSnapshotHelper = (Get-Command Get-CimProcessSnapshot -CommandType Function -ErrorAction Stop).Definition
+  Assert-True (
+    $activeCimSnapshotHelper.Contains('-OperationTimeoutSec') -and
+    -not $activeCimSnapshotHelper.Contains('$script:SettlementSnapshot')
+  ) "Synthetic settlement module removal must leave the production bounded CIM helper active."
 
   $positiveReportIndex = $driverText.IndexOf('$positiveReport = Convert-JsonObject', [System.StringComparison]::Ordinal)
   $positiveContractIndex = $driverText.IndexOf('Assert-PackagedNativePositiveProcessContract $positiveResult.ExitCode $positiveReport', $positiveReportIndex, [System.StringComparison]::Ordinal)
@@ -2184,12 +2671,43 @@ try {
   $installedWorkerStart = [pscustomobject]@{
     processId = 504L; parentProcessId = 503L; processName = "subversionr-daemon.exe"; eventFileTime = 5400L
   }
+  $installedUtilityStart = [pscustomobject]@{
+    processId = 505L; parentProcessId = 502L; processName = "utility.exe"; eventFileTime = 5250L
+  }
   $installedMeasuredBaseline = Get-InstalledNegativeProcessObservation `
     -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
     -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
     -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") -SettlementSnapshot @()
   Assert-Equal 0 $installedMeasuredBaseline.workerDescendantsAfter "Installed-negative baseline must derive zero descendants from the settlement snapshot."
   Assert-Equal 0 $installedMeasuredBaseline.fixtureCliInvocations "Installed-negative baseline must derive zero fixture CLI invocations from process events."
+  $liveInstalledCodeTree = @(Get-LiveRecordedProcessTreeStarts `
+      @($installedProbeStart, $codeStart, $extensionHostStart, $installedUtilityStart, $installedDaemonStart, $installedWorkerStart) `
+      $installedProbeStart `
+      @([pscustomobject]@{
+          ProcessId = 501L; ParentProcessId = 500L; CreationDate = [DateTime]::FromFileTimeUtc(5050L)
+        }, [pscustomobject]@{
+          ProcessId = 502L; ParentProcessId = 501L; CreationDate = [DateTime]::FromFileTimeUtc(5150L)
+        }, [pscustomobject]@{
+          ProcessId = 505L; ParentProcessId = 502L; CreationDate = [DateTime]::FromFileTimeUtc(5200L)
+        }))
+  Assert-Equal 3 $liveInstalledCodeTree.Count "Installed tree settlement must retain live Code, Extension Host, and utility identities, not only daemon/worker descendants."
+  $reusedInstalledCodeTree = @(Get-LiveRecordedProcessTreeStarts `
+      @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
+      $installedProbeStart `
+      @([pscustomobject]@{
+          ProcessId = 501L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5150L)
+        }))
+  Assert-Equal 0 $reusedInstalledCodeTree.Count "Installed-negative tree settlement must not bind a later process that reused a recorded Code PID."
+  $reusedInstalledUtilityStart = [pscustomobject]@{
+    processId = 505L; parentProcessId = 999L; processName = "reused-utility-pid.exe"; eventFileTime = 5650L
+  }
+  $reusedInstalledUtilityTree = @(Get-LiveRecordedProcessTreeStarts `
+      @($installedProbeStart, $codeStart, $extensionHostStart, $installedUtilityStart, $installedDaemonStart, $installedWorkerStart, $reusedInstalledUtilityStart) `
+      $installedProbeStart `
+      @([pscustomobject]@{
+          ProcessId = 505L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5650L)
+        }))
+  Assert-Equal 0 $reusedInstalledUtilityTree.Count "Installed tree settlement must ignore a later process that reused a recorded utility PID."
   Assert-ScriptThrowsContaining {
     Get-InstalledNegativeProcessObservation `
       -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
@@ -2534,8 +3052,8 @@ try {
       "monotonic clock",
       "target/i6d",
       "command-stall",
-      "may not be represented as"
-      "Toolhelp32 ancestry"
+      "may not be represented as",
+      "Toolhelp32 ancestry",
       "1398166083"
     )) {
     Assert-True ($contractText.Contains($requiredText)) "I6 evidence contract must retain fail-closed boundary '$requiredText'."

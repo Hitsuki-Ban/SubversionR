@@ -1353,6 +1353,7 @@ $packagedNegativeProbePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptR
 $repoTargetRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target"))
 $installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6p"))
 $ProcessStartEventSettlementMilliseconds = 2000
+$InstalledProcessTreeSettlementDeadlineSeconds = 30
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
@@ -1902,13 +1903,32 @@ function Invoke-BoundedProcessWithWorkingCopyReadFault(
   }
 }
 
-function Get-CimProcessSnapshot {
+function Get-CimProcessSnapshot([int]$OperationTimeoutSeconds = 30) {
+  Assert-True ($OperationTimeoutSeconds -ge 1) "The process snapshot operation timeout was invalid."
   try {
-    return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    return @(
+      Get-CimInstance -ClassName Win32_Process `
+        -OperationTimeoutSec ([uint32]$OperationTimeoutSeconds) -ErrorAction Stop
+    )
   }
   catch {
     throw "Process settlement observation through Win32_Process failed."
   }
+}
+
+function Get-DeadlineBoundCimProcessSnapshot(
+  [System.Diagnostics.Stopwatch]$Clock,
+  [long]$DeadlineMilliseconds,
+  [string]$Context
+) {
+  $remainingMilliseconds = $DeadlineMilliseconds - [long]$Clock.ElapsedMilliseconds
+  Assert-True ($remainingMilliseconds -gt 0) "The $Context controlled probe process tree exceeded its absolute deadline during process observation."
+  $operationTimeoutSeconds = [Math]::Max(1, [Math]::Floor($remainingMilliseconds / 1000.0))
+  $snapshot = Get-CimProcessSnapshot ([int]$operationTimeoutSeconds)
+  Assert-True (
+    [long]$Clock.ElapsedMilliseconds -lt $DeadlineMilliseconds
+  ) "The $Context controlled probe process tree exceeded its absolute deadline during process observation."
+  return $snapshot
 }
 
 function Get-ProcessSnapshotStartFileTime([object]$Process) {
@@ -2194,6 +2214,8 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
   [string]$ExpectedProductVersion,
   [string]$ExpectedCandidateDaemonPath,
   [int]$ProcessCaptureTimeoutMilliseconds,
+  [int]$ProcessTreeDeadlineSeconds,
+  [int]$ProcessTreeSettlementMilliseconds,
   [hashtable]$Environment = @{}
 ) {
   Assert-True ($Nonce -cmatch '^[0-9a-f]{32}$') "The $ExpectedCell process-capture nonce was invalid."
@@ -2205,6 +2227,7 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
   $readyDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)
   $binding = $null
   $completionStarted = $false
+  $settlementAttempted = $false
   try {
     while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf)) {
       Assert-True (-not $process.HasExited) "The $ExpectedCell installed probe exited before publishing its process-capture ready report."
@@ -2261,6 +2284,13 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
     Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys $CaptureProcessNames
     $completionStarted = $true
     $result = Complete-WorkerCrashProbeProcess $started $TimeoutSeconds "Controlled installed live capture"
+    $settlementAttempted = $true
+    $settlementSnapshot = Wait-RecordedProcessTreeSettlement `
+      -SourceIdentifier $SourceIdentifier -AllEvents $AllEvents -EventKeys $EventKeys `
+      -ProbePid ([long]$started.ProcessId) -ProbeParentPid ([long]$PID) `
+      -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+      -DeadlineSeconds $ProcessTreeDeadlineSeconds `
+      -SettlementMilliseconds $ProcessTreeSettlementMilliseconds -Context "installed $ExpectedCell"
     Remove-Item -LiteralPath $ReadyPath -Force
     Remove-Item -LiteralPath $AckPath -Force
     Assert-True (-not (Test-Path -LiteralPath $ReadyPath)) "The $ExpectedCell process-capture ready file was not removed."
@@ -2269,17 +2299,42 @@ function Invoke-BoundedInstalledProcessWithRequiredLiveCapture(
     Assert-True (-not (Test-Path -LiteralPath "$AckPath.tmp")) "The $ExpectedCell process-capture acknowledgement temporary file remained."
     $result | Add-Member -NotePropertyName InstalledDaemonFileIdentity -NotePropertyValue ([string]$ready.installedDaemonFileIdentity)
     $result | Add-Member -NotePropertyName RetainedDaemonIdentity -NotePropertyValue $daemonIdentity
+    $result | Add-Member -NotePropertyName SettlementSnapshot -NotePropertyValue $settlementSnapshot
     return $result
   }
   catch {
+    $primaryError = $_
     if (-not $completionStarted) {
-      if (-not $process.HasExited) {
-        $process.Kill($true)
-        $process.WaitForExit()
+      try {
+        if (-not $process.HasExited) {
+          $process.Kill($true)
+          $process.WaitForExit()
+        }
       }
-      $process.Dispose()
+      catch {
+        $primaryError.Exception.Data["SubversionR.ProcessTerminationFailure"] = [string]$_.Exception.Message
+      }
+      finally {
+        try { $process.Dispose() }
+        catch {
+          $primaryError.Exception.Data["SubversionR.ProcessDisposeFailure"] = [string]$_.Exception.Message
+        }
+      }
     }
-    throw
+    if (-not $settlementAttempted) {
+      try {
+        $null = Wait-RecordedProcessTreeSettlement `
+          -SourceIdentifier $SourceIdentifier -AllEvents $AllEvents -EventKeys $EventKeys `
+          -ProbePid ([long]$started.ProcessId) -ProbeParentPid ([long]$PID) `
+          -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+          -DeadlineSeconds $ProcessTreeDeadlineSeconds `
+          -SettlementMilliseconds $ProcessTreeSettlementMilliseconds -Context "installed $ExpectedCell"
+      }
+      catch {
+        $primaryError.Exception.Data["SubversionR.ProcessTreeSettlementFailure"] = [string]$_.Exception.Message
+      }
+    }
+    throw $primaryError
   }
   finally {
     if ($null -ne $binding) { $binding.Dispose() }
@@ -2352,6 +2407,290 @@ function Get-RecordedProcessDescendantStarts([object[]]$AllEvents, [object]$Root
     }
   }
   return @($descendants)
+}
+
+function Get-LiveRecordedProcessTreeStarts(
+  [object[]]$AllEvents,
+  [object]$RootStart,
+  [object[]]$Snapshot
+) {
+  $recordedStarts = @($RootStart) + @(Get-RecordedProcessDescendantStarts $AllEvents $RootStart)
+  $liveStarts = [System.Collections.Generic.List[object]]::new()
+  foreach ($recordedStart in $recordedStarts) {
+    $matches = @($Snapshot | Where-Object {
+        [long]$_.ProcessId -eq [long]$recordedStart.processId -and
+        (Get-ProcessSnapshotStartFileTime $_) -le [long]$recordedStart.eventFileTime
+      })
+    Assert-True ($matches.Count -le 1) "A recorded process-tree identity matched multiple live processes."
+    if ($matches.Count -eq 1) {
+      $liveStarts.Add($recordedStart)
+    }
+  }
+  return @($liveStarts)
+}
+
+function Wait-RecordedProcessTreeSettlement(
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys,
+  [long]$ProbePid,
+  [long]$ProbeParentPid,
+  [string]$ExpectedProbeProcessName,
+  [int]$DeadlineSeconds,
+  [int]$SettlementMilliseconds,
+  [string]$Context
+) {
+  Assert-True ($DeadlineSeconds -ge 1) "$Context process-tree settlement deadline was invalid."
+  Assert-True ($SettlementMilliseconds -ge 1) "$Context process-tree settlement window was invalid."
+  $clock = [System.Diagnostics.Stopwatch]::StartNew()
+  $deadlineMilliseconds = [long]$DeadlineSeconds * 1000L
+  $zeroSince = $null
+  $recordedTreeSignature = ""
+  $lastLiveStarts = @()
+  do {
+    Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys
+    $probeStarts = @($AllEvents | Where-Object {
+        [long]$_.processId -eq $ProbePid -and
+        [long]$_.parentProcessId -eq $ProbeParentPid -and
+        ([string]$_.processName).Equals($ExpectedProbeProcessName, [System.StringComparison]::OrdinalIgnoreCase)
+      })
+    Assert-True ($probeStarts.Count -le 1) "The $Context controlled probe had multiple subscribed start identities."
+    if ($probeStarts.Count -eq 1) {
+      $probeStart = $probeStarts[0]
+      $recordedTree = @($probeStart) + @(Get-RecordedProcessDescendantStarts @($AllEvents) $probeStart)
+      $newSignature = (@($recordedTree | ForEach-Object {
+            "$([long]$_.processId):$([long]$_.eventFileTime)"
+          } | Sort-Object) -join ",")
+      if ($newSignature -cne $recordedTreeSignature) {
+        $recordedTreeSignature = $newSignature
+        $zeroSince = $null
+      }
+      $snapshot = Get-DeadlineBoundCimProcessSnapshot $clock $deadlineMilliseconds $Context
+      $lastLiveStarts = @(Get-LiveRecordedProcessTreeStarts @($AllEvents) $probeStart $snapshot)
+      if ($lastLiveStarts.Count -eq 0) {
+        if ($null -eq $zeroSince) {
+          $zeroSince = [long]$clock.ElapsedMilliseconds
+        }
+        elseif (([long]$clock.ElapsedMilliseconds - [long]$zeroSince) -ge $SettlementMilliseconds) {
+          Receive-ProcessStartEvents $SourceIdentifier $AllEvents $EventKeys
+          $finalTree = @($probeStart) + @(Get-RecordedProcessDescendantStarts @($AllEvents) $probeStart)
+          $finalSignature = (@($finalTree | ForEach-Object {
+                "$([long]$_.processId):$([long]$_.eventFileTime)"
+              } | Sort-Object) -join ",")
+          $finalSnapshot = Get-DeadlineBoundCimProcessSnapshot $clock $deadlineMilliseconds $Context
+          $finalLiveStarts = @(Get-LiveRecordedProcessTreeStarts @($AllEvents) $probeStart $finalSnapshot)
+          if ($finalSignature -ceq $recordedTreeSignature -and $finalLiveStarts.Count -eq 0) {
+            return $finalSnapshot
+          }
+          $recordedTreeSignature = $finalSignature
+          $lastLiveStarts = $finalLiveStarts
+          $zeroSince = $null
+        }
+      }
+      else {
+        $zeroSince = $null
+      }
+    }
+    Start-Sleep -Milliseconds 25
+  } while ([long]$clock.ElapsedMilliseconds -lt $deadlineMilliseconds)
+
+  $liveSummary = (@($lastLiveStarts | Select-Object -First 8 | ForEach-Object {
+        "$([string]$_.processName):pid=$([long]$_.processId):event=$([long]$_.eventFileTime)"
+      }) -join ",")
+  if ([string]::IsNullOrEmpty($liveSummary)) {
+    $liveSummary = "none-or-start-event-missing"
+  }
+  throw "The $Context controlled probe process tree did not settle to stable zero before its absolute deadline: $liveSummary."
+}
+
+function New-InstalledProbeProcessTreeCapture(
+  [string]$Context,
+  [int]$SubscriptionSettlementMilliseconds
+) {
+  Assert-True (-not [string]::IsNullOrWhiteSpace($Context)) "An installed probe process-tree capture context was required."
+  Assert-True ($SubscriptionSettlementMilliseconds -ge 1) "The $Context installed probe subscription settlement window was invalid."
+  $sourceIdentifier = "subversionr-m8-i6-installed-probe-tree-$([Guid]::NewGuid().ToString('N'))"
+  $subscriber = $null
+  try {
+    Register-CimIndicationEvent `
+      -ClassName Win32_ProcessStartTrace `
+      -SourceIdentifier $sourceIdentifier `
+      -ErrorAction Stop | Out-Null
+    $matchingSubscribers = @(Get-EventSubscriber -SourceIdentifier $sourceIdentifier -ErrorAction Stop)
+    Assert-True ($matchingSubscribers.Count -eq 1) "The $Context installed probe process-start subscription was not created exactly once."
+    $subscriber = $matchingSubscribers[0]
+    Start-Sleep -Milliseconds $SubscriptionSettlementMilliseconds
+    return [pscustomobject]@{
+      Context = $Context
+      SourceIdentifier = $sourceIdentifier
+      Subscriber = $subscriber
+      Events = [System.Collections.Generic.List[object]]::new()
+      EventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+      Closed = $false
+    }
+  }
+  catch {
+    if ($null -ne $subscriber) {
+      Unregister-Event -SubscriptionId $subscriber.SubscriptionId -ErrorAction SilentlyContinue
+    }
+    Get-Event -SourceIdentifier $sourceIdentifier -ErrorAction SilentlyContinue |
+      Remove-Event -ErrorAction SilentlyContinue
+    throw
+  }
+}
+
+function Close-InstalledProbeProcessTreeCapture([object]$Capture) {
+  if ($null -eq $Capture -or [bool]$Capture.Closed) { return }
+  try {
+    if ($null -ne $Capture.Subscriber) {
+      Unregister-Event -SubscriptionId $Capture.Subscriber.SubscriptionId -ErrorAction SilentlyContinue
+    }
+    Get-Event -SourceIdentifier $Capture.SourceIdentifier -ErrorAction SilentlyContinue |
+      Remove-Event -ErrorAction SilentlyContinue
+  }
+  finally {
+    $Capture.Closed = $true
+  }
+}
+
+function Complete-BoundedInstalledProcessTreeRun(
+  [object]$Started,
+  [int]$TimeoutSeconds,
+  [string]$Context,
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys,
+  [int]$ProcessTreeDeadlineSeconds,
+  [int]$ProcessTreeSettlementMilliseconds
+) {
+  $processResult = $null
+  $primaryError = $null
+  try {
+    $processResult = Complete-WorkerCrashProbeProcess $Started $TimeoutSeconds $Context
+  }
+  catch {
+    $primaryError = $_
+  }
+
+  $settlementSnapshot = $null
+  $settlementError = $null
+  try {
+    $settlementSnapshot = Wait-RecordedProcessTreeSettlement `
+      -SourceIdentifier $SourceIdentifier -AllEvents $AllEvents -EventKeys $EventKeys `
+      -ProbePid ([long]$Started.ProcessId) -ProbeParentPid ([long]$PID) `
+      -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+      -DeadlineSeconds $ProcessTreeDeadlineSeconds `
+      -SettlementMilliseconds $ProcessTreeSettlementMilliseconds -Context $Context
+  }
+  catch {
+    $settlementError = $_
+  }
+
+  if ($null -ne $primaryError) {
+    if ($null -ne $settlementError) {
+      $primaryError.Exception.Data["SubversionR.ProcessTreeSettlementFailure"] = [string]$settlementError.Exception.Message
+    }
+    throw $primaryError
+  }
+  if ($null -ne $settlementError) { throw $settlementError }
+  Assert-True (
+    [long]$processResult.ProcessId -eq [long]$Started.ProcessId
+  ) "The $Context installed process result did not retain its exact started PID."
+  $processResult | Add-Member -NotePropertyName SettlementSnapshot -NotePropertyValue $settlementSnapshot
+  return $processResult
+}
+
+function Stop-StartedInstalledProcessTreeRun(
+  [object]$Started,
+  [object]$Capture,
+  [int]$ProcessTreeDeadlineSeconds,
+  [int]$ProcessTreeSettlementMilliseconds,
+  [string]$Context
+) {
+  Assert-True ($null -ne $Started) "A started $Context installed process was required."
+  Assert-True ($null -ne $Capture -and -not [bool]$Capture.Closed) "An open $Context installed process-tree capture was required."
+  $terminationError = $null
+  $process = [System.Diagnostics.Process]$Started.Process
+  try {
+    if (-not $process.HasExited) {
+      $process.Kill($true)
+      $process.WaitForExit()
+    }
+  }
+  catch {
+    $terminationError = $_
+  }
+  finally {
+    try { $process.Dispose() }
+    catch {
+      if ($null -eq $terminationError) { $terminationError = $_ }
+      else { $terminationError.Exception.Data["SubversionR.ProcessDisposeFailure"] = [string]$_.Exception.Message }
+    }
+  }
+
+  $settlementError = $null
+  try {
+    $null = Wait-RecordedProcessTreeSettlement `
+      -SourceIdentifier $Capture.SourceIdentifier -AllEvents $Capture.Events -EventKeys $Capture.EventKeys `
+      -ProbePid ([long]$Started.ProcessId) -ProbeParentPid ([long]$PID) `
+      -ExpectedProbeProcessName ([System.IO.Path]::GetFileName((Get-Process -Id $PID).Path)) `
+      -DeadlineSeconds $ProcessTreeDeadlineSeconds `
+      -SettlementMilliseconds $ProcessTreeSettlementMilliseconds -Context $Context
+  }
+  catch {
+    $settlementError = $_
+  }
+
+  if ($null -ne $terminationError) {
+    if ($null -ne $settlementError) {
+      $terminationError.Exception.Data["SubversionR.ProcessTreeSettlementFailure"] = [string]$settlementError.Exception.Message
+    }
+    throw $terminationError
+  }
+  if ($null -ne $settlementError) { throw $settlementError }
+}
+
+function Invoke-BoundedProcessWithExistingInstalledTreeCapture(
+  [string]$FilePath,
+  [string[]]$Arguments,
+  [int]$TimeoutSeconds,
+  [string]$Context,
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys,
+  [int]$ProcessTreeDeadlineSeconds,
+  [int]$ProcessTreeSettlementMilliseconds,
+  [hashtable]$Environment = @{}
+) {
+  $started = Start-WorkerCrashProbeProcess $FilePath $Arguments $Environment
+  return Complete-BoundedInstalledProcessTreeRun `
+    -Started $started -TimeoutSeconds $TimeoutSeconds -Context $Context `
+    -SourceIdentifier $SourceIdentifier -AllEvents $AllEvents -EventKeys $EventKeys `
+    -ProcessTreeDeadlineSeconds $ProcessTreeDeadlineSeconds `
+    -ProcessTreeSettlementMilliseconds $ProcessTreeSettlementMilliseconds
+}
+
+function Invoke-BoundedProcessWithOwnedInstalledTreeCapture(
+  [string]$FilePath,
+  [string[]]$Arguments,
+  [int]$TimeoutSeconds,
+  [string]$Context,
+  [int]$SubscriptionSettlementMilliseconds,
+  [int]$ProcessTreeDeadlineSeconds,
+  [int]$ProcessTreeSettlementMilliseconds,
+  [hashtable]$Environment = @{}
+) {
+  $capture = New-InstalledProbeProcessTreeCapture $Context $SubscriptionSettlementMilliseconds
+  try {
+    return Invoke-BoundedProcessWithExistingInstalledTreeCapture `
+      -FilePath $FilePath -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds -Context $Context `
+      -SourceIdentifier $capture.SourceIdentifier -AllEvents $capture.Events -EventKeys $capture.EventKeys `
+      -ProcessTreeDeadlineSeconds $ProcessTreeDeadlineSeconds `
+      -ProcessTreeSettlementMilliseconds $ProcessTreeSettlementMilliseconds -Environment $Environment
+  }
+  finally {
+    Close-InstalledProbeProcessTreeCapture $capture
+  }
 }
 
 function Get-RecordedCandidateParentStartIdentity(
@@ -3789,6 +4128,7 @@ Assert-True ($installedNegativeWorkRoot.Length -le 120) "The installed-negative 
 Assert-True (-not (Test-Path -LiteralPath $installedNegativeWorkRoot)) "The installed-negative short work root already exists."
 New-Item -ItemType Directory -Path $installedNegativeWorkRoot | Out-Null
 $installedNegativeObservations = @()
+$installedNegativeBlockPassed = $false
 try {
   foreach ($contract in $installedNegativeContracts) {
     $scenarioRoot = Join-Path $probeRoot "installed-negative-$($contract.FaultScenario)"
@@ -3817,7 +4157,7 @@ try {
       Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
 
       $negativeRepositoryUrl = "svn://127.0.0.1:$([int]$faultFixture.State.port)/repo/trunk"
-      $installedNegativeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+      $installedNegativeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
         "-NoProfile",
         "-NonInteractive",
         "-ExecutionPolicy", "Bypass",
@@ -3833,7 +4173,9 @@ try {
         "-DaemonPath", $daemonResolved,
         "-BridgePath", $bridgeResolved,
         "-TimeoutSeconds", "180"
-      ) 240
+      ) 240 "$($contract.FaultScenario) installed-negative" `
+        $processStartSourceIdentifier $processStartEvents $processStartEventKeys `
+        $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
       $installedNegativeFailure = $installedNegativeResult.Stderr.Trim()
       Assert-True (
         $installedNegativeResult.ExitCode -eq 0 -and
@@ -3871,11 +4213,6 @@ try {
         [int]$faultState.followupContacts -eq 0 -and
         [int]$faultState.suppliedAuthorityConnections -eq 0
       ) "The installed VSIX $($contract.FaultScenario) network-stage observation was invalid."
-      Complete-ProcessStartEventDrain `
-        $processStartSourceIdentifier `
-        $processStartEvents `
-        $processStartEventKeys `
-        $ProcessStartEventSettlementMilliseconds
       $processObservation = Get-InstalledNegativeProcessObservation `
         -AllEvents @($processStartEvents) `
         -ProbePid ([long]$installedNegativeResult.ProcessId) `
@@ -3887,7 +4224,7 @@ try {
           [System.IO.Path]::GetFileName($svnadminResolved),
           [System.IO.Path]::GetFileName($svnserveResolved)
         ) `
-        -SettlementSnapshot (Get-CimProcessSnapshot)
+        -SettlementSnapshot $installedNegativeResult.SettlementSnapshot
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The installed VSIX $($contract.FaultScenario) product surface invoked a fixture CLI."
       $installedNegativeObservations += [pscustomobject]@{
         scenario = [string]$contract.Scenario
@@ -3914,13 +4251,14 @@ try {
       Stop-FaultFixture $faultFixture $contract.FaultScenario
     }
   }
+  $installedNegativeBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $installedNegativeWorkRoot) {
+  if ($installedNegativeBlockPassed -and (Test-Path -LiteralPath $installedNegativeWorkRoot)) {
     Assert-True (Test-PathWithin $installedNegativeWorkRoot $repoTargetRoot) "The installed-negative cleanup root escaped repo target."
-    Remove-Item -LiteralPath $installedNegativeWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $installedNegativeWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $installedNegativeWorkRoot)) "The installed-negative short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $installedNegativeWorkRoot)) "The installed-negative short work root remained after cleanup."
 }
 Assert-True ($installedNegativeObservations.Count -eq 4) "The installed VSIX malicious-root, SASL-only, greeting-stall, and connected-stall negative probe set was incomplete."
 
@@ -4029,7 +4367,7 @@ try {
     Assert-True ($matchingSubscribers.Count -eq 1) "The installed authz-denied process-start subscription was not created exactly once."
     $installedSubscriber = $matchingSubscribers[0]
     Start-Sleep -Milliseconds $ProcessStartEventSettlementMilliseconds
-    $installedAuthzResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+    $installedAuthzResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-File", $installedAuthzDeniedProbeResolved,
       "-VsixPath", $vsixResolved,
@@ -4042,7 +4380,9 @@ try {
       "-BridgePath", $bridgeResolved,
       "-OperationTimeoutMilliseconds", "30000",
       "-TimeoutSeconds", "180"
-    ) 240
+    ) 240 "installed authz-denied" $installedSourceIdentifier $installedEvents $installedEventKeys `
+      $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
+    $installedAuthzSettlementSnapshot = $installedAuthzResult.SettlementSnapshot
     $installedAuthzReport = Convert-JsonObject $installedAuthzResult.Stdout.Trim() "installed VSIX authz-denied probe stdout"
     Assert-True ($installedAuthzResult.ExitCode -eq 0 -and $installedAuthzResult.Stderr.Length -eq 0) "The installed VSIX authz-denied probe failed."
     Assert-True (
@@ -4072,7 +4412,7 @@ try {
         [System.IO.Path]::GetFileName($svnadminResolved),
         [System.IO.Path]::GetFileName($svnserveResolved)
       ) `
-      -SettlementSnapshot (Get-CimProcessSnapshot)
+      -SettlementSnapshot $installedAuthzSettlementSnapshot
     Assert-True ([int]$installedProcess.fixtureCliInvocations -eq 0) "The installed authz-denied product surface invoked a fixture CLI."
     $installedNetwork = Get-SvnserveAuthzObservation $fixtureLogResolved $installedLogOffset "The installed authz-denied surface"
     $authzDeniedObservations += [pscustomobject]@{
@@ -4182,7 +4522,10 @@ try {
       (Join-Path $localEventProbeRoot "extensions") `
       $ExpectedProductVersion `
       $daemonResolved `
-      240000
+      240000 `
+      $InstalledProcessTreeSettlementDeadlineSeconds `
+      $ProcessStartEventSettlementMilliseconds
+    $localEventProcessSettlementSnapshot = $installedLocalEventResult.SettlementSnapshot
     $installedLocalEventFailure = $installedLocalEventResult.Stderr.Trim()
     Assert-True (
       $installedLocalEventResult.ExitCode -eq 0 -and $installedLocalEventResult.Stderr.Length -eq 0
@@ -4246,7 +4589,7 @@ try {
         [System.IO.Path]::GetFileName($svnadminResolved),
         [System.IO.Path]::GetFileName($svnserveResolved)
       ) `
-      -SettlementSnapshot (Get-CimProcessSnapshot) `
+      -SettlementSnapshot $localEventProcessSettlementSnapshot `
       -Context "installed local-event"
     Assert-True ([int]$localEventProcessObservation.fixtureCliInvocations -eq 0) "The installed local-event product surface invoked a fixture CLI."
     Assert-True ([int]$localEventProcessObservation.workerStarts -eq 0) "The installed local-event product surface started a remote worker."
@@ -4290,7 +4633,7 @@ finally {
 }
 
 $installedStressRoot = Join-Path $probeRoot "installed-stress"
-$installedStressResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+$installedStressResult = Invoke-BoundedProcessWithOwnedInstalledTreeCapture (Get-Process -Id $PID).Path @(
   "-NoProfile",
   "-NonInteractive",
   "-ExecutionPolicy", "Bypass",
@@ -4308,7 +4651,8 @@ $installedStressResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
   "-SvnservePid", ([string]$SvnservePid),
   "-SvnserveStartTimeUtc", $SvnserveStartTimeUtc,
   "-TimeoutSeconds", "7200"
-) 7260
+) 7260 "installed stress" $ProcessStartEventSettlementMilliseconds `
+  $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
 $installedStressFailure = $installedStressResult.Stderr.Trim()
 Assert-True ($installedStressResult.ExitCode -eq 0 -and $installedStressResult.Stderr.Length -eq 0) "The installed VSIX 100+1 stress probe failed: $installedStressFailure"
 $installedStressReport = Convert-JsonObject $installedStressResult.Stdout.Trim() "installed VSIX 100+1 stress probe stdout"
@@ -4392,7 +4736,7 @@ Assert-True ($installedPositiveRoot.Length -le 110) "The installed-positive chil
 $installedEvidencePath = Join-Path $installedFixtureRoot "evidence.json"
 try {
   New-Item -ItemType Directory -Force -Path $installedFixtureRoot | Out-Null
-  $installedPositive = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+  $installedPositive = Invoke-BoundedProcessWithOwnedInstalledTreeCapture (Get-Process -Id $PID).Path @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", $installedI6ProbeResolved,
@@ -4404,7 +4748,8 @@ try {
     "-CheckoutRevision", "2",
     "-ExpectedProductVersion", $ExpectedProductVersion,
     "-TimeoutSeconds", "600"
-  ) 720
+  ) 720 "installed positive matrix" $ProcessStartEventSettlementMilliseconds `
+    $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
   $installedPositiveReport = Convert-JsonObject $installedPositive.Stdout.Trim() "installed Extension Host I6 positive probe stdout"
   Assert-InstalledVsixPositiveProcessContract $installedPositive.ExitCode $installedPositiveReport
   Assert-True ($installedPositive.Stderr.Length -eq 0) "The installed Extension Host I6 positive probe wrote to stderr."
@@ -4429,7 +4774,7 @@ try {
     ) "The installed Extension Host I6 positive probe returned an incomplete operation observation."
   }
 
-  $installedResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+  $installedResult = Invoke-BoundedProcessWithOwnedInstalledTreeCapture (Get-Process -Id $PID).Path @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", $installedHarnessResolved,
@@ -4439,7 +4784,8 @@ try {
     "-FixtureRoot", $installedFixtureRoot,
     "-EvidencePath", $installedEvidencePath,
     "-ExtensionHostTimeoutSeconds", "180"
-  ) 300
+  ) 300 "installed compatibility" $ProcessStartEventSettlementMilliseconds `
+    $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
   Assert-True ($installedResult.ExitCode -eq 0) "The installed Extension Host candidate probe failed before it could establish its current boundary."
   $installedReport = Convert-JsonObject (Get-Content -Raw -LiteralPath $installedEvidencePath) "installed Extension Host evidence"
   Assert-True ([string]$installedReport.extension.version -ceq $ExpectedProductVersion) "Installed Extension Host product version must match ExpectedProductVersion."
@@ -4477,6 +4823,7 @@ New-Item -ItemType Directory -Path $recoveryBlockedWorkRoot | Out-Null
 $recoveryBlockedObservations = @()
 $recoveryBlockedSettlementObservations = @()
 $unrelatedRepositoryObservations = @()
+$recoveryBlockedBlockPassed = $false
 try {
   $recoveryBlockedContracts = @(
     [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p" },
@@ -4552,7 +4899,7 @@ try {
       }
       else {
         $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
-        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        $probeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedRecoveryBlockedProbeResolved,
           "-VsixPath", $vsixResolved,
@@ -4571,7 +4918,9 @@ try {
           "-DaemonPath", $daemonResolved,
           "-BridgePath", $bridgeResolved,
           "-TimeoutSeconds", "300"
-        ) 420
+        ) 420 "installed recovery-blocked" $processStartSourceIdentifier $processStartEvents $processStartEventKeys `
+          $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
+        $installedProcessTreeSettlementSnapshot = $probeResult.SettlementSnapshot
       }
       $probeFailure = $probeResult.Stderr.Trim()
       Assert-True (
@@ -4670,7 +5019,7 @@ try {
           [System.IO.Path]::GetFileName($svnadminResolved),
           [System.IO.Path]::GetFileName($svnserveResolved)
         ) `
-        -SettlementSnapshot (Get-CimProcessSnapshot) `
+        -SettlementSnapshot $(if ($surfaceName -ceq "installed-vsix-extension-host") { $installedProcessTreeSettlementSnapshot } else { Get-CimProcessSnapshot }) `
         -Context "$surfaceName recovery-blocked"
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName recovery-blocked product surface invoked a fixture CLI."
       $recoveryBlockedObservations += [pscustomobject]@{
@@ -4736,13 +5085,14 @@ try {
       }
     }
   }
+  $recoveryBlockedBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $recoveryBlockedWorkRoot) {
+  if ($recoveryBlockedBlockPassed -and (Test-Path -LiteralPath $recoveryBlockedWorkRoot)) {
     Assert-True (Test-PathWithin $recoveryBlockedWorkRoot $repoTargetRoot) "The recovery-blocked cleanup root escaped repo target."
-    Remove-Item -LiteralPath $recoveryBlockedWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $recoveryBlockedWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $recoveryBlockedWorkRoot)) "The recovery-blocked short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $recoveryBlockedWorkRoot)) "The recovery-blocked short work root remained after cleanup."
 }
 Assert-True ($recoveryBlockedObservations.Count -eq 2) "The packaged-native and installed VSIX recovery-blocked observation set was incomplete."
 Assert-True ($recoveryBlockedSettlementObservations.Count -eq 2) "The packaged-native and installed VSIX blocked settlement set was incomplete."
@@ -4755,6 +5105,7 @@ Assert-True (-not (Test-Path -LiteralPath $redactionWorkRoot)) "The redaction sh
 New-Item -ItemType Directory -Path $redactionWorkRoot | Out-Null
 $redactionObservations = @()
 $redactionPrivacyObservations = @()
+$redactionBlockPassed = $false
 try {
   $redactionContracts = @(
     [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p" },
@@ -4822,7 +5173,7 @@ try {
       }
       else {
         $diagnosticToken = Get-TextSha256 ([Guid]::NewGuid().ToString("D"))
-        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        $probeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedRedactionProbeResolved,
           "-VsixPath", $vsixResolved,
@@ -4836,7 +5187,9 @@ try {
           "-DaemonPath", $daemonResolved,
           "-BridgePath", $bridgeResolved,
           "-TimeoutSeconds", "300"
-        ) 420
+        ) 420 "installed redaction" $processStartSourceIdentifier $processStartEvents $processStartEventKeys `
+          $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
+        $installedProcessTreeSettlementSnapshot = $probeResult.SettlementSnapshot
       }
       $probeFailure = $probeResult.Stderr.Trim()
       Assert-True (
@@ -4951,7 +5304,7 @@ try {
             [System.IO.Path]::GetFileName($svnadminResolved),
             [System.IO.Path]::GetFileName($svnserveResolved)
           ) `
-          -SettlementSnapshot (Get-CimProcessSnapshot)
+          -SettlementSnapshot $installedProcessTreeSettlementSnapshot
       }
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName redaction product surface invoked a fixture CLI."
       $redactionObservations += [pscustomobject]@{
@@ -4999,13 +5352,14 @@ try {
       }
     }
   }
+  $redactionBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $redactionWorkRoot) {
+  if ($redactionBlockPassed -and (Test-Path -LiteralPath $redactionWorkRoot)) {
     Assert-True (Test-PathWithin $redactionWorkRoot $repoTargetRoot) "The redaction cleanup root escaped repo target."
-    Remove-Item -LiteralPath $redactionWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $redactionWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $redactionWorkRoot)) "The redaction short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $redactionWorkRoot)) "The redaction short work root remained after cleanup."
 }
 Assert-True ($redactionObservations.Count -eq 2) "The packaged-native and installed VSIX redaction observation set was incomplete."
 Assert-True ($redactionPrivacyObservations.Count -eq 2) "The packaged-native and installed VSIX redaction privacy set was incomplete."
@@ -5017,6 +5371,7 @@ Assert-True (-not (Test-Path -LiteralPath $recoverySafeWorkRoot)) "The recovery-
 New-Item -ItemType Directory -Path $recoverySafeWorkRoot | Out-Null
 $recoverySafeObservations = @()
 $recoverySafeSettlementObservations = @()
+$recoverySafeBlockPassed = $false
 try {
   Stop-ControlledSvnserve $svnserveResolved $SvnservePid $SvnserveStartTimeUtc
   $recoverySafeContracts = @(
@@ -5094,7 +5449,7 @@ try {
         Assert-True ((@($probeReport.transitions) -join ",") -ceq "pending,safe,unchecked") "The packaged-native recovery-safe transitions were invalid."
       }
       else {
-        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        $probeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedRecoverySafeProbeResolved,
           "-VsixPath", $vsixResolved,
@@ -5109,7 +5464,9 @@ try {
           "-DaemonPath", $daemonResolved,
           "-BridgePath", $bridgeResolved,
           "-TimeoutSeconds", "300"
-        ) 360
+        ) 360 "installed recovery-safe" $processStartSourceIdentifier $processStartEvents $processStartEventKeys `
+          $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
+        $installedProcessTreeSettlementSnapshot = $probeResult.SettlementSnapshot
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX recovery-safe probe failed: $probeFailure"
         $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX recovery-safe probe stdout"
@@ -5157,7 +5514,7 @@ try {
         -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
         -ForbiddenFixtureProcessNames @([System.IO.Path]::GetFileName($svnResolved), [System.IO.Path]::GetFileName($svnadminResolved), [System.IO.Path]::GetFileName($svnserveResolved)) `
-        -SettlementSnapshot (Get-CimProcessSnapshot) `
+        -SettlementSnapshot $(if ($surfaceName -ceq "installed-vsix-extension-host") { $installedProcessTreeSettlementSnapshot } else { Get-CimProcessSnapshot }) `
         -Context "$surfaceName recovery-safe"
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName recovery-safe product surface invoked a fixture CLI."
 
@@ -5193,13 +5550,14 @@ try {
       if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "command-stall" }
     }
   }
+  $recoverySafeBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $recoverySafeWorkRoot) {
+  if ($recoverySafeBlockPassed -and (Test-Path -LiteralPath $recoverySafeWorkRoot)) {
     Assert-True (Test-PathWithin $recoverySafeWorkRoot $repoTargetRoot) "The recovery-safe cleanup root escaped repo target."
-    Remove-Item -LiteralPath $recoverySafeWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $recoverySafeWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $recoverySafeWorkRoot)) "The recovery-safe short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $recoverySafeWorkRoot)) "The recovery-safe short work root remained after cleanup."
 }
 Assert-True ($recoverySafeObservations.Count -eq 2) "The packaged-native and installed VSIX recovery-safe observation set was incomplete."
 Assert-True ($recoverySafeSettlementObservations.Count -eq 2) "The packaged-native and installed VSIX Safe settlement set was incomplete."
@@ -5211,6 +5569,7 @@ Assert-True (-not (Test-Path -LiteralPath $recoveryIndeterminateWorkRoot)) "The 
 New-Item -ItemType Directory -Path $recoveryIndeterminateWorkRoot | Out-Null
 $recoveryIndeterminateObservations = @()
 $recoveryIndeterminateSettlementObservations = @()
+$recoveryIndeterminateBlockPassed = $false
 try {
   $recoveryIndeterminateContracts = @(
     [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
@@ -5302,7 +5661,7 @@ try {
         $credentialSettlements = [int]$probeReport.credentialSettlements
       }
       else {
-        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        $probeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedRecoveryIndeterminateProbeResolved,
           "-VsixPath", $vsixResolved,
@@ -5317,7 +5676,9 @@ try {
           "-DaemonPath", $daemonResolved,
           "-BridgePath", $bridgeResolved,
           "-TimeoutSeconds", "300"
-        ) 360
+        ) 360 "installed recovery-indeterminate" $processStartSourceIdentifier $processStartEvents $processStartEventKeys `
+          $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
+        $installedProcessTreeSettlementSnapshot = $probeResult.SettlementSnapshot
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX recovery-indeterminate probe failed: $probeFailure"
         $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX recovery-indeterminate probe stdout"
@@ -5382,7 +5743,7 @@ try {
         -ExpectedProbeProcessName $(if ($surfaceName -ceq "packaged-native") { [System.IO.Path]::GetFileName($nodeHost) } else { [System.IO.Path]::GetFileName((Get-Process -Id $PID).Path) }) `
         -ExpectedDaemonProcessName ([System.IO.Path]::GetFileName($daemonResolved)) `
         -ForbiddenFixtureProcessNames @([System.IO.Path]::GetFileName($svnResolved), [System.IO.Path]::GetFileName($svnadminResolved), [System.IO.Path]::GetFileName($svnserveResolved)) `
-        -SettlementSnapshot (Get-CimProcessSnapshot) `
+        -SettlementSnapshot $(if ($surfaceName -ceq "installed-vsix-extension-host") { $installedProcessTreeSettlementSnapshot } else { Get-CimProcessSnapshot }) `
         -Context "$surfaceName recovery-indeterminate"
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName recovery-indeterminate product surface invoked a fixture CLI."
 
@@ -5418,13 +5779,14 @@ try {
       if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "command-stall" }
     }
   }
+  $recoveryIndeterminateBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $recoveryIndeterminateWorkRoot) {
+  if ($recoveryIndeterminateBlockPassed -and (Test-Path -LiteralPath $recoveryIndeterminateWorkRoot)) {
     Assert-True (Test-PathWithin $recoveryIndeterminateWorkRoot $repoTargetRoot) "The recovery-indeterminate cleanup root escaped repo target."
-    Remove-Item -LiteralPath $recoveryIndeterminateWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $recoveryIndeterminateWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $recoveryIndeterminateWorkRoot)) "The recovery-indeterminate short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $recoveryIndeterminateWorkRoot)) "The recovery-indeterminate short work root remained after cleanup."
 }
 Assert-True ($recoveryIndeterminateObservations.Count -eq 2) "The packaged-native and installed VSIX recovery-indeterminate observation set was incomplete."
 Assert-True ($recoveryIndeterminateSettlementObservations.Count -eq 2) "The packaged-native and installed VSIX Indeterminate settlement set was incomplete."
@@ -5435,6 +5797,7 @@ Assert-True ($stalledReadWorkRoot.Length -le 120) "The stalled-mid-read short wo
 Assert-True (-not (Test-Path -LiteralPath $stalledReadWorkRoot)) "The stalled-mid-read short work root already exists."
 New-Item -ItemType Directory -Path $stalledReadWorkRoot | Out-Null
 $stalledReadObservations = @()
+$stalledReadBlockPassed = $false
 try {
   $stalledReadContracts = @(
     [pscustomobject]@{
@@ -5515,7 +5878,7 @@ try {
       }
       else {
         $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
-        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        $probeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedStalledReadProbeResolved,
           "-VsixPath", $vsixResolved,
@@ -5528,7 +5891,9 @@ try {
           "-DaemonPath", $daemonResolved,
           "-BridgePath", $bridgeResolved,
           "-TimeoutSeconds", "180"
-        ) 240
+        ) 240 "installed stalled-mid-read" $processStartSourceIdentifier $processStartEvents $processStartEventKeys `
+          $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
+        $installedProcessTreeSettlementSnapshot = $probeResult.SettlementSnapshot
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True (
           $probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0
@@ -5595,7 +5960,7 @@ try {
             [System.IO.Path]::GetFileName($svnadminResolved),
             [System.IO.Path]::GetFileName($svnserveResolved)
           ) `
-          -SettlementSnapshot (Get-CimProcessSnapshot)
+          -SettlementSnapshot $installedProcessTreeSettlementSnapshot
       }
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName stalled-mid-read product surface invoked a fixture CLI."
       $stalledReadObservations += [pscustomobject]@{
@@ -5629,13 +5994,14 @@ try {
       }
     }
   }
+  $stalledReadBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $stalledReadWorkRoot) {
+  if ($stalledReadBlockPassed -and (Test-Path -LiteralPath $stalledReadWorkRoot)) {
     Assert-True (Test-PathWithin $stalledReadWorkRoot $repoTargetRoot) "The stalled-mid-read cleanup root escaped repo target."
-    Remove-Item -LiteralPath $stalledReadWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $stalledReadWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $stalledReadWorkRoot)) "The stalled-mid-read short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $stalledReadWorkRoot)) "The stalled-mid-read short work root remained after cleanup."
 }
 Assert-True ($stalledReadObservations.Count -eq 2) "The packaged-native and installed VSIX stalled-mid-read observation set was incomplete."
 
@@ -5645,6 +6011,7 @@ Assert-True ($deadlineWorkRoot.Length -le 120) "The absolute-deadline short work
 Assert-True (-not (Test-Path -LiteralPath $deadlineWorkRoot)) "The absolute-deadline short work root already exists."
 New-Item -ItemType Directory -Path $deadlineWorkRoot | Out-Null
 $deadlineObservations = @()
+$deadlineBlockPassed = $false
 try {
   $deadlineContracts = @(
     [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
@@ -5709,7 +6076,7 @@ try {
       }
       else {
         $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
-        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        $probeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedDeadlineProbeResolved,
           "-VsixPath", $vsixResolved,
@@ -5723,7 +6090,9 @@ try {
           "-DaemonPath", $daemonResolved,
           "-BridgePath", $bridgeResolved,
           "-TimeoutSeconds", "180"
-        ) 240
+        ) 240 "installed absolute-deadline" $processStartSourceIdentifier $processStartEvents $processStartEventKeys `
+          $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
+        $installedProcessTreeSettlementSnapshot = $probeResult.SettlementSnapshot
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX absolute-deadline probe failed: $probeFailure"
         $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX absolute-deadline probe stdout"
@@ -5784,7 +6153,7 @@ try {
             [System.IO.Path]::GetFileName($svnadminResolved),
             [System.IO.Path]::GetFileName($svnserveResolved)
           ) `
-          -SettlementSnapshot (Get-CimProcessSnapshot)
+          -SettlementSnapshot $installedProcessTreeSettlementSnapshot
       }
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName absolute-deadline product surface invoked a fixture CLI."
       $deadlineObservations += [pscustomobject]@{
@@ -5821,13 +6190,14 @@ try {
       if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "greeting-stall" }
     }
   }
+  $deadlineBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $deadlineWorkRoot) {
+  if ($deadlineBlockPassed -and (Test-Path -LiteralPath $deadlineWorkRoot)) {
     Assert-True (Test-PathWithin $deadlineWorkRoot $repoTargetRoot) "The absolute-deadline cleanup root escaped repo target."
-    Remove-Item -LiteralPath $deadlineWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $deadlineWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $deadlineWorkRoot)) "The absolute-deadline short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $deadlineWorkRoot)) "The absolute-deadline short work root remained after cleanup."
 }
 Assert-True ($deadlineObservations.Count -eq 2) "The packaged-native and installed VSIX absolute-deadline observation set was incomplete."
 
@@ -5837,6 +6207,7 @@ Assert-True ($cancellationWorkRoot.Length -le 120) "The cancellation short work 
 Assert-True (-not (Test-Path -LiteralPath $cancellationWorkRoot)) "The cancellation short work root already exists."
 New-Item -ItemType Directory -Path $cancellationWorkRoot | Out-Null
 $cancellationObservations = @()
+$cancellationBlockPassed = $false
 try {
   $cancellationContracts = @(
     [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
@@ -5901,7 +6272,7 @@ try {
       }
       else {
         $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
-        $probeResult = Invoke-BoundedProcess (Get-Process -Id $PID).Path @(
+        $probeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedCancellationProbeResolved,
           "-VsixPath", $vsixResolved,
@@ -5915,7 +6286,9 @@ try {
           "-DaemonPath", $daemonResolved,
           "-BridgePath", $bridgeResolved,
           "-TimeoutSeconds", "180"
-        ) 240
+        ) 240 "installed cancellation" $processStartSourceIdentifier $processStartEvents $processStartEventKeys `
+          $InstalledProcessTreeSettlementDeadlineSeconds $ProcessStartEventSettlementMilliseconds
+        $installedProcessTreeSettlementSnapshot = $probeResult.SettlementSnapshot
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX cancellation probe failed: $probeFailure"
         $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX cancellation probe stdout"
@@ -5976,7 +6349,7 @@ try {
             [System.IO.Path]::GetFileName($svnadminResolved),
             [System.IO.Path]::GetFileName($svnserveResolved)
           ) `
-          -SettlementSnapshot (Get-CimProcessSnapshot)
+          -SettlementSnapshot $installedProcessTreeSettlementSnapshot
       }
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName cancellation product surface invoked a fixture CLI."
       $cancellationObservations += [pscustomobject]@{
@@ -6014,13 +6387,14 @@ try {
       if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "greeting-stall" }
     }
   }
+  $cancellationBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $cancellationWorkRoot) {
+  if ($cancellationBlockPassed -and (Test-Path -LiteralPath $cancellationWorkRoot)) {
     Assert-True (Test-PathWithin $cancellationWorkRoot $repoTargetRoot) "The cancellation cleanup root escaped repo target."
-    Remove-Item -LiteralPath $cancellationWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $cancellationWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $cancellationWorkRoot)) "The cancellation short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $cancellationWorkRoot)) "The cancellation short work root remained after cleanup."
 }
 Assert-True ($cancellationObservations.Count -eq 2) "The packaged-native and installed VSIX cancellation observation set was incomplete."
 
@@ -6030,6 +6404,7 @@ Assert-True ($trustRevokedWorkRoot.Length -le 120) "The trust-revoked short work
 Assert-True (-not (Test-Path -LiteralPath $trustRevokedWorkRoot)) "The trust-revoked short work root already exists."
 New-Item -ItemType Directory -Path $trustRevokedWorkRoot | Out-Null
 $trustRevokedObservations = @()
+$trustRevokedBlockPassed = $false
 try {
   $trustRevokedContracts = @(
     [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
@@ -6134,7 +6509,10 @@ try {
           (Join-Path $installedFixtureRoot "x") `
           $ExpectedProductVersion `
           $daemonResolved `
-          240000
+          240000 `
+          $InstalledProcessTreeSettlementDeadlineSeconds `
+          $ProcessStartEventSettlementMilliseconds
+        $installedProcessTreeSettlementSnapshot = $probeResult.SettlementSnapshot
         $probeFailure = $probeResult.Stderr.Trim()
         Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The installed VSIX trust-revoked probe failed: $probeFailure"
         $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "installed VSIX trust-revoked probe stdout"
@@ -6209,7 +6587,7 @@ try {
           [System.IO.Path]::GetFileName($svnadminResolved),
           [System.IO.Path]::GetFileName($svnserveResolved)
         ) `
-        -SettlementSnapshot (Get-CimProcessSnapshot) `
+        -SettlementSnapshot $(if ($surfaceName -ceq "installed-vsix-extension-host") { $installedProcessTreeSettlementSnapshot } else { Get-CimProcessSnapshot }) `
         -Context "$surfaceName trust-revoked"
       Assert-True ([int]$processObservation.fixtureCliInvocations -eq 0) "The $surfaceName trust-revoked product surface invoked a fixture CLI."
       Assert-True ([int]$processObservation.workerStarts -eq 0) "The $surfaceName trust-revoked product surface started a remote worker."
@@ -6247,13 +6625,14 @@ try {
       if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "greeting-stall" }
     }
   }
+  $trustRevokedBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $trustRevokedWorkRoot) {
+  if ($trustRevokedBlockPassed -and (Test-Path -LiteralPath $trustRevokedWorkRoot)) {
     Assert-True (Test-PathWithin $trustRevokedWorkRoot $repoTargetRoot) "The trust-revoked cleanup root escaped repo target."
-    Remove-Item -LiteralPath $trustRevokedWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $trustRevokedWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $trustRevokedWorkRoot)) "The trust-revoked short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $trustRevokedWorkRoot)) "The trust-revoked short work root remained after cleanup."
 }
 Assert-True ($trustRevokedObservations.Count -eq 2) "The packaged-native and installed VSIX trust-revoked observation set was incomplete."
 
@@ -6263,6 +6642,7 @@ Assert-True ($workerCrashWorkRoot.Length -le 120) "The worker-crash short work r
 Assert-True (-not (Test-Path -LiteralPath $workerCrashWorkRoot)) "The worker-crash short work root already exists."
 New-Item -ItemType Directory -Path $workerCrashWorkRoot | Out-Null
 $workerCrashObservations = @()
+$workerCrashBlockPassed = $false
 try {
   $workerCrashContracts = @(
     [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
@@ -6280,7 +6660,10 @@ try {
     $startedProbe = $null
     $probeCompleted = $false
     $binding = $null
+    $installedProcessTreeCapture = $null
     $tcpObserver = $null
+    $scenarioPrimaryError = $null
+    $scenarioLifecycleError = $null
     try {
       $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "greeting-stall" $fixtureStatePath $repositoryUri.Port
       $workerCrashRepositoryUrl = "svn://127.0.0.1:$($repositoryUri.Port)/repo/trunk"
@@ -6299,6 +6682,8 @@ try {
       }
       else {
         $installedFixtureRoot = Join-Path $surfaceWorkRoot "e"
+        $installedProcessTreeCapture = New-InstalledProbeProcessTreeCapture `
+          "$surfaceName worker-crash" $ProcessStartEventSettlementMilliseconds
         $startedProbe = Start-WorkerCrashProbeProcess (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedWorkerCrashProbeResolved,
@@ -6335,7 +6720,17 @@ try {
       )
       Assert-True ([uint32]$terminationExitCode -eq [uint32]1398166083) "The $surfaceName worker termination exit code was not exact."
       try {
-        $probeResult = Complete-WorkerCrashProbeProcess $startedProbe $(if ($surfaceName -ceq "packaged-native") { 90 } else { 240 }) "$surfaceName worker-crash"
+        if ($surfaceName -ceq "installed-vsix-extension-host") {
+          $probeResult = Complete-BoundedInstalledProcessTreeRun `
+            -Started $startedProbe -TimeoutSeconds 240 -Context "$surfaceName worker-crash" `
+            -SourceIdentifier $installedProcessTreeCapture.SourceIdentifier `
+            -AllEvents $installedProcessTreeCapture.Events -EventKeys $installedProcessTreeCapture.EventKeys `
+            -ProcessTreeDeadlineSeconds $InstalledProcessTreeSettlementDeadlineSeconds `
+            -ProcessTreeSettlementMilliseconds $ProcessStartEventSettlementMilliseconds
+        }
+        else {
+          $probeResult = Complete-WorkerCrashProbeProcess $startedProbe 90 "$surfaceName worker-crash"
+        }
       }
       finally {
         $probeCompleted = $true
@@ -6487,9 +6882,31 @@ try {
         }
       }
     }
+    catch {
+      $scenarioPrimaryError = $_
+    }
     finally {
+      if (
+        $surfaceName -ceq "installed-vsix-extension-host" -and
+        $null -ne $startedProbe -and -not $probeCompleted
+      ) {
+        try {
+          Stop-StartedInstalledProcessTreeRun `
+            -Started $startedProbe -Capture $installedProcessTreeCapture `
+            -ProcessTreeDeadlineSeconds $InstalledProcessTreeSettlementDeadlineSeconds `
+            -ProcessTreeSettlementMilliseconds $ProcessStartEventSettlementMilliseconds `
+            -Context "$surfaceName worker-crash"
+        }
+        catch {
+          $scenarioLifecycleError = $_
+        }
+      }
+      Close-InstalledProbeProcessTreeCapture $installedProcessTreeCapture
       if ($null -ne $binding) { $binding.Dispose() }
-      if ($null -ne $startedProbe -and -not $probeCompleted) {
+      if (
+        $surfaceName -ceq "packaged-native" -and
+        $null -ne $startedProbe -and -not $probeCompleted
+      ) {
         $probeProcess = [System.Diagnostics.Process]$startedProbe.Process
         try {
           if (-not $probeProcess.HasExited) {
@@ -6501,16 +6918,32 @@ try {
           $probeProcess.Dispose()
         }
       }
-      if ($null -ne $faultFixture) { Stop-FaultFixture $faultFixture "greeting-stall" }
+      if ($null -ne $faultFixture) {
+        try { Stop-FaultFixture $faultFixture "greeting-stall" }
+        catch {
+          if ($null -eq $scenarioLifecycleError) { $scenarioLifecycleError = $_ }
+          else {
+            $scenarioLifecycleError.Exception.Data["SubversionR.FixtureCleanupFailure"] = [string]$_.Exception.Message
+          }
+        }
+      }
     }
+    if ($null -ne $scenarioPrimaryError) {
+      if ($null -ne $scenarioLifecycleError) {
+        $scenarioPrimaryError.Exception.Data["SubversionR.AsyncProcessTreeLifecycleFailure"] = [string]$scenarioLifecycleError.Exception.Message
+      }
+      throw $scenarioPrimaryError
+    }
+    if ($null -ne $scenarioLifecycleError) { throw $scenarioLifecycleError }
   }
+  $workerCrashBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $workerCrashWorkRoot) {
+  if ($workerCrashBlockPassed -and (Test-Path -LiteralPath $workerCrashWorkRoot)) {
     Assert-True (Test-PathWithin $workerCrashWorkRoot $repoTargetRoot) "The worker-crash cleanup root escaped repo target."
-    Remove-Item -LiteralPath $workerCrashWorkRoot -Recurse -Force
+    Remove-Item -LiteralPath $workerCrashWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $workerCrashWorkRoot)) "The worker-crash short work root remained after successful cleanup."
   }
-  Assert-True (-not (Test-Path -LiteralPath $workerCrashWorkRoot)) "The worker-crash short work root remained after cleanup."
 }
 Assert-True ($workerCrashObservations.Count -eq 2) "The packaged-native and installed VSIX worker-crash observation set was incomplete."
 
@@ -6521,6 +6954,7 @@ Assert-True (Test-PathWithin $blackholeConnectWorkRoot $repoTargetRoot) "The bla
 Assert-True (-not (Test-Path -LiteralPath $blackholeConnectWorkRoot)) "The blackhole-connect short work root already exists."
 New-Item -ItemType Directory -Path $blackholeConnectWorkRoot | Out-Null
 $blackholeConnectObservations = @()
+$blackholeConnectBlockPassed = $false
 try {
   foreach ($contract in @(
       [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
@@ -6536,6 +6970,9 @@ try {
     $startedProbe = $null
     $probeCompleted = $false
     $binding = $null
+    $installedProcessTreeCapture = $null
+    $scenarioPrimaryError = $null
+    $scenarioLifecycleError = $null
     try {
       $fixture = Start-BlackholeConnectFixture (Get-Process -Id $PID).Path $blackholeConnectFixtureResolved $fixtureStatePath
       $blackholePort = [int]$fixture.State.port
@@ -6557,6 +6994,8 @@ try {
       }
       else {
         $installedRoot = Join-Path $surfaceRoot "extension-host"
+        $installedProcessTreeCapture = New-InstalledProbeProcessTreeCapture `
+          "$surfaceName blackhole-connect" $ProcessStartEventSettlementMilliseconds
         $startedProbe = Start-WorkerCrashProbeProcess (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", $installedBlackholeConnectProbeResolved,
@@ -6576,8 +7015,22 @@ try {
       Wait-WorkerCrashCandidateCount $daemonResolved 2 30000 "The $surfaceName blackhole-connect barrier"
       $binding = [SubversionRM8I6WorkerCrashNative]::BindExactParentWorker($daemonResolved)
       $tcpObserver.BindWorker([uint32]$binding.WorkerProcessId)
-      $probeResult = Complete-WorkerCrashProbeProcess $startedProbe 180 "$surfaceName blackhole-connect"
-      $probeCompleted = $true
+      try {
+        if ($surfaceName -ceq "installed-vsix-extension-host") {
+          $probeResult = Complete-BoundedInstalledProcessTreeRun `
+            -Started $startedProbe -TimeoutSeconds 180 -Context "$surfaceName blackhole-connect" `
+            -SourceIdentifier $installedProcessTreeCapture.SourceIdentifier `
+            -AllEvents $installedProcessTreeCapture.Events -EventKeys $installedProcessTreeCapture.EventKeys `
+            -ProcessTreeDeadlineSeconds $InstalledProcessTreeSettlementDeadlineSeconds `
+            -ProcessTreeSettlementMilliseconds $ProcessStartEventSettlementMilliseconds
+        }
+        else {
+          $probeResult = Complete-WorkerCrashProbeProcess $startedProbe 180 "$surfaceName blackhole-connect"
+        }
+      }
+      finally {
+        $probeCompleted = $true
+      }
       $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "$surfaceName blackhole-connect probe stdout"
       Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The $surfaceName blackhole-connect probe failed."
       Assert-True (
@@ -6632,10 +7085,32 @@ try {
         }
       }
     }
+    catch {
+      $scenarioPrimaryError = $_
+    }
     finally {
+      if (
+        $surfaceName -ceq "installed-vsix-extension-host" -and
+        $null -ne $startedProbe -and -not $probeCompleted
+      ) {
+        try {
+          Stop-StartedInstalledProcessTreeRun `
+            -Started $startedProbe -Capture $installedProcessTreeCapture `
+            -ProcessTreeDeadlineSeconds $InstalledProcessTreeSettlementDeadlineSeconds `
+            -ProcessTreeSettlementMilliseconds $ProcessStartEventSettlementMilliseconds `
+            -Context "$surfaceName blackhole-connect"
+        }
+        catch {
+          $scenarioLifecycleError = $_
+        }
+      }
+      Close-InstalledProbeProcessTreeCapture $installedProcessTreeCapture
       if ($null -ne $tcpObserver) { $tcpObserver.Dispose() }
       if ($null -ne $binding) { $binding.Dispose() }
-      if ($null -ne $startedProbe -and -not $probeCompleted) {
+      if (
+        $surfaceName -ceq "packaged-native" -and
+        $null -ne $startedProbe -and -not $probeCompleted
+      ) {
         $probeProcess = [System.Diagnostics.Process]$startedProbe.Process
         if (-not $probeProcess.HasExited) { $probeProcess.Kill($true); $probeProcess.WaitForExit() }
         $probeProcess.Dispose()
@@ -6644,11 +7119,22 @@ try {
         try { Stop-BlackholeConnectFixture $fixture $fixtureStatePath | Out-Null } catch { }
       }
     }
+    if ($null -ne $scenarioPrimaryError) {
+      if ($null -ne $scenarioLifecycleError) {
+        $scenarioPrimaryError.Exception.Data["SubversionR.AsyncProcessTreeLifecycleFailure"] = [string]$scenarioLifecycleError.Exception.Message
+      }
+      throw $scenarioPrimaryError
+    }
+    if ($null -ne $scenarioLifecycleError) { throw $scenarioLifecycleError }
   }
+  $blackholeConnectBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $blackholeConnectWorkRoot) { Remove-Item -LiteralPath $blackholeConnectWorkRoot -Recurse -Force }
-  Assert-True (-not (Test-Path -LiteralPath $blackholeConnectWorkRoot)) "The blackhole-connect short work root remained after cleanup."
+  if ($blackholeConnectBlockPassed -and (Test-Path -LiteralPath $blackholeConnectWorkRoot)) {
+    Assert-True (Test-PathWithin $blackholeConnectWorkRoot $repoTargetRoot) "The blackhole-connect cleanup root escaped repo target."
+    Remove-Item -LiteralPath $blackholeConnectWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $blackholeConnectWorkRoot)) "The blackhole-connect short work root remained after successful cleanup."
+  }
 }
 Assert-True ($blackholeConnectObservations.Count -eq 2) "The packaged-native and installed VSIX blackhole-connect observation set was incomplete."
 
@@ -6656,6 +7142,7 @@ $daemonDisconnectWorkRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTarget
 Assert-True (Test-PathWithin $daemonDisconnectWorkRoot $repoTargetRoot) "The daemon-disconnect short work root escaped repo target."
 New-Item -ItemType Directory -Path $daemonDisconnectWorkRoot | Out-Null
 $daemonDisconnectObservations = @()
+$daemonDisconnectBlockPassed = $false
 try {
   foreach ($contract in @(
       [pscustomobject]@{ Surface = "packaged-native"; WorkRoot = "p"; WorkingCopy = $packagedAuthzWorkingCopyResolved },
@@ -6669,6 +7156,9 @@ try {
     New-Item -ItemType Directory -Path $surfaceRoot, $profileRoot | Out-Null
     Assert-WorkerCrashCandidateCount $daemonResolved 0 "The $surfaceName daemon-disconnect preflight"
     $faultFixture = $null; $startedProbe = $null; $probeCompleted = $false; $binding = $null
+    $installedProcessTreeCapture = $null
+    $scenarioPrimaryError = $null
+    $scenarioLifecycleError = $null
     try {
       $faultFixture = Start-FaultFixture $nodeHost $faultFixtureResolved "greeting-stall" $fixtureStatePath $repositoryUri.Port
       $operationId = [Guid]::NewGuid().ToString("D")
@@ -6683,6 +7173,8 @@ try {
         ) @{ ELECTRON_RUN_AS_NODE = "1" }
       }
       else {
+        $installedProcessTreeCapture = New-InstalledProbeProcessTreeCapture `
+          "$surfaceName daemon-disconnect" $ProcessStartEventSettlementMilliseconds
         $startedProbe = Start-WorkerCrashProbeProcess (Get-Process -Id $PID).Path @(
           "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $installedDaemonDisconnectProbeResolved,
           "-VsixPath", $vsixResolved, "-CodeCliPath", $codeCliResolved, "-FixtureRoot", (Join-Path $surfaceRoot "extension-host"),
@@ -6697,8 +7189,22 @@ try {
       $workerDescendantsAtBarrier = [SubversionRM8I6WorkerCrashNative]::GetBoundDescendantCount($binding)
       $triggerStream = [System.IO.File]::Open($shutdownTriggerPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
       $triggerStream.Dispose()
-      $probeResult = Complete-WorkerCrashProbeProcess $startedProbe 180 "$surfaceName daemon-disconnect"
-      $probeCompleted = $true
+      try {
+        if ($surfaceName -ceq "installed-vsix-extension-host") {
+          $probeResult = Complete-BoundedInstalledProcessTreeRun `
+            -Started $startedProbe -TimeoutSeconds 180 -Context "$surfaceName daemon-disconnect" `
+            -SourceIdentifier $installedProcessTreeCapture.SourceIdentifier `
+            -AllEvents $installedProcessTreeCapture.Events -EventKeys $installedProcessTreeCapture.EventKeys `
+            -ProcessTreeDeadlineSeconds $InstalledProcessTreeSettlementDeadlineSeconds `
+            -ProcessTreeSettlementMilliseconds $ProcessStartEventSettlementMilliseconds
+        }
+        else {
+          $probeResult = Complete-WorkerCrashProbeProcess $startedProbe 180 "$surfaceName daemon-disconnect"
+        }
+      }
+      finally {
+        $probeCompleted = $true
+      }
       $probeReport = Convert-JsonObject $probeResult.Stdout.Trim() "$surfaceName daemon-disconnect probe stdout"
       Assert-True ($probeResult.ExitCode -eq 0 -and $probeResult.Stderr.Length -eq 0) "The $surfaceName daemon-disconnect probe failed."
       Assert-True (
@@ -6749,20 +7255,53 @@ try {
         }
       }
     }
+    catch {
+      $scenarioPrimaryError = $_
+    }
     finally {
+      if (
+        $surfaceName -ceq "installed-vsix-extension-host" -and
+        $null -ne $startedProbe -and -not $probeCompleted
+      ) {
+        try {
+          Stop-StartedInstalledProcessTreeRun `
+            -Started $startedProbe -Capture $installedProcessTreeCapture `
+            -ProcessTreeDeadlineSeconds $InstalledProcessTreeSettlementDeadlineSeconds `
+            -ProcessTreeSettlementMilliseconds $ProcessStartEventSettlementMilliseconds `
+            -Context "$surfaceName daemon-disconnect"
+        }
+        catch {
+          $scenarioLifecycleError = $_
+        }
+      }
+      Close-InstalledProbeProcessTreeCapture $installedProcessTreeCapture
       if ($null -ne $binding) { $binding.Dispose() }
-      if ($null -ne $startedProbe -and -not $probeCompleted) {
+      if (
+        $surfaceName -ceq "packaged-native" -and
+        $null -ne $startedProbe -and -not $probeCompleted
+      ) {
         $probeProcess = [System.Diagnostics.Process]$startedProbe.Process
         if (-not $probeProcess.HasExited) { $probeProcess.Kill($true); $probeProcess.WaitForExit() }
         $probeProcess.Dispose()
       }
       if ($null -ne $faultFixture) { try { Stop-FaultFixture $faultFixture "greeting-stall" } catch { } }
     }
+    if ($null -ne $scenarioPrimaryError) {
+      if ($null -ne $scenarioLifecycleError) {
+        $scenarioPrimaryError.Exception.Data["SubversionR.AsyncProcessTreeLifecycleFailure"] = [string]$scenarioLifecycleError.Exception.Message
+      }
+      throw $scenarioPrimaryError
+    }
+    if ($null -ne $scenarioLifecycleError) { throw $scenarioLifecycleError }
   }
+  $daemonDisconnectBlockPassed = $true
 }
 finally {
-  if (Test-Path -LiteralPath $daemonDisconnectWorkRoot) { Remove-Item -LiteralPath $daemonDisconnectWorkRoot -Recurse -Force }
-  Assert-True (-not (Test-Path -LiteralPath $daemonDisconnectWorkRoot)) "The daemon-disconnect short work root remained after cleanup."
+  if ($daemonDisconnectBlockPassed -and (Test-Path -LiteralPath $daemonDisconnectWorkRoot)) {
+    Assert-True (Test-PathWithin $daemonDisconnectWorkRoot $repoTargetRoot) "The daemon-disconnect cleanup root escaped repo target."
+    Remove-Item -LiteralPath $daemonDisconnectWorkRoot -Recurse -Force -ErrorAction Stop
+    Assert-True (-not (Test-Path -LiteralPath $daemonDisconnectWorkRoot)) "The daemon-disconnect short work root remained after successful cleanup."
+  }
 }
 Assert-True ($daemonDisconnectObservations.Count -eq 2) "The packaged-native and installed VSIX daemon-disconnect observation set was incomplete."
 

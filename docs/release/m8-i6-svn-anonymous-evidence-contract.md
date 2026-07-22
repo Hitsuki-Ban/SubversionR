@@ -83,6 +83,19 @@ root escapes `target` or exceeds the budget. A successful block removes its
 short root. A failed block retains its isolated VS Code logs and the bounded
 child stdout/stderr locally under that root for diagnosis; those failure files
 are not evidence inputs and cannot appear in a passing aggregate.
+Every installed launcher is bound to its exact returned or started PID. Before
+the driver accepts that launcher and before any successful short-root cleanup,
+the subscribed start-event ancestry from that probe through every VS Code,
+Extension Host, daemon, worker, and utility descendant must remain at zero live
+identities for the complete settlement window. PID reuse is distinguished by
+creation time. A business or lifecycle failure retains the affected short root;
+the same process-tree settlement runs after any post-start failure, including
+pre-completion barriers, completion, and live-capture handshakes, while
+preserving that primary error. Process snapshots use the
+remaining monotonic deadline as their operation timeout, so an unresponsive WMI
+query cannot turn settlement into an unbounded wait. The driver fails at the
+deadline with a bounded live-identity summary, and it neither retries deletion
+nor ignores a locked fixture file.
 
 The report binds the exact bytes of the main driver and every source-controlled
 helper it executes: the I6 packaged-native positive/negative probes, the
