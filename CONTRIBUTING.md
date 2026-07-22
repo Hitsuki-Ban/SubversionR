@@ -4,6 +4,8 @@ SubversionR is implemented as a VS Code TypeScript adapter, a Rust sidecar, and 
 
 ## Development Setup
 
+The required project toolchain is Node.js `24.16.0`, pnpm `11.5.2`, and the Rust toolchain pinned by `rust-toolchain.toml`. Node is pinned by `.node-version` and `package.json`; pnpm rejects mismatched Node or package-manager versions and does not install missing dependencies implicitly.
+
 Use `pnpm` for Node.js workflows and `cargo` through `rustup` for Rust workflows. Use `uv` for any Python helper work. Do not use bare `npm`, `npx`, or `pip` in this repository.
 
 Windows native build scripts require `SUBVERSIONR_VSDEVCMD` to point at the Visual Studio 2022 developer command entrypoint:

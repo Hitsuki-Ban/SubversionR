@@ -1,5 +1,9 @@
 packages:
   - packages/*
+nodeVersion: 24.16.0
+engineStrict: true
+pmOnFail: error
+verifyDepsBeforeRun: error
 allowBuilds:
   '@vscode/vsce-sign': false
   keytar: false
