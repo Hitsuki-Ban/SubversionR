@@ -118,6 +118,10 @@ function New-DaemonBuildWorktreeFixture([string]$Root, [string]$BuildScript, [st
   $primaryRoot = Join-Path $Root "primary"
   $toolsRoot = Join-Path $Root "tools"
   $userProfile = Join-Path $Root "user-profile"
+  $fixturePowerShellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  if (-not (Test-Path -LiteralPath $fixturePowerShellPath -PathType Leaf)) {
+    throw "Windows PowerShell fixture executable is missing: $fixturePowerShellPath"
+  }
   foreach ($directory in @(
     $primaryRoot,
     $toolsRoot,
@@ -171,13 +175,13 @@ if ($env:SUBVERSIONR_TEST_TOOL_ARGUMENTS -cne "-vV") {
 Write-Output "release: 1.96.0"
 Write-Output "host: x86_64-pc-windows-msvc"
 '@ | Set-Content -LiteralPath (Join-Path $toolsRoot "fake-rustc.ps1") -Encoding utf8 -NoNewline
-  @'
+  @"
 @echo off
 set "SUBVERSIONR_TEST_TOOL_CWD=%CD%"
 set "SUBVERSIONR_TEST_TOOL_ARGUMENTS=%*"
-pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-rustc.ps1"
+"$fixturePowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-rustc.ps1"
 exit /b %ERRORLEVEL%
-'@ | Set-Content -LiteralPath (Join-Path $toolsRoot "rustc.cmd") -Encoding ascii -NoNewline
+"@ | Set-Content -LiteralPath (Join-Path $toolsRoot "rustc.cmd") -Encoding ascii -NoNewline
 
   @'
 [CmdletBinding()]
@@ -213,13 +217,13 @@ $bytes[0x81] = 0x45
 [BitConverter]::GetBytes([uint32]16).CopyTo($bytes, 0x20c)
 [IO.File]::WriteAllBytes($daemonPath, $bytes)
 '@ | Set-Content -LiteralPath (Join-Path $toolsRoot "fake-cargo.ps1") -Encoding utf8 -NoNewline
-  @'
+  @"
 @echo off
 set "SUBVERSIONR_TEST_TOOL_CWD=%CD%"
 set "SUBVERSIONR_TEST_TOOL_ARGUMENTS=%*"
-pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-cargo.ps1"
+"$fixturePowerShellPath" -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-cargo.ps1"
 exit /b %ERRORLEVEL%
-'@ | Set-Content -LiteralPath (Join-Path $toolsRoot "cargo.cmd") -Encoding ascii -NoNewline
+"@ | Set-Content -LiteralPath (Join-Path $toolsRoot "cargo.cmd") -Encoding ascii -NoNewline
 
   return [pscustomobject]@{
     primaryRoot = $primaryRoot
