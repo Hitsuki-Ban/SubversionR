@@ -61,6 +61,23 @@ describe("extension manifest", () => {
       "onCommand:subversionr.initialize",
       "onCommand:subversionr.diagnostics.collect",
       "onCommand:subversionr.diagnostics.versionReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousStressCheckout",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousNegativeReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoverySafeReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousRedactionReport",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
+      "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
       "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
       "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
       "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
@@ -90,6 +107,7 @@ describe("extension manifest", () => {
       "onCommand:subversionr.refreshRepository",
       "onCommand:subversionr.checkRemoteChanges",
       "onCommand:subversionr.retryRemoteRecovery",
+      "onCommand:subversionr.resolveCheckoutTargetRecovery",
       "onCommand:subversionr.refreshResource",
       "onCommand:subversionr.openConflictArtifact",
       "onCommand:subversionr.addResource",
@@ -168,6 +186,89 @@ describe("extension manifest", () => {
     expect(manifest.activationEvents).not.toContain("workspaceContains:**/.svn");
     expect(manifest.activationEvents).not.toContain("workspaceContains:**/.svn/wc.db");
     expect(manifest.activationEvents).not.toContain("onCommand:subversionr.diagnostics.installedRedactionReport");
+    const contributedCommands = (manifest.contributes?.commands ?? []).map(
+      (command: { command: string }) => command.command,
+    );
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousNegativeReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousStalledReadReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousDeadlineReport");
+    expect(contributedCommands).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
+    );
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousCancellationReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport");
+    expect(contributedCommands).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
+    );
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRecoverySafeReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousRedactionReport");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm");
+    expect(contributedCommands).not.toContain("subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport");
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousNegativeReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousRecoverySafeReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousRedactionReport",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
+    );
+    expect(JSON.stringify(manifest.contributes?.menus ?? {})).not.toContain(
+      "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
+    );
+  });
+
+  it("binds installed redaction evidence to the real diagnostics and redaction functions", () => {
+    const source = readFileSync(join(extensionRoot, "src/extension.ts"), "utf8");
+    const productionClosure = `              collectDiagnosticsComposite: async (diagnosticInput) => ({
+                diagnosticsBundle: await collectDiagnosticsBundle({
+                  context: diagnosticsContext(context),
+                  backendService: service,
+                  operationJournal,
+                  watcherOverflowDiagnostics,
+                }),
+                redactedCanary: redactDiagnosticValue(diagnosticInput),
+              }),`;
+
+    expect(source).toContain(productionClosure);
+    expect(source.match(/collectDiagnosticsComposite: async \(diagnosticInput\)/gu)).toHaveLength(1);
   });
 
   it("declares limited Workspace Trust support for trust-sensitive SVN operations and external tool config paths", () => {
@@ -260,6 +361,10 @@ describe("extension manifest", () => {
       {
         command: "subversionr.retryRemoteRecovery",
         title: "%command.retryRemoteRecovery.title%",
+      },
+      {
+        command: "subversionr.resolveCheckoutTargetRecovery",
+        title: "%command.resolveCheckoutTargetRecovery.title%",
       },
       {
         command: "subversionr.refreshResource",
@@ -2111,6 +2216,27 @@ describe("extension manifest", () => {
     });
   });
 
+  it("localizes anonymous lock identity requirements in priority languages", () => {
+    expect(readJson("l10n/bundle.l10n.json")).toMatchObject({
+      "Locking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "Locking requires an authenticated identity; the current SVN server profile is anonymous.",
+      "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.",
+    });
+    expect(readJson("l10n/bundle.l10n.ja.json")).toMatchObject({
+      "Locking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "ロックには認証済みの ID が必要ですが、現在の SVN サーバープロファイルは匿名です。",
+      "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "ロック解除には認証済みの ID が必要ですが、現在の SVN サーバープロファイルは匿名です。",
+    });
+    expect(readJson("l10n/bundle.l10n.zh-cn.json")).toMatchObject({
+      "Locking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "锁定需要已认证的身份，但当前 SVN 服务器配置为匿名。",
+      "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.":
+        "解锁需要已认证的身份，但当前 SVN 服务器配置为匿名。",
+    });
+  });
+
   it("localizes singular and plural SVN conflict counts in priority languages", () => {
     expect(readJson("l10n/bundle.l10n.json")).toMatchObject({
       "{0} SVN conflict": "{0} SVN conflict",
@@ -2214,6 +2340,18 @@ function collectStringValues(value: unknown): string[] {
 
 function runtimeLocalizationKeys(): string[] {
   return [
+    "A possibly changed SVN checkout target is blocked until you review its disposition.",
+    "Confirm that you reviewed and resolved the possibly changed SVN checkout target before releasing its safety block: {0}",
+    "No blocked SVN checkout target requires review.",
+    "Release checkout target block",
+    "Review blocked SVN checkout target",
+    "Review checkout target",
+    "Select the checkout target whose disposition you reviewed",
+    "SubversionR released the reviewed SVN checkout target: {0}",
+    "SVN {0} failed because the server denied authorization for this operation.",
+    "SVN {0} failed because the server authorization configuration is invalid.",
+    "Locking requires an authenticated identity; the current SVN server profile is anonymous.",
+    "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.",
     "Revert",
     "Remove",
     "Delete",

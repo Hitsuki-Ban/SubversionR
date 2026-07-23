@@ -1,0 +1,158 @@
+diff --git a/subversion/libsvn_ra_svn/client.c b/subversion/libsvn_ra_svn/client.c
+index f484519..894cd5d 100644
+--- a/subversion/libsvn_ra_svn/client.c
++++ b/subversion/libsvn_ra_svn/client.c
+@@ -64,6 +64,9 @@
+ #define DO_AUTH svn_ra_svn__do_internal_auth
+ #endif
+-
++
++#define SUBVERSIONR_AUTH_PARAM_RA_SVN_EXPECTED_AUTHORITY \
++  "subversionr:expected-svn-origin-v1"
++
+ /* We aren't using SVN_DEPTH_IS_RECURSIVE here because that macro (for
+    whatever reason) deems svn_depth_immediates as non-recursive, which
+    is ... kinda true, but not true enough for our purposes.  We need
+@@ -604,6 +607,106 @@ static apr_status_t close_tunnel_cleanup(void *baton)
+   return APR_SUCCESS; /* ignored */
+ }
+-
++
++static svn_error_t *
++subversionr_authority_mismatch(void)
++{
++  return svn_error_create(SVN_ERR_RA_ILLEGAL_URL, NULL,
++                          "SubversionR repository root authority mismatch");
++}
++
++/* Validate an authenticated server-selected repository root before it is
++   stored or used.  The private auth parameter is set only by SubversionR's
++   envelope-validated direct svn transport. */
++static svn_error_t *
++subversionr_validate_repos_root(const char **validated_root,
++                                const char *server_root,
++                                const char *request_url,
++                                const apr_uri_t *request_uri,
++                                svn_auth_baton_t *auth_baton,
++                                apr_pool_t *result_pool,
++                                apr_pool_t *scratch_pool)
++{
++  const char *expected_authority = svn_auth_get_parameter(
++      auth_baton, SUBVERSIONR_AUTH_PARAM_RA_SVN_EXPECTED_AUTHORITY);
++  const char *canonical_request;
++  const char *canonical_expected;
++  const char *canonical_server_root;
++  apr_uri_t expected_uri;
++  apr_uri_t root_uri;
++  apr_status_t status;
++  svn_error_t *err;
++
++  if (! server_root)
++    return expected_authority ? subversionr_authority_mismatch()
++                              : SVN_NO_ERROR;
++
++  if (! expected_authority)
++    {
++      SVN_ERR(svn_uri_canonicalize_safe(&canonical_server_root, NULL,
++                                        server_root, result_pool,
++                                        scratch_pool));
++      if (strlen(canonical_server_root) > strlen(request_url))
++        return svn_error_create(SVN_ERR_RA_SVN_MALFORMED_DATA, NULL,
++                                _("Impossibly long repository root from "
++                                  "server"));
++      *validated_root = canonical_server_root;
++      return SVN_NO_ERROR;
++    }
++
++  err = svn_uri_canonicalize_safe(&canonical_server_root, NULL, server_root,
++                                  result_pool, scratch_pool);
++  if (err)
++    {
++      svn_error_clear(err);
++      return subversionr_authority_mismatch();
++    }
++  err = svn_uri_canonicalize_safe(&canonical_expected, NULL,
++                                  expected_authority, scratch_pool,
++                                  scratch_pool);
++  if (err)
++    {
++      svn_error_clear(err);
++      return subversionr_authority_mismatch();
++    }
++  err = svn_uri_canonicalize_safe(&canonical_request, NULL, request_url,
++                                  scratch_pool, scratch_pool);
++  if (err)
++    {
++      svn_error_clear(err);
++      return subversionr_authority_mismatch();
++    }
++
++  status = apr_uri_parse(scratch_pool, canonical_expected, &expected_uri);
++  if (status != APR_SUCCESS || ! expected_uri.scheme ||
++      ! expected_uri.hostname || strcmp(expected_uri.scheme, "svn") != 0 ||
++      expected_uri.user || expected_uri.password || expected_uri.query ||
++      expected_uri.fragment ||
++      (expected_uri.path && expected_uri.path[0] != '\0' &&
++       strcmp(expected_uri.path, "/") != 0))
++    return subversionr_authority_mismatch();
++
++  if (! request_uri->scheme || ! request_uri->hostname ||
++      strcmp(request_uri->scheme, expected_uri.scheme) != 0 ||
++      strcmp(request_uri->hostname, expected_uri.hostname) != 0 ||
++      (request_uri->port_str ? request_uri->port : SVN_RA_SVN_PORT) !=
++      (expected_uri.port_str ? expected_uri.port : SVN_RA_SVN_PORT))
++    return subversionr_authority_mismatch();
++
++  status = apr_uri_parse(scratch_pool, canonical_server_root, &root_uri);
++  if (status != APR_SUCCESS || ! root_uri.scheme || ! root_uri.hostname ||
++      root_uri.user || root_uri.password || root_uri.query ||
++      root_uri.fragment ||
++      strcmp(root_uri.scheme, expected_uri.scheme) != 0 ||
++      strcmp(root_uri.hostname, expected_uri.hostname) != 0 ||
++      (root_uri.port_str ? root_uri.port : SVN_RA_SVN_PORT) !=
++      (expected_uri.port_str ? expected_uri.port : SVN_RA_SVN_PORT) ||
++      svn_uri_skip_ancestor(canonical_server_root, canonical_request,
++                            scratch_pool) == NULL)
++    return subversionr_authority_mismatch();
++
++  *validated_root = canonical_server_root;
++  return SVN_NO_ERROR;
++}
+ /* Open a session to URL, returning it in *SESS_P, allocating it in POOL.
+    URI is a parsed version of URL.  CALLBACKS and CALLBACKS_BATON
+    are provided by the caller of ra_svn_open. If TUNNEL_NAME is not NULL,
+@@ -628,6 +731,7 @@ static svn_error_t *open_session(svn_ra_svn__session_baton_t **sess_p,
+   apr_socket_t *sock;
+   apr_uint64_t minver, maxver;
+   svn_ra_svn__list_t *mechlist, *server_caplist, *repos_caplist;
++  const char *server_root = NULL;
+   const char *client_string = NULL;
+   apr_pool_t *pool = result_pool;
+   svn_ra_svn__parent_t *parent;
+@@ -767,20 +871,12 @@ static svn_error_t *open_session(svn_ra_svn__session_baton_t **sess_p,
+   /* Read the repository's uuid and root URL, and perhaps learn more
+      capabilities that weren't available before now. */
+   SVN_ERR(svn_ra_svn__read_cmd_response(conn, pool, "c?c?l", &conn->uuid,
+-                                        &conn->repos_root, &repos_caplist));
++                                        &server_root, &repos_caplist));
+   if (repos_caplist)
+     SVN_ERR(svn_ra_svn__set_capabilities(conn, repos_caplist));
+-
++
+-  if (conn->repos_root)
+-    {
+-      conn->repos_root = svn_uri_canonicalize(conn->repos_root, pool);
+-      /* We should check that the returned string is a prefix of url, since
+-         that's the API guarantee, but this isn't true for 1.0 servers.
+-         Checking the length prevents client crashes. */
+-      if (strlen(conn->repos_root) > strlen(url))
+-        return svn_error_create(SVN_ERR_RA_SVN_MALFORMED_DATA, NULL,
+-                                _("Impossibly long repository root from "
+-                                  "server"));
+-    }
++  SVN_ERR(subversionr_validate_repos_root(&conn->repos_root, server_root,
++                                          url, uri, auth_baton, pool,
++                                          scratch_pool));
+-
++
+   *sess_p = sess;

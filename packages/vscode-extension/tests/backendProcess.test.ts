@@ -67,6 +67,25 @@ describe("startBackendProcess", () => {
     expect(spawner.calls).toHaveLength(0);
   });
 
+  it("fails fast on non-absolute remote state root paths before spawning", async () => {
+    const spawner = new RecordingSpawner();
+
+    await expect(
+      startBackendProcess(
+        backendConfig({
+          remoteStateRoot: "SubversionR\\remote-state",
+        }),
+        { spawner },
+      ),
+    ).rejects.toMatchObject({
+      code: "SUBVERSIONR_BACKEND_PATH_NOT_ABSOLUTE",
+      category: "configuration",
+      messageKey: "error.backend.remoteStateRootNotAbsolute",
+    });
+
+    expect(spawner.calls).toHaveLength(0);
+  });
+
   it("fails fast before spawning when the backend notification handler is missing", async () => {
     const spawner = new RecordingSpawner();
 
@@ -115,6 +134,7 @@ describe("startBackendProcess", () => {
         workspaceTrust: "trusted",
         trustEpoch: 1,
         cacheRoot: "C:\\SubversionR\\cache",
+        remoteStateRoot: "C:\\SubversionR\\remote-state",
       },
     });
 
@@ -344,7 +364,7 @@ describe("startBackendProcess", () => {
       category: "protocol",
       messageKey: "error.backend.protocolMinorUnsupported",
       safeArgs: {
-        expectedMinimum: 34,
+        expectedMinimum: 35,
         actual: 33,
       },
     });
@@ -548,6 +568,7 @@ describe("startBackendProcess", () => {
     "remoteWorkerIsolation",
     "credentialLeaseSettlement",
     "remoteConnectionState",
+    "remoteSvnAnonymous",
   ] as const)(
     "rejects initialize and terminates the sidecar when %s is unavailable",
     async (capability) => {
@@ -579,6 +600,24 @@ describe("startBackendProcess", () => {
       expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
     },
   );
+
+  it("rejects initialize when remoteSvnAnonymous is missing instead of reducing capability", async () => {
+    const spawner = new RecordingSpawner();
+    const start = startBackendProcess(backendConfig(), backendDeps({ spawner }));
+    const request = await readJsonRpcRequest(spawner.child.stdin);
+    const response = initializeResponse();
+    delete (response.capabilities as Partial<typeof response.capabilities>).remoteSvnAnonymous;
+
+    spawner.child.stdout.write(jsonRpcResponse(request.id, response));
+
+    await expect(start).rejects.toMatchObject({
+      code: "SUBVERSIONR_INITIALIZE_RESPONSE_INVALID",
+      category: "protocol",
+      messageKey: "error.backend.initializeResponseInvalid",
+      safeArgs: { field: "capabilities.remoteSvnAnonymous" },
+    });
+    expect(spawner.child.killCalls).toEqual(["SIGTERM"]);
+  });
 
   it("rejects pending initialize when the sidecar exits and keeps stderr diagnostic context", async () => {
     const spawner = new RecordingSpawner();
@@ -945,6 +984,7 @@ function backendConfig(
     executablePath: "C:\\SubversionR\\subversionr-daemon.exe",
     bridgeDllPath: "C:\\SubversionR\\subversionr_svn_bridge.dll",
     cacheRoot: "C:\\SubversionR\\cache",
+    remoteStateRoot: "C:\\SubversionR\\remote-state",
     clientName: "SubversionR",
     clientVersion: "0.1.0",
     locale: "ja",
@@ -991,7 +1031,7 @@ function initializeResponse(
 
 function initializeResponseBase() {
   return {
-    protocol: { major: 1, minor: 34 },
+    protocol: { major: 1, minor: 35 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -1047,6 +1087,7 @@ function initializeResponseBase() {
       remoteWorkerIsolation: true,
       credentialLeaseSettlement: true,
       remoteConnectionState: true,
+      remoteSvnAnonymous: true,
     },
     acknowledgedTrustEpoch: 1,
   };

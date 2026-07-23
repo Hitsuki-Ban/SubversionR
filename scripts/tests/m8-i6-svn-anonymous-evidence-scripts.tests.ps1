@@ -1,0 +1,3098 @@
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+$verifyScript = Join-Path $repoRoot "scripts\release\verify-m8-i6-svn-anonymous-evidence.ps1"
+$runScript = Join-Path $repoRoot "scripts\release\run-m8-i6-svn-anonymous-evidence.ps1"
+$contractPath = Join-Path $repoRoot "docs\release\m8-i6-svn-anonymous-evidence-contract.md"
+$schemaPath = Join-Path $repoRoot "docs\release\m8-i6-svn-anonymous-evidence.v1.schema.json"
+$probeDriverPath = Join-Path $repoRoot "scripts\release\probe-m8-i6-svn-anonymous.ps1"
+$packagedNativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-native.mjs"
+$packagedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-negative.mjs"
+$packagedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-authz-denied.mjs"
+$packagedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-stalled-read.mjs"
+$packagedDeadlineProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-deadline.mjs"
+$packagedCancellationProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-cancellation.mjs"
+$packagedTrustRevokedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-trust-revoked.mjs"
+$packagedRecoveryBlockedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-blocked.mjs"
+$packagedRecoverySafeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-safe.mjs"
+$packagedRecoveryIndeterminateProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-recovery-indeterminate.mjs"
+$packagedRedactionProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-redaction.mjs"
+$packagedWorkerCrashProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-worker-crash.mjs"
+$packagedBlackholeConnectProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-blackholeConnect.mjs"
+$packagedDaemonDisconnectProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-packaged-daemon-disconnect.mjs"
+$raSvnFaultFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-ra-svn-fault-fixture.mjs"
+$blackholeConnectFixturePath = Join-Path $repoRoot "scripts\release\serve-m8-i6-blackhole-connect.ps1"
+$countingProxyPath = Join-Path $repoRoot "scripts\release\serve-m8-i6-counting-proxy.mjs"
+$installedStressProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stress.ps1"
+$installedNegativeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-negative.ps1"
+$installedAuthzDeniedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-authz-denied.ps1"
+$installedStalledReadProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-stalled-read.ps1"
+$installedDeadlineProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-deadline.ps1"
+$installedCancellationProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-cancellation.ps1"
+$installedTrustRevokedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-trust-revoked.ps1"
+$installedRecoveryBlockedProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-blocked.ps1"
+$installedRecoverySafeProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-safe.ps1"
+$installedRecoveryIndeterminateProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-recovery-indeterminate.ps1"
+$installedRedactionProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-redaction.ps1"
+$installedWorkerCrashProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-worker-crash.ps1"
+$installedBlackholeConnectProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-blackholeConnect.ps1"
+$installedDaemonDisconnectProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-daemon-disconnect.ps1"
+$installedLocalEventProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-local-event-zero-network.ps1"
+$installedVsixProbePath = Join-Path $repoRoot "scripts\release\probe-m8-i6-installed-vsix.ps1"
+$packagedCompatibilityProbePath = Join-Path $repoRoot "scripts\release\probe-vscode-packaged-native.mjs"
+$installedExtensionHostProbePath = Join-Path $repoRoot "scripts\release\test-vscode-installed-extension-host.ps1"
+$patchPath = Join-Path $repoRoot "native\patches\subversion-1.14.5\ra-svn-authority.patch"
+$patchContractPath = Join-Path $repoRoot "native\patches\subversion-1.14.5\ra-svn-authority.contract.json"
+$sourceLockPath = Join-Path $repoRoot "native\sources.lock.json"
+$tempRoot = Join-Path $repoRoot "target\tests\m8-i6-svn-anonymous-evidence\$([Guid]::NewGuid().ToString('N'))"
+$fakeStageRoot = Join-Path $repoRoot ".cache\tests\m8-i6-svn-anonymous-evidence\$([Guid]::NewGuid().ToString('N'))"
+$allowedRunnerRoot = Join-Path $repoRoot "target\i6-evidence"
+$runnerFixtureRoot = Join-Path $repoRoot "target\i6-evidence\t-$PID"
+
+function Assert-True([bool]$Condition, [string]$Message) {
+  if (-not $Condition) {
+    throw $Message
+  }
+}
+
+function Assert-Equal($Expected, $Actual, [string]$Message) {
+  if ($Expected -ne $Actual) {
+    throw "$Message Expected '$Expected', got '$Actual'."
+  }
+}
+
+function Assert-NativeCommandFailsContaining([scriptblock]$Action, [string]$ExpectedText, [string]$Message) {
+  $output = & $Action 2>&1
+  $exitCode = $LASTEXITCODE
+  Assert-True ($exitCode -ne 0) "$Message Expected native command to fail."
+  $text = $output | Out-String
+  Assert-True ($text.Contains($ExpectedText)) "$Message Expected output to contain '$ExpectedText', got '$text'."
+}
+
+function Assert-ScriptThrowsContaining([scriptblock]$Action, [string]$ExpectedText, [string]$Message) {
+  $thrown = $null
+  try {
+    & $Action
+  }
+  catch {
+    $thrown = $_
+  }
+  Assert-True ($null -ne $thrown) "$Message Expected the script block to throw."
+  Assert-True ($thrown.Exception.Message.Contains($ExpectedText)) "$Message Expected '$ExpectedText', got '$($thrown.Exception.Message)'."
+}
+
+function Get-Sha256([string]$Path) {
+  return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function New-ArtifactBinding([string]$Kind, [string]$Path) {
+  return [ordered]@{
+    kind = $Kind
+    sha256 = Get-Sha256 $Path
+    sizeBytes = [int64](Get-Item -LiteralPath $Path).Length
+  }
+}
+
+function New-MissingArtifactBinding([string]$Kind) {
+  return [ordered]@{
+    kind = $Kind
+    sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+    sizeBytes = 1
+  }
+}
+
+function New-OperationCell([string]$Operation, [string]$Kind) {
+  $cell = [ordered]@{
+    operation = $Operation
+    status = "passed"
+    serverAuth = "anonymous"
+    promptCount = 0
+    credentialSettlement = "none"
+    reconcile = "fresh"
+    diagnosticsRedacted = $true
+  }
+  if ($Kind -ceq "packaged-native") {
+    $cell["temporaryRootsAfter"] = 0
+  }
+  return $cell
+}
+
+function New-Surface([string]$Kind, [string]$ArtifactSha256) {
+  $operations = @(
+    "checkoutOpen",
+    "remoteStatus",
+    "content",
+    "historyLog",
+    "historyBlame",
+    "update",
+    "commit",
+    "branchCopy",
+    "switch"
+  ) | ForEach-Object { New-OperationCell $_ $Kind }
+  $identityRequired = [ordered]@{
+    lock = [ordered]@{
+      operation = "lock"
+      anonymousIdentityRequired = $true
+      stableCode = "SVN_OPERATION_LOCK_FAILED"
+      diagnosticsCause = "authenticationFailed"
+      mayHaveMutated = $false
+      remoteFailure = [ordered]@{ category = "authentication"; reason = "authenticationRequired"; cleanupAppropriate = $false }
+      promptCount = 0
+      credentialSettlement = "none"
+      laneReleaseProof = [ordered]@{ method = "status/refresh"; reconcile = "fresh" }
+      nativeLaneReleased = $true
+      diagnosticsRedacted = $true
+      svnCauseNames = @("SVN_ERR_RA_NOT_AUTHORIZED")
+    }
+    unlock = [ordered]@{
+      operation = "unlock"
+      anonymousIdentityRequired = $true
+      stableCode = "SVN_OPERATION_UNLOCK_FAILED"
+      diagnosticsCause = "authenticationFailed"
+      mayHaveMutated = $false
+      remoteFailure = [ordered]@{ category = "authentication"; reason = "authenticationRequired"; cleanupAppropriate = $false }
+      promptCount = 0
+      credentialSettlement = "none"
+      laneReleaseProof = [ordered]@{ method = "status/refresh"; reconcile = "fresh" }
+      nativeLaneReleased = $true
+      diagnosticsRedacted = $true
+      svnCauseNames = @("SVN_ERR_FS_NO_USER")
+    }
+  }
+  if ($Kind -ceq "packaged-native") {
+    $identityRequired.lock["temporaryRootsAfter"] = 0
+    $identityRequired.unlock["temporaryRootsAfter"] = 0
+  }
+  return [ordered]@{
+    kind = $Kind
+    artifactSha256 = $ArtifactSha256
+    protocol = [ordered]@{ major = 1; minor = 35 }
+    remoteSvnAnonymous = $true
+    fixtureCliInvocations = 0
+    positiveOperationCount = 9
+    identityRequiredOperationCount = 2
+    remoteOperationCount = 11
+    uniqueOperationIds = $true
+    operations = @($operations)
+    anonymousIdentityRequired = $identityRequired
+  }
+}
+
+function New-NegativeSurfaceObservation(
+  [string]$Surface,
+  [string]$OriginCode,
+  [string]$OriginReason,
+  [string]$NetworkProgress,
+  [int]$NetworkAttempts,
+  [int]$NetworkConnections,
+  [string]$SettlementCode = $OriginCode,
+  [string]$SettlementReason = $OriginReason
+) {
+  return [ordered]@{
+    surface = $Surface
+    originCode = $OriginCode
+    originReason = $OriginReason
+    settlementCode = $SettlementCode
+    settlementReason = $SettlementReason
+    networkProgress = $NetworkProgress
+    networkAttempts = $NetworkAttempts
+    networkConnections = $NetworkConnections
+    fixtureCliInvocations = 0
+    credentialRequests = 0
+    credentialSettlements = 0
+    followupNetworkContacts = 0
+    workerDescendantsAfter = 0
+    temporaryRootsAfter = 0
+    diagnosticsRedacted = $true
+  }
+}
+
+function New-NegativeCell(
+  [string]$Cell,
+  [string]$OriginCode,
+  [string]$OriginReason,
+  [string]$NetworkProgress,
+  [int]$NetworkAttempts,
+  [int]$NetworkConnections,
+  [bool]$InstalledOnly = $false,
+  [string]$SettlementCode = $OriginCode,
+  [string]$SettlementReason = $OriginReason
+) {
+  [object[]]$surfaceObservations = if ($InstalledOnly) {
+    @((New-NegativeSurfaceObservation "installed-vsix-extension-host" $OriginCode $OriginReason $NetworkProgress $NetworkAttempts $NetworkConnections $SettlementCode $SettlementReason))
+  }
+  else {
+    @(
+      (New-NegativeSurfaceObservation "packaged-native" $OriginCode $OriginReason $NetworkProgress $NetworkAttempts $NetworkConnections $SettlementCode $SettlementReason),
+      (New-NegativeSurfaceObservation "installed-vsix-extension-host" $OriginCode $OriginReason $NetworkProgress $NetworkAttempts $NetworkConnections $SettlementCode $SettlementReason)
+    )
+  }
+  if ($Cell -ceq "deadline") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["deadlineTiming"] = [ordered]@{
+        clock = "monotonic"
+        timeoutMs = 500
+        elapsedMs = 500
+        cleanupSlackMs = 5000
+      }
+    }
+  }
+  if ($Cell -ceq "cancellation") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["cancellationSettlement"] = [ordered]@{
+        trigger = "abort-signal-after-greeting"
+        localCode = "JSON_RPC_REQUEST_CANCELLED"
+        wireCode = "SUBVERSIONR_REMOTE_WORKER_CANCELLED"
+        wireReason = "operationCancelled"
+        wireSettlementObserved = $true
+      }
+    }
+  }
+  if ($Cell -ceq "workerCrash") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["workerDescendantsAtBarrier"] = 2
+      $observation["workerCrashSettlement"] = [ordered]@{
+        trigger = "external-worker-termination-after-greeting"
+        terminationExitCode = 1398166083
+        workerIdentityBound = $true
+        workerTerminationObserved = $true
+        wireSettlementObserved = $true
+        daemonSurvived = $true
+        nativeLaneReleased = $true
+        localSnapshotAfterCrash = $true
+        workingCopyPreserved = $true
+      }
+      $observation["daemonState"] = [ordered]@{
+        kind = "indeterminate"
+        reason = "workerTerminated"
+        recovery = "notRequired"
+        cleanupAppropriate = $false
+      }
+    }
+  }
+  if ($Cell -ceq "blackholeConnect") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["workerProcessesAfter"] = 0
+      $observation["checkoutJournalEntriesAfter"] = 0
+      $observation["workingCopyPreserved"] = $true
+      $observation["blackholeTiming"] = [ordered]@{ clock = "monotonic"; timeoutMs = 5000; elapsedMs = 5000; cleanupSlackMs = 5000 }
+      $observation["daemonState"] = [ordered]@{ kind = "unreachable"; reason = "timeout"; recovery = "notRequired"; cleanupAppropriate = $false }
+      $observation["blackholeConnectSettlement"] = [ordered]@{
+        trigger = "conditional-accept-loopback-no-accept"
+        operationIdSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        wireSettlementObserved = $true; daemonTerminalStateObserved = $true; nativeLaneReleased = $true; localSnapshotAfterTimeout = $true
+        conditionalAcceptEnabled = $true; listenerProcessBound = $true; acceptInvocations = 0; acceptedConnections = 0
+        stateArtifactUntampered = $true; finalFixtureStatus = "stopped"
+        tcp = [ordered]@{
+          provider = "GetExtendedTcpTable/TCP_TABLE_OWNER_PID_ALL"
+          workerProcessBound = $true
+          observationStartedBeforeProbeLaunch = $true
+          localAddress = "127.0.0.1"
+          localPort = 49152
+          remoteAddress = "127.0.0.1"
+          remotePort = 3690
+          distinctTcbAttempts = 1
+          establishedTcbConnections = 0
+          observationCompletedAfterProbeExit = $true
+          stableSynSentSamples = 3
+          stableSynSentMilliseconds = 25
+          observationMilliseconds = 50
+          synSentRows = 1
+          establishedRows = 0
+          finalRows = 0
+        }
+      }
+    }
+  }
+  if ($Cell -ceq "daemonDisconnect") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["workerDescendantsAtBarrier"] = 2
+      $observation["workerProcessesAfter"] = 0
+      $observation["checkoutJournalEntriesAfter"] = 0
+      $observation["workingCopyPreserved"] = $true
+      $observation["daemonState"] = [ordered]@{ kind = "indeterminate"; reason = "workerTerminated"; recovery = "notRequired"; cleanupAppropriate = $false }
+      $observation["daemonDisconnectSettlement"] = [ordered]@{
+        trigger = "graceful-client-shutdown-after-greeting"; activeRequestSettlementObserved = $true; daemonStateObserved = $true
+        settlementBeforeShutdownAck = $true; shutdownAcknowledged = $true; workingCopyPreserved = $true
+        fixtureGreetingBarrierObserved = $true; shutdownTriggerExternallyCreated = $true; fixtureFollowupContacts = 0
+      }
+    }
+  }
+  if ($Cell -ceq "trustRevoked") {
+    foreach ($observation in $surfaceObservations) {
+      $observation["trustTransition"] = [ordered]@{
+        fromEpoch = 1
+        toEpoch = 2
+        staleEnvelopeEpoch = 1
+        remoteSubmissionEnabledAfter = $false
+      }
+    }
+  }
+  return [ordered]@{
+    cell = $Cell
+    status = "passed"
+    stableCode = $OriginCode
+    reason = $OriginReason
+    surfaceObservations = $surfaceObservations
+  }
+}
+
+function New-RecoverySurfaceObservation([string]$Surface) {
+  return [ordered]@{
+    surface = $Surface
+    safe = [ordered]@{
+      outcome = "Safe"
+      freshReconcile = $true
+      nativeLaneReleased = $true
+      subsequentRequestPassed = $true
+    }
+    indeterminate = [ordered]@{
+      outcome = "Indeterminate"
+      stableCode = "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE"
+      reason = "remoteOperationIndeterminate"
+      nativeLaneBlocked = $true
+      explicitRecoveryRequired = $true
+    }
+    blocked = [ordered]@{
+      outcome = "Blocked"
+      stableCode = "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+      reason = "remoteRecoveryBlocked"
+      restartRestoredBlocked = $true
+      automaticClear = $false
+      requiredConfirmation = "reviewedAndResolved"
+      armedTargetPathSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      confirmedTargetPathSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      armedOriginOperationIdSha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      confirmedOriginOperationIdSha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      confirmedEntryRemoved = $true
+      subsequentCheckoutPassed = $true
+    }
+  }
+}
+
+function New-StressCycleObservation([int]$Cycle) {
+  return [ordered]@{
+    cycle = $Cycle
+    operationIdSha256 = ("{0:x64}" -f [uint64]$Cycle)
+    targetPathSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    extensionHostSessionSha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    operation = "checkoutOpen"
+    faultMode = "none"
+    status = "passed"
+    checkoutRevision = 2
+    fixtureCliInvocations = 0
+    credentialRequests = 0
+    credentialSettlements = 0
+    workerDescendantsAfter = 0
+    temporaryRootsAfter = 0
+    fixtureServerChildrenAfter = 0
+    checkoutJournalEntriesAfter = 0
+    diagnosticsRedacted = $true
+  }
+}
+
+function Write-Report([object]$Report, [string]$Path) {
+  $Report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding utf8
+}
+
+function Copy-Report([object]$Report) {
+  return ($Report | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
+}
+
+function Assert-SchemaRejects([object]$Report, [string]$Message) {
+  $json = $Report | ConvertTo-Json -Depth 20
+  $valid = Test-Json -Json $json -SchemaFile $schemaPath -ErrorAction SilentlyContinue
+  Assert-True (-not $valid) $Message
+}
+
+function Copy-ArgumentsWithValue([object[]]$Arguments, [string]$Name, [string]$Value) {
+  $copy = @($Arguments)
+  $index = [Array]::IndexOf($copy, $Name)
+  Assert-True ($index -ge 0 -and $index + 1 -lt $copy.Count) "Argument $Name must exist in the test invocation."
+  $copy[$index + 1] = $Value
+  return $copy
+}
+
+function New-FakeSubversionStage([string]$Root, [string]$NativeModulePath, [string]$SourceLockPath) {
+  $requiredFiles = @(
+    "include\subversion-1\svn_client.h",
+    "include\subversion-1\svn_wc.h",
+    "include\subversion-1\svn_version.h",
+    "include\apr.h",
+    "include\apu.h",
+    "include\apr_pools.h",
+    "lib\libsvn_client-1.lib",
+    "lib\libsvn_ra-1.lib",
+    "lib\libsvn_ra_serf-1.lib",
+    "lib\libsvn_wc-1.lib",
+    "lib\libsvn_subr-1.lib",
+    "lib\libapr-1.lib",
+    "lib\libaprutil-1.lib",
+    "lib\libcrypto.lib",
+    "lib\libssl.lib",
+    "lib\serf-1.lib",
+    "include\openssl\opensslv.h",
+    "include\openssl\ssl.h",
+    "include\openssl\crypto.h",
+    "include\serf-1\serf.h",
+    "include\serf-1\serf_bucket_types.h",
+    "include\serf-1\serf_bucket_util.h",
+    "bin\libapr-1.dll",
+    "bin\libapriconv-1.dll",
+    "bin\libaprutil-1.dll",
+    "bin\libexpat.dll",
+    "bin\libsvn_client-1.dll",
+    "bin\libsvn_delta-1.dll",
+    "bin\libsvn_diff-1.dll",
+    "bin\libsvn_fs-1.dll",
+    "bin\libsvn_fs_fs-1.dll",
+    "bin\libsvn_fs_util-1.dll",
+    "bin\libsvn_fs_x-1.dll",
+    "bin\libsvn_ra-1.dll",
+    "bin\libsvn_repos-1.dll",
+    "bin\libsvn_subr-1.dll",
+    "bin\libsvn_wc-1.dll",
+    "bin\svn.exe",
+    "bin\svnadmin.exe",
+    "bin\svnserve.exe",
+    "bin\libssl-3-x64.dll",
+    "bin\libcrypto-3-x64.dll",
+    "bin\iconv\utf8.so"
+  )
+  foreach ($relativePath in $requiredFiles) {
+    $path = Join-Path $Root $relativePath
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+    Set-Content -LiteralPath $path -Value "fixture" -NoNewline
+  }
+  Set-Content -LiteralPath (Join-Path $Root "include\subversion-1\svn_version.h") -Value "#define SVN_VER_MAJOR 1`n#define SVN_VER_MINOR 14`n#define SVN_VER_PATCH 5`n" -NoNewline
+  Set-Content -LiteralPath (Join-Path $Root "include\openssl\opensslv.h") -Value '#define OPENSSL_VERSION_STR "3.5.7"' -NoNewline
+  Set-Content -LiteralPath (Join-Path $Root "include\serf-1\serf.h") -Value "#define SERF_MAJOR_VERSION 1`n#define SERF_MINOR_VERSION 3`n#define SERF_PATCH_VERSION 10`n" -NoNewline
+  Import-Module $NativeModulePath -Force
+  New-SubversionStageManifest -StageRoot $Root -SourceLockPath $SourceLockPath -Arch "x64" -Configuration "Release" | Out-Null
+}
+
+New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+try {
+  foreach ($path in @($verifyScript, $runScript, $probeDriverPath, $packagedNativeProbePath, $packagedNegativeProbePath, $packagedAuthzDeniedProbePath, $packagedStalledReadProbePath, $packagedDeadlineProbePath, $packagedCancellationProbePath, $packagedTrustRevokedProbePath, $packagedRecoveryBlockedProbePath, $packagedRecoverySafeProbePath, $packagedRecoveryIndeterminateProbePath, $packagedRedactionProbePath, $packagedWorkerCrashProbePath, $packagedBlackholeConnectProbePath, $packagedDaemonDisconnectProbePath, $raSvnFaultFixturePath, $blackholeConnectFixturePath, $countingProxyPath, $installedStressProbePath, $installedNegativeProbePath, $installedAuthzDeniedProbePath, $installedStalledReadProbePath, $installedDeadlineProbePath, $installedCancellationProbePath, $installedTrustRevokedProbePath, $installedRecoveryBlockedProbePath, $installedRecoverySafeProbePath, $installedRecoveryIndeterminateProbePath, $installedRedactionProbePath, $installedWorkerCrashProbePath, $installedBlackholeConnectProbePath, $installedDaemonDisconnectProbePath, $installedLocalEventProbePath, $installedVsixProbePath, $packagedCompatibilityProbePath, $installedExtensionHostProbePath, $contractPath, $schemaPath, $patchPath, $patchContractPath, $sourceLockPath)) {
+    Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "Required I6 evidence-chain file is missing: $path"
+  }
+
+  $artifactsRoot = Join-Path $tempRoot "artifacts"
+  New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
+  $vsixPath = Join-Path $artifactsRoot "subversionr-win32-x64-0.3.0.vsix"
+  $daemonPath = Join-Path $artifactsRoot "subversionr-daemon.exe"
+  $bridgePath = Join-Path $artifactsRoot "subversionr_svn_bridge.dll"
+  $codeCliPath = Join-Path $artifactsRoot "code.cmd"
+  $stageManifestPath = Join-Path $artifactsRoot "subversionr-stage-manifest.json"
+  $svnPath = Join-Path $artifactsRoot "svn.exe"
+  $svnadminPath = Join-Path $artifactsRoot "svnadmin.exe"
+  $svnservePath = Join-Path $artifactsRoot "svnserve.exe"
+  $fixtureConfigPath = Join-Path $artifactsRoot "svnserve.conf"
+  $fixtureAuthzPath = Join-Path $artifactsRoot "authz"
+  $fixtureLogPath = Join-Path $artifactsRoot "svnserve.log"
+  Set-Content -LiteralPath $vsixPath -Value "vsix-I6-fixture" -NoNewline
+  Set-Content -LiteralPath $daemonPath -Value "daemon-I6-fixture" -NoNewline
+  Set-Content -LiteralPath $bridgePath -Value "bridge-I6-fixture" -NoNewline
+  Set-Content -LiteralPath $codeCliPath -Value "@exit /b 0" -NoNewline
+  Set-Content -LiteralPath $stageManifestPath -Value '{"subversion":"1.14.5"}' -NoNewline
+  Set-Content -LiteralPath $svnPath -Value "svn-I6-fixture" -NoNewline
+  Set-Content -LiteralPath $svnadminPath -Value "svnadmin-I6-fixture" -NoNewline
+  Set-Content -LiteralPath $svnservePath -Value "svnserve-I6-fixture" -NoNewline
+  Set-Content -LiteralPath $fixtureConfigPath -Value "[general]`nanon-access = write`nauth-access = none`nauthz-db = authz`n[sasl]`nuse-sasl = false`n" -NoNewline
+  Set-Content -LiteralPath $fixtureAuthzPath -Value "[repo:/]`n* = rw`n" -NoNewline
+  Set-Content -LiteralPath $fixtureLogPath -Value "fixture svnserve log`n" -NoNewline
+
+  $artifactBindings = [ordered]@{
+    vsix = New-ArtifactBinding "vsix" $vsixPath
+    daemon = New-ArtifactBinding "daemon" $daemonPath
+    bridge = New-ArtifactBinding "bridge" $bridgePath
+    stageManifest = New-ArtifactBinding "subversion-stage-manifest" $stageManifestPath
+    probeDriver = New-ArtifactBinding "i6-probe-driver" $probeDriverPath
+    packagedNativeProbe = New-ArtifactBinding "i6-packaged-native-probe" $packagedNativeProbePath
+    packagedNegativeProbe = New-ArtifactBinding "i6-packaged-negative-probe" $packagedNegativeProbePath
+    packagedAuthzDeniedProbe = New-ArtifactBinding "i6-packaged-authz-denied-probe" $packagedAuthzDeniedProbePath
+    packagedStalledReadProbe = New-ArtifactBinding "i6-packaged-stalled-read-probe" $packagedStalledReadProbePath
+    packagedDeadlineProbe = New-ArtifactBinding "i6-packaged-deadline-probe" $packagedDeadlineProbePath
+    packagedCancellationProbe = New-ArtifactBinding "i6-packaged-cancellation-probe" $packagedCancellationProbePath
+    packagedTrustRevokedProbe = New-ArtifactBinding "i6-packaged-trust-revoked-probe" $packagedTrustRevokedProbePath
+    packagedRecoveryBlockedProbe = New-ArtifactBinding "i6-packaged-recovery-blocked-probe" $packagedRecoveryBlockedProbePath
+    packagedRecoverySafeProbe = New-ArtifactBinding "i6-packaged-recovery-safe-probe" $packagedRecoverySafeProbePath
+    packagedRecoveryIndeterminateProbe = New-ArtifactBinding "i6-packaged-recovery-indeterminate-probe" $packagedRecoveryIndeterminateProbePath
+    packagedRedactionProbe = New-ArtifactBinding "i6-packaged-redaction-probe" $packagedRedactionProbePath
+    packagedWorkerCrashProbe = New-ArtifactBinding "i6-packaged-worker-crash-probe" $packagedWorkerCrashProbePath
+    packagedBlackholeConnectProbe = New-ArtifactBinding "i6-packaged-blackhole-connect-probe" $packagedBlackholeConnectProbePath
+    packagedDaemonDisconnectProbe = New-ArtifactBinding "i6-packaged-daemon-disconnect-probe" $packagedDaemonDisconnectProbePath
+    raSvnFaultFixture = New-ArtifactBinding "i6-ra-svn-fault-fixture" $raSvnFaultFixturePath
+    blackholeConnectFixture = New-ArtifactBinding "i6-blackhole-connect-fixture" $blackholeConnectFixturePath
+    countingProxy = New-ArtifactBinding "i6-counting-proxy" $countingProxyPath
+    installedStressProbe = New-ArtifactBinding "i6-installed-stress-probe" $installedStressProbePath
+    installedNegativeProbe = New-ArtifactBinding "i6-installed-negative-probe" $installedNegativeProbePath
+    installedAuthzDeniedProbe = New-ArtifactBinding "i6-installed-authz-denied-probe" $installedAuthzDeniedProbePath
+    installedStalledReadProbe = New-ArtifactBinding "i6-installed-stalled-read-probe" $installedStalledReadProbePath
+    installedDeadlineProbe = New-ArtifactBinding "i6-installed-deadline-probe" $installedDeadlineProbePath
+    installedCancellationProbe = New-ArtifactBinding "i6-installed-cancellation-probe" $installedCancellationProbePath
+    installedTrustRevokedProbe = New-ArtifactBinding "i6-installed-trust-revoked-probe" $installedTrustRevokedProbePath
+    installedRecoveryBlockedProbe = New-ArtifactBinding "i6-installed-recovery-blocked-probe" $installedRecoveryBlockedProbePath
+    installedRecoverySafeProbe = New-ArtifactBinding "i6-installed-recovery-safe-probe" $installedRecoverySafeProbePath
+    installedRecoveryIndeterminateProbe = New-ArtifactBinding "i6-installed-recovery-indeterminate-probe" $installedRecoveryIndeterminateProbePath
+    installedRedactionProbe = New-ArtifactBinding "i6-installed-redaction-probe" $installedRedactionProbePath
+    installedWorkerCrashProbe = New-ArtifactBinding "i6-installed-worker-crash-probe" $installedWorkerCrashProbePath
+    installedBlackholeConnectProbe = New-ArtifactBinding "i6-installed-blackhole-connect-probe" $installedBlackholeConnectProbePath
+    installedDaemonDisconnectProbe = New-ArtifactBinding "i6-installed-daemon-disconnect-probe" $installedDaemonDisconnectProbePath
+    installedLocalEventProbe = New-ArtifactBinding "i6-installed-local-event-zero-network-probe" $installedLocalEventProbePath
+    installedVsixProbe = New-ArtifactBinding "i6-installed-vsix-probe" $installedVsixProbePath
+    packagedCompatibilityProbe = New-ArtifactBinding "packaged-native-compatibility-probe" $packagedCompatibilityProbePath
+    installedExtensionHostProbe = New-ArtifactBinding "installed-extension-host-probe" $installedExtensionHostProbePath
+    raSvnOriginPatch = New-ArtifactBinding "ra-svn-origin-patch" $patchPath
+    raSvnOriginContract = New-ArtifactBinding "ra-svn-origin-contract" $patchContractPath
+    nativeSourceLock = New-ArtifactBinding "native-source-lock" $sourceLockPath
+    svn = New-ArtifactBinding "fixture-svn" $svnPath
+    svnadmin = New-ArtifactBinding "fixture-svnadmin" $svnadminPath
+    svnserve = New-ArtifactBinding "fixture-svnserve" $svnservePath
+    svnserveLog = New-ArtifactBinding "fixture-svnserve-log" $fixtureLogPath
+  }
+  $report = [ordered]@{
+    schema = "subversionr.release.m8-i6-svn-anonymous.win32-x64.v1"
+    schemaVersion = 1
+    contract = [ordered]@{
+      path = "docs/release/m8-i6-svn-anonymous-evidence.v1.schema.json"
+      sha256 = Get-Sha256 $schemaPath
+    }
+    target = "win32-x64"
+    productVersion = "0.3.0"
+    publicClaimEligible = $true
+    artifactBindings = $artifactBindings
+    fixture = [ordered]@{
+      transport = "direct-svn"
+      serverKind = "svnserve"
+      serverVersion = "1.14.5"
+      listenHost = "127.0.0.1"
+      configurationSha256 = Get-Sha256 $fixtureConfigPath
+      authzSha256 = Get-Sha256 $fixtureAuthzPath
+      sourceBuilt = $true
+      fixtureCliOnly = $true
+      ambientConfigExcluded = $true
+      saslEnabled = $false
+    }
+    surfaces = @(
+      (New-Surface "packaged-native" $artifactBindings.daemon.sha256),
+      (New-Surface "installed-vsix-extension-host" $artifactBindings.vsix.sha256)
+    )
+    negativeCells = @(
+      (New-NegativeCell "maliciousRoot" "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH" "crossAuthorityRejected" "authenticated" 1 1),
+      (New-NegativeCell "saslOnly" "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED" "remoteCapabilityUnsupported" "greeting" 1 1),
+      (New-NegativeCell "authzDenied" "SVN_REMOTE_STATUS_AUTH_FAILED" "authorizationDenied" "command" 1 1),
+      (New-NegativeCell "blackholeConnect" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded" "none" 1 0),
+      (New-NegativeCell "stalledMidRead" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded" "greeting" 1 1),
+      (New-NegativeCell "deadline" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded" "greeting" 1 1),
+      (New-NegativeCell "cancellation" "SUBVERSIONR_REMOTE_WORKER_CANCELLED" "operationCancelled" "greeting" 1 1),
+      (New-NegativeCell "workerCrash" "SUBVERSIONR_REMOTE_WORKER_CRASHED" "workerContainmentFailed" "greeting" 1 1),
+      (New-NegativeCell "daemonDisconnect" "SUBVERSIONR_REMOTE_WORKER_DISCONNECTED" "workerContainmentFailed" "greeting" 1 1),
+      (New-NegativeCell "trustRevoked" "SUBVERSIONR_REMOTE_TRUST_EPOCH_MISMATCH" "remoteConfigurationInvalid" "none" 0 0),
+      (New-NegativeCell "recoverySafe" "none" "none" "command" 1 1),
+      (New-NegativeCell "recoveryIndeterminate" "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE" "remoteOperationIndeterminate" "command" 1 1),
+      (New-NegativeCell "recoveryBlocked" "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" "operationDeadlineExceeded" "command" 1 1 $false "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" "remoteRecoveryBlocked"),
+      (New-NegativeCell "unrelatedRepository" "none" "none" "command" 1 1),
+      (New-NegativeCell "localEventZeroNetwork" "none" "none" "none" 0 0 $true),
+      (New-NegativeCell "redaction" "none" "none" "command" 1 1)
+    )
+    recoverySettlements = [ordered]@{
+      surfaceObservations = @(
+        (New-RecoverySurfaceObservation "packaged-native"),
+        (New-RecoverySurfaceObservation "installed-vsix-extension-host")
+      )
+    }
+    stress = [ordered]@{
+      surface = "installed-vsix-extension-host"
+      cycles = 100
+      status = "passed"
+      cycleObservations = @(1..100 | ForEach-Object { New-StressCycleObservation $_ })
+      subsequentObservation = (New-StressCycleObservation 101)
+      maxWorkerDescendantsAfterCycle = 0
+      maxTemporaryRootsAfterCycle = 0
+      maxFixtureServerChildrenAfterCycle = 0
+      subsequentRequestPassed = $true
+    }
+    privacy = [ordered]@{
+      rawUrlCount = 0
+      rawPathCount = 0
+      secretTokenCount = 0
+      maxDiagnosticBytes = 4096
+      boundedDiagnostics = $true
+    }
+    verdict = [ordered]@{
+      status = "verified"
+      claim = "win32-x64-direct-svn-anonymous"
+      allOperationCellsPassed = $true
+      allNegativeCellsPassed = $true
+      artifactHashesMatched = $true
+      installedProductProved = $true
+      sourceBuiltFixtureProved = $true
+    }
+  }
+  $evidencePath = Join-Path $tempRoot "evidence.json"
+  Write-Report $report $evidencePath
+
+  $verifyArguments = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $verifyScript,
+    "-EvidencePath", $evidencePath,
+    "-VsixPath", $vsixPath,
+    "-DaemonPath", $daemonPath,
+    "-BridgePath", $bridgePath,
+    "-StageManifestPath", $stageManifestPath,
+    "-ProbeDriverPath", $probeDriverPath,
+    "-RaSvnOriginPatchPath", $patchPath,
+    "-RaSvnOriginContractPath", $patchContractPath,
+    "-NativeSourceLockPath", $sourceLockPath,
+    "-SvnPath", $svnPath,
+    "-SvnadminPath", $svnadminPath,
+    "-SvnservePath", $svnservePath,
+    "-FixtureConfigPath", $fixtureConfigPath,
+    "-FixtureAuthzPath", $fixtureAuthzPath,
+    "-FixtureLogPath", $fixtureLogPath,
+    "-ExpectedProductVersion", "0.3.0"
+  )
+  Assert-Equal ([string]$report.negativeCells[0].surfaceObservations[0].originCode) ([string]$report.negativeCells[0].surfaceObservations[0].settlementCode) "Ordinary negative-cell fixtures must default settlement code to the controlled origin code."
+  Assert-Equal ([string]$report.negativeCells[0].surfaceObservations[0].originReason) ([string]$report.negativeCells[0].surfaceObservations[0].settlementReason) "Ordinary negative-cell fixtures must default settlement reason to the controlled origin reason."
+  Assert-Equal "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT" ([string]$report.negativeCells[12].surfaceObservations[0].originCode) "Blocked recovery fixture must retain the real timeout origin."
+  Assert-Equal "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED" ([string]$report.negativeCells[12].surfaceObservations[0].settlementCode) "Blocked recovery fixture must record the distinct product settlement."
+  $rawReport = Get-Content -Raw -LiteralPath $evidencePath
+  Assert-True (Test-Json -Json $rawReport -SchemaFile $schemaPath) "Complete I6 evidence fixture should satisfy the strict JSON schema."
+  $verifiedOutput = & pwsh @verifyArguments 2>&1
+  Assert-Equal 0 $LASTEXITCODE "Complete hash-bound I6 evidence fixture should pass the executable verifier. Output: $($verifiedOutput | Out-String)"
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].daemonState.reason = "workerTerminated"
+  Assert-SchemaRejects $tampered "I6 schema must reject the unreachable/workerTerminated daemon-state cross-pair."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].daemonState.reason = "timeout"
+  Assert-SchemaRejects $tampered "I6 schema must reject the indeterminate/timeout daemon-state cross-pair."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[8].surfaceObservations[0].daemonState.kind = "unreachable"
+  $tampered.negativeCells[8].surfaceObservations[0].daemonState.reason = "timeout"
+  Assert-SchemaRejects $tampered "I6 schema must reject the blackhole daemon state in the daemon-disconnect cell."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].blackholeConnectSettlement.tcp.distinctTcbAttempts = 2
+  Assert-SchemaRejects $tampered "I6 schema must reject more than one distinct blackhole-connect TCB attempt."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[1].blackholeConnectSettlement.tcp.localAddress = "192.0.2.1"
+  Assert-SchemaRejects $tampered "I6 schema must reject a blackhole-connect TCB identity outside loopback."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].blackholeConnectSettlement.tcp.stableSynSentMilliseconds = 24
+  Assert-SchemaRejects $tampered "I6 schema must reject a blackhole-connect TCB without the required stable SYN_SENT span."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[1].blackholeConnectSettlement.tcp.observationStartedBeforeProbeLaunch = $false
+  Assert-SchemaRejects $tampered "I6 schema must reject blackhole-connect sampling that began after probe launch."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].operations = @($tampered.surfaces[1].operations | Select-Object -Skip 1)
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an incomplete installed operation matrix."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].operations[0].promptCount = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject anonymous credential prompting."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].positiveOperationCount = 11
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an overstated anonymous positive-operation count."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.lock.remoteFailure.reason = "authorizationDenied"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject the misleading anonymous lock authorization classification."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.unlock.svnCauseNames = @()
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must require the bounded libsvn cause chain for anonymous unlock."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.lock.svnCauseNames = @("SVN_ERR_AUTHZ_UNWRITABLE")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an identity boundary without an allowed upstream cause."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.lock.svnCauseNames = @("SVN_ERR_FS_NO_USER")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject the unlock cause in the lock cell."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.unlock.svnCauseNames = @("SVN_ERR_RA_NOT_AUTHORIZED")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject the lock cause in the unlock cell."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.lock.mayHaveMutated = $true
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an identity boundary that may have mutated."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.unlock.anonymousIdentityRequired = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must require the anonymousIdentityRequired marker."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.lock.laneReleaseProof.method = "diagnostics/get"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must require a same-repository status refresh lane proof."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.lock | Add-Member -NotePropertyName temporaryRootsAfter -NotePropertyValue 0
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject synthetic installed residue evidence."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[0].anonymousIdentityRequired.lock.PSObject.Properties.Remove("temporaryRootsAfter")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 schema must require packaged boundary temporary-root evidence."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].anonymousIdentityRequired.unlock | Add-Member -NotePropertyName workerDescendantsAfter -NotePropertyValue 0
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 schema must reject unobservable installed boundary worker evidence."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[0].surfaceObservations[0].followupNetworkContacts = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject malicious-root follow-up contact."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].networkAttempts = 0
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "network attempt count must match" "I6 verification must reject a blackhole record without a measured connection attempt."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[14].surfaceObservations[0].networkAttempts = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "network attempt count must match" "I6 verification must reject local-event evidence that attempted remote contact."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[2].reason = "authenticationRequired"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "authorizationDenied" "I6 verification must reject generic authentication classification for authz denial."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[5].surfaceObservations[0].deadlineTiming.elapsedMs = 499
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a deadline observation that settled before its owned timeout."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[5].surfaceObservations[1].deadlineTiming.elapsedMs = 5501
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject deadline cleanup outside the reviewed slack."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[5].surfaceObservations[0].PSObject.Properties.Remove("deadlineTiming")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject deadline evidence without an independent monotonic timing observation."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[4].surfaceObservations[0] | Add-Member -NotePropertyName deadlineTiming -NotePropertyValue ([pscustomobject]@{ clock = "monotonic"; timeoutMs = 500; elapsedMs = 500; cleanupSlackMs = 5000 })
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "must contain exactly the required fields" "I6 verification must not relabel stalled-mid-read evidence as the independent deadline cell."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[6].surfaceObservations[0].cancellationSettlement.wireSettlementObserved = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject cancellation evidence without the daemon wire settlement."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[6].surfaceObservations[1].cancellationSettlement.localCode = "SUBVERSIONR_REMOTE_WORKER_CANCELLED"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must preserve the distinct immediate local cancellation result."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[6].surfaceObservations[0].PSObject.Properties.Remove("cancellationSettlement")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject cancellation evidence without the explicit settlement hand-off."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].workerDescendantsAtBarrier = -1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an invalid worker-crash barrier descendant measurement."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[1].PSObject.Properties.Remove("workerDescendantsAtBarrier")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must require the worker-crash barrier descendant measurement in the independent schema."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].workerCrashSettlement.terminationExitCode = 1398166082
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a worker crash with a non-exact termination exit code."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[1].workerCrashSettlement.daemonSurvived = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a worker crash that did not preserve the daemon."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].daemonState.recovery = "manualRequired"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a worker crash incorrectly promoted to recovery-required."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[7].surfaceObservations[0].PSObject.Properties.Remove("workerCrashSettlement")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject worker-crash evidence without the explicit settlement proof."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].blackholeConnectSettlement.tcp.establishedRows = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an established blackhole-connect TCP row."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[1].blackholeConnectSettlement.tcp.stableSynSentSamples = 2
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an unstable blackhole-connect TCP observation."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[3].surfaceObservations[0].blackholeConnectSettlement.acceptInvocations = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a blackhole fixture accept invocation."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[8].surfaceObservations[0].daemonDisconnectSettlement.settlementBeforeShutdownAck = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject daemon-disconnect settlement after shutdown acknowledgement."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[8].surfaceObservations[1].daemonDisconnectSettlement.shutdownTriggerExternallyCreated = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a non-external daemon shutdown trigger."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[5].surfaceObservations[0] | Add-Member -NotePropertyName cancellationSettlement -NotePropertyValue ([pscustomobject]@{ trigger = "abort-signal-after-greeting"; localCode = "JSON_RPC_REQUEST_CANCELLED"; wireCode = "SUBVERSIONR_REMOTE_WORKER_CANCELLED"; wireReason = "operationCancelled"; wireSettlementObserved = $true })
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "must contain exactly the required fields" "I6 verification must not relabel deadline evidence as the independent cancellation cell."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[9].surfaceObservations[0].PSObject.Properties.Remove("trustTransition")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject trust-revoked evidence without the exact epoch transition."
+
+  foreach ($trustTamper in @(
+      @("fromEpoch", 2),
+      @("toEpoch", 3),
+      @("staleEnvelopeEpoch", 2),
+      @("remoteSubmissionEnabledAfter", $true)
+    )) {
+    $tampered = Copy-Report $report
+    $tampered.negativeCells[9].surfaceObservations[1].trustTransition.($trustTamper[0]) = $trustTamper[1]
+    Write-Report $tampered $evidencePath
+    Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a non-exact trust transition field $($trustTamper[0])."
+  }
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[8].surfaceObservations[0] | Add-Member -NotePropertyName trustTransition -NotePropertyValue ([pscustomobject]@{ fromEpoch = 1; toEpoch = 2; staleEnvelopeEpoch = 1; remoteSubmissionEnabledAfter = $false })
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "must contain exactly the required fields" "I6 verification must reject trust-transition evidence injected into daemon-disconnect."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[2].surfaceObservations[1].originCode = "SUBVERSIONR_REMOTE_WORKER_CRASHED"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "origin code must match" "I6 verification must reject an observation origin that diverges from its cell."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[12].surfaceObservations[0].settlementCode = "SUBVERSIONR_REMOTE_WORKER_TIMED_OUT"
+  $tampered.negativeCells[12].surfaceObservations[0].settlementReason = "operationDeadlineExceeded"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "settlement code must match" "I6 verification must reject timeout origin substituted for the controlled recovery-blocked settlement."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[0].surfaceObservations[0].PSObject.Properties.Remove("settlementReason")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a missing settlement field without inference or fallback."
+
+  $tampered = Copy-Report $report
+  $tampered.negativeCells[14].surfaceObservations = @($tampered.negativeCells[13].surfaceObservations)
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "installed product observation exactly once" "I6 local-event evidence must be installed-surface only."
+
+  foreach ($requiredNegative in @(
+      "blackholeConnect",
+      "stalledMidRead",
+      "daemonDisconnect",
+      "recoverySafe",
+      "recoveryIndeterminate",
+      "recoveryBlocked"
+    )) {
+    $tampered = Copy-Report $report
+    $tampered.negativeCells = @($tampered.negativeCells | Where-Object { $_.cell -ne $requiredNegative })
+    Write-Report $tampered $evidencePath
+    Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject evidence missing $requiredNegative."
+  }
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycles = 99
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject shortened residue stress evidence."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations = @($tampered.stress.cycleObservations | Where-Object { [int]$_.cycle -ne 50 })
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a missing stress cycle."
+
+  $tampered = Copy-Report $report
+  $firstCycle = $tampered.stress.cycleObservations[0]
+  $tampered.stress.cycleObservations[0] = $tampered.stress.cycleObservations[1]
+  $tampered.stress.cycleObservations[1] = $firstCycle
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "cycle must be exact and ordered" "I6 verification must reject out-of-order stress observations."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[1].operationIdSha256 = $tampered.stress.cycleObservations[0].operationIdSha256
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "operation hashes must be unique" "I6 verification must reject duplicate stress operation hashes."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[50].targetPathSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "one exact checkout target hash" "I6 verification must reject stress target drift."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[50].extensionHostSessionSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "one exact installed Extension Host session" "I6 verification must reject stress execution split across Extension Host sessions."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.subsequentObservation.extensionHostSessionSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "same installed Extension Host session" "I6 verification must reject a cycle 101 observation from another Extension Host session."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[0].fixtureCliInvocations = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject fixture CLI use during native checkout stress."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.cycleObservations[49].workerDescendantsAfter = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "workerDescendantsAfter must be zero" "I6 verification must reject a nonzero per-cycle worker count."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.maxWorkerDescendantsAfterCycle = 1
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "aggregate must be recomputed" "I6 verification must reject a fabricated stress aggregate."
+
+  $tampered = Copy-Report $report
+  $tampered.stress.PSObject.Properties.Remove("subsequentObservation")
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject a missing subsequent stress observation."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations[0].blocked.automaticClear = $true
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject automatic checkout-target recovery clearing."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations[0].blocked.confirmedTargetPathSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "target-path hash" "I6 verification must reject recovery confirmation for a different target."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations[1].blocked.confirmedOriginOperationIdSha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "origin-operation-ID hash" "I6 verification must reject recovery confirmation for a different origin operation."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations = @($tampered.recoverySettlements.surfaceObservations | Select-Object -First 1)
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject recovery evidence missing the installed surface."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations[0].safe.freshReconcile = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject Safe recovery without fresh reconcile."
+
+  $tampered = Copy-Report $report
+  $tampered.recoverySettlements.surfaceObservations[0].indeterminate.stableCode = "SUBVERSIONR_REMOTE_WORKER_CRASHED"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must not substitute worker crash for Indeterminate recovery."
+
+  $tampered = Copy-Report $report
+  $tampered.surfaces[1].remoteSvnAnonymous = $false
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject an installed surface without the runtime capability."
+
+  $tampered = Copy-Report $report
+  $tampered | Add-Member -NotePropertyName provisional -NotePropertyValue $true
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject compatibility or provisional evidence fields."
+
+  $tampered = Copy-Report $report
+  $tampered.verdict.claim = "svn://127.0.0.1/repo"
+  Write-Report $tampered $evidencePath
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "I6 JSON schema" "I6 verification must reject raw URL substitution for the exact claim."
+
+  Write-Report $report $evidencePath
+  Set-Content -LiteralPath $daemonPath -Value "tampered-daemon" -NoNewline
+  Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "bind the exact file bytes" "I6 verification must reject candidate artifact tampering."
+
+  Set-Content -LiteralPath $daemonPath -Value "daemon-I6-fixture" -NoNewline
+  foreach ($toolBinding in @(
+      @("svn", $svnPath, "svn-I6-fixture"),
+      @("svnadmin", $svnadminPath, "svnadmin-I6-fixture"),
+      @("svnserve", $svnservePath, "svnserve-I6-fixture"),
+      @("svnserveLog", $fixtureLogPath, "fixture svnserve log`n")
+    )) {
+    Set-Content -LiteralPath $toolBinding[1] -Value "tampered-$($toolBinding[0])" -NoNewline
+    Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "artifactBindings.$($toolBinding[0]) must bind the exact file bytes" "I6 verification must reject $($toolBinding[0]) hash drift."
+    Set-Content -LiteralPath $toolBinding[1] -Value $toolBinding[2] -NoNewline
+  }
+
+  foreach ($probeBinding in @(
+      @("packagedNativeProbe", $packagedNativeProbePath),
+      @("packagedNegativeProbe", $packagedNegativeProbePath),
+      @("packagedAuthzDeniedProbe", $packagedAuthzDeniedProbePath),
+      @("packagedTrustRevokedProbe", $packagedTrustRevokedProbePath),
+      @("packagedRecoveryBlockedProbe", $packagedRecoveryBlockedProbePath),
+      @("packagedRecoverySafeProbe", $packagedRecoverySafeProbePath),
+      @("packagedRecoveryIndeterminateProbe", $packagedRecoveryIndeterminateProbePath),
+      @("packagedRedactionProbe", $packagedRedactionProbePath),
+      @("packagedWorkerCrashProbe", $packagedWorkerCrashProbePath),
+      @("packagedBlackholeConnectProbe", $packagedBlackholeConnectProbePath),
+      @("packagedDaemonDisconnectProbe", $packagedDaemonDisconnectProbePath),
+      @("raSvnFaultFixture", $raSvnFaultFixturePath),
+      @("blackholeConnectFixture", $blackholeConnectFixturePath),
+      @("countingProxy", $countingProxyPath),
+      @("installedStressProbe", $installedStressProbePath),
+      @("installedNegativeProbe", $installedNegativeProbePath),
+      @("installedAuthzDeniedProbe", $installedAuthzDeniedProbePath),
+      @("installedTrustRevokedProbe", $installedTrustRevokedProbePath),
+      @("installedRecoveryBlockedProbe", $installedRecoveryBlockedProbePath),
+      @("installedRecoverySafeProbe", $installedRecoverySafeProbePath),
+      @("installedRecoveryIndeterminateProbe", $installedRecoveryIndeterminateProbePath),
+      @("installedRedactionProbe", $installedRedactionProbePath),
+      @("installedWorkerCrashProbe", $installedWorkerCrashProbePath),
+      @("installedBlackholeConnectProbe", $installedBlackholeConnectProbePath),
+      @("installedDaemonDisconnectProbe", $installedDaemonDisconnectProbePath),
+      @("installedLocalEventProbe", $installedLocalEventProbePath),
+      @("installedVsixProbe", $installedVsixProbePath),
+      @("packagedCompatibilityProbe", $packagedCompatibilityProbePath),
+      @("installedExtensionHostProbe", $installedExtensionHostProbePath)
+    )) {
+    $tampered = Copy-Report $report
+    $tampered.artifactBindings.($probeBinding[0]).sha256 = "0" * 64
+    Write-Report $tampered $evidencePath
+    Assert-NativeCommandFailsContaining { & pwsh @verifyArguments } "artifactBindings.$($probeBinding[0]) must bind the exact file bytes" "I6 verification must reject $($probeBinding[0]) hash drift."
+  }
+
+  Write-Report $report $evidencePath
+
+  $externalDriverPath = Join-Path $artifactsRoot "external-probe.ps1"
+  $externalPatchPath = Join-Path $artifactsRoot "external-ra-svn.patch"
+  $externalPatchContractPath = Join-Path $artifactsRoot "external-ra-svn.contract.json"
+  $externalSourceLockPath = Join-Path $artifactsRoot "external-sources.lock.json"
+  Set-Content -LiteralPath $externalDriverPath -Value "throw 'external driver must never execute'" -NoNewline
+  Set-Content -LiteralPath $externalPatchPath -Value "external patch" -NoNewline
+  Set-Content -LiteralPath $externalPatchContractPath -Value '{"schemaVersion":1}' -NoNewline
+  Set-Content -LiteralPath $externalSourceLockPath -Value '{"sources":[]}' -NoNewline
+  $externalDriverArguments = Copy-ArgumentsWithValue $verifyArguments "-ProbeDriverPath" $externalDriverPath
+  Assert-NativeCommandFailsContaining { & pwsh @externalDriverArguments } "exact source-controlled path" "I6 verification must reject an arbitrary external probe driver."
+  $externalPatchArguments = Copy-ArgumentsWithValue $verifyArguments "-RaSvnOriginPatchPath" $externalPatchPath
+  Assert-NativeCommandFailsContaining { & pwsh @externalPatchArguments } "exact source-controlled path" "I6 verification must reject an arbitrary external ra_svn patch."
+  $externalPatchContractArguments = Copy-ArgumentsWithValue $verifyArguments "-RaSvnOriginContractPath" $externalPatchContractPath
+  Assert-NativeCommandFailsContaining { & pwsh @externalPatchContractArguments } "exact source-controlled path" "I6 verification must reject an arbitrary external ra_svn patch contract."
+  $externalSourceLockArguments = Copy-ArgumentsWithValue $verifyArguments "-NativeSourceLockPath" $externalSourceLockPath
+  Assert-NativeCommandFailsContaining { & pwsh @externalSourceLockArguments } "exact source-controlled path" "I6 verification must reject an arbitrary native source lock."
+
+  $runnerEvidencePath = Join-Path $runnerFixtureRoot "evidence.json"
+  $runnerArguments = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $runScript,
+    "-SubversionStageRoot", $artifactsRoot,
+    "-VsixPath", $vsixPath,
+    "-DaemonPath", $daemonPath,
+    "-BridgePath", $bridgePath,
+    "-CodeCliPath", $codeCliPath,
+    "-ProbeDriverPath", $probeDriverPath,
+    "-RaSvnOriginPatchPath", $patchPath,
+    "-RaSvnOriginContractPath", $patchContractPath,
+    "-NativeSourceLockPath", $sourceLockPath,
+    "-ExpectedProductVersion", "0.3.0",
+    "-FixtureRoot", $runnerFixtureRoot,
+    "-EvidencePath", $runnerEvidencePath
+  )
+  $runnerExternalDriverArguments = Copy-ArgumentsWithValue $runnerArguments "-ProbeDriverPath" $externalDriverPath
+  Assert-NativeCommandFailsContaining { & pwsh @runnerExternalDriverArguments } "exact source-controlled path" "I6 runner must reject an arbitrary external probe driver before execution."
+  $runnerExternalPatchArguments = Copy-ArgumentsWithValue $runnerArguments "-RaSvnOriginPatchPath" $externalPatchPath
+  Assert-NativeCommandFailsContaining { & pwsh @runnerExternalPatchArguments } "exact source-controlled path" "I6 runner must reject an arbitrary external ra_svn patch."
+  $runnerExternalPatchContractArguments = Copy-ArgumentsWithValue $runnerArguments "-RaSvnOriginContractPath" $externalPatchContractPath
+  Assert-NativeCommandFailsContaining { & pwsh @runnerExternalPatchContractArguments } "exact source-controlled path" "I6 runner must reject an arbitrary external ra_svn patch contract."
+  $runnerExternalSourceLockArguments = Copy-ArgumentsWithValue $runnerArguments "-NativeSourceLockPath" $externalSourceLockPath
+  Assert-NativeCommandFailsContaining { & pwsh @runnerExternalSourceLockArguments } "exact source-controlled path" "I6 runner must reject an arbitrary native source lock."
+
+  $longRunnerFixtureRoot = Join-Path $allowedRunnerRoot ("x" * 120)
+  $runnerLongFixtureArguments = Copy-ArgumentsWithValue $runnerArguments "-FixtureRoot" $longRunnerFixtureRoot
+  Assert-NativeCommandFailsContaining {
+    & pwsh @runnerLongFixtureArguments
+  } "110-character Windows path budget" "I6 runner must reject a fixture root that exceeds the reviewed Windows path budget before fixture creation."
+
+  New-FakeSubversionStage -Root $fakeStageRoot -NativeModulePath (Join-Path $repoRoot "scripts\native\SubversionR.Native.psm1") -SourceLockPath $sourceLockPath
+  $fakeManifestPath = Join-Path $fakeStageRoot "subversionr-stage-manifest.json"
+  $fakeManifest = Get-Content -Raw -LiteralPath $fakeManifestPath | ConvertFrom-Json
+  $fakeManifest.arch = "arm64"
+  $fakeManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $fakeManifestPath -Encoding ascii
+  $runnerFakeStageArguments = Copy-ArgumentsWithValue $runnerArguments "-SubversionStageRoot" $fakeStageRoot
+  Assert-NativeCommandFailsContaining { & pwsh @runnerFakeStageArguments } "manifest architecture must be x64" "I6 runner must reject a false stage manifest before probe execution."
+
+  $driverFixtureRoot = Join-Path $tempRoot "driver-fixture"
+  New-Item -ItemType Directory -Force -Path $driverFixtureRoot | Out-Null
+  $driverConfigPath = Join-Path $driverFixtureRoot "svnserve.conf"
+  $driverAuthzPath = Join-Path $driverFixtureRoot "authz"
+  $driverLogPath = Join-Path $driverFixtureRoot "svnserve.log"
+  $driverPackagedAuthzWorkingCopyPath = Join-Path $driverFixtureRoot "packaged-authz-wc"
+  $driverInstalledAuthzWorkingCopyPath = Join-Path $driverFixtureRoot "installed-authz-wc"
+  New-Item -ItemType Directory -Force -Path $driverPackagedAuthzWorkingCopyPath, $driverInstalledAuthzWorkingCopyPath | Out-Null
+  Set-Content -LiteralPath $driverConfigPath -Value "[general]`nanon-access = write`nauth-access = none`nauthz-db = authz`nrealm = SubversionR I6 Controlled Anonymous`n[sasl]`nuse-sasl = false" -NoNewline
+  Set-Content -LiteralPath $driverAuthzPath -Value "[repo:/]`n* = rw" -NoNewline
+  Set-Content -LiteralPath $driverLogPath -Value "fixture`n" -NoNewline
+  $driverOutputPath = Join-Path $driverFixtureRoot "evidence.json"
+  Set-Content -LiteralPath $driverOutputPath -Value '{"stale":true}' -NoNewline
+  $driverArguments = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $probeDriverPath,
+    "-RepositoryUrl", "svn://127.0.0.1:3690/repo/trunk",
+    "-UnrelatedRepositoryUrl", "svn://127.0.0.1:3690/unrelated/trunk",
+    "-FixtureRoot", $driverFixtureRoot,
+    "-FixtureConfigPath", $driverConfigPath,
+    "-FixtureAuthzPath", $driverAuthzPath,
+    "-FixtureLogPath", $driverLogPath,
+    "-PackagedAuthzWorkingCopyPath", $driverPackagedAuthzWorkingCopyPath,
+    "-InstalledAuthzWorkingCopyPath", $driverInstalledAuthzWorkingCopyPath,
+    "-SvnPath", $svnPath,
+    "-SvnadminPath", $svnadminPath,
+    "-SvnservePath", $svnservePath,
+    "-SvnservePid", "12345",
+    "-SvnserveStartTimeUtc", "2026-07-18T00:00:00.0000000Z",
+    "-VsixPath", $vsixPath,
+    "-DaemonPath", $daemonPath,
+    "-BridgePath", $bridgePath,
+    "-CodeCliPath", $codeCliPath,
+    "-StageManifestPath", $stageManifestPath,
+    "-RaSvnOriginPatchPath", $patchPath,
+    "-RaSvnOriginContractPath", $patchContractPath,
+    "-NativeSourceLockPath", $sourceLockPath,
+    "-ExpectedProductVersion", "0.3.0",
+    "-OutputPath", $driverOutputPath
+  )
+  Assert-NativeCommandFailsContaining { & pwsh @driverArguments } "VsixPath must be a valid VSIX ZIP archive" "I6 probe driver must reject a non-VSIX artifact before product execution."
+  Assert-True (-not (Test-Path -LiteralPath $driverOutputPath)) "I6 probe driver must remove stale output before validation and must not write evidence on failure."
+
+  $runnerText = Get-Content -Raw -LiteralPath $runScript
+  foreach ($requiredText in @(
+      'bin\svn.exe',
+      'bin\svnadmin.exe',
+      'bin\svnserve.exe',
+      'source-built Apache Subversion 1.14.5',
+      '--no-auth-cache',
+      'anon-access = write',
+      'auth-access = none',
+      'use-sasl = false',
+      'Create I6 unrelated fixture repository',
+      'The I6 unrelated fixture must have a distinct repository UUID.',
+      '-UnrelatedRepositoryUrl $unrelatedRepositoryUrl',
+      '[string]$ProbeDriverPath',
+      'Assert-SubversionStageForBridge',
+      '-ExpectedArch "x64"',
+      '-ExpectedConfiguration "Release"',
+      'scripts\release\probe-m8-i6-svn-anonymous.ps1',
+      'native\patches\subversion-1.14.5\ra-svn-authority.patch',
+      'native\sources.lock.json',
+      'verify-m8-i6-svn-anonymous-evidence.ps1'
+    )) {
+    Assert-True ($runnerText.Contains($requiredText)) "I6 runner must retain controlled fixture/probe contract text '$requiredText'."
+  }
+  Assert-True (-not $runnerText.Contains("unsupportedAfterWorker")) "I6 runner must not accept the I3-I5 transport-boundary result."
+
+  $driverText = Get-Content -Raw -LiteralPath $probeDriverPath
+  $fileIdentitySourceMatch = [regex]::Match(
+    $driverText,
+    "(?ms)^Add-Type -TypeDefinition @'\r?\n(?<source>using System;\r?\nusing System\.ComponentModel;.*?^public static class SubversionRM8I6ExactFileIdentity \{.*?^\})\r?\n'@$"
+  )
+  Assert-True $fileIdentitySourceMatch.Success "I6 probe driver must retain one extractable exact-file-identity implementation."
+  $fileIdentitySource = $fileIdentitySourceMatch.Groups["source"].Value
+  Assert-True ($null -eq ('SubversionRM8I6ExactFileIdentity' -as [type])) "Exact-file-identity native type must compile from a fresh test process."
+  Add-Type -TypeDefinition $fileIdentitySource -ErrorAction Stop
+  Assert-True ($null -ne ('SubversionRM8I6ExactFileIdentity' -as [type])) "Exact-file-identity native source did not compile into its required type."
+  $workerNativeSourceMatch = [regex]::Match(
+    $driverText,
+    "(?ms)^Add-Type -TypeDefinition @'\r?\n(?<source>using System;\r?\nusing System\.Collections\.Generic;\r?\nusing System\.ComponentModel;\r?\nusing System\.IO;\r?\nusing System\.Runtime\.InteropServices;\r?\nusing System\.Text;\r?\nusing Microsoft\.Win32\.SafeHandles;.*?^public static class SubversionRM8I6WorkerCrashNative \{.*?^\})\r?\n'@$"
+  )
+  Assert-True $workerNativeSourceMatch.Success "I6 probe driver must retain one extractable retained-process native implementation."
+  $workerNativeSource = $workerNativeSourceMatch.Groups["source"].Value
+  $requireAliveSourceMatch = [regex]::Match(
+    $workerNativeSource,
+    "(?ms)^  public static void RequireSingleAlive\(.*?^  \}"
+  )
+  Assert-True $requireAliveSourceMatch.Success "Retained-process native implementation must retain one RequireSingleAlive method."
+  $requireAliveSource = $requireAliveSourceMatch.Value
+  $aliveFirstWaitIndex = $requireAliveSource.IndexOf('RequireWait(', [System.StringComparison]::Ordinal)
+  $aliveIdentityIndex = $requireAliveSource.IndexOf('RequireIdentity(', [System.StringComparison]::Ordinal)
+  $aliveSecondWaitIndex = $requireAliveSource.IndexOf('RequireWait(', $aliveIdentityIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $aliveFirstWaitIndex -ge 0 -and
+    $aliveIdentityIndex -gt $aliveFirstWaitIndex -and
+    $aliveSecondWaitIndex -gt $aliveIdentityIndex
+  ) "Retained daemon liveness must bracket image identity queries with zero-time handle waits."
+  Assert-True ($workerNativeSource.Contains('GetProcessTimes(exited live-capture process) failed')) "Exited retained-process lifetime capture must use the original handle rather than reopen a PID."
+  foreach ($requiredWorkerNativeText in @(
+      'SubversionRM8I6EventProcessBinding',
+      'TryBindEventProcess',
+      'CompleteEventProcessCapture',
+      'PROCESS_QUERY_INFORMATION',
+      'PROCESS_VM_READ',
+      'IsWow64Process2',
+      'IMAGE_FILE_MACHINE_AMD64',
+      'NtQueryInformationProcess',
+      'ReadProcessMemory',
+      'QueryCommandLine',
+      'public string CommandLine'
+    )) {
+    Assert-True ($workerNativeSource.Contains($requiredWorkerNativeText)) "Retained-process native implementation must retain '$requiredWorkerNativeText'."
+  }
+  Assert-True ($null -eq ('SubversionRM8I6WorkerCrashNative' -as [type])) "Retained-process native type must compile from a fresh test process."
+  Add-Type -TypeDefinition $workerNativeSource -ErrorAction Stop
+  Assert-True ($null -ne ('SubversionRM8I6WorkerCrashNative' -as [type])) "Retained-process native source did not compile into its required type."
+  $retainedExecutablePath = Join-Path $tempRoot "retained-process-fixture.exe"
+  Copy-Item -LiteralPath (Join-Path ([Environment]::SystemDirectory) "cmd.exe") -Destination $retainedExecutablePath
+  $retainedFixtureProcess = $null
+  $retainedFixtureBinding = $null
+  try {
+    $retainedFixtureStart = [System.Diagnostics.ProcessStartInfo]::new()
+    $retainedFixtureStart.FileName = $retainedExecutablePath
+    $retainedFixtureStart.UseShellExecute = $false
+    $retainedFixtureStart.CreateNoWindow = $true
+    foreach ($argument in @("/d", "/q", "/c", "ping.exe -n 30 127.0.0.1 >nul")) {
+      $retainedFixtureStart.ArgumentList.Add($argument)
+    }
+    $retainedFixtureProcess = [System.Diagnostics.Process]::Start($retainedFixtureStart)
+    Assert-True ($null -ne $retainedFixtureProcess) "Retained-process native fixture failed to start."
+    $retainedFixtureBinding = [SubversionRM8I6WorkerCrashNative]::BindExactSingle($retainedExecutablePath)
+    [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($retainedFixtureBinding)
+    $retainedCommandLine = [string]$retainedFixtureBinding.CommandLine
+    Assert-True (
+      -not [string]::IsNullOrWhiteSpace($retainedCommandLine) -and
+      $retainedCommandLine.IndexOf($retainedExecutablePath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+      $retainedCommandLine.IndexOf('ping.exe -n 30 127.0.0.1 >nul', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    ) "Retained-process native binding must capture the live PEB command line including its executable and arguments."
+    $eventCaptureFileTime = [DateTime]::UtcNow.ToFileTimeUtc()
+    $eventCaptureSessionId = [uint32]$retainedFixtureProcess.SessionId
+    $liveEventBinding = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+      [uint32]$retainedFixtureProcess.Id,
+      $eventCaptureFileTime,
+      $eventCaptureSessionId
+    )
+    Assert-True ($null -ne $liveEventBinding) "Native event capture must retain the exact live event process before file-identity lookup."
+    try {
+      $liveEventFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get([string]$liveEventBinding.ImagePath)
+      $liveEventIdentity = [SubversionRM8I6WorkerCrashNative]::CompleteEventProcessCapture(
+        $liveEventBinding,
+        $liveEventFileIdentity
+      )
+      Assert-True (
+        $null -ne $liveEventIdentity -and
+        [long]$liveEventIdentity.ProcessId -eq [long]$retainedFixtureProcess.Id -and
+        [long]$liveEventIdentity.StartFileTime -eq [long]$retainedFixtureBinding.StartFileTime -and
+        [long]$liveEventIdentity.SessionId -eq [long]$eventCaptureSessionId -and
+        ([System.IO.Path]::GetFullPath([string]$liveEventIdentity.ImagePath)).Equals(
+          [System.IO.Path]::GetFullPath($retainedExecutablePath),
+          [System.StringComparison]::OrdinalIgnoreCase
+        ) -and
+        [string]$liveEventIdentity.ImageFileIdentity -ceq [SubversionRM8I6ExactFileIdentity]::Get($retainedExecutablePath)
+      ) "Native event capture must return the exact live process generation, session, image path, and file identity."
+    }
+    finally {
+      $liveEventBinding.Dispose()
+    }
+    $wrongGenerationIdentity = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+      [uint32]$retainedFixtureProcess.Id,
+      ([long]$retainedFixtureBinding.StartFileTime - 1L),
+      $eventCaptureSessionId
+    )
+    if ($null -ne $wrongGenerationIdentity) { $wrongGenerationIdentity.Dispose() }
+    Assert-True ($null -eq $wrongGenerationIdentity) "Native event capture must return null when the live process generation starts after the subscribed event time."
+    $wrongEventSessionId = if ($eventCaptureSessionId -eq [uint32]::MaxValue) { [uint32]0 } else { [uint32]($eventCaptureSessionId + 1) }
+    $wrongSessionIdentity = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+      [uint32]$retainedFixtureProcess.Id,
+      $eventCaptureFileTime,
+      $wrongEventSessionId
+    )
+    if ($null -ne $wrongSessionIdentity) { $wrongSessionIdentity.Dispose() }
+    Assert-True ($null -eq $wrongSessionIdentity) "Native event capture must return null when the subscribed event session does not match the live process."
+    $retainedFixtureProcess.Kill($true)
+    $retainedFixtureProcess.WaitForExit()
+    $postExitEventIdentity = [SubversionRM8I6WorkerCrashNative]::TryBindEventProcess(
+      [uint32]$retainedFixtureProcess.Id,
+      $eventCaptureFileTime,
+      $eventCaptureSessionId
+    )
+    if ($null -ne $postExitEventIdentity) { $postExitEventIdentity.Dispose() }
+    Assert-True ($null -eq $postExitEventIdentity) "Native event capture must return null after the exact process has exited."
+    [SubversionRM8I6WorkerCrashNative]::RequireSingleExited($retainedFixtureBinding, 10000)
+    $retainedExitFileTime = [SubversionRM8I6WorkerCrashNative]::GetSingleExitFileTime($retainedFixtureBinding)
+    Assert-True ($retainedExitFileTime -gt [long]$retainedFixtureBinding.StartFileTime) "Retained-process native fixture did not expose an exact exit FILETIME."
+    Assert-ScriptThrowsContaining {
+      [SubversionRM8I6WorkerCrashNative]::RequireSingleAlive($retainedFixtureBinding)
+    } "exited before acknowledgement" "Exited retained-process liveness must fail before querying its image path."
+  }
+  finally {
+    if ($null -ne $retainedFixtureProcess) {
+      if (-not $retainedFixtureProcess.HasExited) {
+        $retainedFixtureProcess.Kill($true)
+        $retainedFixtureProcess.WaitForExit()
+      }
+      $retainedFixtureProcess.Dispose()
+    }
+    if ($null -ne $retainedFixtureBinding) { $retainedFixtureBinding.Dispose() }
+  }
+  $systemConsoleHostPath = Join-Path ([Environment]::SystemDirectory) "conhost.exe"
+  $extendedSystemConsoleHostPath = "\\?\$systemConsoleHostPath"
+  Assert-Equal `
+    ([SubversionRM8I6ExactFileIdentity]::Get($systemConsoleHostPath)) `
+    ([SubversionRM8I6ExactFileIdentity]::Get($extendedSystemConsoleHostPath)) `
+    "Exact Windows file identity must treat ordinary and extended-length conhost paths as the same file."
+  Assert-True (
+    [SubversionRM8I6ExactFileIdentity]::Get($systemConsoleHostPath) -cne
+    [SubversionRM8I6ExactFileIdentity]::Get($probeDriverPath)
+  ) "Exact Windows file identity must distinguish the system console host from a different file."
+  foreach ($requiredText in @(
+      'probe-vscode-packaged-native.mjs',
+      'probe-m8-i6-packaged-native.mjs',
+      'probe-m8-i6-packaged-negative.mjs',
+      'probe-m8-i6-packaged-authz-denied.mjs',
+      'probe-m8-i6-packaged-stalled-read.mjs',
+      'probe-m8-i6-packaged-deadline.mjs',
+      'probe-m8-i6-packaged-cancellation.mjs',
+      'probe-m8-i6-packaged-recovery-blocked.mjs',
+      'probe-m8-i6-packaged-worker-crash.mjs',
+      'probe-m8-i6-packaged-blackholeConnect.mjs',
+      'probe-m8-i6-packaged-daemon-disconnect.mjs',
+      'serve-m8-i6-ra-svn-fault-fixture.mjs',
+      'serve-m8-i6-blackhole-connect.ps1',
+      'serve-m8-i6-counting-proxy.mjs',
+      'probe-m8-i6-installed-stress.ps1',
+      'probe-m8-i6-installed-negative.ps1',
+      'probe-m8-i6-installed-authz-denied.ps1',
+      'probe-m8-i6-installed-stalled-read.ps1',
+      'probe-m8-i6-installed-deadline.ps1',
+      'probe-m8-i6-installed-cancellation.ps1',
+      'probe-m8-i6-installed-recovery-blocked.ps1',
+      'probe-m8-i6-installed-worker-crash.ps1',
+      'probe-m8-i6-installed-blackholeConnect.ps1',
+      'probe-m8-i6-installed-daemon-disconnect.ps1',
+      'probe-m8-i6-installed-local-event-zero-network.ps1',
+      'probe-m8-i6-installed-vsix.ps1',
+      'test-vscode-installed-extension-host.ps1',
+      'extension/resources/backend/win32-x64/subversionr-daemon.exe',
+      'extension/resources/backend/win32-x64/subversionr_svn_bridge.dll',
+      '$packagedVsixDaemonPath = Resolve-RequiredFile',
+      '$packagedVsixBridgePath = Resolve-RequiredFile',
+      '"--daemon-path", $surfaceDaemonPath',
+      '"--bridge-path", $surfaceBridgePath',
+      '"--expected-revision", "3"',
+      '"-ExpectedRevision", "3"',
+      '[int]$cellReport.checkoutRevision -eq 3',
+      'The extracted packaged VSIX daemon must match DaemonPath.',
+      'The extracted packaged VSIX bridge must match BridgePath.',
+      'SVN_OPERATION_LOCK_FAILED',
+      'SVN_OPERATION_UNLOCK_FAILED',
+      'anonymousIdentityRequired',
+      'Remove-Item -LiteralPath $outputResolved -Force'
+    )) {
+    Assert-True ($driverText.Contains($requiredText)) "I6 probe driver must retain real-artifact/fail-closed contract text '$requiredText'."
+  }
+  Assert-True (-not $driverText.Contains('SUBVERSIONR_M8_I6_OBSERVATION_BLOCKED')) "I6 probe driver must not retain the final observation blocker after every cell is implemented."
+  foreach ($completedContractText in @(
+      'GetExtendedTcpTable',
+      'TCP_TABLE_OWNER_PID_ALL',
+      'GetByRemotePort',
+      'processId + "|" + LocalAddress',
+      'stableSynSentMilliseconds',
+      'networkAttempts = [int]$tcpObservation.distinctTcbAttempts',
+      'conditional-accept-loopback-no-accept',
+      'graceful-client-shutdown-after-greeting',
+      'publicClaimEligible = $true',
+      '[System.IO.File]::Move($temporaryOutputPath, $outputResolved)'
+    )) {
+    Assert-True ($driverText.Contains($completedContractText)) "I6 completed driver must retain exact aggregate contract text '$completedContractText'."
+  }
+  $blackholeObserverStartIndex = $driverText.IndexOf('$tcpObserver = [SubversionRM8I6BlackholeTcpObserver]::new($blackholePort)', [System.StringComparison]::Ordinal)
+  $blackholeProbeLaunchIndex = $driverText.IndexOf('$startedProbe = Start-WorkerCrashProbeProcess', $blackholeObserverStartIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $blackholeObserverStartIndex -ge 0 -and $blackholeProbeLaunchIndex -gt $blackholeObserverStartIndex
+  ) "I6 blackhole TCP sampling must publish its observer before product probe launch."
+  foreach ($workerCrashContractText in @(
+      'CreateToolhelp32Snapshot',
+      'QueryFullProcessImageNameW',
+      'GetProcessTimes',
+      'PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE | PROCESS_TERMINATE',
+      'TerminateProcess(binding.WorkerHandle, exitCode)',
+      'ReadToEndAsync()',
+      'BindExactParentWorker',
+      'workerDescendantsAtBarrier = [int]$workerDescendantsAtBarrier',
+      '1398166083'
+    )) {
+    Assert-True ($driverText.Contains($workerCrashContractText)) "I6 worker-crash driver must retain exact native observation text '$workerCrashContractText'."
+  }
+  $workerCrashBlockStart = $driverText.IndexOf('$workerCrashWorkRoot =')
+  $workerCrashBlockEnd = $driverText.IndexOf('Assert-True (-not (Test-Path -LiteralPath $outputResolved))', $workerCrashBlockStart)
+  Assert-True ($workerCrashBlockStart -ge 0 -and $workerCrashBlockEnd -gt $workerCrashBlockStart) "I6 worker-crash aggregate block must be uniquely delimited."
+  $workerCrashBlockText = $driverText.Substring($workerCrashBlockStart, $workerCrashBlockEnd - $workerCrashBlockStart)
+  foreach ($forbiddenWorkerCrashText in @('Win32_ProcessStartTrace', 'Get-CimInstance', '.CommandLine')) {
+    Assert-True (-not $workerCrashBlockText.Contains($forbiddenWorkerCrashText)) "I6 worker-crash injection must not use '$forbiddenWorkerCrashText'."
+  }
+  Assert-True (-not $workerCrashBlockText.Contains('$workerDescendantsAtBarrier -eq 0')) "I6 worker-crash injection must record the live bound-tree baseline rather than require a zero-descendant Windows process tree."
+
+  $installedVsixProbeText = Get-Content -Raw -LiteralPath $installedVsixProbePath
+  foreach ($requiredText in @(
+      'const environment = Object.freeze({',
+      'reportToken: process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN',
+      'token: environment.reportToken',
+      '"update.mode": "none"',
+      '"extensions.autoUpdate": false',
+      '"extensions.autoCheckUpdates": false',
+      '"telemetry.telemetryLevel": "off"',
+      'status = "failed"',
+      'code = "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED"',
+      'diagnostics = $null',
+      'repositoryUrl: environment.repositoryUrl',
+      'checkoutPath: environment.checkoutPath',
+      'checkoutRevision: Number(environment.checkoutRevision)',
+      'fs.writeFileSync(environment.resultPath'
+    )) {
+    Assert-True ($installedVsixProbeText.Contains($requiredText)) "Installed positive probe must retain pre-activation environment capture '$requiredText'."
+  }
+  $installedActivationIndex = $installedVsixProbeText.IndexOf('vscode.commands.executeCommand("subversionr.diagnostics.versionReport")')
+  Assert-True ($installedActivationIndex -ge 0) "Installed positive probe must activate through the version report command."
+  Assert-True ($installedVsixProbeText.IndexOf('process.env', $installedActivationIndex) -lt 0) "Installed positive probe must not read process.env after product activation can consume the report token."
+
+  foreach ($requiredObservationText in @(
+      'Register-CimIndicationEvent',
+      'Get-EventSubscriber',
+      'Win32_ProcessStartTrace',
+      'TIME_CREATED',
+      'Complete-ProcessStartEventDrain',
+      'Invoke-BoundedProcessWithStartEventCapture',
+      'Invoke-BoundedInstalledProcessWithRequiredLiveCapture',
+      '$installedLocalEventResult = Invoke-BoundedInstalledProcessWithRequiredLiveCapture',
+      'SubversionRM8I6SingleProcessBinding',
+      'SubversionRM8I6EventProcessBinding',
+      'BindExactSingle',
+      'TryBindEventProcess',
+      'CompleteEventProcessCapture',
+      'Get-NativeProcessStartEventLiveIdentity',
+      'GetSingleBoundDescendantCount',
+      'RequireSingleAlive',
+      'RequireSingleExited',
+      'GetSingleExitFileTime',
+      'ReadProcessMemory',
+      '$binding.CommandLine',
+      '[Environment]::Is64BitOperatingSystem',
+      '[Environment]::Is64BitProcess',
+      'requires an x64 PowerShell process on x64 Windows.',
+      'Set-RecordedProcessStartIdentityFromRetainedBinding',
+      'extensionHostProcessId',
+      'eventSessionId',
+      'subversionr.release.m8-i6-installed-process-capture-ready.v1',
+      'subversionr.release.m8-i6-installed-process-capture-ack.v1',
+      'ProcessCaptureReadyPath',
+      'ProcessCaptureAckPath',
+      'ProcessCaptureNonce',
+      'ProcessCaptureTimeoutMilliseconds',
+      'imageStartFileTime',
+      'ExpectedConsoleHostFileIdentity',
+      '$installedLocalEventDaemonFileIdentity',
+      '$surfaceDaemonFileIdentity',
+      'Get-RecordedCandidateParentStartIdentity',
+      'Get-PackagedNegativeProcessObservation',
+      'Get-InstalledNegativeProcessObservation',
+      'Get-LiveRecordedProcessTreeStarts',
+      'Wait-RecordedProcessTreeSettlement',
+      'Get-DeadlineBoundCimProcessSnapshot',
+      'New-InstalledProbeProcessTreeCapture',
+      'Close-InstalledProbeProcessTreeCapture',
+      'Complete-BoundedInstalledProcessTreeRun',
+      'Stop-StartedInstalledProcessTreeRun',
+      'SubversionR.AsyncProcessTreeLifecycleFailure',
+      'SubversionR.FixtureCleanupFailure',
+      'Invoke-BoundedProcessWithExistingInstalledTreeCapture',
+      'Invoke-BoundedProcessWithOwnedInstalledTreeCapture',
+      'did not settle to stable zero before its absolute deadline',
+      '"i6n\$([Guid]',
+      'installedNegativeWorkRoot.Length -le 120',
+      '"-FixtureRoot", $scenarioWorkRoot',
+      '"-CheckoutPath", (Join-Path $scenarioWorkRoot "checkout")',
+      'The installed-negative short work root remained after successful cleanup.',
+      'Stop-ControlledSvnserve',
+      'The controlled svnserve identity changed before the stalled-mid-read phase.',
+      'ra_svn fault fixture did not bind the required port.',
+      'The packaged-native and installed VSIX stalled-mid-read observation set was incomplete.',
+      'The stalled-mid-read short work root remained after successful cleanup.',
+      'The packaged-native and installed VSIX cancellation observation set was incomplete.',
+      'The cancellation short work root remained after successful cleanup.',
+      'abort-signal-after-greeting',
+      'wireSettlementObserved',
+      'Get-ZeroWorkerProcessObservation',
+      'Start-CountingProxy',
+      'The unrelated repository must have a distinct repository UUID.',
+      'blockedJournalBytesSha256BeforeUnrelated',
+      'unrelatedCheckoutRevision -eq 2',
+      'The packaged-native and installed VSIX unrelated-repository observation set was incomplete.',
+      'probe-m8-i6-packaged-redaction.mjs',
+      'probe-m8-i6-installed-redaction.ps1',
+      'inputContainedRawUrl',
+      'function Get-TextSha256',
+      'rawUrlCount',
+      'maxDiagnosticBytes',
+      'The packaged-native and installed VSIX redaction observation set was incomplete.',
+      'The packaged-native and installed VSIX redaction privacy set was incomplete.',
+      'probe-m8-i6-packaged-recovery-indeterminate.mjs',
+      'probe-m8-i6-installed-recovery-indeterminate.ps1',
+      'Invoke-BoundedProcessWithWorkingCopyReadFault',
+      'Get-RecoveryIndeterminateProcessObservation',
+      'SetFileSecurity',
+      'fixture file must be owned by the current Windows identity.',
+      '[System.Security.AccessControl.FileSystemRights]::ReadData',
+      '[System.Security.AccessControl.FileSystemRights]::ReadAttributes',
+      '[System.Security.AccessControl.FileSystemRights]::ReadExtendedAttributes',
+      'working-copy database security descriptor was not restored byte-for-byte.',
+      'The packaged-native and installed VSIX recovery-indeterminate observation set was incomplete.',
+      'The packaged-native and installed VSIX Indeterminate settlement set was incomplete.',
+      '$proxyFinalState = Stop-CountingProxy $countingProxy',
+      'The stopped installed local-event counting proxy changed final counter',
+      'Get-CimProcessSnapshot',
+      'A packaged-negative probe/daemon/worker identity remained alive at settlement.',
+      'The exited packaged-negative worker retained live orphan descendants.',
+      'networkAttempts = $networkAttempts',
+      'networkConnections = $networkConnections',
+      'workerDescendantsAfter = [int]$processObservation.workerDescendantsAfter',
+      'fixtureCliInvocations = [int]$processObservation.fixtureCliInvocations',
+      'product surface invoked a fixture CLI',
+      'Unregister-Event',
+      'Remove-Event'
+    )) {
+    Assert-True ($driverText.Contains($requiredObservationText)) "Packaged-negative evidence must retain measured process/network observation text '$requiredObservationText'."
+  }
+  Assert-True (
+    $driverText -cmatch '(?s)try\s*\{\s*if \(\$null -ne \$unrelatedProxy\).*?\}\s*finally\s*\{\s*if \(\$null -ne \$faultFixture\) \{ Stop-FaultFixture'
+  ) "The unrelated counting proxy cleanup must not prevent command-stall fixture cleanup."
+  $packagedNegativeBlockStart = $driverText.IndexOf('$packagedNegativeContracts =')
+  $packagedNegativeBlockEnd = $driverText.IndexOf('Assert-True ($packagedNegativeObservations.Count -eq 4)', $packagedNegativeBlockStart)
+  Assert-True ($packagedNegativeBlockStart -ge 0 -and $packagedNegativeBlockEnd -gt $packagedNegativeBlockStart) "The packaged-negative observation block must be uniquely delimited."
+  $packagedNegativeBlockText = $driverText.Substring($packagedNegativeBlockStart, $packagedNegativeBlockEnd - $packagedNegativeBlockStart)
+  foreach ($forbiddenObservationText in @(
+      'Get-WmiObject',
+      'networkAttempts = 1',
+      '"-FixtureRoot", (Join-Path $scenarioRoot "extension-host")',
+      'workerDescendantsAfter = 0'
+    )) {
+    Assert-True (-not $packagedNegativeBlockText.Contains($forbiddenObservationText)) "Packaged-negative evidence must not contain synthetic/fallback observation '$forbiddenObservationText'."
+  }
+  $negativeSubscriptionIndex = $driverText.IndexOf('Register-CimIndicationEvent', [System.StringComparison]::Ordinal)
+  $negativeSubscriberLookupIndex = $driverText.IndexOf('$matchingSubscribers = @(Get-EventSubscriber', $negativeSubscriptionIndex, [System.StringComparison]::Ordinal)
+  $negativeProbeLaunchIndex = $driverText.IndexOf('$negativeResult = Invoke-BoundedProcess', [System.StringComparison]::Ordinal)
+  $negativeFinalDrainIndex = $driverText.IndexOf('Complete-ProcessStartEventDrain', $negativeProbeLaunchIndex, [System.StringComparison]::Ordinal)
+  $negativeUnregisterIndex = $driverText.IndexOf('Unregister-Event', $negativeFinalDrainIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $negativeSubscriptionIndex -ge 0 -and
+    $negativeSubscriberLookupIndex -gt $negativeSubscriptionIndex -and
+    $negativeProbeLaunchIndex -gt $negativeSubscriberLookupIndex -and
+    $negativeFinalDrainIndex -gt $negativeProbeLaunchIndex -and
+    $negativeUnregisterIndex -gt $negativeFinalDrainIndex
+  ) "Packaged-negative process observation must subscribe before launch, drain after completion, and then unregister."
+  $installedNegativeLaunchIndex = $driverText.IndexOf('$installedNegativeResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture', [System.StringComparison]::Ordinal)
+  $installedNegativeSubscriptionIndex = $driverText.LastIndexOf('Register-CimIndicationEvent', $installedNegativeLaunchIndex, [System.StringComparison]::Ordinal)
+  $installedNegativeObservationIndex = $driverText.IndexOf('Get-InstalledNegativeProcessObservation', $installedNegativeLaunchIndex, [System.StringComparison]::Ordinal)
+  $installedNegativeSnapshotIndex = $driverText.IndexOf('-SettlementSnapshot $installedNegativeResult.SettlementSnapshot', $installedNegativeObservationIndex, [System.StringComparison]::Ordinal)
+  $installedNegativeUnregisterIndex = $driverText.IndexOf('Unregister-Event', $installedNegativeObservationIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $installedNegativeSubscriptionIndex -ge 0 -and
+    $installedNegativeLaunchIndex -gt $installedNegativeSubscriptionIndex -and
+    $installedNegativeObservationIndex -gt $installedNegativeLaunchIndex -and
+    $installedNegativeSnapshotIndex -gt $installedNegativeObservationIndex -and
+    $installedNegativeUnregisterIndex -gt $installedNegativeObservationIndex
+  ) "Installed-negative process observation must subscribe before its exact-PID sync wrapper, measure from the returned settlement snapshot, and then unregister."
+
+  $driverTokens = $null
+  $driverParseErrors = $null
+  $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $probeDriverPath,
+    [ref]$driverTokens,
+    [ref]$driverParseErrors
+  )
+  Assert-True ($driverParseErrors.Count -eq 0) "I6 probe driver must parse after packaged-negative observation changes."
+  $observationHelpers = @(
+    "Assert-ExactProperties",
+    "Get-PackagedNativePositiveFailureDetail",
+    "Assert-PackagedNativePositiveProcessContract",
+    "Get-InstalledVsixPositiveFailureDetail",
+    "Assert-InstalledVsixPositiveProcessContract",
+    "Resolve-RequiredFile",
+    "Resolve-RequiredDirectory",
+    "Test-PathWithin",
+    "Read-InstalledProcessCaptureReady",
+    "Get-NativeProcessStartEventLiveIdentity",
+    "Receive-ProcessStartEvents",
+    "Update-ProcessStartEventLiveCaptures",
+    "Get-DescendantProcessIds",
+    "Get-CimProcessSnapshot",
+    "Get-ProcessSnapshotStartFileTime",
+    "Get-NextRecordedProcessStartFileTime",
+    "Get-ControlledProbeStartIdentity",
+    "Get-RecordedProcessDescendantStarts",
+    "Get-LiveRecordedProcessTreeStarts",
+    "Wait-RecordedProcessTreeSettlement",
+    "Get-DeadlineBoundCimProcessSnapshot",
+    "New-InstalledProbeProcessTreeCapture",
+    "Close-InstalledProbeProcessTreeCapture",
+    "Complete-BoundedInstalledProcessTreeRun",
+    "Stop-StartedInstalledProcessTreeRun",
+    "Invoke-BoundedProcessWithExistingInstalledTreeCapture",
+    "Invoke-BoundedProcessWithOwnedInstalledTreeCapture",
+    "Get-RecordedCandidateParentStartIdentity",
+    "Set-RecordedProcessStartIdentityFromRetainedBinding",
+    "Invoke-BoundedInstalledProcessWithRequiredLiveCapture",
+    "Get-PackagedNegativeProcessObservation",
+    "Get-InstalledNegativeProcessObservation",
+    "Get-ZeroWorkerProcessObservation",
+    "Get-RecoveryBlockedProcessObservation",
+    "Get-RecoverySafeProcessObservation",
+    "Set-ExactAuthzAtomically",
+    "Get-SvnserveAuthzObservation",
+    "Get-ExactFileSecurityDescriptor",
+    "Set-ExactCurrentUserReadDeny",
+    "Restore-ExactFileDacl",
+    "Wait-CommandBarrier",
+    "Invoke-BoundedProcessWithWorkingCopyReadFault",
+    "Get-RecoveryIndeterminateProcessObservation"
+  )
+  $observationHelperSources = foreach ($functionName in $observationHelpers) {
+    $matches = @($driverAst.FindAll({
+          param($node)
+          $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+          $node.Name -ceq $functionName
+        }, $true))
+    Assert-True ($matches.Count -eq 1) "I6 probe driver must define exactly one $functionName helper."
+    $matches[0].Extent.Text
+  }
+  $readFaultHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Invoke-BoundedProcessWithWorkingCopyReadFault")]
+  $faultFlagIndex = $readFaultHelper.IndexOf('$faultApplied = $true', [System.StringComparison]::Ordinal)
+  $faultMutationIndex = $readFaultHelper.IndexOf('Set-ExactCurrentUserReadDeny $descriptor $Context', [System.StringComparison]::Ordinal)
+  Assert-True ($faultFlagIndex -ge 0 -and $faultMutationIndex -gt $faultFlagIndex) "Packaged recovery-indeterminate cleanup flag must be armed before the DACL mutation."
+  $liveCaptureHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Invoke-BoundedInstalledProcessWithRequiredLiveCapture")]
+  foreach ($requiredLiveCaptureText in @(
+      '[SubversionRM8I6WorkerCrashNative]::BindExactSingle',
+      '[SubversionRM8I6WorkerCrashNative]::GetSingleBoundDescendantCount',
+      'Receive-ProcessStartEvents',
+      '[string]$binding.CommandLine',
+      'GetSingleExitFileTime',
+      'RetainedDaemonIdentity',
+      'StartFileTime',
+      'SessionId',
+      'ImagePath',
+      'imageFileIdentity',
+      'RequireSingleAlive',
+      'RequireSingleExited',
+      '$readyDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ProcessCaptureTimeoutMilliseconds)',
+      'did not publish its process-capture ready report before the absolute deadline.',
+      'subversionr.release.m8-i6-installed-process-capture-ack.v1'
+    )) {
+    Assert-True ($liveCaptureHelper.Contains($requiredLiveCaptureText)) "Installed process live-capture helper must retain '$requiredLiveCaptureText'."
+  }
+  foreach ($forbiddenLiveCaptureText in @(
+      'Get-CandidateProcessIds',
+      'Get-CandidateProcessObservation',
+      '$captureDeadline = $deadline',
+      'Get-CimInstance',
+      'Get-RecordedProcessDescendantStarts',
+      'RetainedConsoleHostIdentity',
+      'BindExactChild',
+      'fallback'
+    )) {
+    Assert-True (-not $liveCaptureHelper.Contains($forbiddenLiveCaptureText)) "Installed process live-capture helper must not use '$forbiddenLiveCaptureText' as a binding fallback."
+  }
+  $liveBindIndex = $liveCaptureHelper.IndexOf('[SubversionRM8I6WorkerCrashNative]::BindExactSingle', [System.StringComparison]::Ordinal)
+  $liveParentIndex = $liveCaptureHelper.IndexOf('$binding.ParentProcessId', $liveBindIndex, [System.StringComparison]::Ordinal)
+  $liveCommandLineIndex = $liveCaptureHelper.IndexOf('[string]$binding.CommandLine', $liveParentIndex, [System.StringComparison]::Ordinal)
+  $livePreSnapshotAliveIndex = $liveCaptureHelper.IndexOf('RequireSingleAlive', $liveBindIndex, [System.StringComparison]::Ordinal)
+  $liveDescendantCountIndex = $liveCaptureHelper.IndexOf('GetSingleBoundDescendantCount', $liveBindIndex, [System.StringComparison]::Ordinal)
+  $livePostSnapshotAliveIndex = $liveCaptureHelper.IndexOf('RequireSingleAlive', $liveDescendantCountIndex, [System.StringComparison]::Ordinal)
+  $liveAckDeadlineIndex = $liveCaptureHelper.IndexOf('retained daemon acknowledgement exceeded its 20-second deadline.', $livePostSnapshotAliveIndex, [System.StringComparison]::Ordinal)
+  $liveAckIndex = $liveCaptureHelper.IndexOf('subversionr.release.m8-i6-installed-process-capture-ack.v1', $livePostSnapshotAliveIndex, [System.StringComparison]::Ordinal)
+  Assert-True ($liveBindIndex -ge 0 -and $liveAckIndex -gt $liveBindIndex) "Installed process capture binding and acknowledgement block must be uniquely delimited."
+  $liveReadyWaitIndex = $liveCaptureHelper.IndexOf('while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf))', [System.StringComparison]::Ordinal)
+  Assert-True ($liveReadyWaitIndex -ge 0 -and $liveReadyWaitIndex -lt $liveBindIndex) "Installed process capture ready wait and binding block must be uniquely delimited."
+  $livePreAckSlice = $liveCaptureHelper.Substring($liveReadyWaitIndex, $liveAckIndex - $liveReadyWaitIndex)
+  foreach ($forbiddenPreAckDrain in @('Receive-ProcessStartEvents', 'Update-ProcessStartEventLiveCaptures', 'Get-CimInstance', 'Get-Event', 'Wait-Event')) {
+    Assert-True (-not $livePreAckSlice.Contains($forbiddenPreAckDrain)) "Installed process capture must not execute '$forbiddenPreAckDrain' while waiting for ready or before acknowledgement."
+  }
+  $livePostAckLoopIndex = $liveCaptureHelper.IndexOf('while (-not $process.HasExited)', $liveAckIndex, [System.StringComparison]::Ordinal)
+  $livePostAckDeadlineIndex = $liveCaptureHelper.IndexOf('if ([DateTimeOffset]::UtcNow -ge $deadline)', $livePostAckLoopIndex, [System.StringComparison]::Ordinal)
+  $livePostAckDrainIndex = $liveCaptureHelper.IndexOf('Receive-ProcessStartEvents', $livePostAckLoopIndex, [System.StringComparison]::Ordinal)
+  $livePostAckUpdateIndex = $liveCaptureHelper.IndexOf('Update-ProcessStartEventLiveCaptures', $livePostAckLoopIndex, [System.StringComparison]::Ordinal)
+  $liveExitIndex = $liveCaptureHelper.IndexOf('RequireSingleExited($binding', $liveAckIndex, [System.StringComparison]::Ordinal)
+  $liveCompleteIndex = $liveCaptureHelper.IndexOf('Complete-WorkerCrashProbeProcess', $liveExitIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $liveBindIndex -ge 0 -and
+    $liveParentIndex -gt $liveBindIndex -and
+    $liveCommandLineIndex -gt $liveParentIndex -and
+    $livePreSnapshotAliveIndex -gt $liveCommandLineIndex -and
+    $liveDescendantCountIndex -gt $livePreSnapshotAliveIndex -and
+    $livePostSnapshotAliveIndex -gt $liveDescendantCountIndex -and
+    $liveAckDeadlineIndex -gt $livePostSnapshotAliveIndex -and
+    $liveAckIndex -gt $liveAckDeadlineIndex -and
+    $livePostAckLoopIndex -gt $liveAckIndex -and
+    $livePostAckDeadlineIndex -gt $livePostAckLoopIndex -and
+    $livePostAckDrainIndex -gt $livePostAckDeadlineIndex -and
+    $livePostAckUpdateIndex -gt $livePostAckDrainIndex -and
+    $liveExitIndex -gt $liveAckIndex -and
+    $liveCompleteIndex -gt $liveExitIndex
+  ) "Installed process capture must validate retained native parent/command line/session and descendants before ACK, perform no event drain between bind and ACK, then check the post-ACK deadline before each drain and require retained exit before completion."
+  Assert-True ($liveCaptureHelper.Contains('installed probe exceeded its post-acknowledgement exit deadline.')) "Installed process capture must report the post-acknowledgement phase on exit deadline failure."
+  Assert-True (-not $liveCaptureHelper.Contains('Controlled installed process with required live capture exceeded its absolute deadline.')) "Installed process capture must not retain the ambiguous pre/post-acknowledgement deadline error."
+  $liveSuccessSettlementIndex = $liveCaptureHelper.IndexOf('$settlementAttempted = $true', $liveCompleteIndex, [System.StringComparison]::Ordinal)
+  $liveSuccessWaitIndex = $liveCaptureHelper.IndexOf('$settlementSnapshot = Wait-RecordedProcessTreeSettlement', $liveSuccessSettlementIndex, [System.StringComparison]::Ordinal)
+  $liveReturnedSnapshotIndex = $liveCaptureHelper.IndexOf('-NotePropertyName SettlementSnapshot', $liveSuccessWaitIndex, [System.StringComparison]::Ordinal)
+  $livePrimaryErrorIndex = $liveCaptureHelper.IndexOf('$primaryError = $_', $liveReturnedSnapshotIndex, [System.StringComparison]::Ordinal)
+  $liveFailureWaitIndex = $liveCaptureHelper.IndexOf('$null = Wait-RecordedProcessTreeSettlement', $livePrimaryErrorIndex, [System.StringComparison]::Ordinal)
+  $liveAttachedSettlementIndex = $liveCaptureHelper.IndexOf('SubversionR.ProcessTreeSettlementFailure', $liveFailureWaitIndex, [System.StringComparison]::Ordinal)
+  $liveThrowPrimaryIndex = $liveCaptureHelper.IndexOf('throw $primaryError', $liveAttachedSettlementIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $liveSuccessSettlementIndex -gt $liveCompleteIndex -and
+    $liveSuccessWaitIndex -gt $liveSuccessSettlementIndex -and
+    $liveReturnedSnapshotIndex -gt $liveSuccessWaitIndex -and
+    $livePrimaryErrorIndex -gt $liveReturnedSnapshotIndex -and
+    $liveFailureWaitIndex -gt $livePrimaryErrorIndex -and
+    $liveAttachedSettlementIndex -gt $liveFailureWaitIndex -and
+    $liveThrowPrimaryIndex -gt $liveAttachedSettlementIndex
+  ) "Required live capture must settle on success, return SettlementSnapshot, and preserve a primary failure while attaching settlement failure."
+  $nativeEventCaptureHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-NativeProcessStartEventLiveIdentity")]
+  foreach ($requiredNativeEventCaptureText in @(
+      '[SubversionRM8I6WorkerCrashNative]::TryBindEventProcess',
+      '[SubversionRM8I6ExactFileIdentity]::Get([string]$binding.ImagePath)',
+      '[SubversionRM8I6WorkerCrashNative]::CompleteEventProcessCapture',
+      'finally',
+      '$binding.Dispose()'
+    )) {
+    Assert-True ($nativeEventCaptureHelper.Contains($requiredNativeEventCaptureText)) "Native event-capture helper must retain '$requiredNativeEventCaptureText'."
+  }
+  foreach ($forbiddenNativeEventFallback in @('Get-CimInstance', 'Get-Process ', 'Get-WmiObject', 'fallback')) {
+    Assert-True (-not $nativeEventCaptureHelper.Contains($forbiddenNativeEventFallback)) "Native event-capture helper must not use '$forbiddenNativeEventFallback'."
+  }
+  $nativeEventBindIndex = $nativeEventCaptureHelper.IndexOf('TryBindEventProcess', [System.StringComparison]::Ordinal)
+  $nativeEventFileIdentityIndex = $nativeEventCaptureHelper.IndexOf('SubversionRM8I6ExactFileIdentity', $nativeEventBindIndex, [System.StringComparison]::Ordinal)
+  $nativeEventCompleteIndex = $nativeEventCaptureHelper.IndexOf('CompleteEventProcessCapture', $nativeEventFileIdentityIndex, [System.StringComparison]::Ordinal)
+  $nativeEventDisposeIndex = $nativeEventCaptureHelper.IndexOf('$binding.Dispose()', $nativeEventCompleteIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $nativeEventBindIndex -ge 0 -and
+    $nativeEventFileIdentityIndex -gt $nativeEventBindIndex -and
+    $nativeEventCompleteIndex -gt $nativeEventFileIdentityIndex -and
+    $nativeEventDisposeIndex -gt $nativeEventCompleteIndex
+  ) "Native event capture must retain a handle across exact file-identity lookup, revalidate, and dispose it afterward."
+  foreach ($eventCaptureFunctionName in @("Receive-ProcessStartEvents", "Update-ProcessStartEventLiveCaptures")) {
+    $eventCaptureFunction = $observationHelperSources[[Array]::IndexOf($observationHelpers, $eventCaptureFunctionName)]
+    Assert-True ($eventCaptureFunction.Contains('Get-NativeProcessStartEventLiveIdentity')) "$eventCaptureFunctionName must use the retained native event-capture helper."
+    foreach ($forbiddenEventCaptureFallback in @('Get-CimInstance', 'Get-Process ', 'Get-WmiObject')) {
+      Assert-True (-not $eventCaptureFunction.Contains($forbiddenEventCaptureFallback)) "$eventCaptureFunctionName must not use '$forbiddenEventCaptureFallback' for event identity capture."
+    }
+  }
+  $retainedEventJoinHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Set-RecordedProcessStartIdentityFromRetainedBinding")]
+  foreach ($requiredRetainedJoinText in @(
+      'eventFileTime -ge [long]$Identity.startFileTime',
+      'eventFileTime -le [long]$Identity.exitFileTime',
+      '$generationStarts.Count -eq 1',
+      'eventSessionId',
+      'imageFileIdentity'
+    )) {
+    Assert-True ($retainedEventJoinHelper.Contains($requiredRetainedJoinText)) "Retained process event join must retain '$requiredRetainedJoinText'."
+  }
+  $captureReadyHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Read-InstalledProcessCaptureReady")]
+  foreach ($requiredCaptureReadyText in @(
+      'Assert-ExactProperties $ready @("schema", "nonce", "cell", "extensionId", "extensionVersion", "extensionPath", "extensionHostProcessId")',
+      'subversionr.release.m8-i6-installed-process-capture-ready.v1',
+      'extensionHostProcessId',
+      'Test-PathWithin $installedExtension $extensionsRoot',
+      'Get-Sha256 $installedDaemon',
+      'SubversionRM8I6ExactFileIdentity'
+    )) {
+    Assert-True ($captureReadyHelper.Contains($requiredCaptureReadyText)) "Installed process-capture ready validation must retain '$requiredCaptureReadyText'."
+  }
+  $zeroWorkerHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-ZeroWorkerProcessObservation")]
+  Assert-True ($zeroWorkerHelper.Contains('candidate daemon live image identity was not captured')) "Zero-worker observation must still fail closed when no explicit binding and no event-carried live identity are available."
+  foreach ($forbiddenZeroWorkerFallback in @('Get-CimInstance', 'Get-Process ', 'Get-CandidateProcess')) {
+    Assert-True (-not $zeroWorkerHelper.Contains($forbiddenZeroWorkerFallback)) "Zero-worker observation must not recapture missing live identity through '$forbiddenZeroWorkerFallback'."
+  }
+
+  $cimSnapshotHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-CimProcessSnapshot")]
+  Assert-True ($cimSnapshotHelper.Contains('-OperationTimeoutSec ([uint32]$OperationTimeoutSeconds)')) "CIM process snapshots must use the caller's bounded operation timeout."
+  $deadlineSnapshotHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Get-DeadlineBoundCimProcessSnapshot")]
+  foreach ($requiredDeadlineSnapshotText in @(
+      '$DeadlineMilliseconds - [long]$Clock.ElapsedMilliseconds',
+      '[Math]::Floor($remainingMilliseconds / 1000.0)',
+      'Get-CimProcessSnapshot ([int]$operationTimeoutSeconds)',
+      '[long]$Clock.ElapsedMilliseconds -lt $DeadlineMilliseconds'
+    )) {
+    Assert-True ($deadlineSnapshotHelper.Contains($requiredDeadlineSnapshotText)) "Deadline-bound CIM snapshots must retain '$requiredDeadlineSnapshotText'."
+  }
+  $recordedTreeWaitHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Wait-RecordedProcessTreeSettlement")]
+  Assert-True ($recordedTreeWaitHelper.Contains('[System.Diagnostics.Stopwatch]::StartNew()')) "Recorded-tree settlement must use a monotonic Stopwatch deadline."
+  Assert-Equal 2 ([regex]::Matches($recordedTreeWaitHelper, 'Get-DeadlineBoundCimProcessSnapshot').Count) "Recorded-tree settlement must bound both ordinary and final CIM snapshots to its deadline."
+
+  $installedCaptureNewHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "New-InstalledProbeProcessTreeCapture")]
+  foreach ($requiredCaptureNewText in @(
+      'Register-CimIndicationEvent',
+      'Win32_ProcessStartTrace',
+      'Get-EventSubscriber',
+      'Events = [System.Collections.Generic.List[object]]::new()',
+      'EventKeys = [System.Collections.Generic.HashSet[string]]::new'
+    )) {
+    Assert-True ($installedCaptureNewHelper.Contains($requiredCaptureNewText)) "Owned installed-tree capture creation must retain '$requiredCaptureNewText'."
+  }
+  $installedCaptureCloseHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Close-InstalledProbeProcessTreeCapture")]
+  foreach ($requiredCaptureCloseText in @('Unregister-Event', 'Remove-Event', '$Capture.Closed = $true')) {
+    Assert-True ($installedCaptureCloseHelper.Contains($requiredCaptureCloseText)) "Owned installed-tree capture close must retain '$requiredCaptureCloseText'."
+  }
+
+  $ownedInstalledTreeWrapper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Invoke-BoundedProcessWithOwnedInstalledTreeCapture")]
+  $ownedCaptureNewIndex = $ownedInstalledTreeWrapper.IndexOf('$capture = New-InstalledProbeProcessTreeCapture', [System.StringComparison]::Ordinal)
+  $ownedInvokeIndex = $ownedInstalledTreeWrapper.IndexOf('Invoke-BoundedProcessWithExistingInstalledTreeCapture', $ownedCaptureNewIndex, [System.StringComparison]::Ordinal)
+  $ownedCloseIndex = $ownedInstalledTreeWrapper.IndexOf('Close-InstalledProbeProcessTreeCapture $capture', $ownedInvokeIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $ownedCaptureNewIndex -ge 0 -and
+    $ownedInvokeIndex -gt $ownedCaptureNewIndex -and
+    $ownedCloseIndex -gt $ownedInvokeIndex
+  ) "Owned installed-tree wrapper must create capture, delegate one exact-PID run through the existing capture, and close in finally."
+  $existingInstalledTreeWrapper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Invoke-BoundedProcessWithExistingInstalledTreeCapture")]
+  $existingStartIndex = $existingInstalledTreeWrapper.IndexOf('$started = Start-WorkerCrashProbeProcess', [System.StringComparison]::Ordinal)
+  $existingCompleteIndex = $existingInstalledTreeWrapper.IndexOf('Complete-BoundedInstalledProcessTreeRun', $existingStartIndex, [System.StringComparison]::Ordinal)
+  Assert-True ($existingStartIndex -ge 0 -and $existingCompleteIndex -gt $existingStartIndex) "Existing installed-tree wrapper must start once and complete the exact started process."
+  $boundedInstalledTreeComplete = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Complete-BoundedInstalledProcessTreeRun")]
+  $boundedProcessCompleteIndex = $boundedInstalledTreeComplete.IndexOf('$processResult = Complete-WorkerCrashProbeProcess $Started', [System.StringComparison]::Ordinal)
+  $boundedTreeSettlementIndex = $boundedInstalledTreeComplete.IndexOf('$settlementSnapshot = Wait-RecordedProcessTreeSettlement', $boundedProcessCompleteIndex, [System.StringComparison]::Ordinal)
+  $boundedExactPidIndex = $boundedInstalledTreeComplete.IndexOf('-ProbePid ([long]$Started.ProcessId)', $boundedTreeSettlementIndex, [System.StringComparison]::Ordinal)
+  $boundedPrimaryErrorIndex = $boundedInstalledTreeComplete.IndexOf('if ($null -ne $primaryError)', $boundedExactPidIndex, [System.StringComparison]::Ordinal)
+  $boundedAttachedSettlementIndex = $boundedInstalledTreeComplete.IndexOf('SubversionR.ProcessTreeSettlementFailure', $boundedPrimaryErrorIndex, [System.StringComparison]::Ordinal)
+  $boundedThrowPrimaryIndex = $boundedInstalledTreeComplete.IndexOf('throw $primaryError', $boundedAttachedSettlementIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $boundedProcessCompleteIndex -ge 0 -and
+    $boundedTreeSettlementIndex -gt $boundedProcessCompleteIndex -and
+    $boundedExactPidIndex -gt $boundedTreeSettlementIndex -and
+    $boundedPrimaryErrorIndex -gt $boundedExactPidIndex -and
+    $boundedAttachedSettlementIndex -gt $boundedPrimaryErrorIndex -and
+    $boundedThrowPrimaryIndex -gt $boundedAttachedSettlementIndex
+  ) "Bounded installed-tree completion must settle Started.ProcessId on success or failure while preserving the primary error and attaching settlement failure."
+  $stopStartedInstalledTreeHelper = $observationHelperSources[[Array]::IndexOf($observationHelpers, "Stop-StartedInstalledProcessTreeRun")]
+  $stopKillIndex = $stopStartedInstalledTreeHelper.IndexOf('$process.Kill($true)', [System.StringComparison]::Ordinal)
+  $stopWaitForExitIndex = $stopStartedInstalledTreeHelper.IndexOf('$process.WaitForExit()', $stopKillIndex, [System.StringComparison]::Ordinal)
+  $stopDisposeIndex = $stopStartedInstalledTreeHelper.IndexOf('$process.Dispose()', $stopWaitForExitIndex, [System.StringComparison]::Ordinal)
+  $stopSettlementIndex = $stopStartedInstalledTreeHelper.IndexOf('$null = Wait-RecordedProcessTreeSettlement', $stopDisposeIndex, [System.StringComparison]::Ordinal)
+  $stopExactPidIndex = $stopStartedInstalledTreeHelper.IndexOf('-ProbePid ([long]$Started.ProcessId)', $stopSettlementIndex, [System.StringComparison]::Ordinal)
+  $stopTerminationPriorityIndex = $stopStartedInstalledTreeHelper.IndexOf('if ($null -ne $terminationError)', $stopExactPidIndex, [System.StringComparison]::Ordinal)
+  $stopAttachedSettlementIndex = $stopStartedInstalledTreeHelper.IndexOf('SubversionR.ProcessTreeSettlementFailure', $stopTerminationPriorityIndex, [System.StringComparison]::Ordinal)
+  $stopThrowTerminationIndex = $stopStartedInstalledTreeHelper.IndexOf('throw $terminationError', $stopAttachedSettlementIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $stopKillIndex -ge 0 -and
+    $stopWaitForExitIndex -gt $stopKillIndex -and
+    $stopDisposeIndex -gt $stopWaitForExitIndex -and
+    $stopSettlementIndex -gt $stopDisposeIndex -and
+    $stopExactPidIndex -gt $stopSettlementIndex -and
+    $stopTerminationPriorityIndex -gt $stopExactPidIndex -and
+    $stopAttachedSettlementIndex -gt $stopTerminationPriorityIndex -and
+    $stopThrowTerminationIndex -gt $stopAttachedSettlementIndex
+  ) "Pre-completion async cleanup must terminate and dispose before exact-PID settlement, preserving termination failure and attaching settlement failure."
+
+  $stressBlockStart = $driverText.IndexOf('$installedStressRoot =', [System.StringComparison]::Ordinal)
+  $stressBlockEnd = $driverText.IndexOf('$installedStressReport =', $stressBlockStart, [System.StringComparison]::Ordinal)
+  Assert-True ($stressBlockStart -ge 0 -and $stressBlockEnd -gt $stressBlockStart) "The installed stress launch block must be uniquely delimited."
+  $stressLaunchBlock = $driverText.Substring($stressBlockStart, $stressBlockEnd - $stressBlockStart)
+  Assert-Equal 1 ([regex]::Matches($stressLaunchBlock, 'Invoke-BoundedProcessWithOwnedInstalledTreeCapture').Count) "Installed stress must use one owned exact-PID tree wrapper."
+
+  $positiveLaunchBlockStart = $driverText.IndexOf('$installedRunId =', [System.StringComparison]::Ordinal)
+  $positiveLaunchBlockEnd = $driverText.IndexOf('$recoveryBlockedWorkRoot =', $positiveLaunchBlockStart, [System.StringComparison]::Ordinal)
+  Assert-True ($positiveLaunchBlockStart -ge 0 -and $positiveLaunchBlockEnd -gt $positiveLaunchBlockStart) "The installed-positive launch block must be uniquely delimited."
+  $positiveLaunchBlock = $driverText.Substring($positiveLaunchBlockStart, $positiveLaunchBlockEnd - $positiveLaunchBlockStart)
+  Assert-Equal 2 ([regex]::Matches($positiveLaunchBlock, 'Invoke-BoundedProcessWithOwnedInstalledTreeCapture').Count) "Installed-positive must use the owned exact-PID tree wrapper for both direct pwsh probes."
+  Assert-Equal 0 ([regex]::Matches($positiveLaunchBlock, '(?m)^\s*\$installed(?:Positive|Result)\s*=\s*Invoke-BoundedProcess\s+').Count) "Installed-positive must not bypass owned capture with a raw bounded launch."
+
+  $installedAuthzOwnedLaunchIndex = $driverText.IndexOf('$installedAuthzResult = Invoke-BoundedProcessWithExistingInstalledTreeCapture', [System.StringComparison]::Ordinal)
+  $installedAuthzBusinessAssertIndex = $driverText.IndexOf('Assert-True', $installedAuthzOwnedLaunchIndex, [System.StringComparison]::Ordinal)
+  Assert-True ($installedAuthzOwnedLaunchIndex -ge 0 -and $installedAuthzBusinessAssertIndex -gt $installedAuthzOwnedLaunchIndex) "Installed authz-denied must reuse its existing subscription wrapper and settle before business assertions."
+
+  $existingCaptureSurfaceSpecs = @(
+    [pscustomobject]@{ Context = "recovery-blocked"; Start = '$recoveryBlockedWorkRoot ='; End = '$redactionWorkRoot =' },
+    [pscustomobject]@{ Context = "redaction"; Start = '$redactionWorkRoot ='; End = '$recoverySafeWorkRoot =' },
+    [pscustomobject]@{ Context = "recovery-safe"; Start = '$recoverySafeWorkRoot ='; End = '$recoveryIndeterminateWorkRoot =' },
+    [pscustomobject]@{ Context = "recovery-indeterminate"; Start = '$recoveryIndeterminateWorkRoot ='; End = '$stalledReadWorkRoot =' },
+    [pscustomobject]@{ Context = "stalled-mid-read"; Start = '$stalledReadWorkRoot ='; End = '$deadlineWorkRoot =' },
+    [pscustomobject]@{ Context = "absolute-deadline"; Start = '$deadlineWorkRoot ='; End = '$cancellationWorkRoot =' },
+    [pscustomobject]@{ Context = "cancellation"; Start = '$cancellationWorkRoot ='; End = '$trustRevokedWorkRoot =' }
+  )
+  foreach ($surfaceSpec in $existingCaptureSurfaceSpecs) {
+    $surfaceBlockStart = $driverText.IndexOf([string]$surfaceSpec.Start, [System.StringComparison]::Ordinal)
+    $surfaceBlockEnd = $driverText.IndexOf([string]$surfaceSpec.End, $surfaceBlockStart + 1, [System.StringComparison]::Ordinal)
+    Assert-True ($surfaceBlockStart -ge 0 -and $surfaceBlockEnd -gt $surfaceBlockStart) "The installed $($surfaceSpec.Context) block must be uniquely delimited."
+    $surfaceBlock = $driverText.Substring($surfaceBlockStart, $surfaceBlockEnd - $surfaceBlockStart)
+    $installedLaunchMatch = [regex]::Match(
+      $surfaceBlock,
+      '(?m)^\s*\$probeResult\s*=\s*Invoke-BoundedProcessWithExistingInstalledTreeCapture\s+\(Get-Process -Id \$PID\)\.Path\s+@\('
+    )
+    Assert-True ($installedLaunchMatch.Success) "Installed $($surfaceSpec.Context) must use one existing-subscription exact-PID wrapper."
+    $surfaceBusinessAssertIndex = $surfaceBlock.IndexOf('Assert-True', $installedLaunchMatch.Index, [System.StringComparison]::Ordinal)
+    Assert-True ($surfaceBusinessAssertIndex -gt $installedLaunchMatch.Index) "Installed $($surfaceSpec.Context) must complete exact-PID settlement before any business assertion."
+  }
+
+  $startedProbeCaptureSpecs = @(
+    [pscustomobject]@{ Context = "worker-crash"; Start = '$workerCrashWorkRoot ='; End = '$blackholeConnectWorkRoot =' },
+    [pscustomobject]@{ Context = "blackhole-connect"; Start = '$blackholeConnectWorkRoot ='; End = '$daemonDisconnectWorkRoot =' },
+    [pscustomobject]@{ Context = "daemon-disconnect"; Start = '$daemonDisconnectWorkRoot ='; End = 'function New-I6ArtifactBinding' }
+  )
+  foreach ($captureSpec in $startedProbeCaptureSpecs) {
+    $captureBlockStart = $driverText.IndexOf([string]$captureSpec.Start, [System.StringComparison]::Ordinal)
+    $captureBlockEnd = $driverText.IndexOf([string]$captureSpec.End, $captureBlockStart + 1, [System.StringComparison]::Ordinal)
+    Assert-True ($captureBlockStart -ge 0 -and $captureBlockEnd -gt $captureBlockStart) "The installed $($captureSpec.Context) started-probe block must be uniquely delimited."
+    $captureBlock = $driverText.Substring($captureBlockStart, $captureBlockEnd - $captureBlockStart)
+    $captureNewIndex = $captureBlock.IndexOf('$installedProcessTreeCapture = New-InstalledProbeProcessTreeCapture', [System.StringComparison]::Ordinal)
+    $captureStartIndex = $captureBlock.IndexOf('$startedProbe = Start-WorkerCrashProbeProcess (Get-Process -Id $PID).Path', $captureNewIndex, [System.StringComparison]::Ordinal)
+    $captureSettlementIndex = $captureBlock.IndexOf('$probeResult = Complete-BoundedInstalledProcessTreeRun', $captureStartIndex, [System.StringComparison]::Ordinal)
+    $captureBusinessAssertIndex = $captureBlock.IndexOf('Assert-True', $captureSettlementIndex, [System.StringComparison]::Ordinal)
+    $captureCloseIndex = $captureBlock.IndexOf('Close-InstalledProbeProcessTreeCapture $installedProcessTreeCapture', $captureBusinessAssertIndex, [System.StringComparison]::Ordinal)
+    $captureFinallyIndex = $captureBlock.LastIndexOf('finally {', $captureCloseIndex, [System.StringComparison]::Ordinal)
+    Assert-True (
+      $captureNewIndex -ge 0 -and
+      $captureStartIndex -gt $captureNewIndex -and
+      $captureSettlementIndex -gt $captureStartIndex -and
+      $captureBusinessAssertIndex -gt $captureSettlementIndex -and
+      $captureFinallyIndex -gt $captureBusinessAssertIndex -and
+      $captureCloseIndex -gt $captureFinallyIndex
+    ) "Installed $($captureSpec.Context) must capture before start, complete the bounded exact-PID run before business assertions, and close capture in finally."
+    $scenarioPrimaryInitIndex = $captureBlock.IndexOf('$scenarioPrimaryError = $null', [System.StringComparison]::Ordinal)
+    $scenarioPrimaryCaptureIndex = $captureBlock.IndexOf('$scenarioPrimaryError = $_', $captureBusinessAssertIndex, [System.StringComparison]::Ordinal)
+    $scenarioStopIndex = $captureBlock.IndexOf('Stop-StartedInstalledProcessTreeRun', $scenarioPrimaryCaptureIndex, [System.StringComparison]::Ordinal)
+    $scenarioLifecycleCaptureIndex = $captureBlock.IndexOf('$scenarioLifecycleError = $_', $scenarioStopIndex, [System.StringComparison]::Ordinal)
+    $scenarioFailureCloseIndex = $captureBlock.IndexOf('Close-InstalledProbeProcessTreeCapture $installedProcessTreeCapture', $scenarioLifecycleCaptureIndex, [System.StringComparison]::Ordinal)
+    $scenarioPrimaryCheckIndex = $captureBlock.IndexOf('if ($null -ne $scenarioPrimaryError)', $scenarioFailureCloseIndex, [System.StringComparison]::Ordinal)
+    $scenarioLifecycleAttachmentIndex = $captureBlock.IndexOf('SubversionR.AsyncProcessTreeLifecycleFailure', $scenarioPrimaryCheckIndex, [System.StringComparison]::Ordinal)
+    $scenarioThrowPrimaryIndex = $captureBlock.IndexOf('throw $scenarioPrimaryError', $scenarioLifecycleAttachmentIndex, [System.StringComparison]::Ordinal)
+    $scenarioThrowLifecycleIndex = $captureBlock.IndexOf('throw $scenarioLifecycleError', $scenarioThrowPrimaryIndex, [System.StringComparison]::Ordinal)
+    Assert-True (
+      $scenarioPrimaryInitIndex -ge 0 -and
+      $scenarioPrimaryCaptureIndex -gt $captureBusinessAssertIndex -and
+      $scenarioStopIndex -gt $scenarioPrimaryCaptureIndex -and
+      $scenarioLifecycleCaptureIndex -gt $scenarioStopIndex -and
+      $scenarioFailureCloseIndex -gt $scenarioLifecycleCaptureIndex -and
+      $scenarioPrimaryCheckIndex -gt $scenarioFailureCloseIndex -and
+      $scenarioLifecycleAttachmentIndex -gt $scenarioPrimaryCheckIndex -and
+      $scenarioThrowPrimaryIndex -gt $scenarioLifecycleAttachmentIndex -and
+      $scenarioThrowLifecycleIndex -gt $scenarioThrowPrimaryIndex
+    ) "Installed $($captureSpec.Context) pre-completion failure must stop and settle before capture close, then preserve the scenario error while attaching lifecycle failure."
+    if ([string]$captureSpec.Context -ceq "worker-crash") {
+      $fixtureCleanupTryIndex = $captureBlock.IndexOf('try { Stop-FaultFixture $faultFixture "greeting-stall" }', $scenarioFailureCloseIndex, [System.StringComparison]::Ordinal)
+      $fixtureLifecycleAdoptIndex = $captureBlock.IndexOf('if ($null -eq $scenarioLifecycleError) { $scenarioLifecycleError = $_ }', $fixtureCleanupTryIndex, [System.StringComparison]::Ordinal)
+      $fixtureCleanupAttachmentIndex = $captureBlock.IndexOf('SubversionR.FixtureCleanupFailure', $fixtureLifecycleAdoptIndex, [System.StringComparison]::Ordinal)
+      Assert-True (
+        $fixtureCleanupTryIndex -gt $scenarioFailureCloseIndex -and
+        $fixtureLifecycleAdoptIndex -gt $fixtureCleanupTryIndex -and
+        $fixtureCleanupAttachmentIndex -gt $fixtureLifecycleAdoptIndex -and
+        $scenarioPrimaryCheckIndex -gt $fixtureCleanupAttachmentIndex
+      ) "Worker-crash fixture cleanup failure must become or attach to lifecycle failure before the preserved scenario primary error is rethrown."
+    }
+  }
+  $blackholeCaptureBlock = $driverText.Substring(
+    $driverText.IndexOf('$blackholeConnectWorkRoot =', [System.StringComparison]::Ordinal),
+    $driverText.IndexOf('$daemonDisconnectWorkRoot =', [System.StringComparison]::Ordinal) -
+      $driverText.IndexOf('$blackholeConnectWorkRoot =', [System.StringComparison]::Ordinal)
+  )
+  Assert-True ($blackholeCaptureBlock.Contains('-Started $startedProbe')) "Blackhole installed capture must pass the exact started probe to bounded completion."
+  Assert-True (-not $blackholeCaptureBlock.Contains('-Started $fixture')) "Blackhole installed capture must not infer its root from the PowerShell fixture process."
+
+  $shortRootCleanupSpecs = @(
+    [pscustomobject]@{ Context = "installed-negative"; Start = '$installedNegativeWorkRoot ='; End = 'Assert-True ($installedNegativeObservations.Count -eq 4)'; Passed = '$installedNegativeBlockPassed'; Root = '$installedNegativeWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "installed-positive"; Start = '$installedRunId ='; End = '$recoveryBlockedWorkRoot ='; Passed = '$installedBlockPassed'; Root = '$installedFixtureRoot'; Settlement = 'Invoke-BoundedProcessWithOwnedInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "recovery-blocked"; Start = '$recoveryBlockedWorkRoot ='; End = '$redactionWorkRoot ='; Passed = '$recoveryBlockedBlockPassed'; Root = '$recoveryBlockedWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "redaction"; Start = '$redactionWorkRoot ='; End = '$recoverySafeWorkRoot ='; Passed = '$redactionBlockPassed'; Root = '$redactionWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "recovery-safe"; Start = '$recoverySafeWorkRoot ='; End = '$recoveryIndeterminateWorkRoot ='; Passed = '$recoverySafeBlockPassed'; Root = '$recoverySafeWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "recovery-indeterminate"; Start = '$recoveryIndeterminateWorkRoot ='; End = '$stalledReadWorkRoot ='; Passed = '$recoveryIndeterminateBlockPassed'; Root = '$recoveryIndeterminateWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "stalled-mid-read"; Start = '$stalledReadWorkRoot ='; End = '$deadlineWorkRoot ='; Passed = '$stalledReadBlockPassed'; Root = '$stalledReadWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "absolute-deadline"; Start = '$deadlineWorkRoot ='; End = '$cancellationWorkRoot ='; Passed = '$deadlineBlockPassed'; Root = '$deadlineWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "cancellation"; Start = '$cancellationWorkRoot ='; End = '$trustRevokedWorkRoot ='; Passed = '$cancellationBlockPassed'; Root = '$cancellationWorkRoot'; Settlement = 'Invoke-BoundedProcessWithExistingInstalledTreeCapture' },
+    [pscustomobject]@{ Context = "trust-revoked"; Start = '$trustRevokedWorkRoot ='; End = '$workerCrashWorkRoot ='; Passed = '$trustRevokedBlockPassed'; Root = '$trustRevokedWorkRoot'; Settlement = 'Invoke-BoundedInstalledProcessWithRequiredLiveCapture' },
+    [pscustomobject]@{ Context = "worker-crash"; Start = '$workerCrashWorkRoot ='; End = '$blackholeConnectWorkRoot ='; Passed = '$workerCrashBlockPassed'; Root = '$workerCrashWorkRoot'; Settlement = 'Complete-BoundedInstalledProcessTreeRun' },
+    [pscustomobject]@{ Context = "blackhole-connect"; Start = '$blackholeConnectWorkRoot ='; End = '$daemonDisconnectWorkRoot ='; Passed = '$blackholeConnectBlockPassed'; Root = '$blackholeConnectWorkRoot'; Settlement = 'Complete-BoundedInstalledProcessTreeRun' },
+    [pscustomobject]@{ Context = "daemon-disconnect"; Start = '$daemonDisconnectWorkRoot ='; End = 'function New-I6ArtifactBinding'; Passed = '$daemonDisconnectBlockPassed'; Root = '$daemonDisconnectWorkRoot'; Settlement = 'Complete-BoundedInstalledProcessTreeRun' }
+  )
+  foreach ($cleanupSpec in $shortRootCleanupSpecs) {
+    $cleanupBlockStart = $driverText.IndexOf([string]$cleanupSpec.Start, [System.StringComparison]::Ordinal)
+    $cleanupBlockEnd = $driverText.IndexOf([string]$cleanupSpec.End, $cleanupBlockStart + 1, [System.StringComparison]::Ordinal)
+    Assert-True ($cleanupBlockStart -ge 0 -and $cleanupBlockEnd -gt $cleanupBlockStart) "The $($cleanupSpec.Context) short-root cleanup block must be uniquely delimited."
+    $cleanupBlock = $driverText.Substring($cleanupBlockStart, $cleanupBlockEnd - $cleanupBlockStart)
+    $cleanupInitiallyFailedIndex = $cleanupBlock.IndexOf("$($cleanupSpec.Passed) = `$false", [System.StringComparison]::Ordinal)
+    $cleanupSettlementIndex = $cleanupBlock.IndexOf([string]$cleanupSpec.Settlement, $cleanupInitiallyFailedIndex, [System.StringComparison]::Ordinal)
+    $cleanupPassedIndex = $cleanupBlock.IndexOf("$($cleanupSpec.Passed) = `$true", $cleanupSettlementIndex, [System.StringComparison]::Ordinal)
+    $cleanupGuardText = "if ($($cleanupSpec.Passed) -and (Test-Path -LiteralPath $($cleanupSpec.Root)))"
+    $cleanupGuardIndex = $cleanupBlock.IndexOf($cleanupGuardText, $cleanupPassedIndex, [System.StringComparison]::Ordinal)
+    $cleanupDeleteIndex = $cleanupBlock.IndexOf("Remove-Item -LiteralPath $($cleanupSpec.Root)", $cleanupGuardIndex, [System.StringComparison]::Ordinal)
+    Assert-True (
+      $cleanupInitiallyFailedIndex -ge 0 -and
+      $cleanupSettlementIndex -gt $cleanupInitiallyFailedIndex -and
+      $cleanupPassedIndex -gt $cleanupSettlementIndex -and
+      $cleanupGuardIndex -gt $cleanupPassedIndex -and
+      $cleanupDeleteIndex -gt $cleanupGuardIndex
+    ) "The $($cleanupSpec.Context) short root must settle before success is armed and must never delete on business failure."
+  }
+  Invoke-Expression ($observationHelperSources -join "`n`n")
+
+  $stopStartedInjectionPrefix = @'
+function Assert-InjectedTrue([bool]$Condition, [string]$Message) {
+  if (-not $Condition) { throw $Message }
+}
+function Wait-InjectedRecordedProcessTreeSettlement(
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys,
+  [long]$ProbePid,
+  [long]$ProbeParentPid,
+  [string]$ExpectedProbeProcessName,
+  [int]$DeadlineSeconds,
+  [int]$SettlementMilliseconds,
+  [string]$Context
+) {
+  $script:SettlementProbePids.Add($ProbePid)
+  if ($script:SettlementFails) { throw "injected process-tree settlement failure" }
+  return @()
+}
+function Invoke-InjectedStopStartedRun([object]$Started, [object]$Capture, [bool]$SettlementFails) {
+  $script:SettlementProbePids = [System.Collections.Generic.List[long]]::new()
+  $script:SettlementFails = $SettlementFails
+  Stop-StartedInstalledProcessTreeRun $Started $Capture 1 1 "injected async cleanup"
+  return @($script:SettlementProbePids)
+}
+'@
+  $stopStartedInjectionHelper = $stopStartedInstalledTreeHelper.Replace(
+    'Assert-True',
+    'Assert-InjectedTrue'
+  ).Replace(
+    'Wait-RecordedProcessTreeSettlement',
+    'Wait-InjectedRecordedProcessTreeSettlement'
+  )
+  $stopStartedInjectionModule = New-Module `
+    -Name "SubversionRM8I6StopStartedInjection$([Guid]::NewGuid().ToString('N'))" `
+    -ScriptBlock ([scriptblock]::Create("$stopStartedInjectionPrefix`n`n$stopStartedInjectionHelper"))
+  $injectedHostPath = (Get-Process -Id $PID).Path
+  $injectedSleeperPid = 0L
+  try {
+    $injectedSleeper = Start-Process `
+      -FilePath $injectedHostPath `
+      -ArgumentList @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30") `
+      -PassThru -WindowStyle Hidden
+    $injectedSleeperPid = [long]$injectedSleeper.Id
+    $injectedCapture = [pscustomobject]@{
+      SourceIdentifier = "injected-async-capture"
+      Events = [System.Collections.Generic.List[object]]::new()
+      EventKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+      Closed = $false
+    }
+    $injectedSettlementPids = @(& $stopStartedInjectionModule {
+      param($Started, $Capture)
+      Invoke-InjectedStopStartedRun $Started $Capture $false
+    } ([pscustomobject]@{ Process = $injectedSleeper; ProcessId = $injectedSleeperPid }) $injectedCapture)
+    Assert-Equal 1 $injectedSettlementPids.Count "Injected pre-completion cleanup must attempt settlement exactly once after termination."
+    Assert-Equal $injectedSleeperPid $injectedSettlementPids[0] "Injected pre-completion cleanup must settle the exact started PID."
+    Assert-True ($null -eq (Get-Process -Id $injectedSleeperPid -ErrorAction SilentlyContinue)) "Injected pre-completion cleanup must terminate its started process before returning."
+
+    $disposedProcess = Start-Process `
+      -FilePath $injectedHostPath `
+      -ArgumentList @("-NoProfile", "-NonInteractive", "-Command", "exit 0") `
+      -PassThru -WindowStyle Hidden
+    $disposedProcess.WaitForExit()
+    $disposedProcessPid = [long]$disposedProcess.Id
+    $disposedProcess.Dispose()
+    $injectedPrimaryError = $null
+    try {
+      & $stopStartedInjectionModule {
+        param($Started, $Capture)
+        Invoke-InjectedStopStartedRun $Started $Capture $true
+      } ([pscustomobject]@{ Process = $disposedProcess; ProcessId = $disposedProcessPid }) $injectedCapture
+    }
+    catch {
+      $injectedPrimaryError = $_
+    }
+    Assert-True ($null -ne $injectedPrimaryError) "Injected termination and settlement failures must throw."
+    Assert-True (-not $injectedPrimaryError.Exception.Message.Contains("injected process-tree settlement failure")) "Injected cleanup must preserve termination failure as the primary error."
+    Assert-Equal "injected process-tree settlement failure" `
+      ([string]$injectedPrimaryError.Exception.Data["SubversionR.ProcessTreeSettlementFailure"]) `
+      "Injected cleanup must attach settlement failure to the primary termination error."
+
+    $injectedScenarioError = try { throw "injected worker-crash scenario failure" } catch { $_ }
+    $injectedLifecycleError = try { throw "injected async lifecycle failure" } catch { $_ }
+    $injectedFixtureCleanupError = try { throw "injected fixture cleanup failure" } catch { $_ }
+    $injectedLifecycleError.Exception.Data["SubversionR.FixtureCleanupFailure"] = [string]$injectedFixtureCleanupError.Exception.Message
+    $injectedScenarioError.Exception.Data["SubversionR.AsyncProcessTreeLifecycleFailure"] = [string]$injectedLifecycleError.Exception.Message
+    Assert-Equal "injected worker-crash scenario failure" $injectedScenarioError.Exception.Message "Fixture cleanup injection must not replace the worker-crash primary error."
+    Assert-Equal "injected async lifecycle failure" `
+      ([string]$injectedScenarioError.Exception.Data["SubversionR.AsyncProcessTreeLifecycleFailure"]) `
+      "Worker-crash primary error must retain the lifecycle failure attachment."
+    Assert-Equal "injected fixture cleanup failure" `
+      ([string]$injectedLifecycleError.Exception.Data["SubversionR.FixtureCleanupFailure"]) `
+      "Existing worker-crash lifecycle failure must retain the fixture cleanup failure attachment."
+  }
+  finally {
+    $remainingInjectedSleeper = if ($injectedSleeperPid -gt 0) { Get-Process -Id $injectedSleeperPid -ErrorAction SilentlyContinue } else { $null }
+    if ($null -ne $remainingInjectedSleeper) { Stop-Process -Id $injectedSleeperPid -Force -ErrorAction SilentlyContinue }
+    Remove-Module $stopStartedInjectionModule -Force
+  }
+
+  $syntheticSettlementModulePrefix = @'
+Set-StrictMode -Version Latest
+
+function Assert-SyntheticTrue([bool]$Condition, [string]$Message) {
+  if (-not $Condition) { throw $Message }
+}
+
+function Receive-SyntheticProcessStartEvents(
+  [string]$SourceIdentifier,
+  [System.Collections.Generic.List[object]]$AllEvents,
+  [System.Collections.Generic.HashSet[string]]$EventKeys
+) {
+  $script:ReceiveCount += 1
+  if ($null -ne $script:LateStart -and $script:ReceiveCount -eq $script:LateStartOnReceive) {
+    $AllEvents.Add($script:LateStart)
+  }
+}
+
+function Get-SyntheticCimProcessSnapshot([int]$OperationTimeoutSeconds) {
+  $script:OperationTimeoutSeconds.Add($OperationTimeoutSeconds)
+  return @($script:SettlementSnapshot)
+}
+
+function Invoke-SyntheticRecordedTreeSettlement([object]$Case) {
+  $events = [System.Collections.Generic.List[object]]::new()
+  foreach ($eventRecord in @($Case.InitialEvents)) { $events.Add($eventRecord) }
+  $script:ReceiveCount = 0
+  $script:LateStart = $Case.LateStart
+  $script:LateStartOnReceive = [int]$Case.LateStartOnReceive
+  $script:SettlementSnapshot = @($Case.SettlementSnapshot)
+  $script:OperationTimeoutSeconds = [System.Collections.Generic.List[int]]::new()
+  $null = Wait-RecordedProcessTreeSettlement `
+    -SourceIdentifier "synthetic-owned-installed-tree" `
+    -AllEvents $events `
+    -EventKeys ([System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)) `
+    -ProbePid ([long]$Case.ProbePid) `
+    -ProbeParentPid ([long]$Case.ProbeParentPid) `
+    -ExpectedProbeProcessName ([string]$Case.ExpectedProbeProcessName) `
+    -DeadlineSeconds ([int]$Case.DeadlineSeconds) `
+    -SettlementMilliseconds ([int]$Case.SettlementMilliseconds) `
+    -Context ([string]$Case.Context)
+  return [pscustomobject]@{
+    ReceiveCount = $script:ReceiveCount
+    EventCount = $events.Count
+    OperationTimeoutSeconds = @($script:OperationTimeoutSeconds)
+  }
+}
+'@
+  $syntheticSettlementHelperNames = @(
+    "Get-ProcessSnapshotStartFileTime",
+    "Get-NextRecordedProcessStartFileTime",
+    "Get-RecordedProcessDescendantStarts",
+    "Get-LiveRecordedProcessTreeStarts",
+    "Get-DeadlineBoundCimProcessSnapshot",
+    "Wait-RecordedProcessTreeSettlement"
+  )
+  $syntheticSettlementHelperSources = foreach ($functionName in $syntheticSettlementHelperNames) {
+    $source = $observationHelperSources[[Array]::IndexOf($observationHelpers, $functionName)]
+    $source = $source.Replace('Assert-True', 'Assert-SyntheticTrue')
+    if ($functionName -ceq "Wait-RecordedProcessTreeSettlement") {
+      $source = $source.Replace('Receive-ProcessStartEvents', 'Receive-SyntheticProcessStartEvents')
+    }
+    if ($functionName -ceq "Get-DeadlineBoundCimProcessSnapshot") {
+      $source = $source.Replace('Get-CimProcessSnapshot', 'Get-SyntheticCimProcessSnapshot')
+    }
+    $source
+  }
+  $syntheticSettlementModuleSource = ((@($syntheticSettlementModulePrefix) + @($syntheticSettlementHelperSources)) -join "`n`n")
+  $syntheticSettlementModule = New-Module `
+    -Name "SubversionRM8I6SyntheticSettlement$([Guid]::NewGuid().ToString('N'))" `
+    -ScriptBlock ([scriptblock]::Create($syntheticSettlementModuleSource))
+  try {
+    $syntheticProbeStart = [pscustomobject]@{
+      processId = 900L; parentProcessId = 90L; processName = "pwsh.exe"; eventFileTime = 9000L
+    }
+    $syntheticLateUtilityStart = [pscustomobject]@{
+      processId = 901L; parentProcessId = 900L; processName = "utility.exe"; eventFileTime = 9100L
+    }
+    $lateStartSettlement = & $syntheticSettlementModule {
+      param($Case)
+      Invoke-SyntheticRecordedTreeSettlement $Case
+    } ([pscustomobject]@{
+        Context = "late-start stable-window reset"
+        InitialEvents = @($syntheticProbeStart)
+        LateStart = $syntheticLateUtilityStart
+        LateStartOnReceive = 3
+        SettlementSnapshot = @([pscustomobject]@{ ProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(1L) })
+        ProbePid = 900L
+        ProbeParentPid = 90L
+        ExpectedProbeProcessName = "pwsh.exe"
+        DeadlineSeconds = 1
+        SettlementMilliseconds = 1
+      })
+    Assert-True ($lateStartSettlement.ReceiveCount -ge 6) "A late recorded utility descendant must reset the stable-zero window before exact-PID settlement returns."
+    Assert-Equal 2 $lateStartSettlement.EventCount "Exact-PID settlement must retain the late descendant start in its recorded tree."
+    Assert-True (
+      $lateStartSettlement.OperationTimeoutSeconds.Count -ge 2 -and
+      @($lateStartSettlement.OperationTimeoutSeconds | Where-Object { $_ -ne 1 }).Count -eq 0
+    ) "A one-second process-tree deadline must bound every synthetic CIM observation to one second."
+
+    Assert-ScriptThrowsContaining {
+      & $syntheticSettlementModule {
+        param($Case)
+        Invoke-SyntheticRecordedTreeSettlement $Case
+      } ([pscustomobject]@{
+          Context = "missing exact probe root"
+          InitialEvents = @()
+          LateStart = $null
+          LateStartOnReceive = 0
+          SettlementSnapshot = @([pscustomobject]@{ ProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(1L) })
+          ProbePid = 900L
+          ProbeParentPid = 90L
+          ExpectedProbeProcessName = "pwsh.exe"
+          DeadlineSeconds = 1
+          SettlementMilliseconds = 1
+        })
+    } "did not settle to stable zero before its absolute deadline" "Exact-PID settlement must fail closed at its deadline when the expected probe start was never recorded."
+  }
+  finally {
+    Remove-Module $syntheticSettlementModule -Force
+  }
+  $activeProcessSnapshotStartHelper = (Get-Command Get-ProcessSnapshotStartFileTime -CommandType Function -ErrorAction Stop).Definition
+  Assert-True (
+    $activeProcessSnapshotStartHelper.Contains('$Process.CreationDate') -and
+    -not $activeProcessSnapshotStartHelper.Contains('$Process.CreationFileTime')
+  ) "Synthetic settlement module removal must restore the production CIM creation-time helper without stub pollution."
+  $activeCimSnapshotHelper = (Get-Command Get-CimProcessSnapshot -CommandType Function -ErrorAction Stop).Definition
+  Assert-True (
+    $activeCimSnapshotHelper.Contains('-OperationTimeoutSec') -and
+    -not $activeCimSnapshotHelper.Contains('$script:SettlementSnapshot')
+  ) "Synthetic settlement module removal must leave the production bounded CIM helper active."
+
+  $positiveReportIndex = $driverText.IndexOf('$positiveReport = Convert-JsonObject', [System.StringComparison]::Ordinal)
+  $positiveContractIndex = $driverText.IndexOf('Assert-PackagedNativePositiveProcessContract $positiveResult.ExitCode $positiveReport', $positiveReportIndex, [System.StringComparison]::Ordinal)
+  $positiveSuccessValidationIndex = $driverText.IndexOf('$expectedPositiveOperations = @(', $positiveContractIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $positiveReportIndex -ge 0 -and
+    $positiveContractIndex -gt $positiveReportIndex -and
+    $positiveSuccessValidationIndex -gt $positiveContractIndex
+  ) "Packaged-native positive reports must be discriminated by exit status before exact success-shape validation."
+  $positiveBeforeContract = $driverText.Substring($positiveReportIndex, $positiveContractIndex - $positiveReportIndex)
+  Assert-True (-not $positiveBeforeContract.Contains('.error')) "A packaged-native positive report must not access branch-specific fields before contract discrimination."
+
+  $positiveSuccessReport = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-packaged-native-positive.v1"
+    status = "passed"
+    protocol = [pscustomobject]@{ major = 1; minor = 35 }
+    remoteSvnAnonymous = $true
+    fixtureCliInvocations = 0
+    operations = @()
+    positiveOperationCount = 9
+    identityRequiredOperationCount = 2
+    remoteOperationCount = 11
+    uniqueOperationIds = $true
+    anonymousIdentityRequired = [pscustomobject]@{ lock = [pscustomobject]@{}; unlock = [pscustomobject]@{} }
+    subsequentDiagnostics = $true
+  }
+  Assert-PackagedNativePositiveProcessContract 0 $positiveSuccessReport
+
+  $positiveFailureWithoutDiagnostics = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-packaged-native-positive.v1"
+    status = "failed"
+    error = [pscustomobject]@{ code = "SUBVERSIONR_I6_PACKAGED_PROBE_FAILED"; diagnostics = $null }
+  }
+  Assert-Equal "SUBVERSIONR_I6_PACKAGED_PROBE_FAILED" `
+    (Get-PackagedNativePositiveFailureDetail $positiveFailureWithoutDiagnostics) `
+    "Packaged-native positive failure details must preserve a failure without diagnostics."
+  $positiveFailureWithDiagnostics = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-packaged-native-positive.v1"
+    status = "failed"
+    error = [pscustomobject]@{
+      code = "SVN_OPERATION_LOCK_FAILED"
+      diagnostics = [pscustomobject]@{ cause = "authenticationFailed"; names = @("SVN_ERR_RA_NOT_AUTHORIZED") }
+    }
+  }
+  Assert-Equal "SVN_OPERATION_LOCK_FAILED / authenticationFailed / SVN_ERR_RA_NOT_AUTHORIZED" `
+    (Get-PackagedNativePositiveFailureDetail $positiveFailureWithDiagnostics) `
+    "Packaged-native positive failure details must preserve bounded symbolic diagnostics."
+  Assert-ScriptThrowsContaining {
+    Assert-PackagedNativePositiveProcessContract 1 $positiveSuccessReport
+  } "failure report must contain exactly the required fields" "A nonzero packaged-native positive exit must reject the success schema."
+  Assert-ScriptThrowsContaining {
+    Assert-PackagedNativePositiveProcessContract 0 $positiveFailureWithoutDiagnostics
+  } "success report must contain exactly the required fields" "A zero packaged-native positive exit must reject the failure schema."
+  Assert-ScriptThrowsContaining {
+    Get-PackagedNativePositiveFailureDetail ([pscustomobject]@{
+        schema = "subversionr.release.m8-i6-packaged-native-positive.v1"
+        status = "passed"
+      })
+  } "must contain exactly the required fields" "Packaged-native positive failure inspection must fail closed when the error field is absent."
+
+  $installedPositiveReportIndex = $driverText.IndexOf('$installedPositiveReport = Convert-JsonObject', [System.StringComparison]::Ordinal)
+  $installedPositiveContractIndex = $driverText.IndexOf('Assert-InstalledVsixPositiveProcessContract $installedPositive.ExitCode $installedPositiveReport', $installedPositiveReportIndex, [System.StringComparison]::Ordinal)
+  $installedPositiveSuccessValidationIndex = $driverText.IndexOf('$installedPositiveReport.operations.operation', $installedPositiveContractIndex, [System.StringComparison]::Ordinal)
+  Assert-True (
+    $installedPositiveReportIndex -ge 0 -and
+    $installedPositiveContractIndex -gt $installedPositiveReportIndex -and
+    $installedPositiveSuccessValidationIndex -gt $installedPositiveContractIndex
+  ) "Installed VSIX positive reports must be discriminated by exit status before exact success-shape validation."
+  $installedPositiveBeforeContract = $driverText.Substring($installedPositiveReportIndex, $installedPositiveContractIndex - $installedPositiveReportIndex)
+  Assert-True (-not $installedPositiveBeforeContract.Contains('.error')) "An installed VSIX positive report must not access branch-specific fields before contract discrimination."
+  foreach ($requiredShortRootText in @(
+      '$installedHarnessRoot = [System.IO.Path]::GetFullPath((Join-Path $repoTargetRoot "i6p"))',
+      '$installedRunId = [Guid]::NewGuid().ToString("N").Substring(0, 8)',
+      '$installedPositiveRoot = [System.IO.Path]::GetFullPath((Join-Path $installedFixtureRoot "p"))',
+      '$installedFixtureRoot.Length -le 110',
+      '$installedPositiveRoot.Length -le 110',
+      '$installedBlockPassed = $true',
+      'positive.stdout.txt',
+      'positive.stderr.txt',
+      '$installedBlockPassed -and (Test-Path -LiteralPath $installedFixtureRoot)',
+      'The installed-positive short work root remained after successful cleanup.'
+    )) {
+    Assert-True ($driverText.Contains($requiredShortRootText)) "Installed-positive driver must retain short-root/failure-artifact text '$requiredShortRootText'."
+  }
+
+  $installedPositiveSuccessReport = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-installed-vsix-positive.v1"
+    status = "passed"
+    protocol = [pscustomobject]@{ major = 1; minor = 35 }
+    remoteSvnAnonymous = $true
+    fixtureCliInvocations = 0
+    operations = @()
+    positiveOperationCount = 9
+    identityRequiredOperationCount = 2
+    remoteOperationCount = 11
+    uniqueOperationIds = $true
+    anonymousIdentityRequired = [pscustomobject]@{ lock = [pscustomobject]@{}; unlock = [pscustomobject]@{} }
+  }
+  Assert-InstalledVsixPositiveProcessContract 0 $installedPositiveSuccessReport
+  $installedPositiveFailure = [pscustomobject]@{
+    schema = "subversionr.release.m8-i6-installed-vsix-positive.v1"
+    status = "failed"
+    error = [pscustomobject]@{ code = "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED"; diagnostics = $null }
+  }
+  Assert-Equal "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED" `
+    (Get-InstalledVsixPositiveFailureDetail $installedPositiveFailure) `
+    "Installed VSIX positive failure details must preserve the stable failure code."
+  Assert-ScriptThrowsContaining {
+    Assert-InstalledVsixPositiveProcessContract 1 $installedPositiveSuccessReport
+  } "failure report must contain exactly the required fields" "A nonzero installed VSIX positive exit must reject the success schema."
+  Assert-ScriptThrowsContaining {
+    Assert-InstalledVsixPositiveProcessContract 0 $installedPositiveFailure
+  } "success report must contain exactly the required fields" "A zero installed VSIX positive exit must reject the failure schema."
+  Assert-ScriptThrowsContaining {
+    Get-InstalledVsixPositiveFailureDetail ([pscustomobject]@{
+        schema = "subversionr.release.m8-i6-installed-vsix-positive.v1"
+        status = "failed"
+        error = [pscustomobject]@{ code = "SUBVERSIONR_I6_INSTALLED_PROBE_FAILED"; diagnostics = [pscustomobject]@{} }
+      })
+  } "diagnostics must be null" "Installed VSIX positive failure inspection must reject an unbounded diagnostics object."
+
+  $retainedJoinEvent = [pscustomobject]@{
+    processId = 42L; parentProcessId = 7L; processName = "subversionr-daemon.exe"
+    eventFileTime = 150L; eventSessionId = 3L
+    imagePath = ""; imageFileIdentity = ""; imageStartFileTime = 0L; sessionId = -1L
+  }
+  $retainedJoinIdentity = [pscustomobject]@{
+    processId = 42L; parentProcessId = 7L; startFileTime = 100L; exitFileTime = 200L; sessionId = 3L
+    imagePath = "C:\candidate\subversionr-daemon.exe"; imageFileIdentity = "volume:1:file:2"
+  }
+  $retainedJoinResult = Set-RecordedProcessStartIdentityFromRetainedBinding `
+    @($retainedJoinEvent) $retainedJoinIdentity "subversionr-daemon.exe" "retained event join test"
+  Assert-Equal $retainedJoinEvent $retainedJoinResult "Retained event join must enrich the exact in-lifetime start record."
+  Assert-Equal 100L $retainedJoinEvent.imageStartFileTime "Retained event join must preserve the handle-captured creation FILETIME."
+  Assert-Equal "volume:1:file:2" $retainedJoinEvent.imageFileIdentity "Retained event join must preserve the handle-captured file identity."
+  $postExitReuseEvent = [pscustomobject]@{
+    processId = 42L; parentProcessId = 7L; processName = "subversionr-daemon.exe"
+    eventFileTime = 250L; eventSessionId = 3L
+    imagePath = ""; imageFileIdentity = ""; imageStartFileTime = 0L; sessionId = -1L
+  }
+  Assert-ScriptThrowsContaining {
+    Set-RecordedProcessStartIdentityFromRetainedBinding `
+      @($postExitReuseEvent) $retainedJoinIdentity "subversionr-daemon.exe" "post-exit reuse test"
+  } "exactly one subscribed start identity" "Retained event join must reject a same-PID start after the retained lifetime ended."
+
+  $installedIdentityRoot = Join-Path $tempRoot "installed-daemon-identity"
+  $installedExtensionsRoot = Join-Path $installedIdentityRoot "extensions"
+  $installedPackageRoot = Join-Path $installedExtensionsRoot "hitsuki-ban.subversionr-0.2.5"
+  $installedBackendRoot = Join-Path $installedPackageRoot "resources\backend\win32-x64"
+  New-Item -ItemType Directory -Force -Path $installedBackendRoot | Out-Null
+  $identityCandidatePath = Join-Path $installedIdentityRoot "candidate-daemon.exe"
+  $identityInstalledPath = Join-Path $installedBackendRoot "subversionr-daemon.exe"
+  [System.IO.File]::WriteAllText($identityCandidatePath, "same candidate bytes", [System.Text.UTF8Encoding]::new($false))
+  Copy-Item -LiteralPath $identityCandidatePath -Destination $identityInstalledPath
+  $processCaptureReadyPath = Join-Path $installedIdentityRoot "process-capture-ready.json"
+  $processCaptureNonce = "e" * 32
+  $processCaptureReady = [ordered]@{
+    schema = "subversionr.release.m8-i6-installed-process-capture-ready.v1"
+    nonce = $processCaptureNonce
+    cell = "localEventZeroNetwork"
+    extensionId = "hitsuki-ban.subversionr"
+    extensionVersion = "0.2.5"
+    extensionPath = $installedPackageRoot
+    extensionHostProcessId = 123L
+  }
+  $processCaptureReady | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $processCaptureReadyPath -Encoding utf8 -NoNewline
+  $validatedProcessCaptureReady = Read-InstalledProcessCaptureReady `
+    $processCaptureReadyPath $processCaptureNonce "localEventZeroNetwork" `
+    $installedExtensionsRoot "0.2.5" $identityCandidatePath "process-capture ready test"
+  Assert-Equal ([System.IO.Path]::GetFullPath($identityInstalledPath)) $validatedProcessCaptureReady.installedDaemonPath "Process-capture ready validation must resolve the hash-bound installed daemon path."
+  Assert-Equal 123L $validatedProcessCaptureReady.extensionHostProcessId "Process-capture ready validation must retain the positive Extension Host PID."
+  Assert-ScriptThrowsContaining {
+    Read-InstalledProcessCaptureReady `
+      $processCaptureReadyPath ("f" * 32) "localEventZeroNetwork" `
+      $installedExtensionsRoot "0.2.5" $identityCandidatePath "stale process-capture ready test"
+  } "nonce was invalid or stale" "Process-capture ready validation must reject a stale nonce."
+
+  $missingProcessCaptureFieldPath = Join-Path $installedIdentityRoot "process-capture-ready-missing-field.json"
+  $missingProcessCaptureField = [ordered]@{}
+  foreach ($property in $processCaptureReady.GetEnumerator()) {
+    if ([string]$property.Key -cne "extensionHostProcessId") { $missingProcessCaptureField[[string]$property.Key] = $property.Value }
+  }
+  $missingProcessCaptureField | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $missingProcessCaptureFieldPath -Encoding utf8 -NoNewline
+  Assert-ScriptThrowsContaining {
+    Read-InstalledProcessCaptureReady `
+      $missingProcessCaptureFieldPath $processCaptureNonce "localEventZeroNetwork" `
+      $installedExtensionsRoot "0.2.5" $identityCandidatePath "missing process-capture field test"
+  } "exactly the required fields" "Process-capture ready validation must reject a missing mandatory field."
+
+  $outsideProcessCapturePath = Join-Path $installedIdentityRoot "process-capture-ready-outside.json"
+  $outsideProcessCapture = [ordered]@{}
+  foreach ($property in $processCaptureReady.GetEnumerator()) { $outsideProcessCapture[[string]$property.Key] = $property.Value }
+  $outsideProcessCapture.extensionPath = $installedIdentityRoot
+  $outsideProcessCapture | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $outsideProcessCapturePath -Encoding utf8 -NoNewline
+  Assert-ScriptThrowsContaining {
+    Read-InstalledProcessCaptureReady `
+      $outsideProcessCapturePath $processCaptureNonce "localEventZeroNetwork" `
+      $installedExtensionsRoot "0.2.5" $identityCandidatePath "outside process-capture extension test"
+  } "escaped the isolated extensions root" "Process-capture ready validation must reject an extension path outside the isolated installed root."
+  $candidateFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($identityCandidatePath)
+  $installedFileIdentity = [SubversionRM8I6ExactFileIdentity]::Get($identityInstalledPath)
+  Assert-True ($candidateFileIdentity -cne $installedFileIdentity) "Installed identity fixture must use a copied file with a distinct exact file identity."
+  Assert-Equal $installedFileIdentity $validatedProcessCaptureReady.installedDaemonFileIdentity "Process-capture ready validation must retain the exact installed-copy file identity rather than the build-tree candidate identity."
+  [System.IO.File]::AppendAllText($identityInstalledPath, "changed", [System.Text.UTF8Encoding]::new($false))
+  Assert-ScriptThrowsContaining {
+    Read-InstalledProcessCaptureReady `
+      $processCaptureReadyPath $processCaptureNonce "localEventZeroNetwork" `
+      $installedExtensionsRoot "0.2.5" $identityCandidatePath "changed installed process-capture ready test"
+  } "process-capture daemon bytes did not match the frozen candidate" "Process-capture ready validation must reject an installed executable whose bytes differ from the candidate."
+
+  $authzAtomicPath = Join-Path $tempRoot "authz-atomic"
+  Set-Content -LiteralPath $authzAtomicPath -Value "old" -NoNewline
+  Set-ExactAuthzAtomically $authzAtomicPath "[repo:/]`n* = rw"
+  Assert-Equal "[repo:/]`n* = rw" (Get-Content -Raw -LiteralPath $authzAtomicPath) "Authz control must settle exact UTF-8 bytes."
+  Assert-Equal 0 @(Get-ChildItem -LiteralPath $tempRoot -Filter ".subversionr-authz-*.tmp" -File).Count "Authz control must leave no replacement residue."
+
+  $authzLogPath = Join-Path $tempRoot "svnserve-authz.log"
+  Set-Content -LiteralPath $authzLogPath -Value @(
+    "1 2026-07-18T00:00:00Z 127.0.0.1 - repo open 2 cap=(depth) /denied SVN/1.14.5 -",
+    "1 2026-07-18T00:00:00Z 127.0.0.1 - repo ERR - 0 170001 Authorization failed"
+  )
+  $authzNetwork = Get-SvnserveAuthzObservation $authzLogPath 0 "Controlled authz test"
+  Assert-Equal 1 $authzNetwork.networkAttempts "Authz log observation must derive one denial attempt from the actual line count."
+  Assert-Equal 1 $authzNetwork.networkConnections "Authz log observation must derive one connection from the actual open-line count."
+  Assert-Equal "command" $authzNetwork.networkProgress "Authz log observation must prove command-stage progress."
+
+  $probeStart = [pscustomobject]@{
+    processId = 100L; parentProcessId = 10L; processName = "Code.exe"; eventFileTime = 1000L
+  }
+  $daemonStart = [pscustomobject]@{
+    processId = 200L; parentProcessId = 100L; processName = "subversionr-daemon.exe"; eventFileTime = 2000L
+  }
+  $workerStart = [pscustomobject]@{
+    processId = 300L; parentProcessId = 200L; processName = "subversionr-daemon.exe"; eventFileTime = 3000L
+  }
+  $measuredBaseline = Get-PackagedNegativeProcessObservation `
+    @($probeStart, $daemonStart, $workerStart) 100L 10L "Code.exe" "subversionr-daemon.exe" @()
+  Assert-Equal 0 $measuredBaseline.workerDescendantsAfter "Packaged-negative baseline must derive zero descendants from an empty settlement snapshot."
+  Assert-Equal 0 $measuredBaseline.fixtureCliInvocations "Packaged-negative baseline must derive zero fixture CLI starts from subscribed process events."
+
+  foreach ($fixtureCliStart in @(
+      [pscustomobject]@{ processId = 350L; parentProcessId = 100L; processName = "svn.exe"; eventFileTime = 3500L },
+      [pscustomobject]@{ processId = 351L; parentProcessId = 200L; processName = "svnadmin.exe"; eventFileTime = 3501L },
+      [pscustomobject]@{ processId = 352L; parentProcessId = 300L; processName = "svnserve.exe"; eventFileTime = 3502L }
+    )) {
+    $measuredFixtureCli = Get-PackagedNegativeProcessObservation `
+      @($probeStart, $daemonStart, $workerStart, $fixtureCliStart) `
+      100L 10L "Code.exe" "subversionr-daemon.exe" @()
+    Assert-Equal 1 $measuredFixtureCli.fixtureCliInvocations "Packaged-negative process evidence must count fixture CLI starts under every product ancestor."
+  }
+
+  $unexpectedDescendant = [pscustomobject]@{
+    processId = 400L; parentProcessId = 300L; processName = "unexpected.exe"; eventFileTime = 4000L
+  }
+  $unexpectedGrandchild = [pscustomobject]@{
+    processId = 401L; parentProcessId = 400L; processName = "unexpected-grandchild.exe"; eventFileTime = 4001L
+  }
+  Assert-Equal 2 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
+      $workerStart
+  ).Count "Packaged-negative event ancestry must traverse child and grandchild starts."
+  $reusedGrandchildPid = [pscustomobject]@{
+    processId = 401L; parentProcessId = 999L; processName = "reused-after-grandchild.exe"; eventFileTime = 5000L
+  }
+  Assert-Equal 2 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild, $reusedGrandchildPid) `
+      $workerStart
+  ).Count "Recorded ancestry must allow a descendant PID to be reused after that start identity."
+  $preDaemonPidCollision = [pscustomobject]@{
+    processId = 402L; parentProcessId = 200L; processName = "unrelated-before-daemon.exe"; eventFileTime = 1500L
+  }
+  Assert-Equal 3 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $preDaemonPidCollision, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
+      $daemonStart
+  ).Count "Recorded ancestry must ignore a numeric parent-PID collision that predates the parent start identity."
+  $preWorkerLifetimeStart = [pscustomobject]@{
+    processId = 300L; parentProcessId = 999L; processName = "previous-worker-pid-owner.exe"; eventFileTime = 1200L
+  }
+  $preWorkerLifetimeChild = [pscustomobject]@{
+    processId = 405L; parentProcessId = 300L; processName = "previous-worker-child.exe"; eventFileTime = 1300L
+  }
+  Assert-Equal 2 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $preWorkerLifetimeStart, $preWorkerLifetimeChild, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
+      $workerStart
+  ).Count "Recorded ancestry must exclude children from a prior lifetime of the root PID."
+  $preProbeDaemonNameCollision = [pscustomobject]@{
+    processId = 403L; parentProcessId = 100L; processName = "subversionr-daemon.exe"; eventFileTime = 900L
+  }
+  $preDaemonWorkerNameCollision = [pscustomobject]@{
+    processId = 404L; parentProcessId = 200L; processName = "subversionr-daemon.exe"; eventFileTime = 1900L
+  }
+  $packagedCollisionObservation = Get-PackagedNegativeProcessObservation `
+    @($preProbeDaemonNameCollision, $probeStart, $preDaemonWorkerNameCollision, $daemonStart, $workerStart) `
+    100L 10L "Code.exe" "subversionr-daemon.exe" @()
+  Assert-Equal 200L $packagedCollisionObservation.daemonProcessId "Packaged-negative observation must ignore a same-name pre-probe PID collision."
+  Assert-Equal 300L $packagedCollisionObservation.workerProcessId "Packaged-negative observation must ignore a same-name pre-daemon PID collision."
+  $settledDescendantObservation = Get-PackagedNegativeProcessObservation `
+    @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
+    100L 10L "Code.exe" "subversionr-daemon.exe" `
+    @()
+  Assert-Equal 0 $settledDescendantObservation.workerDescendantsAfter "Exited Windows helper descendants must not be reported as settlement residue."
+
+  $reusedWorkerPid = [pscustomobject]@{
+    processId = 300L; parentProcessId = 999L; processName = "reused.exe"; eventFileTime = 5000L
+  }
+  $reusedWorkerChild = [pscustomobject]@{
+    processId = 406L; parentProcessId = 300L; processName = "reused-worker-child.exe"; eventFileTime = 5100L
+  }
+  Assert-Equal 0 @(
+    Get-RecordedProcessDescendantStarts `
+      @($probeStart, $daemonStart, $workerStart, $reusedWorkerPid, $reusedWorkerChild) `
+      $workerStart
+  ).Count "Recorded ancestry must exclude a child started by a later owner of the root PID."
+
+  Assert-ScriptThrowsContaining {
+    Get-PackagedNegativeProcessObservation `
+      @($probeStart, $daemonStart, $workerStart) `
+      100L 10L "Code.exe" "subversionr-daemon.exe" `
+      @([pscustomobject]@{
+          ProcessId = 300L; ParentProcessId = 200L; CreationDate = [DateTime]::FromFileTimeUtc(2900L)
+        })
+  } "worker identity remained alive" "Packaged-negative settlement must reject the live recorded worker identity."
+
+  $reusedSettlement = Get-PackagedNegativeProcessObservation `
+    @($probeStart, $daemonStart, $workerStart, $reusedWorkerPid, $reusedWorkerChild) `
+    100L 10L "Code.exe" "subversionr-daemon.exe" `
+    @([pscustomobject]@{
+        ProcessId = 300L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5000L)
+      })
+  Assert-Equal 0 $reusedSettlement.workerDescendantsAfter "Packaged-negative settlement must allow an observed later process to reuse the recorded worker PID."
+
+  Assert-ScriptThrowsContaining {
+    Get-RecordedProcessDescendantStarts `
+      @($workerStart, $workerStart) `
+      $workerStart
+  } "must occur exactly once" "Recorded ancestry must reject a duplicate exact PID and event-time identity."
+
+  $extraPackagedDaemonStart = [pscustomobject]@{
+    processId = 407L; parentProcessId = 100L; processName = "subversionr-daemon.exe"; eventFileTime = 2500L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-PackagedNegativeProcessObservation `
+      @($probeStart, $daemonStart, $extraPackagedDaemonStart, $workerStart) `
+      100L 10L "Code.exe" "subversionr-daemon.exe" @()
+  } "start exactly one candidate daemon" "Packaged-negative observation must still reject a real extra candidate daemon."
+
+  $orphanSnapshot = @([pscustomobject]@{
+      ProcessId = 401L; ParentProcessId = 400L; CreationDate = [DateTime]::FromFileTimeUtc(3900L)
+    })
+  Assert-ScriptThrowsContaining {
+    Get-PackagedNegativeProcessObservation `
+      @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
+      100L 10L "Code.exe" "subversionr-daemon.exe" `
+      $orphanSnapshot
+  } "live orphan descendants" "Packaged-negative settlement must bind a live orphan to recorded start ancestry."
+
+  $reusedDescendantSettlement = Get-PackagedNegativeProcessObservation `
+    @($probeStart, $daemonStart, $workerStart, $unexpectedDescendant, $unexpectedGrandchild) `
+    100L 10L "Code.exe" "subversionr-daemon.exe" `
+    @([pscustomobject]@{
+        ProcessId = 401L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(4100L)
+      })
+  Assert-Equal 0 $reusedDescendantSettlement.workerDescendantsAfter "Packaged-negative settlement must allow a later process to reuse a recorded descendant PID."
+
+  $installedProbeStart = [pscustomobject]@{
+    processId = 500L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 5000L
+  }
+  $codeStart = [pscustomobject]@{
+    processId = 501L; parentProcessId = 500L; processName = "Code.exe"; eventFileTime = 5100L
+  }
+  $extensionHostStart = [pscustomobject]@{
+    processId = 502L; parentProcessId = 501L; processName = "Code.exe"; eventFileTime = 5200L
+  }
+  $installedDaemonStart = [pscustomobject]@{
+    processId = 503L; parentProcessId = 502L; processName = "subversionr-daemon.exe"; eventFileTime = 5300L
+  }
+  $installedWorkerStart = [pscustomobject]@{
+    processId = 504L; parentProcessId = 503L; processName = "subversionr-daemon.exe"; eventFileTime = 5400L
+  }
+  $installedUtilityStart = [pscustomobject]@{
+    processId = 505L; parentProcessId = 502L; processName = "utility.exe"; eventFileTime = 5250L
+  }
+  $installedMeasuredBaseline = Get-InstalledNegativeProcessObservation `
+    -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
+    -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") -SettlementSnapshot @()
+  Assert-Equal 0 $installedMeasuredBaseline.workerDescendantsAfter "Installed-negative baseline must derive zero descendants from the settlement snapshot."
+  Assert-Equal 0 $installedMeasuredBaseline.fixtureCliInvocations "Installed-negative baseline must derive zero fixture CLI invocations from process events."
+  $liveInstalledCodeTree = @(Get-LiveRecordedProcessTreeStarts `
+      @($installedProbeStart, $codeStart, $extensionHostStart, $installedUtilityStart, $installedDaemonStart, $installedWorkerStart) `
+      $installedProbeStart `
+      @([pscustomobject]@{
+          ProcessId = 501L; ParentProcessId = 500L; CreationDate = [DateTime]::FromFileTimeUtc(5050L)
+        }, [pscustomobject]@{
+          ProcessId = 502L; ParentProcessId = 501L; CreationDate = [DateTime]::FromFileTimeUtc(5150L)
+        }, [pscustomobject]@{
+          ProcessId = 505L; ParentProcessId = 502L; CreationDate = [DateTime]::FromFileTimeUtc(5200L)
+        }))
+  Assert-Equal 3 $liveInstalledCodeTree.Count "Installed tree settlement must retain live Code, Extension Host, and utility identities, not only daemon/worker descendants."
+  $reusedInstalledCodeTree = @(Get-LiveRecordedProcessTreeStarts `
+      @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
+      $installedProbeStart `
+      @([pscustomobject]@{
+          ProcessId = 501L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5150L)
+        }))
+  Assert-Equal 0 $reusedInstalledCodeTree.Count "Installed-negative tree settlement must not bind a later process that reused a recorded Code PID."
+  $reusedInstalledUtilityStart = [pscustomobject]@{
+    processId = 505L; parentProcessId = 999L; processName = "reused-utility-pid.exe"; eventFileTime = 5650L
+  }
+  $reusedInstalledUtilityTree = @(Get-LiveRecordedProcessTreeStarts `
+      @($installedProbeStart, $codeStart, $extensionHostStart, $installedUtilityStart, $installedDaemonStart, $installedWorkerStart, $reusedInstalledUtilityStart) `
+      $installedProbeStart `
+      @([pscustomobject]@{
+          ProcessId = 505L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5650L)
+        }))
+  Assert-Equal 0 $reusedInstalledUtilityTree.Count "Installed tree settlement must ignore a later process that reused a recorded utility PID."
+  Assert-ScriptThrowsContaining {
+    Get-InstalledNegativeProcessObservation `
+      -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart) `
+      -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @([pscustomobject]@{
+          ProcessId = 504L; ParentProcessId = 503L; CreationDate = [DateTime]::FromFileTimeUtc(5350L)
+        })
+  } "remained alive at settlement" "Installed-negative settlement must reject the live recorded worker identity."
+  $installedReusedWorkerPid = [pscustomobject]@{
+    processId = 504L; parentProcessId = 999L; processName = "reused.exe"; eventFileTime = 5600L
+  }
+  $installedReusedSettlement = Get-InstalledNegativeProcessObservation `
+    -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart, $installedReusedWorkerPid) `
+    -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+    -SettlementSnapshot @([pscustomobject]@{
+        ProcessId = 504L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(5600L)
+      })
+  Assert-Equal 0 $installedReusedSettlement.workerDescendantsAfter "Installed-negative settlement must allow observed later PID reuse."
+
+  $localEventProbeStart = [pscustomobject]@{
+    processId = 600L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 6000L
+  }
+  $localEventCodeStart = [pscustomobject]@{
+    processId = 601L; parentProcessId = 600L; processName = "Code.exe"; eventFileTime = 6100L
+  }
+  $localEventDaemonStart = [pscustomobject]@{
+    processId = 602L; parentProcessId = 601L; processName = "subversionr-daemon.exe"; eventFileTime = 6200L
+    imagePath = "F:\candidate\subversionr-daemon.exe"; imageFileIdentity = "daemon-file-identity"
+    imageStartFileTime = 6199L; sessionId = 1L; eventSessionId = 1L
+  }
+  $preLocalEventDaemonPidCollision = [pscustomobject]@{
+    processId = 603L; parentProcessId = 602L; processName = "unrelated-before-daemon.exe"; eventFileTime = 6150L
+  }
+  $localEventObservation = Get-ZeroWorkerProcessObservation `
+    -AllEvents @($localEventProbeStart, $localEventCodeStart, $preLocalEventDaemonPidCollision, $localEventDaemonStart) `
+    -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+    -SettlementSnapshot @() -Context "installed local-event"
+  Assert-Equal 0 $localEventObservation.workerStarts "Zero-worker observation must ignore a pre-daemon numeric parent-PID collision."
+  Assert-Equal 0 $localEventObservation.consoleHostStarts "Zero-worker observation must measure an absent Windows console-host baseline."
+
+  $wrongLocalEventDaemonIdentity = $localEventDaemonStart.PSObject.Copy()
+  $wrongLocalEventDaemonIdentity.imageFileIdentity = "build-tree-candidate-file-identity"
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $wrongLocalEventDaemonIdentity) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "installed-copy-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "candidate daemon image did not match the expected exact file identity" "Zero-worker observation must reject a same-byte candidate identity when the installed copy identity is required."
+
+  $missingLocalEventDaemonCapture = $localEventDaemonStart.PSObject.Copy()
+  $missingLocalEventDaemonCapture.imagePath = ""
+  $missingLocalEventDaemonCapture.imageFileIdentity = ""
+  $missingLocalEventDaemonCapture.imageStartFileTime = 0L
+  $missingLocalEventDaemonCapture.sessionId = -1L
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $missingLocalEventDaemonCapture) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "candidate daemon live image identity was not captured" "Zero-worker observation must fail closed when the live daemon image capture is missing."
+
+  $localEventConsoleHostStart = [pscustomobject]@{
+    processId = 603L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6250L
+    imagePath = "\\?\C:\Windows\System32\conhost.exe"; imageFileIdentity = "console-host-file-identity"
+    imageStartFileTime = 6249L; sessionId = 1L; eventSessionId = 1L
+  }
+  $localEventConsoleObservation = Get-ZeroWorkerProcessObservation `
+    -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart) `
+    -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+    -SettlementSnapshot @() -Context "installed local-event"
+  Assert-Equal 1 $localEventConsoleObservation.consoleHostStarts "Zero-worker observation must bind one direct Windows console host."
+  Assert-Equal 0 $localEventConsoleObservation.workerStarts "A bound Windows console host must not be counted as a remote worker."
+
+  $spoofedLocalEventConsoleHostStart = [pscustomobject]@{
+    processId = 608L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6250L
+    imagePath = "C:\attacker\conhost.exe"; imageFileIdentity = "attacker-file-identity"
+    imageStartFileTime = 6249L; sessionId = 1L; eventSessionId = 1L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $spoofedLocalEventConsoleHostStart) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "Windows console-host image did not match the system console host" "Zero-worker observation must reject a non-system image renamed to conhost.exe."
+
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @([pscustomobject]@{
+          ProcessId = 603L; ParentProcessId = 602L; CreationDate = [DateTime]::FromFileTimeUtc(6249L)
+        }) -Context "installed local-event"
+  } "candidate daemon or Windows console host remained alive" "Zero-worker settlement must reject the live recorded console-host identity."
+
+  $secondLocalEventConsoleHostStart = [pscustomobject]@{
+    processId = 605L; parentProcessId = 602L; processName = "conhost.exe"; eventFileTime = 6251L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $secondLocalEventConsoleHostStart) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "at most one direct Windows console host" "Zero-worker observation must reject a second direct Windows console host."
+
+  $nestedLocalEventConsoleHostStart = [pscustomobject]@{
+    processId = 606L; parentProcessId = 603L; processName = "conhost.exe"; eventFileTime = 6260L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $nestedLocalEventConsoleHostStart) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "conhost.exe:pid=606:parent=603:time=6260" "Zero-worker observation must reject a non-direct console-host descendant."
+
+  $localEventRemoteWorkerStart = [pscustomobject]@{
+    processId = 607L; parentProcessId = 602L; processName = "subversionr-daemon.exe"; eventFileTime = 6270L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $localEventRemoteWorkerStart) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "must start exactly one candidate daemon and no remote worker" "Zero-worker observation must still reject a same-executable remote worker."
+
+  $reusedLocalEventConsoleHostPid = [pscustomobject]@{
+    processId = 603L; parentProcessId = 999L; processName = "reused-after-console-host.exe"; eventFileTime = 6400L
+  }
+  $reusedConsoleHostObservation = Get-ZeroWorkerProcessObservation `
+    -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $localEventConsoleHostStart, $reusedLocalEventConsoleHostPid) `
+    -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+    -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+    -SettlementSnapshot @([pscustomobject]@{
+        ProcessId = 603L; ParentProcessId = 999L; CreationDate = [DateTime]::FromFileTimeUtc(6400L)
+      }) -Context "installed local-event"
+  Assert-Equal 0 $reusedConsoleHostObservation.workerDescendantsAfter "Zero-worker settlement must allow later reuse of the console-host PID."
+
+  $realLocalEventDaemonChild = [pscustomobject]@{
+    processId = 604L; parentProcessId = 602L; processName = "unexpected-child.exe"; eventFileTime = 6300L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-ZeroWorkerProcessObservation `
+      -AllEvents @($localEventProbeStart, $localEventCodeStart, $localEventDaemonStart, $realLocalEventDaemonChild) `
+      -ProbePid 600L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ExpectedDaemonFileIdentity "daemon-file-identity" -ExpectedConsoleHostFileIdentity "console-host-file-identity" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") `
+      -SettlementSnapshot @() -Context "installed local-event"
+  } "unexpected-child.exe:pid=604:parent=602:time=6300" "Zero-worker observation must reject and identify a real post-daemon descendant."
+
+  foreach ($fixtureCliStart in @(
+      [pscustomobject]@{ processId = 505L; parentProcessId = 502L; processName = "svn.exe"; eventFileTime = 5500L },
+      [pscustomobject]@{ processId = 506L; parentProcessId = 503L; processName = "svnadmin.exe"; eventFileTime = 5501L },
+      [pscustomobject]@{ processId = 507L; parentProcessId = 504L; processName = "svnserve.exe"; eventFileTime = 5502L }
+    )) {
+    $measuredFixtureCli = Get-InstalledNegativeProcessObservation `
+      -AllEvents @($installedProbeStart, $codeStart, $extensionHostStart, $installedDaemonStart, $installedWorkerStart, $fixtureCliStart) `
+      -ProbePid 500L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ForbiddenFixtureProcessNames @("svn.exe", "svnadmin.exe", "svnserve.exe") -SettlementSnapshot @()
+    Assert-Equal 1 $measuredFixtureCli.fixtureCliInvocations "Installed-negative process evidence must count fixture CLI starts under every product ancestor."
+  }
+
+  $recoveryForbiddenProcessNames = @("svn.exe", "svnadmin.exe", "svnserve.exe")
+  $recoverySafeProbeStart = [pscustomobject]@{
+    processId = 700L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 7000L
+  }
+  $recoverySafeDaemonStart = [pscustomobject]@{
+    processId = 701L; parentProcessId = 700L; processName = "subversionr-daemon.exe"; eventFileTime = 7100L
+  }
+  $recoverySafeWorkerStart1 = [pscustomobject]@{
+    processId = 702L; parentProcessId = 701L; processName = "subversionr-daemon.exe"; eventFileTime = 7200L
+  }
+  $recoverySafeWorkerStart2 = [pscustomobject]@{
+    processId = 702L; parentProcessId = 701L; processName = "subversionr-daemon.exe"; eventFileTime = 7300L
+  }
+  $recoverySafeWorkerStart3 = [pscustomobject]@{
+    processId = 703L; parentProcessId = 701L; processName = "subversionr-daemon.exe"; eventFileTime = 7400L
+  }
+  $recoverySafeObservation = Get-RecoverySafeProcessObservation `
+    -AllEvents @(
+      $recoverySafeProbeStart,
+      $recoverySafeDaemonStart,
+      $recoverySafeWorkerStart1,
+      $recoverySafeWorkerStart2,
+      $recoverySafeWorkerStart3
+    ) `
+    -ProbePid 700L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" `
+    -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames $recoveryForbiddenProcessNames -SettlementSnapshot @() `
+    -Context "recovery-safe sequential worker PID reuse"
+  Assert-Equal 1 $recoverySafeObservation.daemonStarts "Recovery-safe observation must retain one daemon across sequential worker PID reuse."
+  Assert-Equal 3 $recoverySafeObservation.workerStarts "Recovery-safe observation must bind three worker lifetimes when two sequential workers reuse one PID."
+
+  $extraRecoverySafeCandidate = [pscustomobject]@{
+    processId = 704L; parentProcessId = 700L; processName = "subversionr-daemon.exe"; eventFileTime = 7150L
+  }
+  Assert-ScriptThrowsContaining {
+    Get-RecoverySafeProcessObservation `
+      -AllEvents @(
+        $recoverySafeProbeStart,
+        $recoverySafeDaemonStart,
+        $extraRecoverySafeCandidate,
+        $recoverySafeWorkerStart1,
+        $recoverySafeWorkerStart2,
+        $recoverySafeWorkerStart3
+      ) `
+      -ProbePid 700L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" `
+      -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+      -ForbiddenFixtureProcessNames $recoveryForbiddenProcessNames -SettlementSnapshot @() `
+      -Context "recovery-safe extra candidate"
+  } "start exactly one candidate daemon and three direct workers" "Recovery-safe observation must still reject a real extra candidate."
+
+  $recoveryIndeterminateProbeStart = [pscustomobject]@{
+    processId = 720L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 8000L
+  }
+  $recoveryIndeterminateDaemonStart = [pscustomobject]@{
+    processId = 721L; parentProcessId = 720L; processName = "subversionr-daemon.exe"; eventFileTime = 8100L
+  }
+  $recoveryIndeterminateWorkerStart1 = [pscustomobject]@{
+    processId = 722L; parentProcessId = 721L; processName = "subversionr-daemon.exe"; eventFileTime = 8200L
+  }
+  $recoveryIndeterminateWorkerStart2 = [pscustomobject]@{
+    processId = 722L; parentProcessId = 721L; processName = "subversionr-daemon.exe"; eventFileTime = 8300L
+  }
+  $recoveryIndeterminateObservation = Get-RecoveryIndeterminateProcessObservation `
+    -AllEvents @(
+      $recoveryIndeterminateProbeStart,
+      $recoveryIndeterminateDaemonStart,
+      $recoveryIndeterminateWorkerStart1,
+      $recoveryIndeterminateWorkerStart2
+    ) `
+    -ProbePid 720L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" `
+    -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames $recoveryForbiddenProcessNames -SettlementSnapshot @() `
+    -Context "recovery-indeterminate sequential worker PID reuse"
+  Assert-Equal 1 $recoveryIndeterminateObservation.daemonStarts "Recovery-indeterminate observation must retain one daemon across sequential worker PID reuse."
+  Assert-Equal 2 $recoveryIndeterminateObservation.workerStarts "Recovery-indeterminate observation must bind two worker lifetimes that reuse one PID."
+
+  $recoveryBlockedProbeStart = [pscustomobject]@{
+    processId = 740L; parentProcessId = 10L; processName = "pwsh.exe"; eventFileTime = 9000L
+  }
+  $recoveryBlockedDaemonStart1 = [pscustomobject]@{
+    processId = 741L; parentProcessId = 740L; processName = "subversionr-daemon.exe"; eventFileTime = 9100L
+  }
+  $recoveryBlockedWorkerStart1 = [pscustomobject]@{
+    processId = 742L; parentProcessId = 741L; processName = "subversionr-daemon.exe"; eventFileTime = 9200L
+  }
+  $recoveryBlockedDaemonStart2 = [pscustomobject]@{
+    processId = 741L; parentProcessId = 740L; processName = "subversionr-daemon.exe"; eventFileTime = 9300L
+  }
+  $recoveryBlockedWorkerStart2 = [pscustomobject]@{
+    processId = 742L; parentProcessId = 741L; processName = "subversionr-daemon.exe"; eventFileTime = 9400L
+  }
+  $recoveryBlockedWorkerStart3 = [pscustomobject]@{
+    processId = 743L; parentProcessId = 741L; processName = "subversionr-daemon.exe"; eventFileTime = 9500L
+  }
+  $recoveryBlockedObservation = Get-RecoveryBlockedProcessObservation `
+    -AllEvents @(
+      $recoveryBlockedProbeStart,
+      $recoveryBlockedDaemonStart1,
+      $recoveryBlockedWorkerStart1,
+      $recoveryBlockedDaemonStart2,
+      $recoveryBlockedWorkerStart2,
+      $recoveryBlockedWorkerStart3
+    ) `
+    -ProbePid 740L -ProbeParentPid 10L -ExpectedProbeProcessName "pwsh.exe" `
+    -ExpectedDaemonProcessName "subversionr-daemon.exe" `
+    -ForbiddenFixtureProcessNames $recoveryForbiddenProcessNames -SettlementSnapshot @() `
+    -Context "recovery-blocked sequential daemon and worker PID reuse"
+  Assert-Equal 2 $recoveryBlockedObservation.daemonStarts "Recovery-blocked observation must bind both daemon lifetimes when the restart reuses the first daemon PID."
+  Assert-Equal 3 $recoveryBlockedObservation.workerStarts "Recovery-blocked observation must bind workers to the exact daemon lifetime when the restart reuses the first worker PID."
+
+  $installedNegativeProbeText = Get-Content -Raw -LiteralPath $installedNegativeProbePath
+  foreach ($requiredText in @(
+      'subversionr.diagnostics.installedSvnAnonymousNegativeReport',
+      'SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN',
+      'maliciousRoot',
+      'saslOnly',
+      'greetingStall',
+      'connectedStall',
+      'SUBVERSIONR_INSTALLED_I6_NEGATIVE_OPERATION_ID',
+      'SUBVERSIONR_REMOTE_WORKER_TIMED_OUT',
+      'SUBVERSIONR_REMOTE_RECOVERY_BLOCKED',
+      'operationDeadlineExceeded',
+      'remoteRecoveryBlocked',
+      'Get-Sha256 $installedDaemonPath',
+      'Get-Sha256 $installedBridgePath',
+      'Get-TemporaryRootCount $remoteWorkersRoot',
+      'Read-CheckoutJournal $remoteStateRoot',
+      'Get-StringSha256 $checkoutResolved',
+      'installed checkout stall recovery entry',
+      'Wait-CandidateProcessAbsent $installedDaemonPath'
+    )) {
+    Assert-True ($installedNegativeProbeText.Contains($requiredText)) "Installed-negative probe must retain real-candidate contract text '$requiredText'."
+  }
+  foreach ($forbiddenText in @('workerDescendantsAfter = 0', 'Get-WmiObject')) {
+    Assert-True (-not $installedNegativeProbeText.Contains($forbiddenText)) "Installed-negative probe must not synthesize or fall back through '$forbiddenText'."
+  }
+  $installedNegativeTokens = $null
+  $installedNegativeParseErrors = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile(
+    $installedNegativeProbePath,
+    [ref]$installedNegativeTokens,
+    [ref]$installedNegativeParseErrors
+  )
+  Assert-True ($installedNegativeParseErrors.Count -eq 0) "Installed-negative probe must parse."
+
+  $contractText = Get-Content -Raw -LiteralPath $contractPath
+  Assert-True ($contractText.Contains('under `target/i6-evidence`')) "I6 contract must document the reviewed short Windows fixture root."
+  Assert-True ($contractText.Contains('baseline by PID plus creation time')) "I6 contract must document exact fixture-server baseline identity binding."
+  Assert-True ($contractText.Contains('later Windows PID reuse is not reported as residue')) "I6 contract must distinguish PID reuse from live process residue."
+  foreach ($requiredText in @(
+      "Fixture startup or a direct bridge/unit probe does not satisfy the",
+      "SVN_REMOTE_STATUS_AUTH_FAILED",
+      "positive operation matrix",
+      "separate, ordered",
+      "localEventZeroNetwork",
+      "100 checkout cycles",
+      "checkout-stall probes establish only",
+      "They do not satisfy the",
+      "same-session local snapshot",
+      "target/i6r",
+      "monotonic clock",
+      "target/i6d",
+      "command-stall",
+      "may not be represented as",
+      "Toolhelp32 ancestry",
+      "1398166083"
+    )) {
+    Assert-True ($contractText.Contains($requiredText)) "I6 evidence contract must retain fail-closed boundary '$requiredText'."
+  }
+  $schema = Get-Content -Raw -LiteralPath $schemaPath | ConvertFrom-Json
+  Assert-Equal "subversionr.release.m8-i6-svn-anonymous.win32-x64.v1" $schema.properties.schema.const "I6 JSON schema must bind the exact evidence schema."
+  Assert-Equal "False" ([string]$schema.additionalProperties) "I6 JSON schema must reject unknown top-level fields."
+  $packageJson = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "package.json") | ConvertFrom-Json
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-ra-svn-fault-fixture.tests.mjs")) "PR Fast I6 script tests must execute the controlled ra_svn fault fixture tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-counting-proxy.tests.mjs")) "PR Fast I6 script tests must execute the transparent counting proxy tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-blackhole-connect-fixture.tests.ps1")) "PR Fast I6 script tests must execute the conditional-accept fixture tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-blackholeConnect.tests.mjs")) "PR Fast I6 script tests must execute the packaged blackhole-connect tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-blackholeConnect-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed blackhole-connect tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-daemon-disconnect.tests.mjs")) "PR Fast I6 script tests must execute the packaged daemon-disconnect tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-daemon-disconnect-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed daemon-disconnect tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-negative.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native negative probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-authz-denied.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native authz-denied probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-stalled-read.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native stalled-mid-read probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-deadline.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native deadline probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-cancellation.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native cancellation probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-trust-revoked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native trust-revoked probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-recovery-blocked.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native recovery-blocked probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-redaction.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native redaction probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-packaged-worker-crash.tests.mjs")) "PR Fast I6 script tests must execute the packaged-native worker-crash probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stress-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed 100+1 stress probe tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-authz-denied-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed authz-denied probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-stalled-read-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed stalled-mid-read probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-deadline-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed deadline probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-cancellation-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed cancellation probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-trust-revoked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed trust-revoked probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-recovery-blocked-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed recovery-blocked probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-redaction-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed redaction probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-worker-crash-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed worker-crash probe contract tests."
+  Assert-True ($packageJson.scripts."release:test-m8-i6-svn-anonymous-evidence-scripts".Contains("m8-i6-installed-local-event-zero-network-scripts.tests.ps1")) "PR Fast I6 script tests must execute the installed local-event zero-network probe contract tests."
+
+  Write-Host "M8 I6 svn anonymous evidence script tests passed."
+}
+finally {
+  Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $fakeStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $runnerFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+}

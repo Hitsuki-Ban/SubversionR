@@ -2684,14 +2684,14 @@ Assert-Terms $protocolContractTests @(
 Assert-Terms $backendProcessTests @(
   "rejects initialize and terminates the sidecar when protocol minor is too old",
   "SUBVERSIONR_PROTOCOL_MINOR_UNSUPPORTED",
-  "expectedMinimum: 34"
-) "REP-004 protocol v1.34 startup gate"
+  "expectedMinimum: 35"
+) "REP-004 protocol v1.35 startup gate"
 Assert-Terms $protocolSource @(
   "pub enum RemoteConnectionState",
   "pub enum RemoteFailureClass",
   "pub enum RemoteRecoveryOutcome",
   "RemoteConnectionState"
-) "REP-004 protocol v1.34 remote connection and recovery contract"
+) "REP-004 protocol v1.35 remote connection and recovery contract"
 Assert-Terms $daemonRemoteWorkerSource @(
   "pub struct RemoteWorkerSettlement",
   "job_descendants_zero",

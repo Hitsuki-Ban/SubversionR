@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import type * as vscode from "vscode";
 import type {
   HistoryBlame,
   HistoryBlameClient,
@@ -8,13 +9,14 @@ import type {
   HistoryBlameRequest,
 } from "./historyBlameRpcClient";
 import { requireTrustedWorkspace } from "../security/workspaceTrust";
+import type { RemoteOperationEnvelope } from "../security/remoteAccessProfile";
 
 export const BLAME_DOCUMENT_URI_SCHEME = "svn-r-blame";
 
 const MAX_SVN_REVNUM = 2_147_483_647;
 const MAX_BLAME_LINE_LIMIT = 5_000;
 
-export interface HistoryBlameDocumentRequest extends HistoryBlameRequest {
+export interface HistoryBlameDocumentRequest extends Omit<HistoryBlameRequest, "remote"> {
   generation: number;
 }
 
@@ -37,6 +39,7 @@ export class BlameDocumentUriError extends Error {
 
 export interface HistoryBlameDocumentProviderOptions {
   blameClient: HistoryBlameClient;
+  createRemoteEnvelope(input: { repositoryId: string; epoch: number }): Promise<RemoteOperationEnvelope | undefined>;
   workspaceTrusted(): boolean;
   localize(message: string, ...args: unknown[]): string;
 }
@@ -44,12 +47,41 @@ export interface HistoryBlameDocumentProviderOptions {
 export class HistoryBlameDocumentProvider {
   public constructor(private readonly options: HistoryBlameDocumentProviderOptions) {}
 
-  public async provideTextDocumentContent(uri: BlameDocumentUriComponents): Promise<string> {
+  public async provideTextDocumentContent(
+    uri: BlameDocumentUriComponents,
+    token: vscode.CancellationToken,
+  ): Promise<string> {
     requireTrustedWorkspace(this.options.workspaceTrusted);
-    const request = parseBlameDocumentUri(uri);
-    const blame = await this.options.blameClient.getBlame(blameRpcRequest(request));
-    return renderBlameDocument(blame, this.options.localize);
+    const cancellation = cancellationFromToken(token);
+    try {
+      cancellation.signal.throwIfAborted();
+      const request = parseBlameDocumentUri(uri);
+      const remote = await this.options.createRemoteEnvelope({
+        repositoryId: request.repositoryId,
+        epoch: request.epoch,
+      });
+      cancellation.signal.throwIfAborted();
+      const blame = await this.options.blameClient.getBlame(
+        blameRpcRequest(request, remote),
+        { signal: cancellation.signal },
+      );
+      return renderBlameDocument(blame, this.options.localize);
+    } finally {
+      cancellation.dispose();
+    }
   }
+}
+
+function cancellationFromToken(token: vscode.CancellationToken): {
+  signal: AbortSignal;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const subscription = token.onCancellationRequested(() => controller.abort());
+  if (token.isCancellationRequested) {
+    controller.abort();
+  }
+  return { signal: controller.signal, dispose: () => subscription.dispose() };
 }
 
 export function createBlameDocumentUriComponents(
@@ -123,7 +155,10 @@ export function parseBlameDocumentUri(uri: BlameDocumentUriComponents): HistoryB
   return request;
 }
 
-function blameRpcRequest(request: HistoryBlameDocumentRequest): HistoryBlameRequest {
+function blameRpcRequest(
+  request: HistoryBlameDocumentRequest,
+  remote: RemoteOperationEnvelope | undefined,
+): HistoryBlameRequest {
   return {
     repositoryId: request.repositoryId,
     epoch: request.epoch,
@@ -137,6 +172,7 @@ function blameRpcRequest(request: HistoryBlameDocumentRequest): HistoryBlameRequ
     ignoreEolStyle: request.ignoreEolStyle,
     ignoreMimeType: request.ignoreMimeType,
     includeMergedRevisions: request.includeMergedRevisions,
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 

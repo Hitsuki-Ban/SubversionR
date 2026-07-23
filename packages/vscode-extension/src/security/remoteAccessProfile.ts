@@ -38,6 +38,17 @@ export interface RemoteOperationEnvelope {
   expectedOrigin: CanonicalEndpoint;
 }
 
+export interface RemoteOperationEnvelopeAdmission {
+  remoteSvnAnonymous: boolean;
+  isRemoteSubmissionEnabled(): boolean;
+  currentRemoteTrustEpoch(): number;
+}
+
+export type AnonymousSvnRemoteOperationInput = Omit<
+  Parameters<typeof buildRemoteOperationEnvelope>[0],
+  "remoteSubmissionEnabled" | "trustEpoch"
+>;
+
 export interface RemoteProfileConfigurationInspection {
   globalValue?: unknown;
   workspaceValue?: unknown;
@@ -217,6 +228,101 @@ export function buildRemoteOperationEnvelope(input: {
     profile,
     expectedOrigin,
   };
+}
+
+export class RemoteOperationEnvelopeFactory {
+  private readonly remoteSvnAnonymous: boolean;
+  private readonly isRemoteSubmissionEnabled: () => boolean;
+  private readonly currentRemoteTrustEpoch: () => number;
+
+  public constructor(admission: RemoteOperationEnvelopeAdmission) {
+    const value = requireObject(admission, "admission");
+    requireExactKeys(
+      value,
+      ["remoteSvnAnonymous", "isRemoteSubmissionEnabled", "currentRemoteTrustEpoch"],
+      [],
+      "admission",
+    );
+    if (typeof admission.remoteSvnAnonymous !== "boolean") {
+      throw configurationError("SUBVERSIONR_REMOTE_ENVELOPE_INVALID", "admission.remoteSvnAnonymous");
+    }
+    if (typeof admission.isRemoteSubmissionEnabled !== "function") {
+      throw configurationError("SUBVERSIONR_REMOTE_ENVELOPE_INVALID", "admission.isRemoteSubmissionEnabled");
+    }
+    if (typeof admission.currentRemoteTrustEpoch !== "function") {
+      throw configurationError("SUBVERSIONR_REMOTE_ENVELOPE_INVALID", "admission.currentRemoteTrustEpoch");
+    }
+    this.remoteSvnAnonymous = admission.remoteSvnAnonymous;
+    this.isRemoteSubmissionEnabled = admission.isRemoteSubmissionEnabled.bind(admission);
+    this.currentRemoteTrustEpoch = admission.currentRemoteTrustEpoch.bind(admission);
+  }
+
+  public createAnonymousSvn(input: AnonymousSvnRemoteOperationInput): RemoteOperationEnvelope {
+    if (!this.remoteSvnAnonymous) {
+      throw new RemoteProfileConfigurationError(
+        "SUBVERSIONR_REMOTE_SVN_ANONYMOUS_CAPABILITY_REQUIRED",
+        "error.backend.capabilityRequired",
+        { capability: "remoteSvnAnonymous" },
+      );
+    }
+    return validateAnonymousSvnRemoteOperationEnvelope(
+      buildRemoteOperationEnvelope({
+        ...input,
+        trustEpoch: this.currentRemoteTrustEpoch(),
+        remoteSubmissionEnabled: this.isRemoteSubmissionEnabled(),
+      }),
+    );
+  }
+}
+
+export function validateAnonymousSvnRemoteOperationEnvelope(value: unknown): RemoteOperationEnvelope {
+  const envelope = requireObject(value, "remote");
+  requireExactKeys(
+    envelope,
+    [
+      "version",
+      "operationId",
+      "intent",
+      "interaction",
+      "timeoutMs",
+      "workspaceTrust",
+      "trustEpoch",
+      "profile",
+      "expectedOrigin",
+    ],
+    [],
+    "remote",
+  );
+  if (envelope.version !== 1) {
+    throw configurationError("SUBVERSIONR_REMOTE_ENVELOPE_INVALID", "remote.version");
+  }
+  if (envelope.workspaceTrust !== "trusted") {
+    throw configurationError("SUBVERSIONR_REMOTE_ENVELOPE_INVALID", "remote.workspaceTrust");
+  }
+  const validated = buildRemoteOperationEnvelope({
+    operationId: envelope.operationId as string,
+    intent: envelope.intent as RemoteOperationIntent,
+    interaction: envelope.interaction as RemoteInteraction,
+    timeoutMs: envelope.timeoutMs as number,
+    trustEpoch: envelope.trustEpoch as number,
+    profile: envelope.profile as RemoteAccessProfileSnapshot,
+    expectedOrigin: envelope.expectedOrigin as CanonicalEndpoint,
+    remoteSubmissionEnabled: true,
+  });
+  if (validated.profile.authority.scheme !== "svn" || validated.expectedOrigin.scheme !== "svn") {
+    throw new RemoteProfileConfigurationError(
+      "SUBVERSIONR_REMOTE_SVN_ANONYMOUS_SCHEME_REQUIRED",
+      "error.remote.schemeUnsupported",
+      { scheme: validated.expectedOrigin.scheme },
+    );
+  }
+  if (validated.profile.serverAuth !== "anonymous" || validated.profile.serverAccount !== "none") {
+    throw new RemoteProfileConfigurationError(
+      "SUBVERSIONR_REMOTE_SVN_ANONYMOUS_AUTH_REQUIRED",
+      "error.remote.authUnsupported",
+    );
+  }
+  return validated;
 }
 
 function parseProfile(value: unknown, index: number): RemoteAccessProfileSnapshot {

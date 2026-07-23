@@ -12,6 +12,7 @@ import type {
   ScmRepositoryProjection,
 } from "../src/scm/sourceControlResourceStore";
 import type { StatusEntry } from "../src/status/statusSnapshotRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("CurrentLineBlameHoverProvider", () => {
   it("returns localized one-line SVN blame hover with the first log-message line", async () => {
@@ -62,7 +63,8 @@ describe("CurrentLineBlameHoverProvider", () => {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(historyClient.getLog).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -73,7 +75,8 @@ describe("CurrentLineBlameHoverProvider", () => {
       discoverChangedPaths: false,
       strictNodeHistory: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(hover).toEqual({
       contents: [
         {
@@ -142,7 +145,8 @@ describe("CurrentLineBlameHoverProvider", () => {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(historyClient.getLog).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/workspace",
       epoch: 7,
@@ -153,7 +157,8 @@ describe("CurrentLineBlameHoverProvider", () => {
       discoverChangedPaths: false,
       strictNodeHistory: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(hover?.contents[0]?.value).toContain("l10n:SVN Blame: src/review\\.c:3");
     expect(hover?.contents[0]?.value).toContain("Review changelist\\-safe line");
   });
@@ -179,11 +184,13 @@ describe("CurrentLineBlameHoverProvider", () => {
       expect.objectContaining({
         includeMergedRevisions: true,
       }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(historyClient.getLog).toHaveBeenCalledWith(
       expect.objectContaining({
         includeMergedRevisions: true,
       }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(hover?.contents[0]?.value).toContain("Merged hover history");
   });
@@ -450,6 +457,7 @@ function hoverProvider(options: {
     settings: () => options.settings ?? lensSettings(),
     includeMergedRevisions: options.includeMergedRevisions ?? (() => false),
     historyClient: options.historyClient ?? fakeHistoryClient(blameResponse({ lineStart: 1 })),
+    createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
     sessionService: fakeSessionService(options.sessions ?? [repositorySession()]),
     sourceControlProjection: options.sourceControlProjection ?? fakeSourceControlProjection(projections),
     workspaceTrusted: () => options.workspaceTrusted ?? true,
@@ -633,7 +641,10 @@ function textDocument(
 }
 
 function cancellation(isCancellationRequested = false): CurrentLineBlameHoverCancellationToken {
-  return { isCancellationRequested };
+  return {
+    isCancellationRequested,
+    onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })),
+  };
 }
 
 function blameResponse(options: {
@@ -724,6 +735,7 @@ interface CurrentLineBlameHoverTextDocument {
 
 interface CurrentLineBlameHoverCancellationToken {
   isCancellationRequested: boolean;
+  onCancellationRequested(listener: () => void): { dispose(): void };
 }
 
 interface TestMarkdownString {

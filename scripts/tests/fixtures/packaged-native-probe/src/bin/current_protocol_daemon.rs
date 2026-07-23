@@ -1,7 +1,7 @@
 fn main() -> std::io::Result<()> {
     let version = env!("SUBVERSIONR_TEST_PRODUCT_VERSION");
     packaged_native_probe_fixture::run_daemon(
-        34,
+        35,
         version,
         &format!("subversionr-svn-bridge/{version}"),
     )

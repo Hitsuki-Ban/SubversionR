@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
+import { appendFile, readFile } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { performance } from "node:perf_hooks";
 import * as vscode from "vscode";
@@ -50,6 +51,29 @@ import {
 import { collectInstalledRedactionReport } from "./diagnostics/installedRedactionReport";
 import { collectInstalledCredentialLeaseReport } from "./diagnostics/installedCredentialLeaseReport";
 import { collectInstalledRemoteWorkerReport } from "./diagnostics/installedRemoteWorkerReport";
+import {
+  collectInstalledSvnAnonymousReport,
+  type InstalledSvnAnonymousAuthActivity,
+} from "./diagnostics/installedSvnAnonymousReport";
+import {
+  collectInstalledSvnAnonymousStressCheckout,
+  createInstalledSvnAnonymousStressSessionSha256,
+} from "./diagnostics/installedSvnAnonymousStressCheckout";
+import { collectInstalledSvnAnonymousNegativeReport } from "./diagnostics/installedSvnAnonymousNegativeReport";
+import { collectInstalledSvnAnonymousAuthzDeniedReport } from "./diagnostics/installedSvnAnonymousAuthzDeniedReport";
+import { collectInstalledSvnAnonymousStalledReadReport } from "./diagnostics/installedSvnAnonymousStalledReadReport";
+import { collectInstalledSvnAnonymousDeadlineReport } from "./diagnostics/installedSvnAnonymousDeadlineReport";
+import { collectInstalledSvnAnonymousBlackholeConnectReport } from "./diagnostics/installedSvnAnonymousBlackholeConnectReport";
+import { collectInstalledSvnAnonymousCancellationReport } from "./diagnostics/installedSvnAnonymousCancellationReport";
+import { collectInstalledSvnAnonymousTrustRevokedReport } from "./diagnostics/installedSvnAnonymousTrustRevokedReport";
+import { collectInstalledSvnAnonymousRecoveryBlockedReport } from "./diagnostics/installedSvnAnonymousRecoveryBlockedReport";
+import { collectInstalledSvnAnonymousRecoveryIndeterminateReport } from "./diagnostics/installedSvnAnonymousRecoveryIndeterminateReport";
+import { collectInstalledSvnAnonymousRecoverySafeReport } from "./diagnostics/installedSvnAnonymousRecoverySafeReport";
+import { collectInstalledSvnAnonymousWorkerCrashReport } from "./diagnostics/installedSvnAnonymousWorkerCrashReport";
+import { collectInstalledSvnAnonymousDaemonDisconnectReport } from "./diagnostics/installedSvnAnonymousDaemonDisconnectReport";
+import { collectInstalledSvnAnonymousRedactionReport } from "./diagnostics/installedSvnAnonymousRedactionReport";
+import { InstalledSvnAnonymousLocalEventZeroNetworkObserver } from "./diagnostics/installedSvnAnonymousLocalEventZeroNetwork";
+import { redactDiagnosticValue } from "./diagnostics/diagnosticsRedaction";
 import { collectInstalledRepositoryHistoryReport } from "./diagnostics/installedRepositoryHistoryReport";
 import { OperationDiagnostics } from "./diagnostics/operationDiagnostics";
 import { collectInstalledCoreWorkflowReport as collectInstalledCoreWorkflowEvidence } from "./diagnostics/installedCoreWorkflowReport";
@@ -141,6 +165,10 @@ import {
 import { RepositoryLifecycleCoordinator } from "./repository/repositoryLifecycleCoordinator";
 import { RepositoryLifecycleNotificationService } from "./repository/repositoryLifecycleNotificationService";
 import { RepositorySessionService, type RepositorySession } from "./repository/repositorySessionService";
+import {
+  BackendCheckoutTargetRecoveryClient,
+  type CheckoutTargetRecoveryEntry,
+} from "./repository/checkoutTargetRecoveryRpcClient";
 import { SourceControlProjectionService } from "./scm/sourceControlProjectionService";
 import { SourceControlResourceStore } from "./scm/sourceControlResourceStore";
 import { VscodeSourceControlPresenter } from "./scm/vscodeSourceControlPresenter";
@@ -157,16 +185,21 @@ import { RepositoryWatcherService } from "./status/repositoryWatcherService";
 import { StatusRefreshCoverageStore } from "./status/statusRefreshCoverageStore";
 import { createStatusNotificationHandler } from "./status/statusStaleNotificationHandler";
 import { readStatusSettings } from "./status/statusSettings";
-import { StatusSnapshotStore } from "./status/statusSnapshotStore";
+import { StatusSnapshotStore, type StatusStaleMark } from "./status/statusSnapshotStore";
 import type { PathCasePolicy, StatusRefreshDepth, StatusRefreshTarget } from "./status/types";
 import { createVscodeRepositoryWatcherFactory } from "./status/vscodeWatcherFactory";
 import { WatcherOverflowDiagnostics } from "./status/watcherOverflowDiagnostics";
 import { RemoteConnectionStateStore } from "./status/remoteConnectionStateStore";
-import { createRemoteConnectionNotificationHandler } from "./status/remoteConnectionNotificationHandler";
 import {
-  buildRemoteOperationEnvelope,
+  createRemoteConnectionNotificationHandler,
+  parseRemoteConnectionStateNotification,
+  type RemoteConnectionNotification,
+} from "./status/remoteConnectionNotificationHandler";
+import {
   canonicalEndpointFromRepositoryUrl,
   readRemoteAccessProfiles,
+  RemoteOperationEnvelopeFactory,
+  RemoteProfileConfigurationError,
   selectRemoteAccessProfile,
 } from "./security/remoteAccessProfile";
 import { TortoiseCommandController } from "./tortoise/tortoiseCommandController";
@@ -198,6 +231,7 @@ const BACKEND_RESTART_MAX_BACKOFF_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_INTERVAL_MS = 30 * 1000;
 const BACKEND_HEARTBEAT_TIMEOUT_MS = 5 * 1000;
 const REMOTE_STATUS_CHECK_TIMEOUT_MS = 30 * 1000;
+const REMOTE_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface MatchingCompletedRefreshCoverageRequest {
   repositoryId: string;
@@ -291,6 +325,42 @@ function parseMatchingCompletedRefreshCoverageRequest(rawRequest: unknown): Matc
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const installedSvnAnonymousReportToken = consumeInstalledSvnAnonymousReportToken();
+  const installedSvnAnonymousStressCheckoutToken = consumeInstalledSvnAnonymousStressCheckoutToken();
+  const installedSvnAnonymousNegativeReportToken = consumeInstalledSvnAnonymousNegativeReportToken();
+  const installedSvnAnonymousAuthzDeniedReportToken = consumeInstalledSvnAnonymousAuthzDeniedReportToken();
+  const installedSvnAnonymousStalledReadReportToken = consumeInstalledSvnAnonymousStalledReadReportToken();
+  const installedSvnAnonymousDeadlineReportToken = consumeInstalledSvnAnonymousDeadlineReportToken();
+  const installedSvnAnonymousBlackholeConnectReportToken =
+    consumeInstalledSvnAnonymousBlackholeConnectReportToken();
+  const installedSvnAnonymousCancellationReportToken = consumeInstalledSvnAnonymousCancellationReportToken();
+  const installedSvnAnonymousTrustRevokedReportToken = consumeInstalledSvnAnonymousTrustRevokedReportToken();
+  const installedSvnAnonymousRecoveryBlockedReportToken = consumeInstalledSvnAnonymousRecoveryBlockedReportToken();
+  const installedSvnAnonymousRecoveryIndeterminateReportToken =
+    consumeInstalledSvnAnonymousRecoveryIndeterminateReportToken();
+  const installedSvnAnonymousRecoverySafeReportToken = consumeInstalledSvnAnonymousRecoverySafeReportToken();
+  const installedSvnAnonymousWorkerCrashReportToken = consumeInstalledSvnAnonymousWorkerCrashReportToken();
+  const installedSvnAnonymousDaemonDisconnectReportToken =
+    consumeInstalledSvnAnonymousDaemonDisconnectReportToken();
+  const installedSvnAnonymousRedactionReportToken = consumeInstalledSvnAnonymousRedactionReportToken();
+  const installedSvnAnonymousLocalEventZeroNetworkToken =
+    consumeInstalledSvnAnonymousLocalEventZeroNetworkToken();
+  const installedSvnAnonymousStressCheckoutContext =
+    installedSvnAnonymousStressCheckoutToken === undefined
+      ? undefined
+      : {
+          token: installedSvnAnonymousStressCheckoutToken,
+          sessionSha256: createInstalledSvnAnonymousStressSessionSha256(
+            installedSvnAnonymousStressCheckoutToken,
+          ),
+        };
+  const installedSvnAnonymousAuthActivity: InstalledSvnAnonymousAuthActivity = {
+    credentialRequests: 0,
+    credentialSettlements: 0,
+    certificateRequests: 0,
+  };
+  const remoteStateRoot = remoteStateRootPath(context);
+  await vscode.workspace.fs.createDirectory(vscode.Uri.file(remoteStateRoot));
   const commandCancellationSource = new vscode.CancellationTokenSource();
   repositoryCommandCancellationSource = commandCancellationSource;
   context.subscriptions.push({
@@ -339,10 +409,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       pickTrust: pickCertificateTrust,
     },
   });
-  const authRequestHandler = createAuthRequestHandler({
+  const productionAuthRequestHandler = createAuthRequestHandler({
     credentialController,
     certificateTrustController,
   });
+  const authRequestHandler = async (method: string, params: unknown): Promise<unknown> => {
+    if (
+      installedSvnAnonymousReportToken !== undefined ||
+      installedSvnAnonymousStressCheckoutToken !== undefined ||
+      installedSvnAnonymousNegativeReportToken !== undefined ||
+      installedSvnAnonymousAuthzDeniedReportToken !== undefined ||
+      installedSvnAnonymousStalledReadReportToken !== undefined ||
+      installedSvnAnonymousDeadlineReportToken !== undefined ||
+      installedSvnAnonymousBlackholeConnectReportToken !== undefined ||
+      installedSvnAnonymousCancellationReportToken !== undefined ||
+      installedSvnAnonymousTrustRevokedReportToken !== undefined ||
+      installedSvnAnonymousRecoveryBlockedReportToken !== undefined ||
+      installedSvnAnonymousRecoveryIndeterminateReportToken !== undefined ||
+      installedSvnAnonymousRecoverySafeReportToken !== undefined ||
+      installedSvnAnonymousWorkerCrashReportToken !== undefined ||
+      installedSvnAnonymousDaemonDisconnectReportToken !== undefined ||
+      installedSvnAnonymousRedactionReportToken !== undefined ||
+      installedSvnAnonymousLocalEventZeroNetworkToken !== undefined
+    ) {
+      if (method === "credentials/request") {
+        installedSvnAnonymousAuthActivity.credentialRequests += 1;
+      } else if (method === "credentials/settle") {
+        installedSvnAnonymousAuthActivity.credentialSettlements += 1;
+      } else if (method === "certificate/request") {
+        installedSvnAnonymousAuthActivity.certificateRequests += 1;
+      }
+    }
+    return await productionAuthRequestHandler(method, params);
+  };
   const statusSnapshotStore = new StatusSnapshotStore();
   const remoteConnectionStateStore = new RemoteConnectionStateStore();
   const watcherOverflowDiagnostics = new WatcherOverflowDiagnostics();
@@ -393,6 +492,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     sourceControlProjection,
     watcherOverflowDiagnostics,
   });
+  const installedSvnAnonymousRecoverySafeStatusStaleObservers =
+    new Set<(mark: StatusStaleMark) => void>();
+  const installedSvnAnonymousWorkerCrashDaemonStateObservers =
+    new Set<(state: RemoteConnectionNotification) => void>();
+  const installedSvnAnonymousBlackholeConnectDaemonStateObservers =
+    new Set<(state: RemoteConnectionNotification) => void>();
+  const installedSvnAnonymousDaemonDisconnectDaemonStateObservers =
+    new Set<(state: RemoteConnectionNotification) => void>();
   let remoteRecoveryService: RemoteRecoveryService | undefined;
   const remoteConnectionNotificationHandler = createRemoteConnectionNotificationHandler({
     store: remoteConnectionStateStore,
@@ -407,8 +514,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     recordBackgroundRecoveryFailure: (error) => diagnostics.recordFailure("Remote Recovery", error),
   });
   const backendNotificationHandler = (method: string, params: unknown): void => {
-    if (!remoteConnectionNotificationHandler(method, params)) {
+    if (remoteConnectionNotificationHandler(method, params)) {
+      if (method === "remoteConnection/state" && installedSvnAnonymousWorkerCrashReportToken !== undefined) {
+        const notification = parseRemoteConnectionStateNotification(params);
+        for (const observer of installedSvnAnonymousWorkerCrashDaemonStateObservers) {
+          observer(notification);
+        }
+      }
+      if (
+        method === "remoteConnection/state" &&
+        installedSvnAnonymousBlackholeConnectReportToken !== undefined
+      ) {
+        const notification = parseRemoteConnectionStateNotification(params);
+        for (const observer of installedSvnAnonymousBlackholeConnectDaemonStateObservers) {
+          observer(notification);
+        }
+      }
+      if (
+        method === "remoteConnection/state" &&
+        installedSvnAnonymousDaemonDisconnectReportToken !== undefined
+      ) {
+        const notification = parseRemoteConnectionStateNotification(params);
+        for (const observer of installedSvnAnonymousDaemonDisconnectDaemonStateObservers) {
+          observer(notification);
+        }
+      }
+    } else {
       statusNotificationHandler(method, params);
+      if (method === "status/stale" && installedSvnAnonymousRecoverySafeReportToken !== undefined) {
+        const mark = params as StatusStaleMark;
+        for (const observer of installedSvnAnonymousRecoverySafeStatusStaleObservers) {
+          observer({ ...mark });
+        }
+      }
     }
   };
   const service = new BackendService({
@@ -418,6 +556,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clientVersion: extensionVersion(context),
         locale: vscode.env.language,
         cacheRoot: cacheRootPath(context),
+        remoteStateRoot,
         workspaceTrusted: vscode.workspace.isTrusted,
         baseEnv: process.env,
       }),
@@ -442,6 +581,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
   backendService = service;
+  const checkoutTargetRecoveryClient = new BackendCheckoutTargetRecoveryClient(service);
   context.subscriptions.push(service.onDidChangeLifecycleState((event) => {
     if (event.status === "ready" || event.status === "recovered" || event.status === "degraded") {
       credentialController.invalidateBackendConnection();
@@ -463,6 +603,67 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
   void backendLifecycleUiService.refresh();
+  const createAnonymousSvnRemoteEnvelope = async (input: {
+    operationId: string;
+    repositoryRootUrl: string;
+    timeoutMs: number;
+  }) => {
+    const expectedOrigin = canonicalEndpointFromRepositoryUrl(input.repositoryRootUrl);
+    const remoteConfiguration = vscode.workspace.getConfiguration("subversionr");
+    const profiles = readRemoteAccessProfiles({
+      inspect: <T>(section: string) => remoteConfiguration.inspect(section) as T | undefined,
+    });
+    const profile = selectRemoteAccessProfile(profiles, expectedOrigin);
+    const connection = await service.initialize();
+    const factory = new RemoteOperationEnvelopeFactory({
+      remoteSvnAnonymous: connection.initializeResult.capabilities.remoteSvnAnonymous,
+      isRemoteSubmissionEnabled: () => connection.isRemoteSubmissionEnabled(),
+      currentRemoteTrustEpoch: () => connection.currentRemoteTrustEpoch(),
+    });
+    return factory.createAnonymousSvn({
+      operationId: input.operationId,
+      intent: "foreground",
+      interaction: "allowed",
+      timeoutMs: input.timeoutMs,
+      profile,
+      expectedOrigin,
+    });
+  };
+  const createOperationRemoteEnvelope = async (repositoryRootUrl: string) => {
+    const scheme = new URL(repositoryRootUrl).protocol;
+    if (scheme === "file:") {
+      return undefined;
+    }
+    if (scheme !== "svn:") {
+      throw new RemoteProfileConfigurationError(
+        "SUBVERSIONR_REMOTE_SCHEME_UNSUPPORTED",
+        "error.remote.schemeUnsupported",
+        { scheme: scheme.slice(0, 32) },
+      );
+    }
+    return await createAnonymousSvnRemoteEnvelope({
+      operationId: randomUUID(),
+      repositoryRootUrl,
+      timeoutMs: REMOTE_OPERATION_TIMEOUT_MS,
+    });
+  };
+  let sessionService: RepositorySessionService;
+  const createOperationRemoteEnvelopeForSession = async (input: {
+    repositoryId: string;
+    epoch: number;
+  }) => {
+    const session = sessionService
+      .listOpenSessions()
+      .find((candidate) => candidate.repositoryId === input.repositoryId && candidate.epoch === input.epoch);
+    if (!session) {
+      throw new RemoteProfileConfigurationError(
+        "SUBVERSIONR_REMOTE_SESSION_NOT_OPEN",
+        "error.repository.notOpen",
+        { repositoryId: input.repositoryId },
+      );
+    }
+    return await createOperationRemoteEnvelope(session.identity.repositoryRootUrl);
+  };
   const historyClient = new BackendHistoryClient(service);
   const baseContentDocumentProvider = vscode.workspace.registerTextDocumentContentProvider(
     BASE_CONTENT_URI_SCHEME,
@@ -475,6 +676,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     HEAD_CONTENT_URI_SCHEME,
     new HeadContentDocumentProvider({
       contentClient: new BackendContentClient(service),
+      createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
       workspaceTrusted: () => vscode.workspace.isTrusted,
       localize: vscode.l10n.t,
     }),
@@ -483,12 +685,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     REVISION_CONTENT_URI_SCHEME,
     new RevisionContentDocumentProvider({
       contentClient: new BackendContentClient(service),
+      createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
       workspaceTrusted: () => vscode.workspace.isTrusted,
       localize: vscode.l10n.t,
     }),
   );
   const historyTreeDataProvider = new HistoryTreeDataProvider({
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     settings: historySettings,
     workspaceTrusted: () => vscode.workspace.isTrusted,
     api: {
@@ -505,6 +709,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     BLAME_DOCUMENT_URI_SCHEME,
     new HistoryBlameDocumentProvider({
       blameClient: historyClient,
+      createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
       workspaceTrusted: () => vscode.workspace.isTrusted,
       localize: vscode.l10n.t,
     }),
@@ -555,7 +760,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   });
   repositoryWatcherService = watcherService;
-  const sessionService = new RepositorySessionService({
+  sessionService = new RepositorySessionService({
     backendService: service,
     watcherService,
     statusSnapshotClient: new BackendStatusSnapshotClient(service),
@@ -590,6 +795,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => lensSettings,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -611,6 +817,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => lensSettings,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -675,6 +882,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => lensSettings,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -693,6 +901,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => lensSettings,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
     historyClient,
+    createRemoteEnvelope: createOperationRemoteEnvelopeForSession,
     sessionService,
     sourceControlProjection,
     workspaceTrusted: () => vscode.workspace.isTrusted,
@@ -821,23 +1030,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     remoteConnectionStateStore,
     now: () => new Date().toISOString(),
     createOperationId: randomUUID,
-    createRemoteEnvelope: async ({ operationId, repositoryRootUrl }) => {
-      const expectedOrigin = canonicalEndpointFromRepositoryUrl(repositoryRootUrl);
-      const configuration = vscode.workspace.getConfiguration("subversionr");
-      const profiles = readRemoteAccessProfiles({
-        inspect: <T>(section: string) => configuration.inspect(section) as T | undefined,
-      });
-      const profile = selectRemoteAccessProfile(profiles, expectedOrigin);
-      const connection = await service.initialize();
-      return buildRemoteOperationEnvelope({
-        operationId,
-        intent: "foreground",
-        interaction: "allowed",
+    createRemoteEnvelope: async (input) => {
+      const scheme = new URL(input.repositoryRootUrl).protocol;
+      if (scheme === "file:") {
+        return undefined;
+      }
+      if (scheme !== "svn:") {
+        throw new RemoteProfileConfigurationError(
+          "SUBVERSIONR_REMOTE_SCHEME_UNSUPPORTED",
+          "error.remote.schemeUnsupported",
+          { scheme: scheme.slice(0, 32) },
+        );
+      }
+      return await createAnonymousSvnRemoteEnvelope({
+        ...input,
         timeoutMs: REMOTE_STATUS_CHECK_TIMEOUT_MS,
-        trustEpoch: connection.currentRemoteTrustEpoch(),
-        profile,
-        expectedOrigin,
-        remoteSubmissionEnabled: connection.isRemoteSubmissionEnabled(),
       });
     },
   });
@@ -882,6 +1089,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     commandCancellation: commandCancellationSource.token,
     commitMessageHistory,
     includeMergedRevisions: () => historySettings.includeMergedRevisions,
+    createRemoteEnvelope: createOperationRemoteEnvelope,
     createRequestId: randomUUID,
     now: () => new Date().toISOString(),
     monotonicNowMs: () => performance.now(),
@@ -1279,6 +1487,331 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               }),
           }),
         );
+  const installedSvnAnonymousReportCommand =
+    installedSvnAnonymousReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand("subversionr.diagnostics.installedSvnAnonymousReport", (request: unknown) =>
+          collectInstalledSvnAnonymousReport({
+            expectedToken: installedSvnAnonymousReportToken,
+            request,
+            initialize: () => service.initialize(),
+            openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+            closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+            applyRemoteStatusDelta: async (delta) => {
+              await dirtyPathPipeline.runExclusive(delta.repositoryId, async () => {
+                statusSnapshotStore.applyDelta(delta);
+                sourceControlProjection.applyDelta(delta);
+              });
+            },
+            fullReconcile: (repositoryId, epoch) =>
+              repositoryRefreshService.fullReconcileRepository({ repositoryId, epoch }),
+            getProjection: (repositoryId) => sourceControlProjection.getProjection(repositoryId),
+            appendFile: async (path, data) => await appendFile(path, data, { encoding: "utf8" }),
+            authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+          }),
+        );
+  const installedSvnAnonymousStressCheckoutCommand =
+    installedSvnAnonymousStressCheckoutContext === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousStressCheckout",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousStressCheckout({
+              expectedToken: installedSvnAnonymousStressCheckoutContext.token,
+              request,
+              extensionHostSessionSha256: installedSvnAnonymousStressCheckoutContext.sessionSha256,
+              initialize: () => service.initialize(),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousNegativeReportCommand =
+    installedSvnAnonymousNegativeReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousNegativeReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousNegativeReport({
+              expectedToken: installedSvnAnonymousNegativeReportToken,
+              request,
+              initialize: () => service.initialize(),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousAuthzDeniedReportCommand =
+    installedSvnAnonymousAuthzDeniedReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousAuthzDeniedReport({
+              expectedToken: installedSvnAnonymousAuthzDeniedReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousStalledReadReportCommand =
+    installedSvnAnonymousStalledReadReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousStalledReadReport({
+              expectedToken: installedSvnAnonymousStalledReadReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousDeadlineReportCommand =
+    installedSvnAnonymousDeadlineReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousDeadlineReport({
+              expectedToken: installedSvnAnonymousDeadlineReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              monotonicNowMs: () => performance.now(),
+            }),
+        );
+  const installedSvnAnonymousBlackholeConnectReportCommand =
+    installedSvnAnonymousBlackholeConnectReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousBlackholeConnectReport({
+              expectedToken: installedSvnAnonymousBlackholeConnectReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              onDaemonRemoteStateChange: (listener) => {
+                installedSvnAnonymousBlackholeConnectDaemonStateObservers.add(listener);
+                return {
+                  dispose: () => installedSvnAnonymousBlackholeConnectDaemonStateObservers.delete(listener),
+                };
+              },
+              getRemoteState: (repositoryId) => remoteConnectionStateStore.getState(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              monotonicNowMs: () => performance.now(),
+            }),
+        );
+  const installedSvnAnonymousCancellationReportCommand =
+    installedSvnAnonymousCancellationReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousCancellationReport({
+              expectedToken: installedSvnAnonymousCancellationReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              monotonicNowMs: () => performance.now(),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+            }),
+        );
+  const installedSvnAnonymousTrustRevokedReportCommand =
+    installedSvnAnonymousTrustRevokedReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousTrustRevokedReport({
+              expectedToken: installedSvnAnonymousTrustRevokedReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+            }),
+        );
+  const installedSvnAnonymousRecoveryBlockedReportCommand =
+    installedSvnAnonymousRecoveryBlockedReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousRecoveryBlockedReport({
+              expectedToken: installedSvnAnonymousRecoveryBlockedReportToken,
+              request,
+              initialize: () => service.initialize(),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+              readRecoveryJournalBytes: async () =>
+                await readFile(nodePath.join(remoteStateRoot, "subversionr-remote-checkout-mutations-v1.json")),
+              targetPathExists: (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined,
+            }),
+        );
+  const installedSvnAnonymousRecoverySafeReportCommand =
+    installedSvnAnonymousRecoverySafeReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousRecoverySafeReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousRecoverySafeReport({
+              expectedToken: installedSvnAnonymousRecoverySafeReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              onRemoteStateChange: (listener) => remoteConnectionStateStore.onDidChange(listener),
+              onStatusStale: (listener) => {
+                installedSvnAnonymousRecoverySafeStatusStaleObservers.add(listener);
+                return {
+                  dispose: () => installedSvnAnonymousRecoverySafeStatusStaleObservers.delete(listener),
+                };
+              },
+              getRemoteState: (repositoryId) => remoteConnectionStateStore.getState(repositoryId),
+              getStatusSnapshot: (repositoryId) => statusSnapshotStore.getSnapshot(repositoryId),
+              getProjection: (repositoryId) => sourceControlProjection.getProjection(repositoryId),
+              fullReconcile: (repositoryId, epoch) =>
+                repositoryRefreshService.fullReconcileRepository({ repositoryId, epoch }),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousRecoveryIndeterminateReportCommand =
+    installedSvnAnonymousRecoveryIndeterminateReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousRecoveryIndeterminateReport({
+              expectedToken: installedSvnAnonymousRecoveryIndeterminateReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              onRemoteStateChange: (listener) => remoteConnectionStateStore.onDidChange(listener),
+              getRemoteState: (repositoryId) => remoteConnectionStateStore.getState(repositoryId),
+              getStatusSnapshot: (repositoryId) => statusSnapshotStore.getSnapshot(repositoryId),
+              getProjection: (repositoryId) => sourceControlProjection.getProjection(repositoryId),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousWorkerCrashReportCommand =
+    installedSvnAnonymousWorkerCrashReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousWorkerCrashReport({
+              expectedToken: installedSvnAnonymousWorkerCrashReportToken,
+              request,
+              initialize: () => service.initialize(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              closeRepository: (repositoryId) => sessionService.closeRepository(repositoryId),
+              onDaemonRemoteStateChange: (listener) => {
+                installedSvnAnonymousWorkerCrashDaemonStateObservers.add(listener);
+                return {
+                  dispose: () => installedSvnAnonymousWorkerCrashDaemonStateObservers.delete(listener),
+                };
+              },
+              getRemoteState: (repositoryId) => remoteConnectionStateStore.getState(repositoryId),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousDaemonDisconnectReportCommand =
+    installedSvnAnonymousDaemonDisconnectReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousDaemonDisconnectReport({
+              expectedToken: installedSvnAnonymousDaemonDisconnectReportToken,
+              request,
+              initialize: () => service.initialize(),
+              shutdownBackend: () => service.shutdown(),
+              openWorkingCopy: (path) => sessionService.openWorkingCopy({ path, pathCase: "case-insensitive" }),
+              onDaemonRemoteStateChange: (listener) => {
+                installedSvnAnonymousDaemonDisconnectDaemonStateObservers.add(listener);
+                return {
+                  dispose: () => installedSvnAnonymousDaemonDisconnectDaemonStateObservers.delete(listener),
+                };
+              },
+              getRemoteState: (repositoryId) => remoteConnectionStateStore.getState(repositoryId),
+              readFixtureState: async (path) => JSON.parse(await readFile(path, "utf8")) as unknown,
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+            }),
+        );
+  const installedSvnAnonymousRedactionReportCommand =
+    installedSvnAnonymousRedactionReportToken === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousRedactionReport",
+          (request: unknown) =>
+            collectInstalledSvnAnonymousRedactionReport({
+              expectedToken: installedSvnAnonymousRedactionReportToken,
+              request,
+              initialize: () => service.initialize(),
+              authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+              operationDiagnostics: new OperationDiagnostics({
+                clear: () => undefined,
+                error: () => undefined,
+                show: () => undefined,
+              }),
+              collectDiagnosticsComposite: async (diagnosticInput) => ({
+                diagnosticsBundle: await collectDiagnosticsBundle({
+                  context: diagnosticsContext(context),
+                  backendService: service,
+                  operationJournal,
+                  watcherOverflowDiagnostics,
+                }),
+                redactedCanary: redactDiagnosticValue(diagnosticInput),
+              }),
+            }),
+        );
+  const installedSvnAnonymousLocalEventZeroNetworkObserver =
+    installedSvnAnonymousLocalEventZeroNetworkToken === undefined
+      ? undefined
+      : new InstalledSvnAnonymousLocalEventZeroNetworkObserver({
+          expectedToken: installedSvnAnonymousLocalEventZeroNetworkToken,
+          workspaceTrusted: () => vscode.workspace.isTrusted,
+          pathCase: pathCasePolicy(process.platform),
+          sessionService,
+          watcherService,
+          statusRefreshCoverage,
+          sourceControlSurface: sourceControlPresenter,
+          counters: () => ({
+            statusRefreshRequestCount: statusRefreshClient.requestCount(),
+            remoteStatusRequestCount,
+            reconcileRequestCount,
+          }),
+          authActivity: () => ({ ...installedSvnAnonymousAuthActivity }),
+          collectDiagnostics: async () =>
+            await (await service.initialize()).sendRequest<unknown>("diagnostics/get", {}),
+        });
+  const installedSvnAnonymousLocalEventZeroNetworkArmCommand =
+    installedSvnAnonymousLocalEventZeroNetworkObserver === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
+          (request: unknown) => installedSvnAnonymousLocalEventZeroNetworkObserver.arm(request),
+        );
+  const installedSvnAnonymousLocalEventZeroNetworkReportCommand =
+    installedSvnAnonymousLocalEventZeroNetworkObserver === undefined
+      ? undefined
+      : vscode.commands.registerCommand(
+          "subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
+          async (request: unknown) =>
+            await installedSvnAnonymousLocalEventZeroNetworkObserver.awaitReport(request),
+        );
   const installedCoreWorkflowReportCommand = vscode.commands.registerCommand(
     "subversionr.diagnostics.installedCoreWorkflowReport",
     (request: unknown) =>
@@ -1514,6 +2047,73 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       commitAllRepositoryIdArgument(commandArgument, sourceControlRepositoryIds),
     ),
   );
+  const resolveCheckoutTargetRecoveryCommand = vscode.commands.registerCommand(
+    "subversionr.resolveCheckoutTargetRecovery",
+    async () => {
+      const blocked = (await checkoutTargetRecoveryClient.list()).filter(
+        (entry): entry is CheckoutTargetRecoveryEntry & { state: "blocked" } => entry.state === "blocked",
+      );
+      if (blocked.length === 0) {
+        await vscode.window.showInformationMessage(
+          vscode.l10n.t("No blocked SVN checkout target requires review."),
+        );
+        return;
+      }
+      const selected = blocked.length === 1
+        ? blocked[0]
+        : (await vscode.window.showQuickPick(
+            blocked.map((entry) => ({
+              label: entry.targetPath,
+              description: entry.originOperationId,
+              entry,
+            })),
+            {
+              title: vscode.l10n.t("Review blocked SVN checkout target"),
+              placeHolder: vscode.l10n.t("Select the checkout target whose disposition you reviewed"),
+            },
+          ))?.entry;
+      if (!selected) {
+        return;
+      }
+      const releaseAction = vscode.l10n.t("Release checkout target block");
+      const confirmation = await vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          "Confirm that you reviewed and resolved the possibly changed SVN checkout target before releasing its safety block: {0}",
+          selected.targetPath,
+        ),
+        { modal: true },
+        releaseAction,
+      );
+      if (confirmation !== releaseAction) {
+        return;
+      }
+      await checkoutTargetRecoveryClient.confirm({
+        targetPath: selected.targetPath,
+        targetSha256: selected.targetSha256,
+        originOperationId: selected.originOperationId,
+        confirmation: "reviewedAndResolved",
+      });
+      await vscode.window.showInformationMessage(
+        vscode.l10n.t("SubversionR released the reviewed SVN checkout target: {0}", selected.targetPath),
+      );
+    },
+  );
+  void checkoutTargetRecoveryClient
+    .list()
+    .then(async (entries) => {
+      if (!entries.some((entry) => entry.state === "blocked")) {
+        return;
+      }
+      const reviewAction = vscode.l10n.t("Review checkout target");
+      const selected = await vscode.window.showWarningMessage(
+        vscode.l10n.t("A possibly changed SVN checkout target is blocked until you review its disposition."),
+        reviewAction,
+      );
+      if (selected === reviewAction) {
+        await vscode.commands.executeCommand("subversionr.resolveCheckoutTargetRecovery");
+      }
+    })
+    .catch((error: unknown) => diagnostics.recordFailure("Checkout Target Recovery", error));
   const refreshResourceCommand = vscode.commands.registerCommand("subversionr.refreshResource", (...resourceStates: unknown[]) =>
     repositoryCommandController.refreshResource(...resourceStates),
   );
@@ -1900,6 +2500,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshRepositoryCommand,
     checkRemoteChangesCommand,
     retryRemoteRecoveryCommand,
+    resolveCheckoutTargetRecoveryCommand,
     refreshResourceCommand,
     openConflictArtifactCommand,
     addResourceCommand,
@@ -1976,6 +2577,62 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (installedRemoteWorkerReportCommand !== undefined) {
     context.subscriptions.push(installedRemoteWorkerReportCommand);
   }
+  if (installedSvnAnonymousReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousReportCommand);
+  }
+  if (installedSvnAnonymousStressCheckoutCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousStressCheckoutCommand);
+  }
+  if (installedSvnAnonymousNegativeReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousNegativeReportCommand);
+  }
+  if (installedSvnAnonymousAuthzDeniedReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousAuthzDeniedReportCommand);
+  }
+  if (installedSvnAnonymousStalledReadReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousStalledReadReportCommand);
+  }
+  if (installedSvnAnonymousDeadlineReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousDeadlineReportCommand);
+  }
+  if (installedSvnAnonymousBlackholeConnectReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousBlackholeConnectReportCommand);
+  }
+  if (installedSvnAnonymousCancellationReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousCancellationReportCommand);
+  }
+  if (installedSvnAnonymousTrustRevokedReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousTrustRevokedReportCommand);
+  }
+  if (installedSvnAnonymousRecoveryBlockedReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousRecoveryBlockedReportCommand);
+  }
+  if (installedSvnAnonymousRecoverySafeReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousRecoverySafeReportCommand);
+  }
+  if (installedSvnAnonymousRecoveryIndeterminateReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousRecoveryIndeterminateReportCommand);
+  }
+  if (installedSvnAnonymousWorkerCrashReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousWorkerCrashReportCommand);
+  }
+  if (installedSvnAnonymousDaemonDisconnectReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousDaemonDisconnectReportCommand);
+  }
+  if (installedSvnAnonymousRedactionReportCommand !== undefined) {
+    context.subscriptions.push(installedSvnAnonymousRedactionReportCommand);
+  }
+  if (
+    installedSvnAnonymousLocalEventZeroNetworkObserver !== undefined &&
+    installedSvnAnonymousLocalEventZeroNetworkArmCommand !== undefined &&
+    installedSvnAnonymousLocalEventZeroNetworkReportCommand !== undefined
+  ) {
+    context.subscriptions.push(
+      installedSvnAnonymousLocalEventZeroNetworkObserver,
+      installedSvnAnonymousLocalEventZeroNetworkArmCommand,
+      installedSvnAnonymousLocalEventZeroNetworkReportCommand,
+    );
+  }
   if (installedSourceControlUiE2eExecuteResourceCommand !== undefined) {
     context.subscriptions.push(installedSourceControlUiE2eExecuteResourceCommand);
   }
@@ -2006,6 +2663,10 @@ function historyFailureMessage(error: unknown): string {
   switch (cause) {
     case "authenticationFailed":
       return vscode.l10n.t("SVN {0} failed because authentication was rejected. Check the credentials and retry.", vscode.l10n.t("History"));
+    case "authorizationDenied":
+      return vscode.l10n.t("SVN {0} failed because the server denied authorization for this operation.", vscode.l10n.t("History"));
+    case "authorizationConfigurationInvalid":
+      return vscode.l10n.t("SVN {0} failed because the server authorization configuration is invalid.", vscode.l10n.t("History"));
     case "notWorkingCopy":
       return vscode.l10n.t("SVN {0} failed because the selected target is not a working copy.", vscode.l10n.t("History"));
     default:
@@ -2422,6 +3083,10 @@ function setInstalledSourceControlUiE2eInputMessage(
 
 function cacheRootPath(context: vscode.ExtensionContext): string {
   return vscode.Uri.joinPath(context.globalStorageUri, "cache").fsPath;
+}
+
+function remoteStateRootPath(context: vscode.ExtensionContext): string {
+  return vscode.Uri.joinPath(context.globalStorageUri, "remote-state").fsPath;
 }
 
 function cacheStorageRoots(context: vscode.ExtensionContext): CacheStorageRoot[] {
@@ -3916,6 +4581,102 @@ function consumeInstalledRedactionReportToken(): string | undefined {
 function consumeInstalledRemoteWorkerReportToken(): string | undefined {
   const token = process.env.SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN;
   delete process.env.SUBVERSIONR_INSTALLED_E2E_REMOTE_WORKER_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousStressCheckoutToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_STRESS_CHECKOUT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_STRESS_CHECKOUT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousNegativeReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_NEGATIVE_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousAuthzDeniedReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_AUTHZ_DENIED_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_AUTHZ_DENIED_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousStalledReadReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_STALLED_READ_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_STALLED_READ_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousDeadlineReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DEADLINE_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DEADLINE_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousBlackholeConnectReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_BLACKHOLE_CONNECT_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_BLACKHOLE_CONNECT_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousCancellationReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_CANCELLATION_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_CANCELLATION_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousTrustRevokedReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_TRUST_REVOKED_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_TRUST_REVOKED_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousRecoveryBlockedReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_BLOCKED_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousRecoverySafeReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_SAFE_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_SAFE_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousRecoveryIndeterminateReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_INDETERMINATE_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_RECOVERY_INDETERMINATE_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousWorkerCrashReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_WORKER_CRASH_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_WORKER_CRASH_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousDaemonDisconnectReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DAEMON_DISCONNECT_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_DAEMON_DISCONNECT_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousRedactionReportToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_REDACTION_REPORT_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_SVN_ANONYMOUS_REDACTION_REPORT_TOKEN;
+  return typeof token === "string" && token.length > 0 ? token : undefined;
+}
+
+function consumeInstalledSvnAnonymousLocalEventZeroNetworkToken(): string | undefined {
+  const token = process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_LOCAL_EVENT_ZERO_NETWORK_TOKEN;
+  delete process.env.SUBVERSIONR_INSTALLED_E2E_SVN_ANONYMOUS_LOCAL_EVENT_ZERO_NETWORK_TOKEN;
   return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 

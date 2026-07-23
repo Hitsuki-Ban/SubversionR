@@ -13,13 +13,13 @@ use libloading::Library;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use subversionr_protocol::{
-    CertificateTrustRequest, CertificateTrustResponse, CredentialAttempt, CredentialAuthKind,
-    CredentialPersistenceIntent, CredentialRequest, CredentialResponse, CredentialSettlementAck,
-    CredentialSettlementOutcome, CredentialSettlementRequest, HistoryBlameLine,
-    HistoryLogChangedPath, HistoryLogEntry, LockInfo, OperationFailureCause,
-    OperationFailureDiagnostics, RemoteInteraction, RemoteOperationEnvelope, RemoteServerAuth,
-    RepositoryIdentity, ServerAccountSelection, ServerAccountSnapshot, StatusEntry, StatusSnapshot,
-    StatusSummary, SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
+    CanonicalEndpoint, CertificateTrustRequest, CertificateTrustResponse, CredentialAttempt,
+    CredentialAuthKind, CredentialPersistenceIntent, CredentialRequest, CredentialResponse,
+    CredentialSettlementAck, CredentialSettlementOutcome, CredentialSettlementRequest,
+    HistoryBlameLine, HistoryLogChangedPath, HistoryLogEntry, LockInfo, OperationFailureCause,
+    OperationFailureDiagnostics, RemoteInteraction, RemoteOperationEnvelope, RemoteScheme,
+    RemoteServerAuth, RepositoryIdentity, ServerAccountSelection, ServerAccountSnapshot,
+    StatusEntry, StatusSnapshot, StatusSummary, SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
 };
 
 use crate::{
@@ -371,6 +371,7 @@ struct RawRemoteConfigInspection {
 
 type RuntimeCreate = unsafe extern "C" fn(*mut *mut c_void) -> c_int;
 type RuntimeDestroy = unsafe extern "C" fn(*mut c_void);
+type RuntimeConfigureSvnAnonymous = unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int;
 type RemoteContextCreate = unsafe extern "C" fn(
     *const RawRemoteConfigV1,
     *const RawRemoteCredentialCallbacksV2,
@@ -671,6 +672,7 @@ type LastErrorDiagnosticsFn = unsafe extern "C" fn(*mut c_void, *mut RawErrorDia
 struct NativeSymbols {
     runtime_create: RuntimeCreate,
     runtime_destroy: RuntimeDestroy,
+    runtime_configure_svn_anonymous: RuntimeConfigureSvnAnonymous,
     remote_context_create: RemoteContextCreate,
     remote_context_inspect: RemoteContextInspect,
     remote_context_destroy: RemoteContextDestroy,
@@ -712,6 +714,9 @@ impl NativeSymbols {
         Ok(Self {
             runtime_create: *unsafe { library.get(b"subversionr_bridge_runtime_create\0") }?,
             runtime_destroy: *unsafe { library.get(b"subversionr_bridge_runtime_destroy\0") }?,
+            runtime_configure_svn_anonymous: *unsafe {
+                library.get(b"subversionr_bridge_runtime_configure_svn_anonymous\0")
+            }?,
             remote_context_create: *unsafe {
                 library.get(b"subversionr_bridge_remote_context_create\0")
             }?,
@@ -1142,6 +1147,33 @@ impl NativeBridge {
         Ok(())
     }
 
+    pub(crate) fn configure_svn_anonymous(
+        &self,
+        expected_origin: &CanonicalEndpoint,
+    ) -> Result<(), BridgeFailure> {
+        if expected_origin.scheme != RemoteScheme::Svn {
+            return Err(remote_svn_contract_invalid());
+        }
+        let host = if expected_origin.canonical_host.contains(':') {
+            format!("[{}]", expected_origin.canonical_host)
+        } else {
+            expected_origin.canonical_host.clone()
+        };
+        let origin = if expected_origin.effective_port == 3690 {
+            format!("svn://{host}")
+        } else {
+            format!("svn://{host}:{}", expected_origin.effective_port)
+        };
+        let origin = CString::new(origin).map_err(|_| remote_svn_contract_invalid())?;
+        let status = unsafe {
+            (self.symbols.runtime_configure_svn_anonymous)(self.runtime.as_ptr(), origin.as_ptr())
+        };
+        if status != 0 {
+            return Err(self.with_native_diagnostics(remote_svn_contract_invalid()));
+        }
+        Ok(())
+    }
+
     fn with_native_diagnostics(&self, failure: BridgeFailure) -> BridgeFailure {
         let mut raw = RawErrorDiagnostics {
             entries: ptr::null(),
@@ -1172,15 +1204,42 @@ impl NativeBridge {
         if entries.is_empty() {
             return failure;
         }
+        let origin_mismatch = entries
+            .iter()
+            .any(|entry| entry.name == "SUBVERSIONR_ERR_REMOTE_ORIGIN_MISMATCH");
         let cause = native_failure_cause(&entries);
-        failure.with_diagnostics(OperationFailureDiagnostics {
+        let diagnostics = OperationFailureDiagnostics {
             cause,
             svn: SvnErrorDiagnostics {
                 entries,
                 truncated: raw.truncated != 0,
             },
-        })
+        };
+        if origin_mismatch {
+            return remote_origin_mismatch_failure().with_diagnostics(diagnostics);
+        }
+        failure.with_diagnostics(diagnostics)
     }
+}
+
+fn remote_svn_contract_invalid() -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_CONTRACT_INVALID",
+        "configuration",
+        "error.remote.contractInvalid",
+        json!({}),
+        false,
+    )
+}
+
+fn remote_origin_mismatch_failure() -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+        "configuration",
+        "error.remote.originMismatch",
+        json!({}),
+        false,
+    )
 }
 
 fn native_failure_cause(entries: &[SvnErrorDiagnosticEntry]) -> OperationFailureCause {
@@ -1194,7 +1253,20 @@ fn native_failure_cause(entries: &[SvnErrorDiagnosticEntry]) -> OperationFailure
         if entry.name.contains("CONFLICT") {
             return OperationFailureCause::ConflictPresent;
         }
-        if entry.name.contains("AUTH") || entry.name.contains("NOT_AUTHORIZED") {
+        if entry.name == "SVN_ERR_AUTHZ_INVALID_CONFIG" {
+            return OperationFailureCause::AuthorizationConfigurationInvalid;
+        }
+        if matches!(
+            entry.name.as_str(),
+            "SVN_ERR_RA_NOT_AUTHORIZED"
+                | "SVN_ERR_AUTHZ_ROOT_UNREADABLE"
+                | "SVN_ERR_AUTHZ_UNREADABLE"
+                | "SVN_ERR_AUTHZ_PARTIALLY_READABLE"
+                | "SVN_ERR_AUTHZ_UNWRITABLE"
+        ) {
+            return OperationFailureCause::AuthorizationDenied;
+        }
+        if entry.name.contains("AUTHN") {
             return OperationFailureCause::AuthenticationFailed;
         }
         if matches!(
@@ -3850,13 +3922,23 @@ unsafe fn native_credential_callback_inner(
     let auth_baton = unsafe { &mut *(baton.cast::<NativeAuthBaton<'_>>()) };
     let _request = unsafe { &*request };
     unsafe { write_empty_credential_response(response) };
-    auth_baton.record_failure(BridgeFailure::new(
-        "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED",
-        "auth",
-        "error.auth.credentialRemoteWorkerRequired",
-        json!({ "method": "credentials/request" }),
-        false,
-    ));
+    let failure = match auth_baton.auth.native_credential_callback_policy() {
+        crate::NativeCredentialCallbackPolicy::RemoteWorkerRequired => BridgeFailure::new(
+            "SUBVERSIONR_CREDENTIAL_REMOTE_WORKER_REQUIRED",
+            "auth",
+            "error.auth.credentialRemoteWorkerRequired",
+            json!({ "method": "credentials/request" }),
+            false,
+        ),
+        crate::NativeCredentialCallbackPolicy::AnonymousUnsupported => BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_AUTH_UNSUPPORTED",
+            "unsupported",
+            "error.remote.authUnsupported",
+            json!({ "scheme": "svn", "auth": "anonymous" }),
+            false,
+        ),
+    };
+    auth_baton.record_failure(failure);
     RAW_AUTH_CALLBACK_DENIED
 }
 
@@ -6538,6 +6620,22 @@ mod tests {
         );
         assert_eq!(
             native_failure_cause(&[entry("SVN_ERR_RA_NOT_AUTHORIZED")]),
+            OperationFailureCause::AuthorizationDenied
+        );
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_AUTHZ_UNWRITABLE")]),
+            OperationFailureCause::AuthorizationDenied
+        );
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_AUTHZ_INVALID_CONFIG")]),
+            OperationFailureCause::AuthorizationConfigurationInvalid
+        );
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_AUTHZ_VALIDATION_FAILED")]),
+            OperationFailureCause::UnknownNative
+        );
+        assert_eq!(
+            native_failure_cause(&[entry("SVN_ERR_AUTHN_FAILED")]),
             OperationFailureCause::AuthenticationFailed
         );
         assert_eq!(
@@ -7490,6 +7588,10 @@ mod tests {
     }
 
     impl AuthRequestBroker for RecordingAuthBroker {
+        fn native_credential_callback_policy(&self) -> crate::NativeCredentialCallbackPolicy {
+            crate::NativeCredentialCallbackPolicy::RemoteWorkerRequired
+        }
+
         fn request_credential(
             &mut self,
             _request: CredentialRequest,

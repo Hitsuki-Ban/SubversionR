@@ -627,5 +627,17 @@
   "SubversionR remote recovery remains indeterminate: {0}": "SubversionR リモート復旧の状態を確定できません: {0}",
   "Remote Access": "リモートアクセス",
   "Configure Remote Access": "リモートアクセスを構成",
-  "SubversionR remote access failed ({0}).": "SubversionR リモートアクセスに失敗しました ({0})。"
+  "SubversionR remote access failed ({0}).": "SubversionR リモートアクセスに失敗しました ({0})。",
+  "No blocked SVN checkout target requires review.": "確認が必要なブロック中の SVN チェックアウト先はありません。",
+  "Review blocked SVN checkout target": "ブロックされた SVN チェックアウト先を確認",
+  "Select the checkout target whose disposition you reviewed": "状態を確認したチェックアウト先を選択してください",
+  "Release checkout target block": "チェックアウト先のブロックを解除",
+  "Confirm that you reviewed and resolved the possibly changed SVN checkout target before releasing its safety block: {0}": "安全ブロックを解除する前に、変更された可能性がある SVN チェックアウト先を確認して解決したことを確定してください: {0}",
+  "SubversionR released the reviewed SVN checkout target: {0}": "SubversionR は確認済みの SVN チェックアウト先を解除しました: {0}",
+  "Review checkout target": "チェックアウト先を確認",
+  "A possibly changed SVN checkout target is blocked until you review its disposition.": "変更された可能性がある SVN チェックアウト先は、状態を確認するまでブロックされています。",
+  "SVN {0} failed because the server denied authorization for this operation.": "サーバーがこの操作を許可しなかったため、SVN {0} に失敗しました。",
+  "SVN {0} failed because the server authorization configuration is invalid.": "サーバーの認可設定が無効なため、SVN {0} に失敗しました。",
+  "Locking requires an authenticated identity; the current SVN server profile is anonymous.": "ロックには認証済みの ID が必要ですが、現在の SVN サーバープロファイルは匿名です。",
+  "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.": "ロック解除には認証済みの ID が必要ですが、現在の SVN サーバープロファイルは匿名です。"
 }

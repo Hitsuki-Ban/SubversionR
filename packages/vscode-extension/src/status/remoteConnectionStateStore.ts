@@ -3,6 +3,7 @@ import type { DaemonRemoteConnectionState } from "./remoteConnectionNotification
 
 export type RemoteAttentionReason =
   | "authRequired"
+  | "authorizationDenied"
   | "certificateRequired"
   | "hostKeyRequired"
   | "configurationInvalid"
@@ -625,7 +626,8 @@ function categoryForReason(reason: NativeRemoteFailureReason): NativeRemoteFailu
 }
 
 function attentionReason(reason: NativeRemoteFailureReason): RemoteAttentionReason {
-  if (["authenticationRequired", "authorizationDenied", "credentialRejected", "proxyAuthenticationRequired"].includes(reason)) return "authRequired";
+  if (reason === "authorizationDenied") return "authorizationDenied";
+  if (["authenticationRequired", "credentialRejected", "proxyAuthenticationRequired"].includes(reason)) return "authRequired";
   if (["tlsUntrusted", "tlsChanged", "tlsProtocol"].includes(reason)) return "certificateRequired";
   if (["sshHostKeyRequired", "sshHostKeyChanged"].includes(reason)) return "hostKeyRequired";
   if (reason === "remoteCapabilityUnsupported") return "unsupportedCapability";
@@ -677,7 +679,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isCanonicalUuid(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    && value !== "00000000-0000-0000-0000-000000000000";
 }
 
 function inputError(field: string): RemoteConnectionStateStoreError {

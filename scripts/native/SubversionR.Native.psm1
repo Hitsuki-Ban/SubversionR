@@ -1863,6 +1863,166 @@ function Update-SubversionGeneratorForExpat272 {
   }
 }
 
+function Convert-HashLockedCrlfFileToLf {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path,
+
+    [Parameter(Mandatory = $true)]
+    [string]$CrlfSha256,
+
+    [Parameter(Mandatory = $true)]
+    [string]$LfSha256
+  )
+
+  $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
+  $actualHash = (Get-FileHash -LiteralPath $resolved.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+  $expectedCrlfHash = $CrlfSha256.ToLowerInvariant()
+  $expectedLfHash = $LfSha256.ToLowerInvariant()
+  if ($actualHash -eq $expectedLfHash) {
+    return
+  }
+  if ($actualHash -ne $expectedCrlfHash) {
+    throw "Hash-locked CRLF source SHA256 mismatch for $($resolved.Path): expected $expectedCrlfHash or normalized $expectedLfHash, got $actualHash."
+  }
+
+  $content = [IO.File]::ReadAllText($resolved.Path)
+  $normalized = $content.Replace("`r`n", "`n")
+  [IO.File]::WriteAllText($resolved.Path, $normalized, [Text.UTF8Encoding]::new($false))
+  $normalizedHash = (Get-FileHash -LiteralPath $resolved.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($normalizedHash -ne $expectedLfHash) {
+    throw "Hash-locked LF normalization postcondition failed for $($resolved.Path): expected $expectedLfHash, got $normalizedHash."
+  }
+}
+
+function Invoke-HashLockedUnifiedPatch {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$SourceRoot,
+
+    [Parameter(Mandatory = $true)]
+    [string]$TargetRelativePath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PatchPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$UpstreamSha256,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PatchedSha256,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PatchSha256
+  )
+
+  $sourceRootResolved = Resolve-Path -LiteralPath $SourceRoot -ErrorAction Stop
+  $patchResolved = Resolve-Path -LiteralPath $PatchPath -ErrorAction Stop
+  $targetPath = Join-Path $sourceRootResolved.Path $TargetRelativePath
+  if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
+    throw "Hash-locked patch target is missing: $targetPath"
+  }
+
+  $expectedPatchHash = $PatchSha256.ToLowerInvariant()
+  $actualPatchHash = (Get-FileHash -LiteralPath $patchResolved.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actualPatchHash -ne $expectedPatchHash) {
+    throw "Hash-locked patch artifact SHA256 mismatch for $($patchResolved.Path): expected $expectedPatchHash, got $actualPatchHash."
+  }
+
+  $expectedUpstreamHash = $UpstreamSha256.ToLowerInvariant()
+  $expectedPatchedHash = $PatchedSha256.ToLowerInvariant()
+  $actualTargetHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actualTargetHash -eq $expectedPatchedHash) {
+    Write-Host "Hash-locked patch is already applied: $TargetRelativePath"
+    return
+  }
+  if ($actualTargetHash -ne $expectedUpstreamHash) {
+    throw "Hash-locked patch target SHA256 mismatch for $targetPath`: expected clean upstream $expectedUpstreamHash or patched $expectedPatchedHash, got $actualTargetHash."
+  }
+
+  $git = @((Get-Command git -CommandType Application -ErrorAction Stop))[0]
+  $oldGitCeilingDirectories = $env:GIT_CEILING_DIRECTORIES
+  $env:GIT_CEILING_DIRECTORIES = Split-Path -Parent $sourceRootResolved.Path
+  Push-Location $sourceRootResolved.Path
+  try {
+    $checkOutput = @(& $git.Source -c core.autocrlf=false apply --check -- $patchResolved.Path 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+      throw "Hash-locked patch preflight failed for $($patchResolved.Path): $($checkOutput -join ' ')"
+    }
+
+    $applyOutput = @(& $git.Source -c core.autocrlf=false apply --whitespace=nowarn -- $patchResolved.Path 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+      throw "Hash-locked patch application failed for $($patchResolved.Path): $($applyOutput -join ' ')"
+    }
+  }
+  finally {
+    Pop-Location
+    if ($null -eq $oldGitCeilingDirectories) {
+      Remove-Item Env:GIT_CEILING_DIRECTORIES -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:GIT_CEILING_DIRECTORIES = $oldGitCeilingDirectories
+    }
+  }
+
+  $actualPatchedHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actualPatchedHash -ne $expectedPatchedHash) {
+    throw "Hash-locked patch postcondition failed for $targetPath`: expected $expectedPatchedHash, got $actualPatchedHash."
+  }
+}
+
+function Apply-SubversionRaSvnAuthorityPatch {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$SourceRoot
+  )
+
+  $contractPath = Join-Path $PSScriptRoot "..\..\native\patches\subversion-1.14.5\ra-svn-authority.contract.json"
+  if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf)) {
+    throw "Apache Subversion ra_svn authority patch contract is missing: $contractPath"
+  }
+
+  $contract = Get-Content -Raw -LiteralPath $contractPath | ConvertFrom-Json
+  $source = Get-RequiredProperty -Object $contract -Name "source"
+  $patch = Get-RequiredProperty -Object $contract -Name "patch"
+  $authParameter = Get-RequiredProperty -Object $contract -Name "authParameter"
+  $failure = Get-RequiredProperty -Object $contract -Name "failure"
+  foreach ($requiredValue in @(
+    @{ Name = "schemaVersion"; Actual = Get-RequiredProperty -Object $contract -Name "schemaVersion"; Expected = 1 },
+    @{ Name = "source.name"; Actual = Get-RequiredProperty -Object $source -Name "name"; Expected = "apache-subversion" },
+    @{ Name = "source.version"; Actual = Get-RequiredProperty -Object $source -Name "version"; Expected = "1.14.5" },
+    @{ Name = "authParameter.key"; Actual = Get-RequiredProperty -Object $authParameter -Name "key"; Expected = "subversionr:expected-svn-origin-v1" },
+    @{ Name = "failure.aprError"; Actual = Get-RequiredProperty -Object $failure -Name "aprError"; Expected = "SVN_ERR_RA_ILLEGAL_URL" },
+    @{ Name = "failure.message"; Actual = Get-RequiredProperty -Object $failure -Name "message"; Expected = "SubversionR repository root authority mismatch" }
+  )) {
+    if ($requiredValue.Actual -ne $requiredValue.Expected) {
+      throw "Apache Subversion ra_svn authority patch contract $($requiredValue.Name) must be '$($requiredValue.Expected)'; got '$($requiredValue.Actual)'."
+    }
+  }
+
+  $patchFile = Get-RequiredProperty -Object $patch -Name "file"
+  $patchPath = Join-Path (Split-Path -Parent $contractPath) $patchFile
+  $targetRelativePath = Get-RequiredProperty -Object $source -Name "target"
+  $targetPath = Join-Path $SourceRoot $targetRelativePath
+  $actualTargetHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $patchedTargetHash = Get-RequiredProperty -Object $source -Name "patchedSha256"
+  if ($actualTargetHash -ne $patchedTargetHash) {
+    Convert-HashLockedCrlfFileToLf `
+      -Path $targetPath `
+      -CrlfSha256 (Get-RequiredProperty -Object $source -Name "archiveSha256") `
+      -LfSha256 (Get-RequiredProperty -Object $source -Name "upstreamSha256")
+  }
+  Invoke-HashLockedUnifiedPatch `
+    -SourceRoot $SourceRoot `
+    -TargetRelativePath $targetRelativePath `
+    -PatchPath $patchPath `
+    -UpstreamSha256 (Get-RequiredProperty -Object $source -Name "upstreamSha256") `
+    -PatchedSha256 (Get-RequiredProperty -Object $source -Name "patchedSha256") `
+    -PatchSha256 (Get-RequiredProperty -Object $patch -Name "sha256")
+
+  Write-Host "Applied the hash-locked Apache Subversion 1.14.5 ra_svn authority patch."
+}
+
 function Update-GeneratedVcxprojPlatformToolset {
   param(
     [Parameter(Mandatory = $true)]
@@ -2258,6 +2418,7 @@ Export-ModuleMember -Function `
   Copy-BridgeRuntimeDependencies, `
   Copy-SubversionBuildStage, `
   Update-SubversionGeneratorForExpat272, `
+  Apply-SubversionRaSvnAuthorityPatch, `
   Update-GeneratedVcxprojPlatformToolset, `
   Assert-GeneratedVcxprojPlatformToolset, `
   Assert-GeneratedSubversionRaSerfProjectGraph, `

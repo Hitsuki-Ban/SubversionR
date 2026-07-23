@@ -398,7 +398,7 @@ async function run() {
     installedRemoteWorkerReport.schemaVersion !== 3 ||
     installedRemoteWorkerReport.kind !== "subversionr.installedRemoteWorkerReport" ||
     installedRemoteWorkerReport.protocol?.major !== 1 ||
-    installedRemoteWorkerReport.protocol?.minor !== 34 ||
+    installedRemoteWorkerReport.protocol?.minor !== 35 ||
     installedRemoteWorkerReport.remoteWorkerIsolation !== true ||
     installedRemoteWorkerReport.credentialLeaseSettlement !== true ||
     JSON.stringify(installedRemoteWorkerReport.remoteConnectionState?.stateUnion) !== JSON.stringify(["unchecked", "checking", "online", "attention", "unreachable", "indeterminate"]) ||
@@ -429,7 +429,7 @@ async function run() {
     installedRemoteWorkerReport.credentialLeaseReport?.reloadDiscardedPendingLease !== true ||
     installedRemoteWorkerReport.credentialLeaseReport?.storageCleanup !== true
   ) {
-    throw new Error("Installed remote worker report did not prove the v1.34 isolated worker, remote connection state, credential lease lifecycle, same-lane recovery, and follow-up request.");
+    throw new Error("Installed remote worker report did not prove the v1.35 isolated worker, remote connection state, credential lease lifecycle, same-lane recovery, and follow-up request.");
   }
   const credentialEvidenceText = JSON.stringify(installedRemoteWorkerReport.credentialLeaseReport);
   for (const forbidden of ["alice", "bob", "charlie", "installed-evidence-secret", "svn.example.invalid", "SubversionR installed credential evidence"]) {
@@ -536,7 +536,7 @@ function Assert-HarnessResult(
     $Result.installedRemoteWorkerReport.schemaVersion -ne 3 -or
     $Result.installedRemoteWorkerReport.kind -ne "subversionr.installedRemoteWorkerReport" -or
     $Result.installedRemoteWorkerReport.protocol.major -ne 1 -or
-    $Result.installedRemoteWorkerReport.protocol.minor -ne 34 -or
+    $Result.installedRemoteWorkerReport.protocol.minor -ne 35 -or
     $Result.installedRemoteWorkerReport.remoteWorkerIsolation -ne $true -or
     $Result.installedRemoteWorkerReport.credentialLeaseSettlement -ne $true -or
     $Result.installedRemoteWorkerReport.remoteConnectionState.staleIncomingPreserved -ne $true -or
@@ -565,7 +565,7 @@ function Assert-HarnessResult(
     $Result.installedRemoteWorkerReport.credentialLeaseReport.reloadDiscardedPendingLease -ne $true -or
     $Result.installedRemoteWorkerReport.credentialLeaseReport.storageCleanup -ne $true
   ) {
-    throw "Installed-host result must prove the v1.34 isolated remote worker, remote connection state, credential lease lifecycle, same-lane recovery, and a subsequent diagnostics request."
+    throw "Installed-host result must prove the v1.35 isolated remote worker, remote connection state, credential lease lifecycle, same-lane recovery, and a subsequent diagnostics request."
   }
   $remoteStateUnion = @($Result.installedRemoteWorkerReport.remoteConnectionState.stateUnion)
   if (($remoteStateUnion -join ",") -ne "unchecked,checking,online,attention,unreachable,indeterminate") {
@@ -598,16 +598,22 @@ $vsixResolved = Assert-File $vsixResolved "VsixPath"
 $codeCliResolved = Assert-CodeCliPath $CodeCliPath
 $fixtureRootResolved = Assert-GeneratedPath -Path $FixtureRoot -Name "FixtureRoot" -AllowedRoots @(
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host")),
+  [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\i6p")),
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\tests\release-installed-extension-host-scripts"))
-) -Description "the repository target directory (target/release-evidence/installed-extension-host or target/tests/release-installed-extension-host-scripts)"
+) -Description "the repository target directory (target/release-evidence/installed-extension-host, target/i6p, or target/tests/release-installed-extension-host-scripts)"
 $aggregateFixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence\installed-extension-host"))
 if (Test-IsSamePath -Left $fixtureRootResolved -Right $aggregateFixtureRoot) {
   throw "FixtureRoot must include a dedicated child directory below target/release-evidence/installed-extension-host."
 }
+$i6PositiveFixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\i6p"))
+if (Test-IsSamePath -Left $fixtureRootResolved -Right $i6PositiveFixtureRoot) {
+  throw "FixtureRoot must include a dedicated child directory below target/i6p."
+}
 $evidencePathResolved = Assert-GeneratedPath -Path $EvidencePath -Name "EvidencePath" -AllowedRoots @(
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\release-evidence")),
+  [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\i6p")),
   [System.IO.Path]::GetFullPath((Join-Path $repoRoot "target\tests\release-installed-extension-host-scripts"))
-) -Description "target/release-evidence or target/tests/release-installed-extension-host-scripts"
+) -Description "target/release-evidence, target/i6p, or target/tests/release-installed-extension-host-scripts"
 
 if (Test-Path -LiteralPath $fixtureRootResolved) {
   Remove-Item -LiteralPath $fixtureRootResolved -Recurse -Force
@@ -623,6 +629,16 @@ $harnessResultPath = Join-Path $fixtureRootResolved "installed-host-result.json"
 New-Item -ItemType Directory -Force -Path $userDataRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $extensionsRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $workspaceRoot | Out-Null
+$userSettingsRoot = Join-Path $userDataRoot "User"
+New-Item -ItemType Directory -Force -Path $userSettingsRoot | Out-Null
+@'
+{
+  "update.mode": "none",
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "telemetry.telemetryLevel": "off"
+}
+'@ | Set-Content -LiteralPath (Join-Path $userSettingsRoot "settings.json") -Encoding utf8 -NoNewline
 $sentinel = New-WorkingCopySentinel -Root $workingCopySentinelRoot
 
 $packageJson = Get-VsixPackageJson $vsixResolved
@@ -754,7 +770,7 @@ $report = [pscustomobject]@{
     "SubversionR became active inside a real VS Code Extension Host",
     "SubversionR version report command executed and opened a readonly report document",
     "SubversionR installed redaction report command executed and returned a redacted diagnostics bundle",
-    "SubversionR installed remote worker report proved protocol v1.34 isolation, remote connection state, credential settlement, transport boundary, same-lane recovery, and subsequent diagnostics",
+    "SubversionR installed remote worker report proved protocol v1.35 isolation, remote connection state, credential settlement, transport boundary, same-lane recovery, and subsequent diagnostics",
     "working-copy sentinel .svn tree hash was unchanged",
     "publicReadinessClaim remains false"
   )

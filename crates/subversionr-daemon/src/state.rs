@@ -14,18 +14,23 @@ use subversionr_protocol::{
     InitializeResponse, OperationReconcileHint, OperationRunResponse, OperationSummary,
     OperationWarning, PropertiesListResponse, PropertyEntry as ProtocolPropertyEntry,
     ProtocolVersion, RemoteAttentionReason, RemoteConnectionState, RemoteFailureClass,
-    RemoteIndeterminateReason, RemoteRecoveryOutcome, RemoteRecoveryState, RemoteUnreachableReason,
-    RepositoryCheckoutResponse, RepositoryCloseResponse, RepositoryDiscoverResponse,
-    RepositoryDiscoveryCandidate, RepositoryIdentity, RepositoryOpenResponse, StatusCoverageScope,
-    StatusDelta, StatusEntry, StatusRefreshTarget, StatusSnapshot, StatusSummary,
-    StatusSummaryDelta, WorkspaceTrustState, WorkspaceTrustUpdateParams,
-    WorkspaceTrustUpdateResponse, current_platform, default_cache_schema,
+    RemoteIndeterminateReason, RemoteRecoveryOutcome, RemoteRecoveryState, RemoteScheme,
+    RemoteUnreachableReason, RepositoryCheckoutResponse, RepositoryCloseResponse,
+    RepositoryDiscoverResponse, RepositoryDiscoveryCandidate, RepositoryIdentity,
+    RepositoryOpenResponse, StatusCoverageScope, StatusDelta, StatusEntry, StatusRefreshTarget,
+    StatusSnapshot, StatusSummary, StatusSummaryDelta, WorkspaceTrustState,
+    WorkspaceTrustUpdateParams, WorkspaceTrustUpdateResponse, current_platform,
+    default_cache_schema,
 };
 
 use crate::remote::{
     MAX_REMOTE_TIMEOUT_MS, RemoteLaunchPlan, RemoteTrustState, attach_remote_failure,
     classify_remote_failure, envelope_value, is_canonical_uuid, preflight_repository_urls,
     unsupported_transport,
+};
+use crate::remote_checkout_journal::{
+    RemoteCheckoutJournalError, RemoteCheckoutJournalErrorKind, RemoteCheckoutMutationJournal,
+    RemoteCheckoutMutationState,
 };
 use crate::{
     AddOperationRequest, AuthRequestBroker, BranchCreateOperationRequest, BridgeApi,
@@ -60,6 +65,7 @@ pub struct DaemonState {
     pending_remote_recovery_launch: Option<RemoteRecoveryLaunchPlan>,
     remote_native_lanes: BTreeMap<String, RemoteNativeLaneState>,
     active_remote_operation_ids: BTreeSet<String>,
+    remote_checkout_journal: Option<RemoteCheckoutMutationJournal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,6 +156,7 @@ impl DaemonState {
             pending_remote_recovery_launch: None,
             remote_native_lanes: BTreeMap::new(),
             active_remote_operation_ids: BTreeSet::new(),
+            remote_checkout_journal: None,
         }
     }
 
@@ -219,6 +226,12 @@ impl DaemonState {
             "history/blame" => self.dispatch_history_blame(&request, bridge, auth, cancellation),
             "operation/run" => self.dispatch_operation_run(&request, bridge, auth, cancellation),
             "remote/recoverWorkingCopy" => self.dispatch_remote_recover_working_copy(&request),
+            "remote/listCheckoutTargetRecoveries" => {
+                self.dispatch_list_checkout_target_recoveries(&request)
+            }
+            "remote/confirmCheckoutTargetDisposition" => {
+                self.dispatch_confirm_checkout_target_disposition(&request)
+            }
             "diagnostics/get" => self.dispatch_diagnostics_get(&request, bridge),
             "shutdown" => self.dispatch_shutdown(&request),
             _ => crate::dispatch_known_request(&request, bridge),
@@ -268,6 +281,7 @@ impl DaemonState {
             "workspaceTrust",
             "trustEpoch",
             "cacheRoot",
+            "remoteStateRoot",
         ];
         if let Some(field) = params_object
             .keys()
@@ -291,6 +305,13 @@ impl DaemonState {
         {
             return invalid_param(request, "cacheRoot");
         }
+        if !params_object
+            .get("remoteStateRoot")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty() && Path::new(value).is_absolute())
+        {
+            return invalid_param(request, "remoteStateRoot");
+        }
         if params_object.get("trustEpoch").and_then(Value::as_u64) != Some(1) {
             return invalid_param(request, "trustEpoch");
         }
@@ -310,6 +331,33 @@ impl DaemonState {
             Ok(trust) => trust,
             Err(failure) => return bridge_failure_response(request, failure),
         };
+        let checkout_journal = match RemoteCheckoutMutationJournal::open(&params.remote_state_root)
+        {
+            Ok(journal) => journal,
+            Err(error) => {
+                return bridge_failure_response(request, remote_checkout_journal_failure(error));
+            }
+        };
+        let mut restored_checkout_lanes = BTreeMap::new();
+        for entry in checkout_journal.entries() {
+            let lane_key = absolute_path_key(&normalize_absolute_path_text(&entry.target_path));
+            if restored_checkout_lanes
+                .insert(
+                    lane_key,
+                    RemoteNativeLaneState::Blocked {
+                        origin_operation_id: entry.origin_operation_id.clone(),
+                        reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                        cleanup_appropriate: false,
+                    },
+                )
+                .is_some()
+            {
+                return bridge_failure_response(
+                    request,
+                    remote_checkout_journal_contract_failure("duplicateLane"),
+                );
+            }
+        }
         if let Err(failure) = self
             .remote_worker
             .update_workspace_trust(params.workspace_trust == WorkspaceTrustState::Trusted)
@@ -318,12 +366,16 @@ impl DaemonState {
         }
         let acknowledged_trust_epoch = trust.acknowledged_epoch();
         self.remote_trust = Some(trust);
+        self.remote_checkout_journal = Some(checkout_journal);
+        self.remote_native_lanes = restored_checkout_lanes;
         let bridge_info = bridge.info();
         let mut capabilities = bridge_info.capabilities();
         capabilities.remote_worker_isolation = self.remote_worker.capability_available();
         capabilities.remote_connection_state = true;
         capabilities.credential_lease_settlement =
             self.remote_worker.credential_lease_settlement_available();
+        capabilities.remote_svn_anonymous =
+            self.remote_checkout_journal.is_some() && self.remote_worker.svn_anonymous_available();
         let result = InitializeResponse::new(
             env!("CARGO_PKG_VERSION").to_string(),
             bridge_info.bridge_version.clone(),
@@ -389,6 +441,124 @@ impl DaemonState {
         )
     }
 
+    fn dispatch_list_checkout_target_recoveries(
+        &self,
+        request: &JsonRpcRequest,
+    ) -> (DispatchOutcome, Value) {
+        if let Some(field) = unexpected_param(request, &[]) {
+            return invalid_param(request, &field);
+        }
+        let Some(journal) = self.remote_checkout_journal.as_ref() else {
+            return bridge_failure_response(
+                request,
+                remote_checkout_journal_contract_failure("notInitialized"),
+            );
+        };
+        let entries = journal
+            .entries()
+            .iter()
+            .map(|entry| {
+                json!({
+                    "targetPath": entry.target_path,
+                    "targetSha256": entry.target_sha256,
+                    "originOperationId": entry.origin_operation_id,
+                    "state": match entry.state {
+                        RemoteCheckoutMutationState::Armed => "armed",
+                        RemoteCheckoutMutationState::Blocked => "blocked",
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        (
+            DispatchOutcome::Continue,
+            json!({
+                "jsonrpc": "2.0",
+                "id": request.id,
+                "result": { "entries": entries },
+            }),
+        )
+    }
+
+    fn dispatch_confirm_checkout_target_disposition(
+        &mut self,
+        request: &JsonRpcRequest,
+    ) -> (DispatchOutcome, Value) {
+        if let Some(field) = unexpected_param(
+            request,
+            &[
+                "targetPath",
+                "targetSha256",
+                "originOperationId",
+                "confirmation",
+            ],
+        ) {
+            return invalid_param(request, &field);
+        }
+        let Some(target_path) =
+            string_param(request, "targetPath").filter(|path| valid_checkout_target_path(path))
+        else {
+            return invalid_param(request, "targetPath");
+        };
+        let Some(target_sha256) =
+            string_param(request, "targetSha256").filter(|value| is_lowercase_sha256(value))
+        else {
+            return invalid_param(request, "targetSha256");
+        };
+        let Some(origin_operation_id) =
+            string_param(request, "originOperationId").filter(|value| is_canonical_uuid(value))
+        else {
+            return invalid_param(request, "originOperationId");
+        };
+        if string_param(request, "confirmation") != Some("reviewedAndResolved") {
+            return invalid_param(request, "confirmation");
+        }
+        let lane_key = absolute_path_key(&normalize_absolute_path_text(target_path));
+        if !matches!(
+            self.remote_native_lanes.get(&lane_key),
+            Some(RemoteNativeLaneState::Blocked { origin_operation_id: lane_origin, .. })
+                if lane_origin == origin_operation_id
+        ) {
+            return bridge_failure_response(
+                request,
+                remote_checkout_journal_contract_failure("laneAttribution"),
+            );
+        }
+        let Some(journal) = self.remote_checkout_journal.as_mut() else {
+            return bridge_failure_response(
+                request,
+                remote_checkout_journal_contract_failure("notInitialized"),
+            );
+        };
+        let entry_matches = journal.entries().iter().any(|entry| {
+            entry.state == RemoteCheckoutMutationState::Blocked
+                && entry.target_path == target_path
+                && entry.target_sha256 == target_sha256
+                && entry.origin_operation_id == origin_operation_id
+        });
+        if !entry_matches {
+            return bridge_failure_response(
+                request,
+                remote_checkout_journal_contract_failure("entryAttribution"),
+            );
+        }
+        if let Err(error) = journal.clear(target_sha256, origin_operation_id) {
+            return bridge_failure_response(request, remote_checkout_journal_failure(error));
+        }
+        self.remote_native_lanes.remove(&lane_key);
+        (
+            DispatchOutcome::Continue,
+            json!({
+                "jsonrpc": "2.0",
+                "id": request.id,
+                "result": {
+                    "released": true,
+                    "targetSha256": target_sha256,
+                    "originOperationId": origin_operation_id,
+                },
+            }),
+        )
+    }
+
     fn dispatch_diagnostics_get(
         &self,
         request: &JsonRpcRequest,
@@ -403,13 +573,15 @@ impl DaemonState {
         capabilities.remote_connection_state = true;
         capabilities.credential_lease_settlement =
             self.remote_worker.credential_lease_settlement_available();
+        capabilities.remote_svn_anonymous =
+            self.remote_checkout_journal.is_some() && self.remote_worker.svn_anonymous_available();
         let response = DiagnosticsGetResponse {
             backend_version: env!("CARGO_PKG_VERSION").to_string(),
             bridge_version: bridge_info.bridge_version,
             libsvn_version: bridge_info.libsvn_version,
             protocol: ProtocolVersion {
                 major: 1,
-                minor: 34,
+                minor: 35,
             },
             platform: current_platform(),
             cache_schema: default_cache_schema(),
@@ -681,6 +853,9 @@ impl DaemonState {
             &checkout_request.target_path,
             bridge,
             cancellation,
+            Some(crate::RemoteSvnAnonymousRequest::Checkout {
+                request: checkout_request.clone(),
+            }),
         ) {
             return response;
         }
@@ -999,12 +1174,17 @@ impl DaemonState {
         }
         let lane_key = session.identity.working_copy_root.clone();
         let repository_root_url = session.identity.repository_root_url.clone();
+        let remote_request = crate::RemoteSvnAnonymousRequest::Status {
+            identity: session.identity.clone(),
+            generation: session.next_generation,
+        };
         if let Some(response) = self.begin_remote_preflight(
             request,
             &[&repository_root_url],
             &lane_key,
             bridge,
             cancellation,
+            Some(remote_request),
         ) {
             return response;
         }
@@ -1126,12 +1306,18 @@ impl DaemonState {
         if revision != "base" {
             let repository_root_url = session.identity.repository_root_url.clone();
             let lane_key = session.identity.working_copy_root.clone();
+            let remote_request = crate::RemoteSvnAnonymousRequest::Content {
+                identity: session.identity.clone(),
+                path: path.to_string(),
+                revision: revision.to_string(),
+            };
             if let Some(response) = self.begin_remote_preflight(
                 request,
                 &[&repository_root_url],
                 &lane_key,
                 bridge,
                 cancellation,
+                Some(remote_request),
             ) {
                 return response;
             }
@@ -1279,12 +1465,17 @@ impl DaemonState {
         }
         let repository_root_url = session.identity.repository_root_url.clone();
         let lane_key = session.identity.working_copy_root.clone();
+        let remote_request = crate::RemoteSvnAnonymousRequest::Log {
+            identity: session.identity.clone(),
+            request: log_request.clone(),
+        };
         if let Some(response) = self.begin_remote_preflight(
             request,
             &[&repository_root_url],
             &lane_key,
             bridge,
             cancellation,
+            Some(remote_request),
         ) {
             return response;
         }
@@ -1370,12 +1561,17 @@ impl DaemonState {
         }
         let repository_root_url = session.identity.repository_root_url.clone();
         let lane_key = session.identity.working_copy_root.clone();
+        let remote_request = crate::RemoteSvnAnonymousRequest::Blame {
+            identity: session.identity.clone(),
+            request: blame_request.clone(),
+        };
         if let Some(response) = self.begin_remote_preflight(
             request,
             &[&repository_root_url],
             &lane_key,
             bridge,
             cancellation,
+            Some(remote_request),
         ) {
             return response;
         }
@@ -1557,6 +1753,36 @@ impl DaemonState {
         let session_epoch = session.epoch;
         let session_identity = session.identity.clone();
 
+        let svn_anonymous_request = match &operation {
+            ParsedOperation::Update(request) => Some(crate::RemoteSvnAnonymousRequest::Update {
+                identity: session_identity.clone(),
+                request: request.clone(),
+            }),
+            ParsedOperation::Lock(request) => Some(crate::RemoteSvnAnonymousRequest::Lock {
+                identity: session_identity.clone(),
+                request: request.clone(),
+            }),
+            ParsedOperation::Unlock(request) => Some(crate::RemoteSvnAnonymousRequest::Unlock {
+                identity: session_identity.clone(),
+                request: request.clone(),
+            }),
+            ParsedOperation::BranchCreate(request) => {
+                Some(crate::RemoteSvnAnonymousRequest::BranchCreate {
+                    identity: session_identity.clone(),
+                    request: request.clone(),
+                })
+            }
+            ParsedOperation::Switch(request) => Some(crate::RemoteSvnAnonymousRequest::Switch {
+                identity: session_identity.clone(),
+                request: request.clone(),
+            }),
+            ParsedOperation::Commit(request) => Some(crate::RemoteSvnAnonymousRequest::Commit {
+                identity: session_identity.clone(),
+                request: request.clone(),
+            }),
+            _ => None,
+        };
+
         let remote_preflight = match &operation {
             ParsedOperation::Update(_)
             | ParsedOperation::Lock(_)
@@ -1591,6 +1817,7 @@ impl DaemonState {
                 &session_identity.working_copy_root,
                 bridge,
                 cancellation,
+                svn_anonymous_request,
             ) {
                 return response;
             }
@@ -2799,6 +3026,7 @@ impl DaemonState {
         lane_key: &str,
         bridge: &dyn BridgeApi,
         cancellation: &dyn BridgeCancellationToken,
+        svn_anonymous_request: Option<crate::RemoteSvnAnonymousRequest>,
     ) -> Option<(DispatchOutcome, Value)> {
         let operation = match preflight_repository_urls(request, urls, self.remote_trust.as_ref()) {
             Ok(None) => return None,
@@ -2825,6 +3053,23 @@ impl DaemonState {
                 ));
             }
         };
+
+        let direct_svn_anonymous = operation.config.scheme == crate::RemoteConfigScheme::Svn
+            && operation.config.server_auth == crate::RemoteConfigServerAuth::Anonymous;
+        if direct_svn_anonymous {
+            if !self.remote_worker.svn_anonymous_available() {
+                return Some(bridge_failure_response(
+                    request,
+                    attach_remote_failure(unsupported_transport(&operation.endpoint)),
+                ));
+            }
+            if svn_anonymous_request.is_none() {
+                return Some(bridge_failure_response(
+                    request,
+                    attach_remote_failure(unsupported_transport(&operation.endpoint)),
+                ));
+            }
+        }
 
         if !self.remote_worker.capability_available() {
             let endpoint = operation.endpoint.clone();
@@ -2872,6 +3117,32 @@ impl DaemonState {
         ) {
             return Some(bridge_failure_response(request, failure));
         }
+        if direct_svn_anonymous {
+            if let Some(crate::RemoteSvnAnonymousRequest::Checkout { request: checkout }) =
+                svn_anonymous_request.as_ref()
+            {
+                let Some(journal) = self.remote_checkout_journal.as_mut() else {
+                    self.active_remote_operation_ids
+                        .remove(&operation.envelope.operation_id);
+                    self.remote_native_lanes.remove(&normalized_lane);
+                    return Some(bridge_failure_response(
+                        request,
+                        remote_checkout_journal_contract_failure("notInitialized"),
+                    ));
+                };
+                if let Err(error) =
+                    journal.arm(&checkout.target_path, &operation.envelope.operation_id)
+                {
+                    self.active_remote_operation_ids
+                        .remove(&operation.envelope.operation_id);
+                    self.remote_native_lanes.remove(&normalized_lane);
+                    return Some(bridge_failure_response(
+                        request,
+                        remote_checkout_journal_failure(error),
+                    ));
+                }
+            }
+        }
         let checking_state = RemoteConnectionState::Checking {
             operation_id: operation.envelope.operation_id.clone(),
             started_at: current_timestamp(),
@@ -2883,6 +3154,9 @@ impl DaemonState {
             epoch,
             effect,
             operation,
+            svn_anonymous_request: direct_svn_anonymous
+                .then_some(svn_anonymous_request)
+                .flatten(),
         });
         self.push_remote_connection_state(repository_id.as_deref(), epoch, checking_state);
         Some((DispatchOutcome::Continue, Value::Null))
@@ -2978,8 +3252,51 @@ impl DaemonState {
                     return None;
                 }
             };
-        self.active_remote_operation_ids.remove(operation_id);
         let attribution = (attributed_repository_id, attributed_epoch);
+        let checkout_entry = self.remote_checkout_journal.as_ref().and_then(|journal| {
+            journal
+                .entries()
+                .iter()
+                .find(|entry| entry.origin_operation_id == operation_id)
+                .cloned()
+        });
+        if daemon_effect == settlement.effect
+            && settlement.cleanup_safe()
+            && settlement.result.is_ok()
+            && settlement.operation_output.is_some()
+        {
+            return None;
+        }
+        self.active_remote_operation_ids.remove(operation_id);
+        if let Some(entry) = checkout_entry {
+            let journal_result = if settlement.cleanup_safe()
+                && settlement.result.is_err()
+                && !settlement.may_have_mutated()
+            {
+                self.remote_checkout_journal
+                    .as_mut()
+                    .expect("checkout journal entry requires initialized journal")
+                    .clear(&entry.target_sha256, operation_id)
+            } else {
+                self.remote_checkout_journal
+                    .as_mut()
+                    .expect("checkout journal entry requires initialized journal")
+                    .mark_blocked(&entry.target_sha256, operation_id)
+            };
+            if let Err(error) = journal_result {
+                self.remote_native_lanes.insert(
+                    lane_key.to_string(),
+                    RemoteNativeLaneState::Blocked {
+                        origin_operation_id: operation_id.to_string(),
+                        reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                        cleanup_appropriate: false,
+                    },
+                );
+                return Some(attach_remote_failure(remote_checkout_journal_failure(
+                    error,
+                )));
+            }
+        }
         if attribution.0.is_none() != attribution.1.is_none() {
             self.remote_native_lanes.insert(
                 lane_key.to_string(),
@@ -3033,11 +3350,17 @@ impl DaemonState {
                         cleanup_appropriate: false,
                     },
                 );
+                let origin_failure = settlement
+                    .result
+                    .as_ref()
+                    .err()
+                    .expect("failed mutating settlement must retain its origin failure");
+                let origin_args = json!({ "originFailureCode": origin_failure.code() });
                 return Some(attach_remote_failure(BridgeFailure::new(
                     "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
                     "state",
                     "error.remote.recoveryBlocked",
-                    json!({}),
+                    origin_args,
                     false,
                 )));
             }
@@ -3071,6 +3394,10 @@ impl DaemonState {
         } else {
             self.remote_native_lanes.remove(lane_key);
             let state = match settlement.result.as_ref() {
+                Ok(()) if settlement.operation_output.is_some() => RemoteConnectionState::Online {
+                    transport: RemoteScheme::Svn,
+                    checked_at: current_timestamp(),
+                },
                 Ok(()) => RemoteConnectionState::Attention {
                     reason: RemoteAttentionReason::UnsupportedCapability,
                 },
@@ -3081,6 +3408,460 @@ impl DaemonState {
         None
     }
 
+    fn complete_checkout_journal_entry(
+        &mut self,
+        target_path: &str,
+        operation_id: &str,
+    ) -> Result<(), BridgeFailure> {
+        let entry = self.checkout_journal_entry(target_path, operation_id)?;
+        self.remote_checkout_journal
+            .as_mut()
+            .expect("validated checkout journal must remain initialized")
+            .clear(&entry.target_sha256, operation_id)
+            .map_err(remote_checkout_journal_failure)?;
+        let lane_key = absolute_path_key(&normalize_absolute_path_text(target_path));
+        self.active_remote_operation_ids.remove(operation_id);
+        self.remote_native_lanes.remove(&lane_key);
+        Ok(())
+    }
+
+    fn block_checkout_journal_entry(
+        &mut self,
+        target_path: &str,
+        operation_id: &str,
+    ) -> Result<(), BridgeFailure> {
+        let entry = self.checkout_journal_entry(target_path, operation_id)?;
+        let lane_key = absolute_path_key(&normalize_absolute_path_text(target_path));
+        self.active_remote_operation_ids.remove(operation_id);
+        self.remote_native_lanes.insert(
+            lane_key,
+            RemoteNativeLaneState::Blocked {
+                origin_operation_id: operation_id.to_string(),
+                reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                cleanup_appropriate: false,
+            },
+        );
+        self.remote_checkout_journal
+            .as_mut()
+            .expect("validated checkout journal must remain initialized")
+            .mark_blocked(&entry.target_sha256, operation_id)
+            .map(|_| ())
+            .map_err(remote_checkout_journal_failure)
+    }
+
+    fn block_remote_output_lane(
+        &mut self,
+        lane_key: &str,
+        operation_id: &str,
+        repository_id: Option<&str>,
+        epoch: Option<u64>,
+    ) {
+        let attribution = match self.remote_native_lanes.get(lane_key) {
+            Some(RemoteNativeLaneState::Active {
+                repository_id,
+                epoch,
+                ..
+            }) => (repository_id.clone(), *epoch),
+            _ => (repository_id.map(str::to_string), epoch),
+        };
+        self.active_remote_operation_ids.remove(operation_id);
+        self.remote_native_lanes.insert(
+            lane_key.to_string(),
+            RemoteNativeLaneState::Blocked {
+                origin_operation_id: operation_id.to_string(),
+                reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                cleanup_appropriate: false,
+            },
+        );
+        self.push_remote_connection_state(
+            attribution.0.as_deref(),
+            attribution.1,
+            RemoteConnectionState::Indeterminate {
+                reason: RemoteIndeterminateReason::WorkerTerminated,
+                origin_operation_id: operation_id.to_string(),
+                recovery: RemoteRecoveryState::Blocked,
+                cleanup_appropriate: false,
+            },
+        );
+    }
+
+    fn checkout_journal_entry(
+        &self,
+        target_path: &str,
+        operation_id: &str,
+    ) -> Result<crate::remote_checkout_journal::RemoteCheckoutMutationEntry, BridgeFailure> {
+        let target_lane = absolute_path_key(&normalize_absolute_path_text(target_path));
+        self.remote_checkout_journal
+            .as_ref()
+            .and_then(|journal| {
+                journal.entries().iter().find(|entry| {
+                    entry.origin_operation_id == operation_id
+                        && absolute_path_key(&normalize_absolute_path_text(&entry.target_path))
+                            == target_lane
+                })
+            })
+            .cloned()
+            .ok_or_else(|| remote_checkout_journal_contract_failure("entryAttribution"))
+    }
+
+    pub(crate) fn complete_remote_svn_anonymous(
+        &mut self,
+        request_id: Value,
+        lane_key: &str,
+        operation_id: &str,
+        repository_id: Option<&str>,
+        epoch: Option<u64>,
+        request: crate::RemoteSvnAnonymousRequest,
+        output: crate::RemoteSvnAnonymousOutput,
+    ) -> Result<Value, BridgeFailure> {
+        let checkout_target = match &request {
+            crate::RemoteSvnAnonymousRequest::Checkout { request } => {
+                Some(request.target_path.clone())
+            }
+            _ => None,
+        };
+        if !matches!(
+            self.remote_native_lanes.get(lane_key),
+            Some(RemoteNativeLaneState::Active {
+                operation_id: active,
+                repository_id: active_repository_id,
+                epoch: active_epoch,
+                ..
+            }) if active == operation_id
+                && active_repository_id.as_deref() == repository_id
+                && *active_epoch == epoch
+        ) {
+            if let Some(target_path) = checkout_target.as_deref() {
+                self.block_checkout_journal_entry(target_path, operation_id)?;
+            } else {
+                self.block_remote_output_lane(lane_key, operation_id, repository_id, epoch);
+            }
+            return Err(remote_worker_output_invalid());
+        }
+        let rpc_request = JsonRpcRequest {
+            id: request_id,
+            method: "remote/completeSvnAnonymous".to_string(),
+            params: None,
+        };
+        let response = match (request, output) {
+            (
+                crate::RemoteSvnAnonymousRequest::Checkout { request },
+                crate::RemoteSvnAnonymousOutput::Checkout(result),
+            ) => {
+                if absolute_path_key(&normalize_absolute_path_text(&request.target_path))
+                    != absolute_path_key(&normalize_absolute_path_text(&result.working_copy_path))
+                {
+                    Err(remote_worker_output_invalid())
+                } else {
+                    match self.complete_checkout_journal_entry(&request.target_path, operation_id) {
+                        Ok(()) => Ok(json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_request.id,
+                            "result": RepositoryCheckoutResponse {
+                                working_copy_path: result.working_copy_path,
+                                revision: result.revision,
+                            },
+                        })),
+                        Err(failure) => Err(failure),
+                    }
+                }
+            }
+            (
+                crate::RemoteSvnAnonymousRequest::Status {
+                    identity,
+                    generation,
+                },
+                crate::RemoteSvnAnonymousOutput::Status(mut snapshot),
+            ) => {
+                let (repository_id, epoch) = required_remote_attribution(repository_id, epoch)?;
+                let Some(session) = self.repositories.get_mut(repository_id) else {
+                    return Err(remote_worker_output_invalid());
+                };
+                if session.epoch != epoch || session.identity != identity {
+                    return Err(remote_worker_output_invalid());
+                }
+                snapshot.repository_id = session.repository_id.clone();
+                snapshot.epoch = epoch;
+                snapshot.generation = generation;
+                snapshot.identity = session.identity.clone();
+                snapshot.timestamp = current_timestamp();
+                for entry in &mut snapshot.remote_entries {
+                    entry.generation = generation;
+                }
+                filter_snapshot_boundaries(&mut snapshot, &session.boundary_roots);
+                let before_summary = summarize_snapshot_entries(
+                    session.local_entries.values(),
+                    session.remote_entries.values(),
+                );
+                let before_remote_entries = session.remote_entries.clone();
+                let next_remote_entries = snapshot
+                    .remote_entries
+                    .into_iter()
+                    .filter(is_projectable_remote_status)
+                    .map(|entry| (entry.path.clone(), entry))
+                    .collect::<BTreeMap<_, _>>();
+                let after_summary = summarize_snapshot_entries(
+                    session.local_entries.values(),
+                    next_remote_entries.values(),
+                );
+                let remote_upsert = changed_upserts(&before_remote_entries, &next_remote_entries);
+                let remote_remove = removed_paths(&before_remote_entries, &next_remote_entries);
+                let next_generation = generation
+                    .checked_add(1)
+                    .ok_or_else(remote_worker_output_invalid)?;
+                session.remote_entries = next_remote_entries;
+                session.next_generation = next_generation;
+                let delta = StatusDelta {
+                    repository_id: repository_id.to_string(),
+                    epoch,
+                    generation,
+                    coverage: vec![StatusCoverageScope {
+                        path: ".".to_string(),
+                        depth: "workingCopy".to_string(),
+                        generation,
+                        reason: "manualRemoteCheck".to_string(),
+                    }],
+                    upsert: Vec::new(),
+                    remove: Vec::new(),
+                    remote_upsert,
+                    remote_remove,
+                    summary_delta: summary_delta(&before_summary, &after_summary),
+                    completeness: "complete".to_string(),
+                    timestamp: current_timestamp(),
+                    source: "libsvn-remote".to_string(),
+                };
+                Ok(json!({ "jsonrpc": "2.0", "id": rpc_request.id, "result": delta }))
+            }
+            (
+                crate::RemoteSvnAnonymousRequest::Content {
+                    identity,
+                    path,
+                    revision,
+                },
+                crate::RemoteSvnAnonymousOutput::Content(blob),
+            ) => {
+                let (repository_id, epoch) = required_remote_attribution(repository_id, epoch)?;
+                validate_remote_session(self, repository_id, epoch, &identity)?;
+                let response = ContentGetResponse {
+                    repository_id: repository_id.to_string(),
+                    epoch,
+                    path,
+                    revision,
+                    content_base64: STANDARD.encode(&blob.data),
+                    byte_length: blob.data.len() as u64,
+                    mime_type: blob.mime_type,
+                    is_binary: blob.is_binary,
+                    source: blob.source,
+                };
+                Ok(json!({ "jsonrpc": "2.0", "id": rpc_request.id, "result": response }))
+            }
+            (
+                crate::RemoteSvnAnonymousRequest::Log { identity, request },
+                crate::RemoteSvnAnonymousOutput::Log(log),
+            ) => {
+                let (repository_id, epoch) = required_remote_attribution(repository_id, epoch)?;
+                validate_remote_session(self, repository_id, epoch, &identity)?;
+                let response = HistoryLogResponse {
+                    repository_id: repository_id.to_string(),
+                    epoch,
+                    path: request.path,
+                    start_revision: request.start_revision,
+                    end_revision: request.end_revision,
+                    limit: request.limit,
+                    entries: log.entries,
+                    source: log.source,
+                };
+                Ok(json!({ "jsonrpc": "2.0", "id": rpc_request.id, "result": response }))
+            }
+            (
+                crate::RemoteSvnAnonymousRequest::Blame { identity, request },
+                crate::RemoteSvnAnonymousOutput::Blame(blame),
+            ) => {
+                let (repository_id, epoch) = required_remote_attribution(repository_id, epoch)?;
+                validate_remote_session(self, repository_id, epoch, &identity)?;
+                let response = HistoryBlameResponse {
+                    repository_id: repository_id.to_string(),
+                    epoch,
+                    path: request.path,
+                    peg_revision: request.peg_revision,
+                    start_revision: request.start_revision,
+                    end_revision: request.end_revision,
+                    resolved_start_revision: blame.resolved_start_revision,
+                    resolved_end_revision: blame.resolved_end_revision,
+                    line_start: request.line_start,
+                    line_limit: request.line_limit,
+                    ignore_whitespace: request.ignore_whitespace,
+                    ignore_eol_style: request.ignore_eol_style,
+                    ignore_mime_type: request.ignore_mime_type,
+                    include_merged_revisions: request.include_merged_revisions,
+                    has_more: blame.has_more,
+                    lines: blame.lines,
+                    source: blame.source,
+                };
+                Ok(json!({ "jsonrpc": "2.0", "id": rpc_request.id, "result": response }))
+            }
+            (
+                crate::RemoteSvnAnonymousRequest::Update { identity, .. },
+                crate::RemoteSvnAnonymousOutput::Update(result),
+            ) => {
+                let (repository_id, epoch) = required_remote_attribution(repository_id, epoch)?;
+                validate_remote_session(self, repository_id, epoch, &identity)?;
+                Ok(self
+                    .operation_run_full_reconcile_success(
+                        &rpc_request,
+                        OperationRunFullReconcileSuccess {
+                            repository_id: repository_id.to_string(),
+                            epoch,
+                            kind: "update",
+                            stale_reason: "operationUpdateRequiresFullReconcile",
+                            result: result.result,
+                            revision: Some(result.revision),
+                        },
+                    )
+                    .1)
+            }
+            (
+                crate::RemoteSvnAnonymousRequest::Lock { identity, request },
+                crate::RemoteSvnAnonymousOutput::Lock(result),
+            ) => self.complete_remote_targeted_operation(
+                &rpc_request,
+                repository_id,
+                epoch,
+                &identity,
+                "lock",
+                result,
+                &request.paths,
+                "operationLock",
+                None,
+            ),
+            (
+                crate::RemoteSvnAnonymousRequest::Unlock { identity, request },
+                crate::RemoteSvnAnonymousOutput::Unlock(result),
+            ) => self.complete_remote_targeted_operation(
+                &rpc_request,
+                repository_id,
+                epoch,
+                &identity,
+                "unlock",
+                result,
+                &request.paths,
+                "operationUnlock",
+                None,
+            ),
+            (
+                crate::RemoteSvnAnonymousRequest::BranchCreate { identity, .. },
+                crate::RemoteSvnAnonymousOutput::BranchCreate(result),
+            ) => {
+                let (repository_id, epoch) = required_remote_attribution(repository_id, epoch)?;
+                validate_remote_session(self, repository_id, epoch, &identity)?;
+                Ok(self
+                    .operation_run_remote_success(
+                        &rpc_request,
+                        OperationRunRemoteSuccess {
+                            repository_id: repository_id.to_string(),
+                            epoch,
+                            kind: "branchCreate",
+                            result: result.result,
+                            revision: Some(result.revision),
+                        },
+                    )
+                    .1)
+            }
+            (
+                crate::RemoteSvnAnonymousRequest::Switch { identity, .. },
+                crate::RemoteSvnAnonymousOutput::Switch(result),
+            ) => {
+                let (repository_id, epoch) = required_remote_attribution(repository_id, epoch)?;
+                validate_remote_session(self, repository_id, epoch, &identity)?;
+                Ok(self
+                    .operation_run_full_reconcile_success(
+                        &rpc_request,
+                        OperationRunFullReconcileSuccess {
+                            repository_id: repository_id.to_string(),
+                            epoch,
+                            kind: "switch",
+                            stale_reason: "operationSwitchRequiresFullReconcile",
+                            result: result.result,
+                            revision: Some(result.revision),
+                        },
+                    )
+                    .1)
+            }
+            (
+                crate::RemoteSvnAnonymousRequest::Commit { identity, request },
+                crate::RemoteSvnAnonymousOutput::Commit(result),
+            ) => self.complete_remote_targeted_operation(
+                &rpc_request,
+                repository_id,
+                epoch,
+                &identity,
+                "commit",
+                result.result,
+                &request.paths,
+                "operationCommit",
+                Some(result.revision),
+            ),
+            _ => Err(remote_worker_output_invalid()),
+        };
+        match response {
+            Ok(response) => {
+                if checkout_target.is_none() {
+                    self.active_remote_operation_ids.remove(operation_id);
+                    self.remote_native_lanes.remove(lane_key);
+                    self.push_remote_connection_state(
+                        repository_id,
+                        epoch,
+                        RemoteConnectionState::Online {
+                            transport: RemoteScheme::Svn,
+                            checked_at: current_timestamp(),
+                        },
+                    );
+                }
+                Ok(response)
+            }
+            Err(failure) => {
+                if let Some(target_path) = checkout_target {
+                    self.block_checkout_journal_entry(&target_path, operation_id)?;
+                } else {
+                    self.block_remote_output_lane(lane_key, operation_id, repository_id, epoch);
+                }
+                Err(failure)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn complete_remote_targeted_operation(
+        &mut self,
+        rpc_request: &JsonRpcRequest,
+        repository_id: Option<&str>,
+        epoch: Option<u64>,
+        identity: &RepositoryIdentity,
+        kind: &str,
+        result: crate::OperationResult,
+        paths: &[String],
+        reason: &str,
+        revision: Option<i64>,
+    ) -> Result<Value, BridgeFailure> {
+        let (repository_id, epoch) = required_remote_attribution(repository_id, epoch)?;
+        validate_remote_session(self, repository_id, epoch, identity)?;
+        Ok(self
+            .operation_run_success(
+                rpc_request,
+                repository_id.to_string(),
+                epoch,
+                OperationRunSuccess {
+                    kind,
+                    result,
+                    paths,
+                    depth: "empty",
+                    reason,
+                    revision,
+                },
+            )
+            .1)
+    }
+
     fn native_lane_failure_for_request(&self, request: &JsonRpcRequest) -> Option<BridgeFailure> {
         if matches!(
             request.method.as_str(),
@@ -3088,6 +3869,8 @@ impl DaemonState {
                 | "workspaceTrust/update"
                 | "diagnostics/get"
                 | "remote/recoverWorkingCopy"
+                | "remote/listCheckoutTargetRecoveries"
+                | "remote/confirmCheckoutTargetDisposition"
                 | "shutdown"
         ) {
             return None;
@@ -3138,7 +3921,7 @@ impl DaemonState {
                 {
                     continue;
                 }
-                return Some(match state {
+                return Some(attach_remote_failure(match state {
                     RemoteNativeLaneState::Active { .. } => BridgeFailure::new(
                         "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
                         "state",
@@ -3160,7 +3943,7 @@ impl DaemonState {
                         json!({}),
                         false,
                     ),
-                });
+                }));
             }
         }
         None
@@ -3185,6 +3968,73 @@ impl DaemonState {
             },
         }));
     }
+}
+
+fn required_remote_attribution(
+    repository_id: Option<&str>,
+    epoch: Option<u64>,
+) -> Result<(&str, u64), BridgeFailure> {
+    match (repository_id, epoch) {
+        (Some(repository_id), Some(epoch)) => Ok((repository_id, epoch)),
+        _ => Err(remote_worker_output_invalid()),
+    }
+}
+
+fn validate_remote_session(
+    state: &DaemonState,
+    repository_id: &str,
+    epoch: u64,
+    identity: &RepositoryIdentity,
+) -> Result<(), BridgeFailure> {
+    match state.repositories.get(repository_id) {
+        Some(session) if session.epoch == epoch && &session.identity == identity => Ok(()),
+        _ => Err(remote_worker_output_invalid()),
+    }
+}
+
+fn remote_worker_output_invalid() -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID",
+        "protocol",
+        "error.remote.workerProtocolInvalid",
+        json!({}),
+        false,
+    )
+}
+
+fn remote_checkout_journal_failure(error: RemoteCheckoutJournalError) -> BridgeFailure {
+    let kind = match error.kind() {
+        RemoteCheckoutJournalErrorKind::StorageRootNotAbsolute => "storageRootNotAbsolute",
+        RemoteCheckoutJournalErrorKind::StorageRootUnavailable => "storageRootUnavailable",
+        RemoteCheckoutJournalErrorKind::StorageRootNotDirectory => "storageRootNotDirectory",
+        RemoteCheckoutJournalErrorKind::OrphanedTemporaryFile => "orphanedTemporaryFile",
+        RemoteCheckoutJournalErrorKind::JournalTooLarge => "journalTooLarge",
+        RemoteCheckoutJournalErrorKind::JournalCorrupt => "journalCorrupt",
+        RemoteCheckoutJournalErrorKind::UnsupportedSchema => "unsupportedSchema",
+        RemoteCheckoutJournalErrorKind::EntryLimitExceeded => "entryLimitExceeded",
+        RemoteCheckoutJournalErrorKind::TargetPathInvalid => "targetPathInvalid",
+        RemoteCheckoutJournalErrorKind::OperationIdInvalid => "operationIdInvalid",
+        RemoteCheckoutJournalErrorKind::EntryAlreadyExists => "entryAlreadyExists",
+        RemoteCheckoutJournalErrorKind::EntryNotFound => "entryNotFound",
+        RemoteCheckoutJournalErrorKind::AtomicWriteFailed => "atomicWriteFailed",
+    };
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_CHECKOUT_JOURNAL_INVALID",
+        "configuration",
+        "error.remote.checkoutJournalInvalid",
+        json!({ "kind": kind }),
+        false,
+    )
+}
+
+fn remote_checkout_journal_contract_failure(field: &str) -> BridgeFailure {
+    BridgeFailure::new(
+        "SUBVERSIONR_REMOTE_CHECKOUT_JOURNAL_CONTRACT_INVALID",
+        "protocol",
+        "error.remote.checkoutJournalContractInvalid",
+        json!({ "field": field }),
+        false,
+    )
 }
 
 fn connection_state_for_failure(
@@ -3214,6 +4064,9 @@ fn connection_state_for_failure(
                 reason: RemoteAttentionReason::AuthRequired,
             }
         }
+        RemoteFailureClass::AuthorizationDenied => RemoteConnectionState::Attention {
+            reason: RemoteAttentionReason::AuthorizationDenied,
+        },
         RemoteFailureClass::TlsUntrusted
         | RemoteFailureClass::TlsChanged
         | RemoteFailureClass::TlsProtocol => RemoteConnectionState::Attention {
@@ -3974,6 +4827,13 @@ fn valid_branch_url(url: &str) -> bool {
 
 fn valid_checkout_target_path(path: &str) -> bool {
     !path.trim().is_empty() && !path.contains('\0') && Path::new(path).is_absolute()
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn valid_revision_number_text(number: &str) -> bool {
@@ -5551,7 +6411,10 @@ fn unsupported_operation_kind(request: &JsonRpcRequest, kind: &str) -> (Dispatch
 #[cfg(test)]
 mod i5_remote_lane_tests {
     use super::*;
-    use subversionr_protocol::{RemoteFailure, RemoteFailureCategory};
+    use subversionr_protocol::{
+        OperationFailureCause, OperationFailureDiagnostics, RemoteFailure, RemoteFailureCategory,
+        SvnErrorDiagnosticEntry, SvnErrorDiagnostics,
+    };
 
     fn cancelled_settlement(
         effect: RemoteOperationEffect,
@@ -5576,6 +6439,56 @@ mod i5_remote_lane_tests {
             termination: crate::WorkerTerminationDisposition::Settled,
             job_descendants_zero: true,
             temp_root_removed: true,
+            operation_output: None,
+        }
+    }
+
+    fn authenticated_identity_settlement(code: &str) -> RemoteWorkerSettlement {
+        let (diagnostic_code, diagnostic_name) = if code == "SVN_OPERATION_UNLOCK_FAILED" {
+            (160034, "SVN_ERR_FS_NO_USER")
+        } else {
+            (170001, "SVN_ERR_RA_NOT_AUTHORIZED")
+        };
+        let failure = BridgeFailure::new(
+            code,
+            "native",
+            if code == "SVN_OPERATION_UNLOCK_FAILED" {
+                "error.native.operationUnlockFailed"
+            } else {
+                "error.native.operationLockFailed"
+            },
+            json!({
+                "path": "C:/wc/trunk.txt",
+                "status": 2,
+                "mayHaveMutated": false,
+                "anonymousIdentityRequired": true
+            }),
+            false,
+        )
+        .with_diagnostics(OperationFailureDiagnostics {
+            cause: OperationFailureCause::AuthenticationFailed,
+            svn: SvnErrorDiagnostics {
+                entries: vec![SvnErrorDiagnosticEntry {
+                    code: diagnostic_code,
+                    name: diagnostic_name.to_string(),
+                }],
+                truncated: false,
+            },
+        });
+        RemoteWorkerSettlement {
+            result: Err(failure),
+            remote_failure: Some(RemoteFailure {
+                category: RemoteFailureCategory::Authentication,
+                reason: RemoteFailureClass::AuthenticationRequired,
+                cleanup_appropriate: false,
+            }),
+            effect: RemoteOperationEffect::Mutation,
+            worker_was_resumed: true,
+            execution_origin_known: true,
+            termination: crate::WorkerTerminationDisposition::NotRequired,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+            operation_output: None,
         }
     }
 
@@ -5689,6 +6602,137 @@ mod i5_remote_lane_tests {
     }
 
     #[test]
+    fn authenticated_identity_lock_failure_releases_lane_and_sets_auth_attention() {
+        for (index, code) in ["SVN_OPERATION_LOCK_FAILED", "SVN_OPERATION_UNLOCK_FAILED"]
+            .into_iter()
+            .enumerate()
+        {
+            let path = format!("C:/wc-auth-{index}");
+            let lane = absolute_path_key(&normalize_absolute_path_text(&path));
+            let origin = format!("{index}1234567-89ab-4def-8123-456789abcdef");
+            let mut state = DaemonState::new();
+            let repository_id = insert_remote_recovery_session(&mut state, &path);
+            assert!(
+                state
+                    .reserve_remote_lane(
+                        &lane,
+                        &origin,
+                        RemoteOperationEffect::Mutation,
+                        Some(repository_id.clone()),
+                        Some(1),
+                    )
+                    .is_none()
+            );
+
+            assert!(
+                state
+                    .settle_remote_launch(&lane, &origin, &authenticated_identity_settlement(code),)
+                    .is_none()
+            );
+            assert!(!state.remote_native_lanes.contains_key(&lane));
+            let notifications = state.take_pending_notifications();
+            assert!(notifications.iter().any(|notification| {
+                notification["method"] == "remoteConnection/state"
+                    && notification["params"]["repositoryId"] == repository_id
+                    && notification["params"]["state"]["kind"] == "attention"
+                    && notification["params"]["state"]["reason"] == "authRequired"
+            }));
+            assert!(!notifications.iter().any(|notification| {
+                notification["method"] == "remoteConnection/state"
+                    && notification["params"]["state"]["kind"] == "indeterminate"
+            }));
+        }
+    }
+
+    #[test]
+    fn partial_authenticated_identity_evidence_enters_conservative_recovery() {
+        for (index, scenario) in [
+            "markerMissing",
+            "mutationMissing",
+            "mutationTrue",
+            "unrelatedCause",
+            "truncatedCause",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = format!("C:/wc-auth-partial-{index}");
+            let lane = absolute_path_key(&normalize_absolute_path_text(&path));
+            let origin = format!("{index}2234567-89ab-4def-8123-456789abcdef");
+            let mut state = DaemonState::new();
+            let repository_id = insert_remote_recovery_session(&mut state, &path);
+            assert!(
+                state
+                    .reserve_remote_lane(
+                        &lane,
+                        &origin,
+                        RemoteOperationEffect::Mutation,
+                        Some(repository_id.clone()),
+                        Some(1),
+                    )
+                    .is_none()
+            );
+
+            let mut settlement = authenticated_identity_settlement("SVN_OPERATION_LOCK_FAILED");
+            let failure = settlement
+                .result
+                .as_mut()
+                .expect_err("fixture must retain its failure");
+            match scenario {
+                "markerMissing" => {
+                    failure
+                        .args
+                        .as_object_mut()
+                        .expect("fixture safe args")
+                        .remove("anonymousIdentityRequired");
+                }
+                "mutationMissing" => {
+                    failure
+                        .args
+                        .as_object_mut()
+                        .expect("fixture safe args")
+                        .remove("mayHaveMutated");
+                }
+                "mutationTrue" => failure.args["mayHaveMutated"] = json!(true),
+                "unrelatedCause" => {
+                    failure
+                        .diagnostics
+                        .as_mut()
+                        .expect("fixture diagnostics")
+                        .svn
+                        .entries[0]
+                        .name = "SVN_ERR_AUTHZ_UNWRITABLE".to_string();
+                }
+                "truncatedCause" => {
+                    failure
+                        .diagnostics
+                        .as_mut()
+                        .expect("fixture diagnostics")
+                        .svn
+                        .truncated = true;
+                }
+                _ => unreachable!("enumerated scenarios are exhaustive"),
+            }
+
+            assert!(
+                state
+                    .settle_remote_launch(&lane, &origin, &settlement)
+                    .is_none()
+            );
+            assert!(matches!(
+                state.remote_native_lanes.get(&lane),
+                Some(RemoteNativeLaneState::Recovering { .. })
+            ));
+            let notifications = state.take_pending_notifications();
+            assert!(notifications.iter().any(|notification| {
+                notification["method"] == "remoteConnection/state"
+                    && notification["params"]["repositoryId"] == repository_id
+                    && notification["params"]["state"]["kind"] == "indeterminate"
+            }));
+        }
+    }
+
+    #[test]
     fn unattributed_post_resume_checkout_failure_is_terminally_blocked() {
         let lane = "c:/checkout/new";
         let origin = "a1234567-89ab-4def-8123-456789abcdef";
@@ -5710,6 +6754,14 @@ mod i5_remote_lane_tests {
         assert_eq!(
             override_failure.code(),
             "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED"
+        );
+        assert_eq!(
+            override_failure.safe_args()["originFailureCode"],
+            "SUBVERSIONR_REMOTE_WORKER_CANCELLED"
+        );
+        assert_eq!(
+            override_failure.safe_args()["remoteFailure"]["reason"],
+            "remoteRecoveryBlocked"
         );
         assert!(matches!(
             state.remote_native_lanes.get(lane),
@@ -5769,6 +6821,7 @@ mod i5_remote_lane_tests {
                 termination: crate::WorkerTerminationDisposition::Blocked,
                 job_descendants_zero: true,
                 temp_root_removed: false,
+                operation_output: None,
             },
         );
         assert!(matches!(
@@ -5925,6 +6978,13 @@ mod i5_remote_lane_tests {
                     epoch: Some(1),
                 },
                 "SUBVERSIONR_REMOTE_NATIVE_LANE_BUSY",
+                json!({
+                    "remoteFailure": {
+                        "category": "unknown",
+                        "reason": "unknownRemote",
+                        "cleanupAppropriate": false,
+                    }
+                }),
             ),
             (
                 RemoteNativeLaneState::Recovering {
@@ -5933,6 +6993,13 @@ mod i5_remote_lane_tests {
                     used_recovery_operation_ids: BTreeSet::new(),
                 },
                 "SUBVERSIONR_REMOTE_OPERATION_INDETERMINATE",
+                json!({
+                    "remoteFailure": {
+                        "category": "recovery",
+                        "reason": "remoteOperationIndeterminate",
+                        "cleanupAppropriate": false,
+                    }
+                }),
             ),
             (
                 RemoteNativeLaneState::Blocked {
@@ -5941,17 +7008,517 @@ mod i5_remote_lane_tests {
                     cleanup_appropriate: false,
                 },
                 "SUBVERSIONR_REMOTE_RECOVERY_BLOCKED",
+                json!({
+                    "remoteFailure": {
+                        "category": "recovery",
+                        "reason": "remoteRecoveryBlocked",
+                        "cleanupAppropriate": false,
+                    }
+                }),
             ),
         ];
-        for (lane_state, expected) in cases {
+        for (lane_state, expected_code, expected_safe_args) in cases {
             state.remote_native_lanes.insert(lane.clone(), lane_state);
-            assert_eq!(
-                state
-                    .native_lane_failure_for_request(&close)
-                    .expect("close must be lane gated")
-                    .code(),
-                expected
-            );
+            let failure = state
+                .native_lane_failure_for_request(&close)
+                .expect("close must be lane gated");
+            assert_eq!(failure.code(), expected_code);
+            assert_eq!(failure.safe_args(), &expected_safe_args);
         }
+    }
+
+    #[test]
+    fn checkout_journal_survives_restart_and_requires_exact_confirmation() {
+        let storage = checkout_journal_test_root("restart-confirm");
+        let target = storage.join("checkout-target");
+        let operation_id = "e1234567-89ab-4def-8123-456789abcdef";
+        let mut journal = RemoteCheckoutMutationJournal::open(&storage).expect("open journal");
+        let armed = journal
+            .arm(&target, operation_id)
+            .expect("arm checkout target");
+        drop(journal);
+
+        let journal = RemoteCheckoutMutationJournal::open(&storage).expect("reopen journal");
+        assert_eq!(
+            journal.entries()[0].state,
+            RemoteCheckoutMutationState::Blocked
+        );
+        let lane = absolute_path_key(&normalize_absolute_path_text(&armed.target_path));
+        let mut state = DaemonState::new();
+        state.remote_checkout_journal = Some(journal);
+        state.remote_native_lanes.insert(
+            lane.clone(),
+            RemoteNativeLaneState::Blocked {
+                origin_operation_id: operation_id.to_string(),
+                reason: RemoteFailureClass::RemoteRecoveryBlocked,
+                cleanup_appropriate: false,
+            },
+        );
+
+        let list = JsonRpcRequest {
+            id: json!(1),
+            method: "remote/listCheckoutTargetRecoveries".to_string(),
+            params: Some(json!({})),
+        };
+        let (_, listed) = state.dispatch_list_checkout_target_recoveries(&list);
+        assert_eq!(listed["result"]["entries"][0]["state"], "blocked");
+        assert_eq!(
+            listed["result"]["entries"][0]["targetSha256"],
+            armed.target_sha256
+        );
+
+        let wrong = JsonRpcRequest {
+            id: json!(2),
+            method: "remote/confirmCheckoutTargetDisposition".to_string(),
+            params: Some(json!({
+                "targetPath": armed.target_path,
+                "targetSha256": "f".repeat(64),
+                "originOperationId": operation_id,
+                "confirmation": "reviewedAndResolved"
+            })),
+        };
+        let (_, rejected) = state.dispatch_confirm_checkout_target_disposition(&wrong);
+        assert_eq!(
+            rejected["error"]["code"],
+            "SUBVERSIONR_REMOTE_CHECKOUT_JOURNAL_CONTRACT_INVALID"
+        );
+        assert!(state.remote_native_lanes.contains_key(&lane));
+
+        let confirm = JsonRpcRequest {
+            id: json!(3),
+            method: "remote/confirmCheckoutTargetDisposition".to_string(),
+            params: Some(json!({
+                "targetPath": armed.target_path,
+                "targetSha256": armed.target_sha256,
+                "originOperationId": operation_id,
+                "confirmation": "reviewedAndResolved"
+            })),
+        };
+        let (_, released) = state.dispatch_confirm_checkout_target_disposition(&confirm);
+        assert_eq!(released["result"]["released"], true);
+        assert!(!state.remote_native_lanes.contains_key(&lane));
+        assert!(
+            state
+                .remote_checkout_journal
+                .as_ref()
+                .expect("journal remains initialized")
+                .entries()
+                .is_empty()
+        );
+        drop(state);
+        assert!(
+            RemoteCheckoutMutationJournal::open(&storage)
+                .expect("reopen cleared journal")
+                .entries()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(storage).expect("remove checkout journal test root");
+    }
+
+    #[test]
+    fn checkout_journal_clears_only_after_safe_prelaunch_or_validated_output() {
+        let storage = checkout_journal_test_root("settlement");
+        let target = storage.join("checkout-target");
+        let target_text = target.to_string_lossy().into_owned();
+        let lane = absolute_path_key(&normalize_absolute_path_text(&target_text));
+        let first = "f1234567-89ab-4def-8123-456789abcdef";
+        let pre_mutation = "e1234567-89ab-4def-8123-456789abcdef";
+        let second = "01234567-89ab-4def-8123-456789abcdef";
+        let mut state = DaemonState::new();
+        state.remote_checkout_journal =
+            Some(RemoteCheckoutMutationJournal::open(&storage).expect("open settlement journal"));
+
+        state
+            .remote_checkout_journal
+            .as_mut()
+            .expect("journal")
+            .arm(&target, first)
+            .expect("arm first checkout");
+        assert!(
+            state
+                .reserve_remote_lane(&lane, first, RemoteOperationEffect::Mutation, None, None)
+                .is_none()
+        );
+        let prelaunch = RemoteWorkerSettlement::pre_launch(
+            RemoteOperationEffect::Mutation,
+            Err(BridgeFailure::new(
+                "SUBVERSIONR_REMOTE_WORKER_START_FAILED",
+                "process",
+                "error.remote.workerStartFailed",
+                json!({}),
+                false,
+            )),
+        );
+        assert!(
+            state
+                .settle_remote_launch(&lane, first, &prelaunch)
+                .is_none()
+        );
+        assert!(!state.remote_native_lanes.contains_key(&lane));
+        assert!(
+            state
+                .remote_checkout_journal
+                .as_ref()
+                .expect("journal")
+                .entries()
+                .is_empty()
+        );
+
+        state
+            .remote_checkout_journal
+            .as_mut()
+            .expect("journal")
+            .arm(&target, pre_mutation)
+            .expect("arm pre-mutation checkout");
+        assert!(
+            state
+                .reserve_remote_lane(
+                    &lane,
+                    pre_mutation,
+                    RemoteOperationEffect::Mutation,
+                    None,
+                    None,
+                )
+                .is_none()
+        );
+        let origin_mismatch = BridgeFailure::new(
+            "SUBVERSIONR_REMOTE_ORIGIN_MISMATCH",
+            "policy",
+            "error.remote.originMismatch",
+            json!({}),
+            false,
+        );
+        let pre_mutation_settlement = RemoteWorkerSettlement {
+            result: Err(origin_mismatch.clone()),
+            operation_output: None,
+            remote_failure: Some(crate::remote::classify_remote_failure(&origin_mismatch)),
+            effect: RemoteOperationEffect::Mutation,
+            worker_was_resumed: true,
+            execution_origin_known: true,
+            termination: crate::WorkerTerminationDisposition::NotRequired,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+        };
+        assert!(
+            state
+                .settle_remote_launch(&lane, pre_mutation, &pre_mutation_settlement)
+                .is_none()
+        );
+        assert!(!state.remote_native_lanes.contains_key(&lane));
+        assert!(
+            state
+                .remote_checkout_journal
+                .as_ref()
+                .expect("journal")
+                .entries()
+                .is_empty()
+        );
+
+        state
+            .remote_checkout_journal
+            .as_mut()
+            .expect("journal")
+            .arm(&target, second)
+            .expect("arm second checkout");
+        assert!(
+            state
+                .reserve_remote_lane(&lane, second, RemoteOperationEffect::Mutation, None, None)
+                .is_none()
+        );
+        let output = crate::RepositoryCheckoutResult {
+            working_copy_path: target_text.clone(),
+            revision: 7,
+        };
+        let settlement = RemoteWorkerSettlement {
+            result: Ok(()),
+            operation_output: Some(crate::RemoteSvnAnonymousOutput::Checkout(output.clone())),
+            remote_failure: None,
+            effect: RemoteOperationEffect::Mutation,
+            worker_was_resumed: true,
+            execution_origin_known: true,
+            termination: crate::WorkerTerminationDisposition::Settled,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+        };
+        assert!(
+            state
+                .settle_remote_launch(&lane, second, &settlement)
+                .is_none()
+        );
+        assert!(matches!(
+            state.remote_native_lanes.get(&lane),
+            Some(RemoteNativeLaneState::Active { operation_id, .. }) if operation_id == second
+        ));
+        assert_eq!(
+            state
+                .remote_checkout_journal
+                .as_ref()
+                .expect("journal")
+                .entries()[0]
+                .state,
+            RemoteCheckoutMutationState::Armed
+        );
+
+        let response = state
+            .complete_remote_svn_anonymous(
+                json!(4),
+                &lane,
+                second,
+                None,
+                None,
+                crate::RemoteSvnAnonymousRequest::Checkout {
+                    request: RepositoryCheckoutRequest {
+                        url: "svn://svn.example.invalid/project/trunk".to_string(),
+                        target_path: target_text.clone(),
+                        revision: "head".to_string(),
+                        depth: "infinity".to_string(),
+                        ignore_externals: true,
+                    },
+                },
+                crate::RemoteSvnAnonymousOutput::Checkout(output),
+            )
+            .expect("validated checkout output");
+        assert_eq!(response["result"]["revision"], 7);
+        assert!(!state.remote_native_lanes.contains_key(&lane));
+        assert!(
+            state
+                .remote_checkout_journal
+                .as_ref()
+                .expect("journal")
+                .entries()
+                .is_empty()
+        );
+
+        let third = "11234567-89ab-4def-8123-456789abcdef";
+        state
+            .remote_checkout_journal
+            .as_mut()
+            .expect("journal")
+            .arm(&target, third)
+            .expect("arm mismatched checkout");
+        assert!(
+            state
+                .reserve_remote_lane(&lane, third, RemoteOperationEffect::Mutation, None, None)
+                .is_none()
+        );
+        let mismatched_output = crate::RepositoryCheckoutResult {
+            working_copy_path: storage.join("other-target").to_string_lossy().into_owned(),
+            revision: 8,
+        };
+        let mismatched_settlement = RemoteWorkerSettlement {
+            operation_output: Some(crate::RemoteSvnAnonymousOutput::Checkout(
+                mismatched_output.clone(),
+            )),
+            ..settlement
+        };
+        assert!(
+            state
+                .settle_remote_launch(&lane, third, &mismatched_settlement)
+                .is_none()
+        );
+        let mismatch = state
+            .complete_remote_svn_anonymous(
+                json!(5),
+                &lane,
+                third,
+                None,
+                None,
+                crate::RemoteSvnAnonymousRequest::Checkout {
+                    request: RepositoryCheckoutRequest {
+                        url: "svn://svn.example.invalid/project/trunk".to_string(),
+                        target_path: target_text,
+                        revision: "head".to_string(),
+                        depth: "infinity".to_string(),
+                        ignore_externals: true,
+                    },
+                },
+                crate::RemoteSvnAnonymousOutput::Checkout(mismatched_output),
+            )
+            .expect_err("mismatched checkout output must fail closed");
+        assert_eq!(
+            mismatch.code(),
+            "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID"
+        );
+        assert!(matches!(
+            state.remote_native_lanes.get(&lane),
+            Some(RemoteNativeLaneState::Blocked { origin_operation_id, .. }) if origin_operation_id == third
+        ));
+        assert_eq!(
+            state
+                .remote_checkout_journal
+                .as_ref()
+                .expect("journal")
+                .entries()[0]
+                .state,
+            RemoteCheckoutMutationState::Blocked
+        );
+        drop(state);
+        std::fs::remove_dir_all(storage).expect("remove checkout journal test root");
+    }
+
+    #[test]
+    fn checkout_journal_clear_failure_blocks_lane_in_current_process() {
+        let storage = checkout_journal_test_root("clear-failure");
+        let target = storage.join("checkout-target");
+        let target_text = target.to_string_lossy().into_owned();
+        let lane = absolute_path_key(&normalize_absolute_path_text(&target_text));
+        let operation_id = "31234567-89ab-4def-8123-456789abcdef";
+        let mut state = DaemonState::new();
+        state.remote_checkout_journal = Some(
+            RemoteCheckoutMutationJournal::open(&storage).expect("open clear-failure journal"),
+        );
+        state
+            .remote_checkout_journal
+            .as_mut()
+            .expect("journal")
+            .arm(&target, operation_id)
+            .expect("arm checkout");
+        assert!(
+            state
+                .reserve_remote_lane(
+                    &lane,
+                    operation_id,
+                    RemoteOperationEffect::Mutation,
+                    None,
+                    None,
+                )
+                .is_none()
+        );
+        let output = crate::RepositoryCheckoutResult {
+            working_copy_path: target_text.clone(),
+            revision: 9,
+        };
+        let settlement = RemoteWorkerSettlement {
+            result: Ok(()),
+            operation_output: Some(crate::RemoteSvnAnonymousOutput::Checkout(output.clone())),
+            remote_failure: None,
+            effect: RemoteOperationEffect::Mutation,
+            worker_was_resumed: true,
+            execution_origin_known: true,
+            termination: crate::WorkerTerminationDisposition::Settled,
+            job_descendants_zero: true,
+            temp_root_removed: true,
+        };
+        assert!(
+            state
+                .settle_remote_launch(&lane, operation_id, &settlement)
+                .is_none()
+        );
+
+        std::fs::remove_dir_all(&storage).expect("remove journal storage directory");
+        std::fs::write(&storage, b"not-a-directory").expect("replace storage with a file");
+
+        let failure = state
+            .complete_remote_svn_anonymous(
+                json!(6),
+                &lane,
+                operation_id,
+                None,
+                None,
+                crate::RemoteSvnAnonymousRequest::Checkout {
+                    request: RepositoryCheckoutRequest {
+                        url: "svn://svn.example.invalid/project/trunk".to_string(),
+                        target_path: target_text,
+                        revision: "head".to_string(),
+                        depth: "infinity".to_string(),
+                        ignore_externals: true,
+                    },
+                },
+                crate::RemoteSvnAnonymousOutput::Checkout(output),
+            )
+            .expect_err("journal clear persistence failure must fail closed");
+        assert_eq!(
+            failure.code(),
+            "SUBVERSIONR_REMOTE_CHECKOUT_JOURNAL_INVALID"
+        );
+        assert!(matches!(
+            state.remote_native_lanes.get(&lane),
+            Some(RemoteNativeLaneState::Blocked { origin_operation_id, .. })
+                if origin_operation_id == operation_id
+        ));
+        assert!(!state.active_remote_operation_ids.contains(operation_id));
+        assert_eq!(
+            state
+                .remote_checkout_journal
+                .as_ref()
+                .expect("journal")
+                .entries()[0]
+                .state,
+            RemoteCheckoutMutationState::Armed
+        );
+
+        drop(state);
+        std::fs::remove_file(storage).expect("remove storage replacement file");
+    }
+
+    #[test]
+    fn invalid_typed_worker_output_blocks_lane_before_release() {
+        let lane = "c:/wc-output-validation";
+        let operation_id = "21234567-89ab-4def-8123-456789abcdef";
+        let repository_id = "repo-output-validation";
+        let identity = RepositoryIdentity {
+            repository_uuid: "uuid-output-validation".to_string(),
+            repository_root_url: "svn://svn.example.invalid/project".to_string(),
+            working_copy_root: "C:/wc-output-validation".to_string(),
+            workspace_scope_root: "C:/wc-output-validation".to_string(),
+            format: 31,
+        };
+        let mut state = DaemonState::new();
+        state
+            .active_remote_operation_ids
+            .insert(operation_id.to_string());
+        state.remote_native_lanes.insert(
+            lane.to_string(),
+            RemoteNativeLaneState::Active {
+                operation_id: operation_id.to_string(),
+                effect: RemoteOperationEffect::ReadOnly,
+                repository_id: Some(repository_id.to_string()),
+                epoch: Some(1),
+            },
+        );
+
+        let failure = state
+            .complete_remote_svn_anonymous(
+                json!(1),
+                lane,
+                operation_id,
+                Some(repository_id),
+                Some(1),
+                crate::RemoteSvnAnonymousRequest::Content {
+                    identity,
+                    path: "README.txt".to_string(),
+                    revision: "head".to_string(),
+                },
+                crate::RemoteSvnAnonymousOutput::Checkout(crate::RepositoryCheckoutResult {
+                    working_copy_path: "C:/unexpected".to_string(),
+                    revision: 1,
+                }),
+            )
+            .expect_err("wrong output variant must fail closed");
+
+        assert_eq!(failure.code(), "SUBVERSIONR_REMOTE_WORKER_PROTOCOL_INVALID");
+        assert!(!state.active_remote_operation_ids.contains(operation_id));
+        assert!(matches!(
+            state.remote_native_lanes.get(lane),
+            Some(RemoteNativeLaneState::Blocked { origin_operation_id, .. })
+                if origin_operation_id == operation_id
+        ));
+        assert!(state.pending_notifications.iter().any(|notification| {
+            notification["method"] == "remoteConnection/state"
+                && notification["params"]["state"]["kind"] == "indeterminate"
+                && notification["params"]["state"]["recovery"] == "blocked"
+        }));
+    }
+
+    fn checkout_journal_test_root(label: &str) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let path = std::env::temp_dir().join(format!(
+            "subversionr-state-{label}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&path).expect("create checkout journal test root");
+        path.canonicalize()
+            .expect("canonical checkout journal test root")
     }
 }

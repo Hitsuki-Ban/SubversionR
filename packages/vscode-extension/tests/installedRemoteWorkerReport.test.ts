@@ -87,7 +87,7 @@ describe("installed remote worker report", () => {
       expect(method).toBe("diagnostics/get");
       expect(params).toEqual({});
       return {
-        protocol: { major: 1, minor: 34 },
+        protocol: { major: 1, minor: 35 },
         capabilities: { remoteWorkerIsolation: true, credentialLeaseSettlement: true, remoteConnectionState: true },
       };
     });
@@ -107,7 +107,7 @@ describe("installed remote worker report", () => {
     expect(report).toEqual({
       schemaVersion: 3,
       kind: "subversionr.installedRemoteWorkerReport",
-      protocol: { major: 1, minor: 34 },
+      protocol: { major: 1, minor: 35 },
       remoteWorkerIsolation: true,
       credentialLeaseSettlement: true,
       remoteConnectionState: {
@@ -184,7 +184,7 @@ function connection(
 ): Pick<BackendConnection, "initializeResult" | "isRemoteSubmissionEnabled" | "sendRequest"> {
   return {
     initializeResult: {
-      protocol: { major: 1, minor: 34 },
+      protocol: { major: 1, minor: 35 },
       capabilities: {
         remoteWorkerIsolation: overrides.capability ?? true,
         credentialLeaseSettlement: overrides.credentialLeaseSettlement ?? true,

@@ -627,5 +627,17 @@
   "SubversionR remote recovery remains indeterminate: {0}": "SubversionR remote recovery remains indeterminate: {0}",
   "Remote Access": "Remote Access",
   "Configure Remote Access": "Configure Remote Access",
-  "SubversionR remote access failed ({0}).": "SubversionR remote access failed ({0})."
+  "SubversionR remote access failed ({0}).": "SubversionR remote access failed ({0}).",
+  "No blocked SVN checkout target requires review.": "No blocked SVN checkout target requires review.",
+  "Review blocked SVN checkout target": "Review blocked SVN checkout target",
+  "Select the checkout target whose disposition you reviewed": "Select the checkout target whose disposition you reviewed",
+  "Release checkout target block": "Release checkout target block",
+  "Confirm that you reviewed and resolved the possibly changed SVN checkout target before releasing its safety block: {0}": "Confirm that you reviewed and resolved the possibly changed SVN checkout target before releasing its safety block: {0}",
+  "SubversionR released the reviewed SVN checkout target: {0}": "SubversionR released the reviewed SVN checkout target: {0}",
+  "Review checkout target": "Review checkout target",
+  "A possibly changed SVN checkout target is blocked until you review its disposition.": "A possibly changed SVN checkout target is blocked until you review its disposition.",
+  "SVN {0} failed because the server denied authorization for this operation.": "SVN {0} failed because the server denied authorization for this operation.",
+  "SVN {0} failed because the server authorization configuration is invalid.": "SVN {0} failed because the server authorization configuration is invalid.",
+  "Locking requires an authenticated identity; the current SVN server profile is anonymous.": "Locking requires an authenticated identity; the current SVN server profile is anonymous.",
+  "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.": "Unlocking requires an authenticated identity; the current SVN server profile is anonymous."
 }

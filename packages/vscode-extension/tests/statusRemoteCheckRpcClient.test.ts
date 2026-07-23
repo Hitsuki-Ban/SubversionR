@@ -35,6 +35,15 @@ describe("StatusRemoteCheckRpcClient", () => {
     });
   });
 
+  it("preserves the explicit local file path without a remote envelope", async () => {
+    const sender = senderReturning(remoteDelta());
+    const local = { repositoryId: "repo-uuid:C:/wc", epoch: 7 };
+
+    await new StatusRemoteCheckRpcClient(sender).checkRemoteStatus(local);
+
+    expect(sender.sendRequest).toHaveBeenCalledWith("status/checkRemote", local);
+  });
+
   it.each([
     ["source", { source: "libsvn-local" }],
     ["coverage", { coverage: [{ path: ".", depth: "infinity", generation: 8, reason: "manualRemoteCheck" }] }],

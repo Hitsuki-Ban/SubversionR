@@ -1,5 +1,10 @@
 import path from "node:path";
 import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
+import {
+  canonicalEndpointFromRepositoryUrl,
+  validateAnonymousSvnRemoteOperationEnvelope,
+  type RemoteOperationEnvelope,
+} from "../security/remoteAccessProfile";
 
 export type RepositoryCheckoutErrorCategory = "input" | "protocol";
 export type RepositoryCheckoutRevision = "head" | number;
@@ -11,6 +16,7 @@ export interface RepositoryCheckoutRequest {
   revision: RepositoryCheckoutRevision;
   depth: RepositoryCheckoutDepth;
   ignoreExternals: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface RepositoryCheckoutResponse {
@@ -62,14 +68,68 @@ function validateCheckoutRequest(request: RepositoryCheckoutRequest): Repository
   if (!isRecord(request)) {
     throw invalidCheckoutRequest("url");
   }
-  requireExactKeys(request, "request", ["url", "targetPath", "revision", "depth", "ignoreExternals"], "request");
+  requireExactKeys(
+    request,
+    "request",
+    ["url", "targetPath", "revision", "depth", "ignoreExternals"],
+    "request",
+    ["remote"],
+  );
+  const url = requireCheckoutUrl(request.url, "url");
+  const remote = requireCheckoutRemote(url, "remote" in request, request.remote);
   return {
-    url: requireCheckoutUrl(request.url, "url"),
+    url,
     targetPath: requireAbsolutePath(request.targetPath, "targetPath", "request"),
     revision: requireRevision(request.revision, "revision", "request"),
     depth: requireCheckoutDepth(request.depth, "depth"),
     ignoreExternals: requireBoolean(request.ignoreExternals, "ignoreExternals", "request"),
+    ...(remote === undefined ? {} : { remote }),
   };
+}
+
+function requireCheckoutRemote(
+  url: string,
+  hasRemote: boolean,
+  value: unknown,
+): RemoteOperationEnvelope | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalidCheckoutRequest("url");
+  }
+  if (parsed.protocol === "file:") {
+    if (hasRemote) {
+      throw invalidCheckoutRequest("remote");
+    }
+    return undefined;
+  }
+  if (parsed.protocol !== "svn:") {
+    throw invalidCheckoutRequest("url");
+  }
+  if (!hasRemote) {
+    throw invalidCheckoutRequest("remote");
+  }
+  const remote = validateAnonymousSvnRemoteOperationEnvelope(value);
+  requireUrlMatchesRemoteOrigin(url, remote);
+  return remote;
+}
+
+function requireUrlMatchesRemoteOrigin(url: string, remote: RemoteOperationEnvelope): void {
+  let endpoint;
+  try {
+    endpoint = canonicalEndpointFromRepositoryUrl(url);
+  } catch {
+    throw invalidCheckoutRequest("url");
+  }
+  if (
+    endpoint.scheme !== "svn" ||
+    endpoint.scheme !== remote.expectedOrigin.scheme ||
+    endpoint.canonicalHost !== remote.expectedOrigin.canonicalHost ||
+    endpoint.effectivePort !== remote.expectedOrigin.effectivePort
+  ) {
+    throw invalidCheckoutRequest("url");
+  }
 }
 
 function parseCheckoutResponse(rawResponse: unknown): RepositoryCheckoutResponse {
@@ -97,10 +157,17 @@ function requireExactKeys(
   field: string,
   expectedKeys: readonly string[],
   source: "request" | "response",
+  optionalKeys: readonly string[] = [],
 ): void {
   const expected = new Set(expectedKeys);
+  const allowed = new Set([...expectedKeys, ...optionalKeys]);
+  for (const key of expected) {
+    if (!(key in value)) {
+      throw source === "request" ? invalidCheckoutRequest(key) : invalidCheckoutResponse(key);
+    }
+  }
   for (const key of Object.keys(value)) {
-    if (!expected.has(key)) {
+    if (!allowed.has(key)) {
       throw source === "request"
         ? invalidCheckoutRequest(field === "request" ? key : `${field}.${key}`)
         : invalidCheckoutResponse(field === "result" ? key : `${field}.${key}`);

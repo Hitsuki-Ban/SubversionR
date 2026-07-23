@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { BackendRepositoryCheckoutClient } from "../src/repository/backendRepositoryCheckoutClient";
 import type { BackendConnection, InitializeResult } from "../src/backend/backendProcess";
 import type { BackendService } from "../src/backend/backendService";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("BackendRepositoryCheckoutClient", () => {
   it("initializes the backend and sends repository/checkout through the active connection", async () => {
@@ -12,20 +13,22 @@ describe("BackendRepositoryCheckoutClient", () => {
     const client = new BackendRepositoryCheckoutClient(service);
 
     const result = await client.checkout({
-      url: "https://svn.example.invalid/project/trunk",
+      url: "svn://svn.example.invalid/project/trunk",
       targetPath: "C:/workspace/project",
       revision: "head",
       depth: "infinity",
       ignoreExternals: true,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(service.initialize).toHaveBeenCalledTimes(1);
     expect(connection.sendRequest).toHaveBeenCalledWith("repository/checkout", {
-      url: "https://svn.example.invalid/project/trunk",
+      url: "svn://svn.example.invalid/project/trunk",
       targetPath: "C:/workspace/project",
       revision: "head",
       depth: "infinity",
       ignoreExternals: true,
+      remote: anonymousSvnRemoteEnvelope(),
     });
     expect(result).toEqual({
       workingCopyPath: "C:/workspace/project",
@@ -52,7 +55,7 @@ function fakeConnection(): BackendConnection {
 
 function initializeResult(): InitializeResult {
   return {
-    protocol: { major: 1, minor: 34 },
+    protocol: { major: 1, minor: 35 },
     backendVersion: "0.1.0",
     bridgeVersion: "subversionr-svn-bridge/0.1.0",
     libsvnVersion: "1.14.5",
@@ -108,6 +111,7 @@ function initializeResult(): InitializeResult {
       remoteWorkerIsolation: true,
       credentialLeaseSettlement: true,
       remoteConnectionState: true,
+      remoteSvnAnonymous: true,
     },
     acknowledgedTrustEpoch: 1,
   };

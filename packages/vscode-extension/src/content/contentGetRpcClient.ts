@@ -1,5 +1,9 @@
 import { Buffer } from "node:buffer";
-import type { JsonRpcSender } from "../status/types";
+import {
+  validateAnonymousSvnRemoteOperationEnvelope,
+  type RemoteOperationEnvelope,
+} from "../security/remoteAccessProfile";
+import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 declare const contentRevisionBrand: unique symbol;
 
@@ -8,14 +12,40 @@ export type ContentErrorCategory = "input" | "protocol";
 
 const MAX_SVN_REVNUM = 2_147_483_647;
 
-export interface ContentGetRequest {
+interface ContentGetRequestBase {
   repositoryId: string;
   epoch: number;
   path: string;
-  revision: string;
 }
 
-export interface ValidatedContentGetRequest {
+export interface BaseContentGetRequest extends ContentGetRequestBase {
+  revision: "base";
+  remote?: never;
+}
+
+export interface RepositoryContentGetRequest extends ContentGetRequestBase {
+  revision: string;
+  remote?: RemoteOperationEnvelope;
+}
+
+export type ContentGetRequest = BaseContentGetRequest | RepositoryContentGetRequest;
+
+export interface ValidatedBaseContentGetRequest extends ContentGetRequestBase {
+  revision: "base";
+}
+
+export interface ValidatedRepositoryContentGetRequest extends ContentGetRequestBase {
+  revision: Exclude<ContentRevision, "base">;
+  remote?: RemoteOperationEnvelope;
+}
+
+export type ValidatedContentGetRequest =
+  | ValidatedBaseContentGetRequest
+  | ValidatedRepositoryContentGetRequest;
+
+export type ContentClientOptions = JsonRpcRequestOptions;
+
+export interface ContentRequestIdentity {
   repositoryId: string;
   epoch: number;
   path: string;
@@ -35,7 +65,7 @@ export interface ContentBlob {
 }
 
 export interface ContentClient {
-  getContent(request: ContentGetRequest): Promise<ContentBlob>;
+  getContent(request: ContentGetRequest, options?: ContentClientOptions): Promise<ContentBlob>;
 }
 
 export class ContentResponseError extends Error {
@@ -53,9 +83,11 @@ export class ContentResponseError extends Error {
 export class ContentGetRpcClient implements ContentClient {
   public constructor(private readonly sender: JsonRpcSender) {}
 
-  public async getContent(request: ContentGetRequest): Promise<ContentBlob> {
+  public async getContent(request: ContentGetRequest, options?: ContentClientOptions): Promise<ContentBlob> {
     const validatedRequest = validateContentRequest(request);
-    const rawResponse = await this.sender.sendRequest<unknown>("content/get", validatedRequest);
+    const rawResponse = options === undefined
+      ? await this.sender.sendRequest<unknown>("content/get", validatedRequest)
+      : await this.sender.sendRequest<unknown>("content/get", validatedRequest, options);
     const content = parseContentResponse(rawResponse);
     requireContentMatchesRequest(content, validatedRequest);
     return content;
@@ -66,7 +98,6 @@ function validateContentRequest(request: ContentGetRequest): ValidatedContentGet
   if (!isRecord(request) || typeof request.repositoryId !== "string" || request.repositoryId.trim().length === 0) {
     throw invalidContentRequest("repositoryId");
   }
-  requireExactRequestKeys(request, "request", ["repositoryId", "epoch", "path", "revision"]);
   if (typeof request.epoch !== "number" || !Number.isSafeInteger(request.epoch) || request.epoch < 0) {
     throw invalidContentRequest("epoch");
   }
@@ -76,11 +107,24 @@ function validateContentRequest(request: ContentGetRequest): ValidatedContentGet
   if (!isContentRevision(request.revision)) {
     throw invalidContentRequest("revision");
   }
-  return {
+  const identity: ContentRequestIdentity = {
     repositoryId: request.repositoryId,
     epoch: request.epoch,
     path: request.path,
     revision: request.revision,
+  };
+  if (request.revision === "base") {
+    requireExactRequestKeys(request, "request", ["repositoryId", "epoch", "path", "revision"]);
+    return { ...identity, revision: "base" };
+  }
+  requireExactRequestKeys(request, "request", ["repositoryId", "epoch", "path", "revision"], ["remote"]);
+  const remote = "remote" in request
+    ? validateAnonymousSvnRemoteOperationEnvelope(request.remote)
+    : undefined;
+  return {
+    ...identity,
+    revision: request.revision,
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -113,7 +157,7 @@ function parseContentResponse(rawResponse: unknown): ContentBlob {
   };
 }
 
-function requireContentMatchesRequest(content: ContentBlob, request: ValidatedContentGetRequest): void {
+function requireContentMatchesRequest(content: ContentBlob, request: ContentRequestIdentity): void {
   if (content.repositoryId !== request.repositoryId) {
     throw invalidContentResponse("repositoryId");
   }
@@ -163,6 +207,11 @@ function requireRecord(value: unknown, field: string): Record<string, unknown> {
 
 function requireExactKeys(value: Record<string, unknown>, field: string, expectedKeys: readonly string[]): void {
   const expected = new Set(expectedKeys);
+  for (const key of expected) {
+    if (!(key in value)) {
+      throw invalidContentResponse(key);
+    }
+  }
   for (const key of Object.keys(value)) {
     if (!expected.has(key)) {
       throw invalidContentResponse(field === "result" ? key : `${field}.${key}`);
@@ -174,10 +223,17 @@ function requireExactRequestKeys(
   value: Record<string, unknown>,
   field: string,
   expectedKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
 ): void {
   const expected = new Set(expectedKeys);
+  const allowed = new Set([...expectedKeys, ...optionalKeys]);
+  for (const key of expected) {
+    if (!(key in value)) {
+      throw invalidContentRequest(key);
+    }
+  }
   for (const key of Object.keys(value)) {
-    if (!expected.has(key)) {
+    if (!allowed.has(key)) {
       throw invalidContentRequest(field === "request" ? key : `${field}.${key}`);
     }
   }

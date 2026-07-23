@@ -3,7 +3,13 @@ import {
   HistoryTreeDataProvider,
   type HistoryTreeApi,
 } from "../src/history/historyTreeDataProvider";
-import type { HistoryClient, HistoryLog, HistoryLogRequest } from "../src/history/historyLogRpcClient";
+import type {
+  HistoryClient,
+  HistoryClientOptions,
+  HistoryLog,
+  HistoryLogRequest,
+} from "../src/history/historyLogRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("HistoryTreeDataProvider", () => {
   it("loads repository history through bounded explicit history/log parameters", async () => {
@@ -37,7 +43,8 @@ describe("HistoryTreeDataProvider", () => {
       discoverChangedPaths: true,
       strictNodeHistory: false,
       includeMergedRevisions: true,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     const roots = await provider.getChildren();
     expect(provider.getTreeItem(roots[0])).toMatchObject({
       label: "C:/wc",
@@ -147,7 +154,8 @@ describe("HistoryTreeDataProvider", () => {
       discoverChangedPaths: true,
       strictNodeHistory: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(historyClient.getLog).toHaveBeenNthCalledWith(2, {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
@@ -158,7 +166,8 @@ describe("HistoryTreeDataProvider", () => {
       discoverChangedPaths: true,
       strictNodeHistory: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
 
     const [target] = await provider.getChildren();
     const children = await provider.getChildren(target);
@@ -318,6 +327,7 @@ describe("HistoryTreeDataProvider", () => {
         limit: 2,
         includeMergedRevisions: true,
       }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(fire).toHaveBeenCalledWith(undefined);
     const [target] = await provider.getChildren();
@@ -997,7 +1007,7 @@ describe("HistoryTreeDataProvider", () => {
     );
   });
 
-  it("keeps a newer selected target when an older history request resolves last", async () => {
+  it("aborts an older target when a newer selection starts", async () => {
     const first = deferredHistoryLog();
     const second = deferredHistoryLog();
     const historyClient = fakeDeferredHistoryClient(first, second);
@@ -1010,6 +1020,8 @@ describe("HistoryTreeDataProvider", () => {
       path: "src/old.c",
       label: "src/old.c",
     });
+    await vi.waitFor(() => expect(historyClient.getLog).toHaveBeenCalledTimes(1));
+    const firstSignal = historyClient.getLog.mock.calls[0]?.[1]?.signal;
     const secondLoad = provider.showHistory({
       kind: "file",
       repositoryId: "repo-uuid:C:/wc",
@@ -1017,6 +1029,8 @@ describe("HistoryTreeDataProvider", () => {
       path: "src/new.c",
       label: "src/new.c",
     });
+    await vi.waitFor(() => expect(historyClient.getLog).toHaveBeenCalledTimes(2));
+    expect(firstSignal?.aborted).toBe(true);
 
     second.resolve(
       historyLog({
@@ -1101,6 +1115,7 @@ function historyProvider(
 ): HistoryTreeDataProvider {
   return new HistoryTreeDataProvider({
     historyClient,
+    createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
     settings,
     workspaceTrusted: options.workspaceTrusted ?? (() => true),
     api: options.api ?? fakeTreeApi(),
@@ -1125,7 +1140,7 @@ function fakeTreeApi(options: { fire?: ReturnType<typeof vi.fn<(element?: unknow
 }
 
 function fakeHistoryClient(...responses: HistoryLog[]): HistoryClient & {
-  getLog: ReturnType<typeof vi.fn<(request: HistoryLogRequest) => Promise<HistoryLog>>>;
+  getLog: ReturnType<typeof vi.fn<(request: HistoryLogRequest, options?: HistoryClientOptions) => Promise<HistoryLog>>>;
 } {
   const pending = [...responses];
   return {
@@ -1150,7 +1165,7 @@ function fakeHistoryClient(...responses: HistoryLog[]): HistoryClient & {
 function fakeDeferredHistoryClient(
   ...responses: Array<DeferredHistoryLog>
 ): HistoryClient & {
-  getLog: ReturnType<typeof vi.fn<(request: HistoryLogRequest) => Promise<HistoryLog>>>;
+  getLog: ReturnType<typeof vi.fn<(request: HistoryLogRequest, options?: HistoryClientOptions) => Promise<HistoryLog>>>;
 } {
   const pending = [...responses];
   return {

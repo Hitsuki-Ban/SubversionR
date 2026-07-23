@@ -199,6 +199,7 @@ Expand-Archive -LiteralPath $archivePath -DestinationPath $workRootResolved -For
 $sourceRoot = Join-Path $workRootResolved "subversion-1.14.5"
 Assert-RequiredFile (Join-Path $sourceRoot "gen-make.py") "Subversion generator"
 Update-SubversionGeneratorForExpat272 -SourceRoot $sourceRoot
+Apply-SubversionRaSvnAuthorityPatch -SourceRoot $sourceRoot
 
 $genMakeArgs = @(
   "-t", "vcproj",

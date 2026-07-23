@@ -1,5 +1,6 @@
 import type * as vscode from "vscode";
 import type { HistoryClient, HistoryLogEntry, HistoryLogRequest } from "./historyLogRpcClient";
+import type { RemoteOperationEnvelope } from "../security/remoteAccessProfile";
 import type { HistoryRevisionDetailsTarget } from "./historyRevisionDetailsDocument";
 import type { HistorySettings } from "./historySettings";
 import type { HistoryViewTarget } from "./historyViewTarget";
@@ -81,6 +82,7 @@ export interface HistoryCopyTarget {
 
 export interface HistoryTreeDataProviderOptions {
   historyClient: HistoryClient;
+  createRemoteEnvelope(input: { repositoryId: string; epoch: number }): Promise<RemoteOperationEnvelope | undefined>;
   settings: HistorySettings;
   workspaceTrusted(): boolean;
   api: HistoryTreeApi;
@@ -135,6 +137,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
   private currentRevisionNodes = new Map<HistoryLogEntry, HistoryRevisionNode>();
   private requestGeneration = 0;
   private searchQuery = "";
+  private activeRequest: AbortController | undefined;
 
   public constructor(private readonly options: HistoryTreeDataProviderOptions) {
     this.settings = options.settings;
@@ -161,6 +164,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
   }
 
   public showLineHistory(target: HistoryViewTarget, entries: readonly HistoryLogEntry[]): void {
+    this.invalidateRequests();
     this.requireLineHistoryTarget(target);
     this.searchQuery = "";
     this.state = {
@@ -213,6 +217,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
   }
 
   public refreshWorkspaceTrust(): void {
+    this.invalidateRequests();
     this.emitter.fire(undefined);
   }
 
@@ -221,6 +226,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
     this.currentRevisionNodes = new Map();
     const state = this.state;
     if (!state || state.target.kind === "line" || !this.options.workspaceTrusted()) {
+      this.invalidateRequests();
       this.emitter.fire(undefined);
       return;
     }
@@ -351,7 +357,18 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
     }
     requireTrustedWorkspace(this.options.workspaceTrusted);
     const requestGeneration = this.nextRequestGeneration();
-    const log = await this.options.historyClient.getLog(this.createRequest(state.target, state.nextStartRevision));
+    const signal = this.requestSignal(requestGeneration);
+    let log: Awaited<ReturnType<HistoryClient["getLog"]>>;
+    try {
+      const request = await this.createRequest(state.target, state.nextStartRevision);
+      signal.throwIfAborted();
+      log = await this.options.historyClient.getLog(request, { signal });
+    } catch (error) {
+      if (signal.aborted) {
+        return;
+      }
+      throw error;
+    }
     if (this.requestGeneration !== requestGeneration || this.state?.targetNode !== state.targetNode) {
       return;
     }
@@ -502,6 +519,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
   }
 
   public dispose(): void {
+    this.invalidateRequests();
     this.emitter.dispose();
   }
 
@@ -510,7 +528,18 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
     if (!state) {
       return;
     }
-    const log = await this.options.historyClient.getLog(this.createRequest(state.target, "head"));
+    const signal = this.requestSignal(requestGeneration);
+    let log: Awaited<ReturnType<HistoryClient["getLog"]>>;
+    try {
+      const request = await this.createRequest(state.target, "head");
+      signal.throwIfAborted();
+      log = await this.options.historyClient.getLog(request, { signal });
+    } catch (error) {
+      if (signal.aborted) {
+        return;
+      }
+      throw error;
+    }
     if (this.requestGeneration !== requestGeneration || this.state?.targetNode !== state.targetNode) {
       return;
     }
@@ -524,7 +553,11 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
     this.emitter.fire(undefined);
   }
 
-  private createRequest(target: HistoryViewTarget, startRevision: string): HistoryLogRequest {
+  private async createRequest(target: HistoryViewTarget, startRevision: string): Promise<HistoryLogRequest> {
+    const remote = await this.options.createRemoteEnvelope({
+      repositoryId: target.repositoryId,
+      epoch: target.epoch,
+    });
     return {
       repositoryId: target.repositoryId,
       epoch: target.epoch,
@@ -535,12 +568,27 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<HistoryT
       discoverChangedPaths: true,
       strictNodeHistory: false,
       includeMergedRevisions: this.settings.includeMergedRevisions,
+      ...(remote === undefined ? {} : { remote }),
     };
   }
 
   private nextRequestGeneration(): number {
-    this.requestGeneration += 1;
+    this.invalidateRequests();
+    this.activeRequest = new AbortController();
     return this.requestGeneration;
+  }
+
+  private invalidateRequests(): void {
+    this.activeRequest?.abort();
+    this.activeRequest = undefined;
+    this.requestGeneration += 1;
+  }
+
+  private requestSignal(requestGeneration: number): AbortSignal {
+    if (this.requestGeneration !== requestGeneration || this.activeRequest === undefined) {
+      throw new DOMException("History request cancelled", "AbortError");
+    }
+    return this.activeRequest.signal;
   }
 
   private requireHistoryTarget(target: HistoryViewTarget): void {

@@ -19,6 +19,7 @@
   "command.refreshRepository.title": "SubversionR: Refresh",
   "command.checkRemoteChanges.title": "SubversionR: Check Remote Changes",
   "command.retryRemoteRecovery.title": "SubversionR: Retry Remote Recovery",
+  "command.resolveCheckoutTargetRecovery.title": "SubversionR: Review Blocked Checkout Target",
   "command.refreshResource.title": "SubversionR: Refresh Resource",
   "command.openConflictArtifact.title": "SubversionR: Open Conflict Artifact",
   "command.addResource.title": "SubversionR: Add Resource",

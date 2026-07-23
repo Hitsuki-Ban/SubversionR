@@ -6,6 +6,7 @@ import {
   type OperationRunResponse,
 } from "../src/operations/operationRunRpcClient";
 import type { JsonRpcSender } from "../src/status/types";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("OperationRunRpcClient", () => {
   it("sends operation/run revert with explicit options and returns the parsed result", async () => {
@@ -231,7 +232,7 @@ describe("OperationRunRpcClient", () => {
     );
   });
 
-  it("sends operation/run update with explicit root options and returns the parsed full-reconcile result", async () => {
+  it("sends local operation/run update without a remote envelope", async () => {
     const response = operationResponse({
       kind: "update",
       path: ".",
@@ -329,6 +330,7 @@ describe("OperationRunRpcClient", () => {
         depth: "workingCopy",
         depthIsSticky: false,
         ignoreExternals: true,
+        remote: anonymousSvnRemoteEnvelope(),
       },
       { signal: cancellation.signal },
     );
@@ -338,6 +340,7 @@ describe("OperationRunRpcClient", () => {
       {
         repositoryId: "repo-uuid:C:/wc",
         epoch: 7,
+        remote: anonymousSvnRemoteEnvelope(),
         kind: "update",
         options: {
           version: 1,
@@ -373,11 +376,13 @@ describe("OperationRunRpcClient", () => {
       depth: "workingCopy",
       depthIsSticky: false,
       ignoreExternals: true,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "update",
       options: {
         version: 1,
@@ -412,11 +417,13 @@ describe("OperationRunRpcClient", () => {
       depth: "files",
       depthIsSticky: true,
       ignoreExternals: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "update",
       options: {
         version: 1,
@@ -451,11 +458,12 @@ describe("OperationRunRpcClient", () => {
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "branchCreate",
       options: {
         version: 1,
-        sourceUrl: "file:///repo/trunk",
-        destinationUrl: "file:///repo/branches/feature",
+        sourceUrl: "svn://svn.example.invalid/repo/trunk",
+        destinationUrl: "svn://svn.example.invalid/repo/branches/feature",
         revision: "head",
         message: "Create feature branch",
         makeParents: true,
@@ -483,11 +491,12 @@ describe("OperationRunRpcClient", () => {
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "switch",
       options: {
         version: 1,
         path: "src",
-        url: "file:///repo/branches/feature/src",
+        url: "svn://svn.example.invalid/repo/branches/feature/src",
         revision: 55,
         depth: "infinity",
         depthIsSticky: true,
@@ -496,6 +505,64 @@ describe("OperationRunRpcClient", () => {
       },
     });
     expect(result).toEqual(response);
+  });
+
+  it("sends local file branchCreate without a remote envelope", async () => {
+    const response: OperationRunResponse = {
+      ...operationResponse({
+        kind: "branchCreate",
+        revision: 42,
+        targets: [],
+        requiresFullReconcile: false,
+      }),
+      touchedPaths: [],
+      summary: { affectedPaths: 0, skippedPaths: 0 },
+    };
+    const sender: JsonRpcSender = { sendRequest: vi.fn().mockResolvedValue(response) };
+    const remoteRequest = validBranchCreateRequest();
+    const request = {
+      ...remoteRequest,
+      sourceUrl: "file:///repo/trunk",
+      destinationUrl: "file:///repo/branches/feature",
+    };
+    const { remote: _remote, ...localRequest } = request;
+    void _remote;
+
+    await new OperationRunRpcClient(sender).branchCreate(localRequest);
+
+    expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
+      repositoryId: localRequest.repositoryId,
+      epoch: localRequest.epoch,
+      kind: "branchCreate",
+      options: {
+        version: 1,
+        sourceUrl: localRequest.sourceUrl,
+        destinationUrl: localRequest.destinationUrl,
+        revision: localRequest.revision,
+        message: localRequest.message,
+        makeParents: localRequest.makeParents,
+        ignoreExternals: localRequest.ignoreExternals,
+      },
+    });
+  });
+
+  it("rejects direct svn branchCreate and switch requests without remote", async () => {
+    const sender: JsonRpcSender = { sendRequest: vi.fn().mockResolvedValue({}) };
+    const client = new OperationRunRpcClient(sender);
+    const { remote: branchRemote, ...branchRequest } = validBranchCreateRequest();
+    const { remote: switchRemote, ...switchRequest } = validSwitchRequest();
+    void branchRemote;
+    void switchRemote;
+
+    await expect(client.branchCreate(branchRequest)).rejects.toMatchObject({
+      code: "SUBVERSIONR_OPERATION_RUN_REQUEST_INVALID",
+      safeArgs: { field: "remote" },
+    });
+    await expect(client.switch(switchRequest)).rejects.toMatchObject({
+      code: "SUBVERSIONR_OPERATION_RUN_REQUEST_INVALID",
+      safeArgs: { field: "remote" },
+    });
+    expect(sender.sendRequest).not.toHaveBeenCalled();
   });
 
   it("sends operation/run relocate and requires a full reconcile", async () => {
@@ -751,11 +818,13 @@ describe("OperationRunRpcClient", () => {
       paths: ["src/main.c"],
       comment: null,
       stealLock: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "lock",
       options: {
         version: 1,
@@ -783,11 +852,13 @@ describe("OperationRunRpcClient", () => {
       epoch: 7,
       paths: ["src/main.c"],
       breakLock: false,
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "unlock",
       options: {
         version: 1,
@@ -815,6 +886,7 @@ describe("OperationRunRpcClient", () => {
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "commit",
       options: {
         version: 1,
@@ -863,6 +935,7 @@ describe("OperationRunRpcClient", () => {
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "commit",
       options: {
         version: 1,
@@ -902,6 +975,7 @@ describe("OperationRunRpcClient", () => {
     expect(sender.sendRequest).toHaveBeenCalledWith("operation/run", {
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
+      remote: anonymousSvnRemoteEnvelope(),
       kind: "commit",
       options: {
         version: 1,
@@ -1039,7 +1113,8 @@ describe("OperationRunRpcClient", () => {
     ["comment", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src/main.c"], comment: "bad\rcomment", stealLock: false }],
     ["stealLock", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src/main.c"], comment: null, stealLock: "yes" }],
     ["extra", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src/main.c"], comment: null, stealLock: false, extra: true }],
-  ])("fails fast on invalid lock request field: %s", async (field, request) => {
+  ].map(([field, request]) => [field, { ...(request as Record<string, unknown>), remote: anonymousSvnRemoteEnvelope() }] as const))(
+    "fails fast on invalid lock request field: %s", async (field, request) => {
     const sender: JsonRpcSender = {
       sendRequest: vi.fn().mockResolvedValue(operationResponse({ kind: "lock", reason: "operationLock" })),
     };
@@ -1052,7 +1127,8 @@ describe("OperationRunRpcClient", () => {
       safeArgs: { field },
     });
     expect(sender.sendRequest).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it.each([
     ["repositoryId", { repositoryId: "", epoch: 7, paths: ["src/main.c"], breakLock: false }],
@@ -1063,7 +1139,8 @@ describe("OperationRunRpcClient", () => {
     ["paths.0", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src\\main.c"], breakLock: false }],
     ["breakLock", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src/main.c"], breakLock: "yes" }],
     ["stealLock", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src/main.c"], breakLock: false, stealLock: false }],
-  ])("fails fast on invalid unlock request field: %s", async (field, request) => {
+  ].map(([field, request]) => [field, { ...(request as Record<string, unknown>), remote: anonymousSvnRemoteEnvelope() }] as const))(
+    "fails fast on invalid unlock request field: %s", async (field, request) => {
     const sender: JsonRpcSender = {
       sendRequest: vi.fn().mockResolvedValue(operationResponse({ kind: "unlock", reason: "operationUnlock" })),
     };
@@ -1076,7 +1153,8 @@ describe("OperationRunRpcClient", () => {
       safeArgs: { field },
     });
     expect(sender.sendRequest).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it.each([
     ["repositoryId", { repositoryId: "", epoch: 7, paths: ["scratch.txt"], depth: "empty", force: false, noIgnore: false, noAutoprops: false, addParents: false }],
@@ -1228,7 +1306,8 @@ describe("OperationRunRpcClient", () => {
     ["depthIsSticky", { repositoryId: "repo-uuid:C:/wc", epoch: 7, path: ".", revision: "head", depth: "files", depthIsSticky: "yes", ignoreExternals: true }],
     ["ignoreExternals", { repositoryId: "repo-uuid:C:/wc", epoch: 7, path: ".", revision: "head", depth: "workingCopy", depthIsSticky: false, ignoreExternals: "no" }],
     ["extra", { repositoryId: "repo-uuid:C:/wc", epoch: 7, path: ".", revision: "head", depth: "workingCopy", depthIsSticky: false, ignoreExternals: true, extra: true }],
-  ])("fails fast on invalid update request field: %s", async (field, request) => {
+  ].map(([field, request]) => [field, { ...(request as Record<string, unknown>), remote: anonymousSvnRemoteEnvelope() }] as const))(
+    "fails fast on invalid update request field: %s", async (field, request) => {
     const sender: JsonRpcSender = {
       sendRequest: vi.fn().mockResolvedValue(
         operationResponse({
@@ -1249,7 +1328,8 @@ describe("OperationRunRpcClient", () => {
       safeArgs: { field },
     });
     expect(sender.sendRequest).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it.each([
     ["repositoryId", { repositoryId: "", epoch: 7, sourceUrl: "file:///repo/trunk", destinationUrl: "file:///repo/branches/feature", revision: "head", message: "Create branch", makeParents: false, ignoreExternals: false }],
@@ -1262,7 +1342,13 @@ describe("OperationRunRpcClient", () => {
     ["makeParents", { repositoryId: "repo-uuid:C:/wc", epoch: 7, sourceUrl: "file:///repo/trunk", destinationUrl: "file:///repo/branches/feature", revision: "head", message: "Create branch", ignoreExternals: false }],
     ["ignoreExternals", { repositoryId: "repo-uuid:C:/wc", epoch: 7, sourceUrl: "file:///repo/trunk", destinationUrl: "file:///repo/branches/feature", revision: "head", message: "Create branch", makeParents: false }],
     ["extra", { repositoryId: "repo-uuid:C:/wc", epoch: 7, sourceUrl: "file:///repo/trunk", destinationUrl: "file:///repo/branches/feature", revision: "head", message: "Create branch", makeParents: false, ignoreExternals: false, extra: true }],
-  ])("fails fast on invalid branchCreate request field: %s", async (field, request) => {
+  ].map(([field, request]) => [field, {
+    ...(request as Record<string, unknown>),
+    ...(field === "sourceUrl" ? {} : { sourceUrl: "svn://svn.example.invalid/repo/trunk" }),
+    ...(field === "destinationUrl" ? {} : { destinationUrl: "svn://svn.example.invalid/repo/branches/feature" }),
+    remote: anonymousSvnRemoteEnvelope(),
+  }] as const))(
+    "fails fast on invalid branchCreate request field: %s", async (field, request) => {
     const sender: JsonRpcSender = {
       sendRequest: vi.fn().mockResolvedValue(
         operationResponse({
@@ -1282,7 +1368,8 @@ describe("OperationRunRpcClient", () => {
       safeArgs: { field },
     });
     expect(sender.sendRequest).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it.each([
     ["repositoryId", { repositoryId: "", epoch: 7, path: "src", url: "file:///repo/branches/feature/src", revision: 55, depth: "infinity", depthIsSticky: true, ignoreExternals: true, ignoreAncestry: false }],
@@ -1295,7 +1382,12 @@ describe("OperationRunRpcClient", () => {
     ["ignoreExternals", { repositoryId: "repo-uuid:C:/wc", epoch: 7, path: "src", url: "file:///repo/branches/feature/src", revision: 55, depth: "infinity", depthIsSticky: true, ignoreExternals: "yes", ignoreAncestry: false }],
     ["ignoreAncestry", { repositoryId: "repo-uuid:C:/wc", epoch: 7, path: "src", url: "file:///repo/branches/feature/src", revision: 55, depth: "infinity", depthIsSticky: true, ignoreExternals: true }],
     ["extra", { repositoryId: "repo-uuid:C:/wc", epoch: 7, path: "src", url: "file:///repo/branches/feature/src", revision: 55, depth: "infinity", depthIsSticky: true, ignoreExternals: true, ignoreAncestry: false, extra: true }],
-  ])("fails fast on invalid switch request field: %s", async (field, request) => {
+  ].map(([field, request]) => [field, {
+    ...(request as Record<string, unknown>),
+    ...(field === "url" ? {} : { url: "svn://svn.example.invalid/repo/branches/feature/src" }),
+    remote: anonymousSvnRemoteEnvelope(),
+  }] as const))(
+    "fails fast on invalid switch request field: %s", async (field, request) => {
     const sender: JsonRpcSender = {
       sendRequest: vi.fn().mockResolvedValue(
         operationResponse({
@@ -1316,7 +1408,8 @@ describe("OperationRunRpcClient", () => {
       safeArgs: { field },
     });
     expect(sender.sendRequest).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it.each([
     ["repositoryId", { repositoryId: "", epoch: 7, fromUrl: "file:///repo", toUrl: "https://svn.example.invalid/repo", ignoreExternals: true }],
@@ -1425,7 +1518,8 @@ describe("OperationRunRpcClient", () => {
     ["includeFileExternals", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src/main.c"], message: "commit tracked file", depth: "empty", changelists: [], keepLocks: false, keepChangelists: false, commitAsOperations: false, includeFileExternals: true, includeDirExternals: false }],
     ["includeDirExternals", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src/main.c"], message: "commit tracked file", depth: "empty", changelists: [], keepLocks: false, keepChangelists: false, commitAsOperations: false, includeFileExternals: false, includeDirExternals: true }],
     ["extra", { repositoryId: "repo-uuid:C:/wc", epoch: 7, paths: ["src/main.c"], message: "commit tracked file", depth: "empty", changelists: [], keepLocks: false, keepChangelists: false, commitAsOperations: false, includeFileExternals: false, includeDirExternals: false, extra: true }],
-  ])("fails fast on invalid commit request field: %s", async (field, request) => {
+  ].map(([field, request]) => [field, { ...(request as Record<string, unknown>), remote: anonymousSvnRemoteEnvelope() }] as const))(
+    "fails fast on invalid commit request field: %s", async (field, request) => {
     const sender: JsonRpcSender = {
       sendRequest: vi.fn().mockResolvedValue(
         operationResponse({
@@ -1445,7 +1539,8 @@ describe("OperationRunRpcClient", () => {
       safeArgs: { field },
     });
     expect(sender.sendRequest).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it.each([
     ["repositoryId", { repositoryId: "", epoch: 7, paths: ["src/conflicted.txt"], depth: "empty", choice: "working" }],
@@ -1762,6 +1857,7 @@ function validUpdateRequest() {
     depth: "workingCopy" as const,
     depthIsSticky: false as const,
     ignoreExternals: true as const,
+    remote: anonymousSvnRemoteEnvelope(),
   };
 }
 
@@ -1787,12 +1883,13 @@ function validBranchCreateRequest() {
   return {
     repositoryId: "repo-uuid:C:/wc",
     epoch: 7,
-    sourceUrl: "file:///repo/trunk",
-    destinationUrl: "file:///repo/branches/feature",
+    sourceUrl: "svn://svn.example.invalid/repo/trunk",
+    destinationUrl: "svn://svn.example.invalid/repo/branches/feature",
     revision: "head" as const,
     message: "Create feature branch",
     makeParents: true,
     ignoreExternals: false,
+    remote: anonymousSvnRemoteEnvelope(),
   };
 }
 
@@ -1801,12 +1898,13 @@ function validSwitchRequest() {
     repositoryId: "repo-uuid:C:/wc",
     epoch: 7,
     path: "src",
-    url: "file:///repo/branches/feature/src",
+    url: "svn://svn.example.invalid/repo/branches/feature/src",
     revision: 55,
     depth: "infinity" as const,
     depthIsSticky: true,
     ignoreExternals: true,
     ignoreAncestry: false,
+    remote: anonymousSvnRemoteEnvelope(),
   };
 }
 
@@ -1833,6 +1931,7 @@ function validCommitRequest() {
     commitAsOperations: false as const,
     includeFileExternals: false as const,
     includeDirExternals: false as const,
+    remote: anonymousSvnRemoteEnvelope(),
   };
 }
 

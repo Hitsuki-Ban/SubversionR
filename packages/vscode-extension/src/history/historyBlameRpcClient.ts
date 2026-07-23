@@ -1,5 +1,9 @@
 import { Buffer } from "node:buffer";
-import type { JsonRpcSender } from "../status/types";
+import {
+  validateAnonymousSvnRemoteOperationEnvelope,
+  type RemoteOperationEnvelope,
+} from "../security/remoteAccessProfile";
+import type { JsonRpcRequestOptions, JsonRpcSender } from "../status/types";
 
 declare const blameRevisionBrand: unique symbol;
 declare const blameNumberedRevisionBrand: unique symbol;
@@ -30,6 +34,7 @@ export interface HistoryBlameRequest {
   ignoreEolStyle: boolean;
   ignoreMimeType: boolean;
   includeMergedRevisions: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface ValidatedHistoryBlameRequest {
@@ -45,6 +50,7 @@ export interface ValidatedHistoryBlameRequest {
   ignoreEolStyle: boolean;
   ignoreMimeType: boolean;
   includeMergedRevisions: boolean;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface HistoryBlameLine {
@@ -82,8 +88,10 @@ export interface HistoryBlame {
 }
 
 export interface HistoryBlameClient {
-  getBlame(request: HistoryBlameRequest): Promise<HistoryBlame>;
+  getBlame(request: HistoryBlameRequest, options?: HistoryBlameClientOptions): Promise<HistoryBlame>;
 }
+
+export type HistoryBlameClientOptions = JsonRpcRequestOptions;
 
 export class HistoryBlameResponseError extends Error {
   public constructor(
@@ -100,9 +108,14 @@ export class HistoryBlameResponseError extends Error {
 export class HistoryBlameRpcClient implements HistoryBlameClient {
   public constructor(private readonly sender: JsonRpcSender) {}
 
-  public async getBlame(request: HistoryBlameRequest): Promise<HistoryBlame> {
+  public async getBlame(
+    request: HistoryBlameRequest,
+    options?: HistoryBlameClientOptions,
+  ): Promise<HistoryBlame> {
     const validatedRequest = validateHistoryBlameRequest(request);
-    const rawResponse = await this.sender.sendRequest<unknown>("history/blame", validatedRequest);
+    const rawResponse = options === undefined
+      ? await this.sender.sendRequest<unknown>("history/blame", validatedRequest)
+      : await this.sender.sendRequest<unknown>("history/blame", validatedRequest, options);
     const blame = parseHistoryBlameResponse(rawResponse);
     requireHistoryBlameMatchesRequest(blame, validatedRequest);
     return blame;
@@ -126,7 +139,7 @@ function validateHistoryBlameRequest(request: HistoryBlameRequest): ValidatedHis
     "ignoreEolStyle",
     "ignoreMimeType",
     "includeMergedRevisions",
-  ]);
+  ], ["remote"]);
   if (typeof request.repositoryId !== "string" || request.repositoryId.trim().length === 0) {
     throw invalidBlameRequest("repositoryId");
   }
@@ -174,6 +187,9 @@ function validateHistoryBlameRequest(request: HistoryBlameRequest): ValidatedHis
     throw invalidBlameRequest("includeMergedRevisions");
   }
 
+  const remote = "remote" in request
+    ? validateAnonymousSvnRemoteOperationEnvelope(request.remote)
+    : undefined;
   return {
     repositoryId: request.repositoryId,
     epoch: request.epoch,
@@ -187,6 +203,7 @@ function validateHistoryBlameRequest(request: HistoryBlameRequest): ValidatedHis
     ignoreEolStyle: request.ignoreEolStyle,
     ignoreMimeType: request.ignoreMimeType,
     includeMergedRevisions: request.includeMergedRevisions,
+    ...(remote === undefined ? {} : { remote }),
   };
 }
 
@@ -350,6 +367,11 @@ function requireRecord(value: unknown, field: string): Record<string, unknown> {
 
 function requireExactKeys(value: Record<string, unknown>, field: string, expectedKeys: readonly string[]): void {
   const expected = new Set(expectedKeys);
+  for (const key of expected) {
+    if (!(key in value)) {
+      throw invalidBlameResponse(key);
+    }
+  }
   for (const key of Object.keys(value)) {
     if (!expected.has(key)) {
       throw invalidBlameResponse(field === "result" ? key : `${field}.${key}`);
@@ -361,10 +383,17 @@ function requireExactRequestKeys(
   value: Record<string, unknown>,
   field: string,
   expectedKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
 ): void {
   const expected = new Set(expectedKeys);
+  const allowed = new Set([...expectedKeys, ...optionalKeys]);
+  for (const key of expected) {
+    if (!(key in value)) {
+      throw invalidBlameRequest(key);
+    }
+  }
   for (const key of Object.keys(value)) {
-    if (!expected.has(key)) {
+    if (!allowed.has(key)) {
       throw invalidBlameRequest(field === "request" ? key : `${field}.${key}`);
     }
   }

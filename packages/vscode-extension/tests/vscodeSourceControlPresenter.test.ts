@@ -338,6 +338,31 @@ describe("VscodeSourceControlPresenter", () => {
     }]);
   });
 
+  it("does not offer an authentication retry for authorization denial", () => {
+    const api = fakeVscodeScmApi();
+    const presenter = new VscodeSourceControlPresenter(api);
+    presenter.registerRepository({ repositoryId: "repo-uuid:C:/wc", epoch: 7, workingCopyRoot: "C:/wc" });
+    presenter.updateRepository(projection());
+    presenter.updateRemoteConnectionState({
+      kind: "attention",
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      reason: "authorizationDenied",
+      incoming: { kind: "stale" },
+      recovery: { kind: "notRequired" },
+      lastFailure: {
+        reason: "authorizationDenied",
+        cleanupAppropriate: false,
+        occurredAt: "2026-07-18T01:00:00.000Z",
+      },
+    });
+
+    expect(api.sourceControl.statusBarCommands).toEqual([{
+      command: "subversionr.diagnostics.collect",
+      title: "l10n:SVN remote attention required",
+    }]);
+  });
+
   it("omits incoming changed metadata tooltip lines when SVN changed revision is unknown", () => {
     const api = fakeVscodeScmApi();
     const presenter = new VscodeSourceControlPresenter(api);

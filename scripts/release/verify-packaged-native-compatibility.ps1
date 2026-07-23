@@ -117,7 +117,7 @@ try {
     $probeResult["status"] -ne "passed" `
     -or $protocol -isnot [System.Collections.IDictionary] `
     -or [int]$protocol["major"] -ne 1 `
-    -or [int]$protocol["minor"] -ne 34 `
+    -or [int]$protocol["minor"] -ne 35 `
     -or $capabilities -isnot [System.Collections.IDictionary] `
     -or $capabilities["remoteWorkerIsolation"] -isnot [bool] `
     -or $capabilities["remoteWorkerIsolation"] -ne $true `
@@ -152,7 +152,7 @@ try {
     -or [string]$subsequentDiagnostics["source"] -cne "subversionr-daemon" `
     -or $subsequentProtocol -isnot [System.Collections.IDictionary] `
     -or [int]$subsequentProtocol["major"] -ne 1 `
-    -or [int]$subsequentProtocol["minor"] -ne 34 `
+    -or [int]$subsequentProtocol["minor"] -ne 35 `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["backendVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["bridgeVersion"]) `
     -or [string]::IsNullOrWhiteSpace([string]$probeResult["libsvnVersion"])

@@ -506,7 +506,7 @@ try {
   Assert-Equal "subversionr-svn-bridge/$productVersion" $report.nativeCompatibility.bridgeVersion "VSIX package evidence should bind the bridge version to the product."
   Assert-True (-not [string]::IsNullOrWhiteSpace([string]$report.nativeCompatibility.libsvnVersion)) "VSIX package evidence should preserve the independent libsvn version."
   Assert-Equal "1" ([string]$report.nativeCompatibility.protocol.major) "VSIX package evidence should record the probed protocol major."
-  Assert-Equal "34" ([string]$report.nativeCompatibility.protocol.minor) "VSIX package evidence should record the exact connection-state protocol minor."
+  Assert-Equal "35" ([string]$report.nativeCompatibility.protocol.minor) "VSIX package evidence should record the exact connection-state protocol minor."
   Assert-Equal "True" ([string]$report.nativeCompatibility.capabilities.remoteWorkerIsolation) "VSIX package evidence should record the packaged remote worker capability."
   Assert-Equal "True" ([string]$report.nativeCompatibility.capabilities.remoteConnectionState) "VSIX package evidence should record the packaged remote connection-state capability."
   Assert-Equal "True" ([string]$report.nativeCompatibility.capabilities.credentialLeaseSettlement) "VSIX package evidence should record the packaged credential lease settlement capability."
@@ -533,7 +533,7 @@ try {
   Assert-Equal "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED" $report.nativeCompatibility.workerIsolation.sameLaneSubsequent.resultCode "VSIX package same-lane evidence must remain transport unsupported."
   Assert-Equal "passed" $report.nativeCompatibility.workerIsolation.subsequentDiagnostics.status "VSIX package evidence should prove a subsequent daemon request succeeds."
   Assert-Equal "subversionr-daemon" $report.nativeCompatibility.workerIsolation.subsequentDiagnostics.source "VSIX package evidence should bind the subsequent request to the daemon."
-  Assert-Equal "34" ([string]$report.nativeCompatibility.workerIsolation.subsequentDiagnostics.protocol.minor) "VSIX package evidence should bind subsequent diagnostics to protocol v1.34."
+  Assert-Equal "35" ([string]$report.nativeCompatibility.workerIsolation.subsequentDiagnostics.protocol.minor) "VSIX package evidence should bind subsequent diagnostics to protocol v1.35."
 
   $stalePackageRoot = Join-Path $tempRoot "stale-protocol-package"
   Copy-Item -LiteralPath $packageRoot -Destination $stalePackageRoot -Recurse

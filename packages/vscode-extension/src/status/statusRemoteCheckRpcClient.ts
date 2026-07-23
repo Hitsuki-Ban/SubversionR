@@ -5,7 +5,7 @@ import type { RemoteOperationEnvelope } from "../security/remoteAccessProfile";
 export interface StatusRemoteCheckRequest {
   repositoryId: string;
   epoch: number;
-  remote: RemoteOperationEnvelope;
+  remote?: RemoteOperationEnvelope;
 }
 
 export interface StatusRemoteCheckClient {
@@ -66,7 +66,12 @@ function validateRequest(request: StatusRemoteCheckRequest): StatusRemoteCheckRe
     throw invalidRequest("repositoryId");
   }
   const keys = Object.keys(request).sort();
-  if (keys.length !== 3 || keys[0] !== "epoch" || keys[1] !== "remote" || keys[2] !== "repositoryId") {
+  if (
+    (keys.length !== 2 && keys.length !== 3)
+    || keys[0] !== "epoch"
+    || keys[keys.length - 1] !== "repositoryId"
+    || (keys.length === 3 && keys[1] !== "remote")
+  ) {
     throw invalidRequest("request");
   }
   if (typeof request.repositoryId !== "string" || request.repositoryId.trim().length === 0) {
@@ -75,7 +80,11 @@ function validateRequest(request: StatusRemoteCheckRequest): StatusRemoteCheckRe
   if (!Number.isSafeInteger(request.epoch) || request.epoch < 0) {
     throw invalidRequest("epoch");
   }
-  return { repositoryId: request.repositoryId, epoch: request.epoch, remote: validateRemoteEnvelope(request.remote) };
+  return {
+    repositoryId: request.repositoryId,
+    epoch: request.epoch,
+    ...(request.remote === undefined ? {} : { remote: validateRemoteEnvelope(request.remote) }),
+  };
 }
 
 function validateRemoteEnvelope(value: RemoteOperationEnvelope): RemoteOperationEnvelope {
@@ -97,7 +106,9 @@ function validateRemoteEnvelope(value: RemoteOperationEnvelope): RemoteOperation
 }
 
 function isCanonicalUuid(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    && value !== "00000000-0000-0000-0000-000000000000";
 }
 
 function invalidRequest(field: string): StatusRemoteCheckRequestError {

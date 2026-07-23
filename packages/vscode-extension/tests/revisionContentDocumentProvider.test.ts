@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { RevisionContentDocumentProvider } from "../src/content/revisionContentDocumentProvider";
 import { REVISION_CONTENT_URI_SCHEME } from "../src/content/revisionContentUri";
 import type { ContentBlob, ContentClient } from "../src/content/contentGetRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("RevisionContentDocumentProvider", () => {
   it("loads explicit revision content through content/get and returns readonly text", async () => {
@@ -18,19 +19,21 @@ describe("RevisionContentDocumentProvider", () => {
     });
     const provider = new RevisionContentDocumentProvider({
       contentClient: client,
+      createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
       workspaceTrusted: () => true,
       localize: (message, ...args) =>
         `l10n:${args.reduce<string>((current, arg, index) => current.replace(`{${index}}`, String(arg)), message)}`,
     });
 
-    const text = await provider.provideTextDocumentContent(revisionUri());
+    const text = await provider.provideTextDocumentContent(revisionUri(), cancellationToken());
 
     expect(client.getContent).toHaveBeenCalledWith({
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
       path: "src/main.c",
       revision: "r8",
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(text).toBe("rev\n");
   });
 
@@ -48,6 +51,7 @@ describe("RevisionContentDocumentProvider", () => {
     });
     const provider = new RevisionContentDocumentProvider({
       contentClient: client,
+      createRemoteEnvelope: async () => undefined,
       workspaceTrusted: () => true,
       localize: (message, ...args) =>
         `l10n:${args.reduce<string>((current, arg, index) => current.replace(`{${index}}`, String(arg)), message)}`,
@@ -58,8 +62,17 @@ describe("RevisionContentDocumentProvider", () => {
       authority: "revision",
       path: "/",
       query: "repositoryId=repo-uuid%3AC%3A%2Fwc&epoch=7&path=image.bin&revision=r8",
-    });
+    }, cancellationToken());
 
+    expect(client.getContent).toHaveBeenCalledWith(
+      {
+        repositoryId: "repo-uuid:C:/wc",
+        epoch: 7,
+        path: "image.bin",
+        revision: "r8",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(text).toBe("l10n:Binary SVN revision content is not displayed in the text editor: image.bin@r8");
   });
 
@@ -77,12 +90,13 @@ describe("RevisionContentDocumentProvider", () => {
     });
     const provider = new RevisionContentDocumentProvider({
       contentClient: client,
+      createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
       workspaceTrusted: () => false,
       localize: (message, ...args) =>
         `l10n:${args.reduce<string>((current, arg, index) => current.replace(`{${index}}`, String(arg)), message)}`,
     });
 
-    await expect(provider.provideTextDocumentContent(revisionUri())).rejects.toMatchObject({
+    await expect(provider.provideTextDocumentContent(revisionUri(), cancellationToken())).rejects.toMatchObject({
       code: "SUBVERSIONR_WORKSPACE_UNTRUSTED_OPERATION",
     });
     expect(client.getContent).not.toHaveBeenCalled();
@@ -103,5 +117,12 @@ function revisionUri() {
     authority: "revision",
     path: "/",
     query: "repositoryId=repo-uuid%3AC%3A%2Fwc&epoch=7&path=src%2Fmain.c&revision=r8",
+  };
+}
+
+function cancellationToken() {
+  return {
+    isCancellationRequested: false,
+    onCancellationRequested: vi.fn(() => ({ dispose: vi.fn() })),
   };
 }

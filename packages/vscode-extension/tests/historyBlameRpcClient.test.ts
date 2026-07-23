@@ -3,6 +3,7 @@ import type { BackendConnection } from "../src/backend/backendProcess";
 import { BackendHistoryClient } from "../src/history/backendHistoryClient";
 import { HistoryBlameResponseError, HistoryBlameRpcClient } from "../src/history/historyBlameRpcClient";
 import type { JsonRpcSender } from "../src/status/types";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("HistoryBlameRpcClient", () => {
   it("sends history/blame and parses line attribution metadata", async () => {
@@ -41,6 +42,16 @@ describe("HistoryBlameRpcClient", () => {
         localChange: false,
       },
     ]);
+  });
+
+  it("passes cancellation signals to history/blame", async () => {
+    const sender = fakeSender(historyBlameResponse());
+    const request = historyBlameRequest();
+    const signal = new AbortController().signal;
+
+    await new HistoryBlameRpcClient(sender).getBlame(request, { signal });
+
+    expect(sender.sendRequest).toHaveBeenCalledWith("history/blame", request, { signal });
   });
 
   it("accepts an explicit one-line window with alternate blame options", async () => {
@@ -163,6 +174,16 @@ describe("HistoryBlameRpcClient", () => {
     expect(sender.sendRequest).not.toHaveBeenCalled();
   });
 
+  it("accepts local blame requests without a remote envelope", async () => {
+    const sender = fakeSender(historyBlameResponse());
+    const client = new HistoryBlameRpcClient(sender);
+    const { remote: _remote, ...request } = historyBlameRequest();
+    void _remote;
+
+    await expect(client.getBlame(request)).resolves.toMatchObject({ repositoryId: request.repositoryId });
+    expect(sender.sendRequest).toHaveBeenCalledWith("history/blame", request);
+  });
+
   it("rejects blame responses with mismatched identity fields", async () => {
     const sender = fakeSender({ ...historyBlameResponse(), repositoryId: "other-repo" });
     const client = new HistoryBlameRpcClient(sender);
@@ -241,6 +262,7 @@ function historyBlameRequest() {
     ignoreEolStyle: false,
     ignoreMimeType: false,
     includeMergedRevisions: false,
+    remote: anonymousSvnRemoteEnvelope(),
   };
 }
 

@@ -3,6 +3,7 @@ import type { BackendConnection } from "../src/backend/backendProcess";
 import { BackendHistoryClient } from "../src/history/backendHistoryClient";
 import { HistoryLogResponseError, HistoryLogRpcClient } from "../src/history/historyLogRpcClient";
 import type { JsonRpcSender } from "../src/status/types";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("HistoryLogRpcClient", () => {
   it("sends history/log and parses changed-path metadata", async () => {
@@ -31,6 +32,16 @@ describe("HistoryLogRpcClient", () => {
       textModified: "true",
       propertiesModified: "false",
     });
+  });
+
+  it("passes cancellation signals to history/log", async () => {
+    const sender = fakeSender(historyLogResponse());
+    const request = historyLogRequest();
+    const signal = new AbortController().signal;
+
+    await new HistoryLogRpcClient(sender).getLog(request, { signal });
+
+    expect(sender.sendRequest).toHaveBeenCalledWith("history/log", request, { signal });
   });
 
   it("accepts root history requests with an empty response", async () => {
@@ -124,6 +135,16 @@ describe("HistoryLogRpcClient", () => {
     expect(sender.sendRequest).not.toHaveBeenCalled();
   });
 
+  it("accepts local history requests without a remote envelope", async () => {
+    const sender = fakeSender(historyLogResponse());
+    const client = new HistoryLogRpcClient(sender);
+    const { remote: _remote, ...request } = historyLogRequest();
+    void _remote;
+
+    await expect(client.getLog(request)).resolves.toMatchObject({ repositoryId: request.repositoryId });
+    expect(sender.sendRequest).toHaveBeenCalledWith("history/log", request);
+  });
+
   it("rejects history responses with mismatched identity fields", async () => {
     const sender = fakeSender({ ...historyLogResponse(), repositoryId: "other-repo" });
     const client = new HistoryLogRpcClient(sender);
@@ -191,6 +212,7 @@ function historyLogRequest() {
     discoverChangedPaths: true,
     strictNodeHistory: true,
     includeMergedRevisions: false,
+    remote: anonymousSvnRemoteEnvelope(),
   };
 }
 

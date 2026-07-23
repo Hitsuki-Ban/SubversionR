@@ -92,13 +92,13 @@ int main(void) {
 
   subversionr_bridge_remote_config_v1 config = {
     SUBVERSIONR_BRIDGE_REMOTE_CONFIG_ABI_VERSION,
-    SUBVERSIONR_BRIDGE_REMOTE_SCHEME_HTTPS,
-    SUBVERSIONR_BRIDGE_REMOTE_AUTH_BASIC,
+    SUBVERSIONR_BRIDGE_REMOTE_SCHEME_SVN,
+    SUBVERSIONR_BRIDGE_REMOTE_AUTH_ANONYMOUS,
     1234,
-    1
+    0
   };
   subversionr_bridge_remote_context *context = NULL;
-  int create_status = subversionr_bridge_remote_context_create(&config, &context);
+  int create_status = subversionr_bridge_remote_context_create(&config, NULL, &context);
   if (create_status != 0 || context == NULL) {
     fprintf(stderr, "Remote context creation failed with status %d\n", create_status);
     return 2;

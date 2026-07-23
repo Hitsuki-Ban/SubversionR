@@ -39,6 +39,27 @@ describe("RemoteStatusCheckService", () => {
     expect(refreshPipeline.runExclusive).toHaveBeenCalledWith("repo", expect.any(Function));
   });
 
+  it("checks file repositories without an envelope or remote connection-state transition", async () => {
+    const delta = {} as StatusDelta;
+    const client = { checkRemoteStatus: vi.fn().mockResolvedValue(delta) };
+    const remoteStateProjection = { updateRemoteConnectionState: vi.fn() };
+    const service = createService({
+      client,
+      remoteStateProjection,
+      createRemoteEnvelope: vi.fn().mockResolvedValue(undefined),
+      statusSnapshotStore: { applyDelta: vi.fn().mockReturnValue({ summary: { remoteChanges: 2 } }) },
+    });
+
+    await expect(service.checkRemoteChanges({
+      repositoryId: "repo",
+      epoch: 2,
+      repositoryRootUrl: "file:///C:/repository",
+    })).resolves.toBe(2);
+
+    expect(client.checkRemoteStatus).toHaveBeenCalledWith({ repositoryId: "repo", epoch: 2 }, {});
+    expect(remoteStateProjection.updateRemoteConnectionState).not.toHaveBeenCalled();
+  });
+
   it("rebuilds projection and marks Incoming stale when projection application fails", async () => {
     const delta = {} as StatusDelta;
     const snapshot = { summary: { remoteChanges: 1 } };

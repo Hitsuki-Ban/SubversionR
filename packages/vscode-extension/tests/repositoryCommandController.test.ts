@@ -3434,8 +3434,7 @@ describe("RepositoryCommandController", () => {
     });
 
     const first = controller.updateRepository();
-    await flushMicrotasks();
-    expect(events).toEqual(["update:1"]);
+    await vi.waitFor(() => expect(events).toEqual(["update:1"]));
 
     firstUpdate.resolve(
       operationResponse({
@@ -3445,9 +3444,7 @@ describe("RepositoryCommandController", () => {
         reconcile: { targets: [], requiresFullReconcile: true },
       }),
     );
-    await flushMicrotasks();
-    await flushMicrotasks();
-    expect(events).toEqual(["update:1", "reconcile:1"]);
+    await vi.waitFor(() => expect(events).toEqual(["update:1", "reconcile:1"]));
 
     const second = controller.updateRepository();
     await flushMicrotasks();
@@ -7689,6 +7686,149 @@ describe("RepositoryCommandController", () => {
     expect(ui.showInformationMessage).toHaveBeenCalledWith("SubversionR locked SVN resource: src/main.c");
   });
 
+  it("explains that anonymous SVN locking requires an authenticated identity", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    operationClient.lock.mockRejectedValueOnce({
+      code: "SVN_OPERATION_LOCK_FAILED",
+      category: "native",
+      messageKey: "error.native.operationLockFailed",
+      safeArgs: {
+        path: "C:/workspace/src/main.c",
+        status: 2,
+        mayHaveMutated: false,
+        anonymousIdentityRequired: true,
+        remoteFailure: {
+          category: "authentication",
+          reason: "authenticationRequired",
+          cleanupAppropriate: false,
+        },
+      },
+      retryable: false,
+      diagnostics: {
+        cause: "authenticationFailed",
+        svn: {
+          entries: [{ code: 170001, name: "SVN_ERR_RA_NOT_AUTHORIZED" }],
+          truncated: false,
+        },
+      },
+    });
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    await controller.lockResource(resource);
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "Locking requires an authenticated identity; the current SVN server profile is anonymous.",
+      "Show Log",
+    );
+  });
+
+  it("keeps ordinary SVN lock authorization denial distinct from anonymous identity failure", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    operationClient.lock.mockRejectedValueOnce({
+      code: "SVN_OPERATION_LOCK_FAILED",
+      safeArgs: {
+        remoteFailure: {
+          category: "authorization",
+          reason: "authorizationDenied",
+          cleanupAppropriate: false,
+        },
+      },
+      diagnostics: {
+        cause: "authorizationDenied",
+        svn: {
+          entries: [{ code: 170001, name: "SVN_ERR_AUTHZ_UNWRITABLE" }],
+          truncated: false,
+        },
+      },
+    });
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    await controller.lockResource(resource);
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "SVN Lock failed because the server denied authorization for this operation.",
+      "Show Log",
+    );
+  });
+
+  it("does not describe an authenticated SVN lock rejection as an anonymous profile", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "lock", path: "src/main.c" }));
+    operationClient.lock.mockRejectedValueOnce({
+      code: "SVN_OPERATION_LOCK_FAILED",
+      safeArgs: {
+        mayHaveMutated: false,
+        remoteFailure: {
+          category: "authentication",
+          reason: "authenticationRequired",
+          cleanupAppropriate: false,
+        },
+      },
+      diagnostics: {
+        cause: "authenticationFailed",
+        svn: {
+          entries: [{ code: 170001, name: "SVN_ERR_RA_NOT_AUTHORIZED" }],
+          truncated: false,
+        },
+      },
+    });
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c" })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    await controller.lockResource(resource);
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "SVN Lock failed because authentication was rejected. Check the credentials and retry.",
+      "Show Log",
+    );
+  });
+
   it("settles a native unlock failure and releases the scheduler for the next unlock", async () => {
     const resource = {
       contextValue: "subversionr.changedFile.baseDiffable.locked",
@@ -7720,6 +7860,58 @@ describe("RepositoryCommandController", () => {
     await expect(withTimeout(controller.unlockResource(resource), 50)).resolves.toBeUndefined();
     expect(operationClient.unlock).toHaveBeenCalledTimes(2);
     expect(refreshService.refreshTargets).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains that anonymous SVN unlocking requires an authenticated identity", async () => {
+    const resource = {
+      contextValue: "subversionr.changedFile.locked",
+      resourceUri: { fsPath: "C:\\workspace\\src\\main.c" },
+    };
+    const operationClient = fakeOperationClient(operationResponse({ kind: "unlock", path: "src/main.c" }));
+    operationClient.unlock.mockRejectedValueOnce({
+      code: "SVN_OPERATION_UNLOCK_FAILED",
+      category: "native",
+      messageKey: "error.native.operationUnlockFailed",
+      safeArgs: {
+        path: "C:/workspace/src/main.c",
+        status: 2,
+        mayHaveMutated: false,
+        anonymousIdentityRequired: true,
+        remoteFailure: {
+          category: "authentication",
+          reason: "authenticationRequired",
+          cleanupAppropriate: false,
+        },
+      },
+      retryable: false,
+      diagnostics: {
+        cause: "authenticationFailed",
+        svn: {
+          entries: [{ code: 160034, name: "SVN_ERR_FS_NO_USER" }],
+          truncated: false,
+        },
+      },
+    });
+    const ui = fakeCommandUi({ workspaceRoots: ["C:\\workspace"] });
+    const controller = commandController(
+      fakeDiscoveryService({ candidates: [discoveryCandidate()] }),
+      fakeSessionService({ sessions: [repositorySession()] }),
+      ui,
+      {
+        operationClient,
+        sourceControlProjection: fakeSourceControlProjection({
+          projection: scmProjection({ resources: [scmProjectedResource({ path: "src/main.c", lock: svnLock() })] }),
+          isCurrentResourceState: (resourceState) => resourceState === resource,
+        }),
+      },
+    );
+
+    await controller.unlockResource(resource);
+
+    expect(ui.showErrorMessage).toHaveBeenCalledWith(
+      "Unlocking requires an authenticated identity; the current SVN server profile is anonymous.",
+      "Show Log",
+    );
   });
 
   it("reconciles exactly the selected lock targets when native reports a partial mutation", async () => {
@@ -7767,7 +7959,7 @@ describe("RepositoryCommandController", () => {
     });
     expect(ui.showInformationMessage).not.toHaveBeenCalled();
     expect(ui.showErrorMessage).toHaveBeenCalledWith(
-      "SVN Repository Operation failed. Open the SubversionR log for details.",
+      "SVN Lock failed. Open the SubversionR log for details.",
       "Show Log",
     );
   });
@@ -11819,6 +12011,7 @@ function commandController(
     commandCancellation?: RepositoryCommandControllerOptions["commandCancellation"];
     commitMessageHistory?: Pick<RepositoryCommitMessageHistory, "messages" | "record">;
     includeMergedRevisions?: () => boolean;
+    createRemoteEnvelope?: RepositoryCommandControllerOptions["createRemoteEnvelope"];
     createRequestId?: () => string;
     now?: () => string;
     monotonicNowMs?: () => number;
@@ -11847,6 +12040,7 @@ function commandController(
     },
     commitMessageHistory: deps.commitMessageHistory ?? new RepositoryCommitMessageHistory(),
     includeMergedRevisions: deps.includeMergedRevisions ?? (() => false),
+    createRemoteEnvelope: deps.createRemoteEnvelope ?? (async () => undefined),
     createRequestId: deps.createRequestId ?? (() => "11111111-1111-4111-8111-111111111111"),
     now: deps.now ?? (() => "2026-06-25T00:00:00.000Z"),
     monotonicNowMs: deps.monotonicNowMs ?? (() => 0),

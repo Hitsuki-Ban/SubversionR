@@ -1,11 +1,11 @@
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
-import { readdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 
 const PROBE_SCHEMA = "subversionr.release.packaged-native-compatibility.v2";
 const EXPECTED_PROTOCOL_MAJOR = 1;
-const EXPECTED_PROTOCOL_MINOR = 34;
+const EXPECTED_PROTOCOL_MINOR = 35;
 const EXPECTED_REMOTE_RESULT_CODE = "SUBVERSIONR_REMOTE_TRANSPORT_UNSUPPORTED";
 
 class ProbeError extends Error {
@@ -34,11 +34,14 @@ try {
     );
   }
 
+  await mkdir(path.join(options.profileRoot, "remote-state"), { recursive: true });
+
   connection = await startBackendProcess(
     {
       executablePath: options.daemon,
       bridgeDllPath: options.bridge,
       cacheRoot: options.cacheRoot,
+      remoteStateRoot: path.join(options.profileRoot, "remote-state"),
       clientName: "subversionr-release-probe",
       clientVersion: "1",
       locale: "en",

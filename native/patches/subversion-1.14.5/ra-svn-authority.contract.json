@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "name": "apache-subversion",
+    "version": "1.14.5",
+    "target": "subversion/libsvn_ra_svn/client.c",
+    "archiveSha256": "a8721cbac8047966483011f1977dc93008d1b2a06d07e8dea04ebff58b5200d3",
+    "upstreamSha256": "3c3b9263dd7223a9c2c48ef8152b55e349f9fce69b7e56ea36ec6149582b48f1",
+    "patchedSha256": "3cc8f223128d2de62a7edfb167dd6ab88c868c861794501450a96cd45735da6f"
+  },
+  "patch": {
+    "file": "ra-svn-authority.patch",
+    "sha256": "063dbc55ace673f7c8c4cb6ac7833fed85012a8259f8aa39b00f0fa4067509e6"
+  },
+  "authParameter": {
+    "key": "subversionr:expected-svn-origin-v1",
+    "value": "canonical svn:// authority origin; omit :3690 and include only a non-default port"
+  },
+  "failure": {
+    "aprError": "SVN_ERR_RA_ILLEGAL_URL",
+    "message": "SubversionR repository root authority mismatch"
+  }
+}

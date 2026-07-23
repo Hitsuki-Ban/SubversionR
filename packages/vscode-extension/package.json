@@ -53,6 +53,23 @@
     "onCommand:subversionr.initialize",
     "onCommand:subversionr.diagnostics.collect",
     "onCommand:subversionr.diagnostics.versionReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousStressCheckout",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousNegativeReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousAuthzDeniedReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousStalledReadReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousDeadlineReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousBlackholeConnectReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousCancellationReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousWorkerCrashReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousDaemonDisconnectReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousTrustRevokedReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryBlockedReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoveryIndeterminateReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousRecoverySafeReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousRedactionReport",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkArm",
+    "onCommand:subversionr.diagnostics.installedSvnAnonymousLocalEventZeroNetworkReport",
     "onCommand:subversionr.diagnostics.installedCoreWorkflowReport",
     "onCommand:subversionr.diagnostics.installedSourceControlSurfaceReport",
     "onCommand:subversionr.diagnostics.installedSourceControlUiE2eOpenReport",
@@ -82,6 +99,7 @@
     "onCommand:subversionr.refreshRepository",
     "onCommand:subversionr.checkRemoteChanges",
     "onCommand:subversionr.retryRemoteRecovery",
+    "onCommand:subversionr.resolveCheckoutTargetRecovery",
     "onCommand:subversionr.refreshResource",
     "onCommand:subversionr.openConflictArtifact",
     "onCommand:subversionr.addResource",
@@ -253,6 +271,10 @@
       {
         "command": "subversionr.retryRemoteRecovery",
         "title": "%command.retryRemoteRecovery.title%"
+      },
+      {
+        "command": "subversionr.resolveCheckoutTargetRecovery",
+        "title": "%command.resolveCheckoutTargetRecovery.title%"
       },
       {
         "command": "subversionr.refreshResource",

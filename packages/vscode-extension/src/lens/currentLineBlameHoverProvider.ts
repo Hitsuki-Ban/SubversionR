@@ -6,11 +6,13 @@ import type { ScmProjectedResource, ScmProjectedResourceLookup } from "../scm/so
 import type { PathCasePolicy } from "../status/types";
 import type { LensSettings } from "./lensSettings";
 import { isChangelistResourceGroupId } from "../scm/resourceStateClassifier";
+import type { RemoteOperationEnvelope } from "../security/remoteAccessProfile";
 
 export interface CurrentLineBlameHoverProviderOptions<THover, TMarkdownString> {
   settings(): LensSettings;
   includeMergedRevisions(): boolean;
   historyClient: HistoryBlameClient & HistoryLogClient;
+  createRemoteEnvelope(input: { repositoryId: string; epoch: number }): Promise<RemoteOperationEnvelope | undefined>;
   sessionService: Pick<RepositorySessionService, "listOpenSessions">;
   sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource">;
   workspaceTrusted(): boolean;
@@ -38,6 +40,7 @@ export interface CurrentLineBlameHoverPosition {
 
 export interface CurrentLineBlameHoverCancellationToken {
   isCancellationRequested: boolean;
+  onCancellationRequested(listener: () => void): { dispose(): void };
 }
 
 interface ResourceMatch {
@@ -64,10 +67,13 @@ export class CurrentLineBlameHoverProvider<THover, TMarkdownString> {
     position: CurrentLineBlameHoverPosition,
     token: CurrentLineBlameHoverCancellationToken,
   ): Promise<THover | undefined> {
+    const cancellation = cancellationFromToken(token);
     try {
-      return await this.provideHoverUnchecked(document, position, token);
+      return await this.provideHoverUnchecked(document, position, token, cancellation.signal);
     } catch (_error) {
       return undefined;
+    } finally {
+      cancellation.dispose();
     }
   }
 
@@ -75,6 +81,7 @@ export class CurrentLineBlameHoverProvider<THover, TMarkdownString> {
     document: CurrentLineBlameHoverTextDocument,
     position: CurrentLineBlameHoverPosition,
     token: CurrentLineBlameHoverCancellationToken,
+    signal: AbortSignal,
   ): Promise<THover | undefined> {
     if (token.isCancellationRequested) {
       return undefined;
@@ -84,21 +91,32 @@ export class CurrentLineBlameHoverProvider<THover, TMarkdownString> {
       return undefined;
     }
     const includeMergedRevisions = this.options.includeMergedRevisions();
-
-    const blame = await this.options.historyClient.getBlame({
+    const blameRemote = await this.options.createRemoteEnvelope({
       repositoryId: target.repositoryId,
       epoch: target.epoch,
-      path: target.path,
-      pegRevision: "base",
-      startRevision: "r0",
-      endRevision: "base",
-      lineStart: target.lineStart,
-      lineLimit: 1,
-      ignoreWhitespace: "none",
-      ignoreEolStyle: false,
-      ignoreMimeType: false,
-      includeMergedRevisions,
     });
+    if (signal.aborted) {
+      return undefined;
+    }
+
+    const blame = await this.options.historyClient.getBlame(
+      {
+        repositoryId: target.repositoryId,
+        epoch: target.epoch,
+        path: target.path,
+        pegRevision: "base",
+        startRevision: "r0",
+        endRevision: "base",
+        lineStart: target.lineStart,
+        lineLimit: 1,
+        ignoreWhitespace: "none",
+        ignoreEolStyle: false,
+        ignoreMimeType: false,
+        includeMergedRevisions,
+        ...(blameRemote === undefined ? {} : { remote: blameRemote }),
+      },
+      { signal },
+    );
     if (token.isCancellationRequested) {
       return undefined;
     }
@@ -108,17 +126,28 @@ export class CurrentLineBlameHoverProvider<THover, TMarkdownString> {
       return undefined;
     }
     const revision = `r${line.revision}`;
-    const log = await this.options.historyClient.getLog({
+    const logRemote = await this.options.createRemoteEnvelope({
       repositoryId: target.repositoryId,
       epoch: target.epoch,
-      path: target.path,
-      startRevision: revision,
-      endRevision: revision,
-      limit: 1,
-      discoverChangedPaths: false,
-      strictNodeHistory: false,
-      includeMergedRevisions,
     });
+    if (signal.aborted) {
+      return undefined;
+    }
+    const log = await this.options.historyClient.getLog(
+      {
+        repositoryId: target.repositoryId,
+        epoch: target.epoch,
+        path: target.path,
+        startRevision: revision,
+        endRevision: revision,
+        limit: 1,
+        discoverChangedPaths: false,
+        strictNodeHistory: false,
+        includeMergedRevisions,
+        ...(logRemote === undefined ? {} : { remote: logRemote }),
+      },
+      { signal },
+    );
     if (token.isCancellationRequested) {
       return undefined;
     }
@@ -190,6 +219,18 @@ export class CurrentLineBlameHoverProvider<THover, TMarkdownString> {
           left.session.repositoryId.localeCompare(right.session.repositoryId),
       )[0];
   }
+}
+
+function cancellationFromToken(token: CurrentLineBlameHoverCancellationToken): {
+  signal: AbortSignal;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const subscription = token.onCancellationRequested(() => controller.abort());
+  if (token.isCancellationRequested) {
+    controller.abort();
+  }
+  return { signal: controller.signal, dispose: () => subscription.dispose() };
 }
 
 function renderHoverMarkdown(

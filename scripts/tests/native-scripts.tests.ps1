@@ -26,6 +26,8 @@ $descendantWcActivationEvidence = Join-Path $repoRoot "docs\research\evidence\de
 $ciWorkflow = Join-Path $repoRoot ".github\workflows\ci.yml"
 $fastPrWorkflow = Join-Path $repoRoot ".github\workflows\pr-fast.yml"
 $packageJsonPath = Join-Path $repoRoot "package.json"
+$raSvnAuthorityPatch = Join-Path $repoRoot "native\patches\subversion-1.14.5\ra-svn-authority.patch"
+$raSvnAuthorityContract = Join-Path $repoRoot "native\patches\subversion-1.14.5\ra-svn-authority.contract.json"
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) {
@@ -256,6 +258,101 @@ New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 try {
   Import-Module $modulePath -Force
+
+  Assert-True (Test-Path -LiteralPath $raSvnAuthorityPatch -PathType Leaf) "The Apache Subversion 1.14.5 ra_svn authority patch should exist."
+  Assert-True (Test-Path -LiteralPath $raSvnAuthorityContract -PathType Leaf) "The Apache Subversion 1.14.5 ra_svn authority patch contract should exist."
+  $authorityContract = Get-Content -Raw -LiteralPath $raSvnAuthorityContract | ConvertFrom-Json
+  $authorityPatchHash = (Get-FileHash -LiteralPath $raSvnAuthorityPatch -Algorithm SHA256).Hash.ToLowerInvariant()
+  Assert-Equal $authorityContract.patch.sha256 $authorityPatchHash "The ra_svn authority patch artifact should match its locked SHA256."
+  Assert-Equal "a8721cbac8047966483011f1977dc93008d1b2a06d07e8dea04ebff58b5200d3" $authorityContract.source.archiveSha256 "The ra_svn authority patch should lock the CRLF client.c from the official Apache release archive."
+  Assert-Equal "3c3b9263dd7223a9c2c48ef8152b55e349f9fce69b7e56ea36ec6149582b48f1" $authorityContract.source.upstreamSha256 "The ra_svn authority patch should lock the official Apache Subversion 1.14.5 client.c."
+  Assert-Equal "3cc8f223128d2de62a7edfb167dd6ab88c868c861794501450a96cd45735da6f" $authorityContract.source.patchedSha256 "The ra_svn authority patch should lock its exact patched client.c."
+  Assert-Equal "subversionr:expected-svn-origin-v1" $authorityContract.authParameter.key "The ra_svn authority patch and native bridge should share one private auth parameter key."
+  Assert-Equal "SVN_ERR_RA_ILLEGAL_URL" $authorityContract.failure.aprError "The ra_svn authority patch should expose the typed bridge error code."
+  Assert-Equal "SubversionR repository root authority mismatch" $authorityContract.failure.message "The ra_svn authority patch should expose the typed bridge error message."
+
+  $authorityPatchText = Get-Content -Raw -LiteralPath $raSvnAuthorityPatch
+  Assert-Equal 1 ([regex]::Matches($authorityPatchText, [regex]::Escape('"subversionr:expected-svn-origin-v1"')).Count) "The private expected-origin parameter key should appear exactly once in the ra_svn patch."
+  Assert-True ($authorityPatchText.Contains('svn_uri_canonicalize_safe(&canonical_server_root')) "The ra_svn patch should safely canonicalize the untrusted server repository root into a local value."
+  Assert-True ($authorityPatchText.Contains('svn_uri_skip_ancestor(canonical_server_root, canonical_request')) "The ra_svn patch should require the server root to be an ancestor of the actual requested URL."
+  Assert-True ($authorityPatchText.Contains('&server_root, &repos_caplist')) "The ra_svn patch should read the server root into a local value."
+  Assert-True (-not $authorityPatchText.Contains('+                                        &conn->repos_root, &repos_caplist')) "The ra_svn patch must not store the server root before authority validation."
+  Assert-Equal 2 ([regex]::Matches($authorityPatchText, [regex]::Escape('*validated_root = canonical_server_root;')).Count) "The ra_svn patch should store only a canonical root after either guarded validation or the inactive legacy check."
+  Assert-True ($authorityPatchText.Contains('request_uri->port_str ? request_uri->port : SVN_RA_SVN_PORT')) "The ra_svn patch should compare the requested URL effective port."
+  Assert-True ($authorityPatchText.Contains('root_uri.port_str ? root_uri.port : SVN_RA_SVN_PORT')) "The ra_svn patch should compare the server root effective port."
+  Assert-True ($authorityPatchText.Contains('svn_error_create(SVN_ERR_RA_ILLEGAL_URL, NULL,') -and $authorityPatchText.Contains('"SubversionR repository root authority mismatch"')) "The ra_svn patch should expose the exact non-localized typed bridge failure."
+
+  $hashPatchRoot = Join-Path $tempRoot "hash-locked-patch"
+  New-Item -ItemType Directory -Force -Path $hashPatchRoot | Out-Null
+  $hashPatchTarget = Join-Path $hashPatchRoot "target.txt"
+  $hashPatchArtifact = Join-Path $hashPatchRoot "fixture.patch"
+  $hashPatchBase = "alpha`nbefore`nomega`n"
+  $hashPatchResult = "alpha`nafter`nomega`n"
+  [IO.File]::WriteAllText($hashPatchTarget, $hashPatchBase, [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText($hashPatchArtifact, @'
+diff --git a/target.txt b/target.txt
+--- a/target.txt
++++ b/target.txt
+@@ -1,3 +1,3 @@
+ alpha
+-before
++after
+ omega
+'@.Replace("`r`n", "`n") + "`n", [Text.UTF8Encoding]::new($false))
+  $hashPatchBaseSha256 = (Get-FileHash -LiteralPath $hashPatchTarget -Algorithm SHA256).Hash.ToLowerInvariant()
+  $hashPatchArtifactSha256 = (Get-FileHash -LiteralPath $hashPatchArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
+  $expectedResultPath = Join-Path $hashPatchRoot "expected.txt"
+  [IO.File]::WriteAllText($expectedResultPath, $hashPatchResult, [Text.UTF8Encoding]::new($false))
+  $hashPatchResultSha256 = (Get-FileHash -LiteralPath $expectedResultPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $nativeModule = Get-Module SubversionR.Native
+  $newlineFixture = Join-Path $hashPatchRoot "newline.txt"
+  [IO.File]::WriteAllText($newlineFixture, "one`r`ntwo`r`n", [Text.UTF8Encoding]::new($false))
+  $newlineCrlfHash = (Get-FileHash -LiteralPath $newlineFixture -Algorithm SHA256).Hash.ToLowerInvariant()
+  $newlineLfExpected = Join-Path $hashPatchRoot "newline-lf.txt"
+  [IO.File]::WriteAllText($newlineLfExpected, "one`ntwo`n", [Text.UTF8Encoding]::new($false))
+  $newlineLfHash = (Get-FileHash -LiteralPath $newlineLfExpected -Algorithm SHA256).Hash.ToLowerInvariant()
+  $invokeNewlineNormalization = {
+    param($Module, $Path, $CrlfHash, $LfHash)
+    & $Module {
+      param($InnerPath, $InnerCrlfHash, $InnerLfHash)
+      Convert-HashLockedCrlfFileToLf -Path $InnerPath -CrlfSha256 $InnerCrlfHash -LfSha256 $InnerLfHash
+    } $Path $CrlfHash $LfHash
+  }
+  & $invokeNewlineNormalization $nativeModule $newlineFixture $newlineCrlfHash $newlineLfHash
+  Assert-Equal $newlineLfHash ((Get-FileHash -LiteralPath $newlineFixture -Algorithm SHA256).Hash.ToLowerInvariant()) "Hash-locked source normalization should produce exact LF bytes."
+  & $invokeNewlineNormalization $nativeModule $newlineFixture $newlineCrlfHash $newlineLfHash
+  [IO.File]::WriteAllText($newlineFixture, "wrong`r`n", [Text.UTF8Encoding]::new($false))
+  Assert-ThrowsContaining {
+    & $invokeNewlineNormalization $nativeModule $newlineFixture $newlineCrlfHash $newlineLfHash
+  } "CRLF source SHA256 mismatch" "Hash-locked source normalization should reject a wrong source version."
+  $invokeHashPatch = {
+    param($Module, $Root, $PatchPath, $UpstreamHash, $PatchedHash, $ArtifactHash)
+    & $Module {
+      param($InnerRoot, $InnerPatchPath, $InnerUpstreamHash, $InnerPatchedHash, $InnerArtifactHash)
+      Invoke-HashLockedUnifiedPatch `
+        -SourceRoot $InnerRoot `
+        -TargetRelativePath "target.txt" `
+        -PatchPath $InnerPatchPath `
+        -UpstreamSha256 $InnerUpstreamHash `
+        -PatchedSha256 $InnerPatchedHash `
+        -PatchSha256 $InnerArtifactHash
+    } $Root $PatchPath $UpstreamHash $PatchedHash $ArtifactHash
+  }
+  & $invokeHashPatch $nativeModule $hashPatchRoot $hashPatchArtifact $hashPatchBaseSha256 $hashPatchResultSha256 $hashPatchArtifactSha256
+  Assert-Equal $hashPatchResultSha256 ((Get-FileHash -LiteralPath $hashPatchTarget -Algorithm SHA256).Hash.ToLowerInvariant()) "Hash-locked patch application should produce the exact expected target."
+  & $invokeHashPatch $nativeModule $hashPatchRoot $hashPatchArtifact $hashPatchBaseSha256 $hashPatchResultSha256 $hashPatchArtifactSha256
+  Assert-ThrowsContaining {
+    & $invokeHashPatch $nativeModule $hashPatchRoot $hashPatchArtifact $hashPatchBaseSha256 $hashPatchResultSha256 ("0" * 64)
+  } "patch artifact SHA256 mismatch" "Hash-locked patch application should reject a changed patch artifact."
+  [IO.File]::WriteAllText($hashPatchTarget, "wrong-version`n", [Text.UTF8Encoding]::new($false))
+  Assert-ThrowsContaining {
+    & $invokeHashPatch $nativeModule $hashPatchRoot $hashPatchArtifact $hashPatchBaseSha256 $hashPatchResultSha256 $hashPatchArtifactSha256
+  } "target SHA256 mismatch" "Hash-locked patch application should reject a wrong source version."
+
+  $buildSubversionAuthorityText = Get-Content -Raw -LiteralPath $buildSubversionScript
+  $buildDavAuthorityText = Get-Content -Raw -LiteralPath $buildDavModulesScript
+  Assert-Equal 1 ([regex]::Matches($buildSubversionAuthorityText, [regex]::Escape('Apply-SubversionRaSvnAuthorityPatch -SourceRoot $sourceRoot')).Count) "The primary Subversion build should apply the ra_svn authority patch exactly once after clean extraction."
+  Assert-Equal 1 ([regex]::Matches($buildDavAuthorityText, [regex]::Escape('Apply-SubversionRaSvnAuthorityPatch -SourceRoot $sourceRoot')).Count) "The DAV module Subversion build should apply the ra_svn authority patch exactly once after clean extraction."
 
   foreach ($path in @(
     $smokeM8RemoteSettlementScript,

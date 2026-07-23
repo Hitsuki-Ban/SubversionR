@@ -11,12 +11,14 @@ import type {
   ScmRepositoryProjection,
 } from "../scm/sourceControlResourceStore";
 import { requireTrustedWorkspace } from "../security/workspaceTrust";
+import type { RemoteOperationEnvelope } from "../security/remoteAccessProfile";
 import type { PathCasePolicy } from "../status/types";
 
 export interface LineHistoryCommandControllerOptions {
   settings(): LensSettings;
   includeMergedRevisions(): boolean;
   historyClient: HistoryBlameClient & HistoryLogClient;
+  createRemoteEnvelope(input: { repositoryId: string; epoch: number }): Promise<RemoteOperationEnvelope | undefined>;
   sessionService: Pick<RepositorySessionService, "listOpenSessions">;
   sourceControlProjection: Pick<SourceControlProjectionService, "getProjectedResource" | "getProjection">;
   workspaceTrusted(): boolean;
@@ -78,42 +80,65 @@ const DELETED_STATUS_TOKENS = new Set(["deleted", "missing"]);
 const UNSAFE_LOCAL_STATUS_TOKENS = new Set(["added", "replaced", "obstructed", "incomplete", "conflicted", "unversioned"]);
 
 export class LineHistoryCommandController {
+  private activeRequest: AbortController | undefined;
+
   public constructor(private readonly options: LineHistoryCommandControllerOptions) {}
 
   public async showLineHistory(): Promise<void> {
+    this.activeRequest?.abort();
+    const controller = new AbortController();
+    this.activeRequest = controller;
     try {
       requireTrustedWorkspace(this.options.workspaceTrusted);
       const target = this.targetForActiveEditor();
       const includeMergedRevisions = this.options.includeMergedRevisions();
-      const blame = await this.options.historyClient.getBlame({
+      const blameRemote = await this.options.createRemoteEnvelope({
         repositoryId: target.repositoryId,
         epoch: target.epoch,
-        path: target.path,
-        pegRevision: "base",
-        startRevision: "r0",
-        endRevision: "base",
-        lineStart: target.lineStart,
-        lineLimit: target.lineLimit,
-        ignoreWhitespace: "none",
-        ignoreEolStyle: false,
-        ignoreMimeType: false,
-        includeMergedRevisions,
       });
+      controller.signal.throwIfAborted();
+      const blame = await this.options.historyClient.getBlame(
+        {
+          repositoryId: target.repositoryId,
+          epoch: target.epoch,
+          path: target.path,
+          pegRevision: "base",
+          startRevision: "r0",
+          endRevision: "base",
+          lineStart: target.lineStart,
+          lineLimit: target.lineLimit,
+          ignoreWhitespace: "none",
+          ignoreEolStyle: false,
+          ignoreMimeType: false,
+          includeMergedRevisions,
+          ...(blameRemote === undefined ? {} : { remote: blameRemote }),
+        },
+        { signal: controller.signal },
+      );
       const revisions = concreteLineRevisions(blame, target);
       const entries: HistoryLogEntry[] = [];
       for (const revision of revisions) {
         const revisionId = `r${revision}`;
-        const log = await this.options.historyClient.getLog({
+        const remote = await this.options.createRemoteEnvelope({
           repositoryId: target.repositoryId,
           epoch: target.epoch,
-          path: target.path,
-          startRevision: revisionId,
-          endRevision: revisionId,
-          limit: 1,
-          discoverChangedPaths: false,
-          strictNodeHistory: false,
-          includeMergedRevisions,
         });
+        controller.signal.throwIfAborted();
+        const log = await this.options.historyClient.getLog(
+          {
+            repositoryId: target.repositoryId,
+            epoch: target.epoch,
+            path: target.path,
+            startRevision: revisionId,
+            endRevision: revisionId,
+            limit: 1,
+            discoverChangedPaths: false,
+            strictNodeHistory: false,
+            includeMergedRevisions,
+            ...(remote === undefined ? {} : { remote }),
+          },
+          { signal: controller.signal },
+        );
         const [entry] = log.entries;
         if (!entry || entry.revision !== revision) {
           throw lineHistoryLogIncomplete();
@@ -123,6 +148,9 @@ export class LineHistoryCommandController {
 
       await this.options.ui.showLineHistory(lineHistoryViewTarget(target), entries);
     } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
       this.options.diagnostics.recordFailure("Line History", error);
       const showLog = this.options.localize("Show Log");
       void this.options.ui
@@ -141,6 +169,10 @@ export class LineHistoryCommandController {
         .catch((notificationError: unknown) => {
           console.error("SubversionR line history notification failed.", notificationError);
         });
+    } finally {
+      if (this.activeRequest === controller) {
+        this.activeRequest = undefined;
+      }
     }
   }
 

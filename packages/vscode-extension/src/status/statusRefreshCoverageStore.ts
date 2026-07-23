@@ -5,6 +5,7 @@ const MAX_COMPLETED_REFRESH_RECORDS_PER_REPOSITORY = 32;
 
 export class StatusRefreshCoverageStore {
   private readonly records = new Map<string, CompletedStatusRefreshCoverage[]>();
+  private readonly listeners = new Set<(record: CompletedStatusRefreshCoverage) => void>();
 
   public recordCompletedStatusRefreshCoverage(record: CompletedStatusRefreshCoverage): void {
     const records = this.records.get(record.repositoryId) ?? [];
@@ -13,6 +14,20 @@ export class StatusRefreshCoverageStore {
       records.splice(0, records.length - MAX_COMPLETED_REFRESH_RECORDS_PER_REPOSITORY);
     }
     this.records.set(record.repositoryId, records);
+    for (const listener of this.listeners) {
+      listener(cloneCompletedRefreshCoverage(record));
+    }
+  }
+
+  public onDidRecordCompletedStatusRefreshCoverage(
+    listener: (record: CompletedStatusRefreshCoverage) => void,
+  ): { dispose(): void } {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
   }
 
   public getLastCompletedRefresh(

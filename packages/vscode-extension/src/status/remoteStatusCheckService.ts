@@ -23,7 +23,7 @@ export interface RemoteStatusCheckServiceOptions {
   createRemoteEnvelope(input: {
     operationId: string;
     repositoryRootUrl: string;
-  }): Promise<RemoteOperationEnvelope>;
+  }): Promise<RemoteOperationEnvelope | undefined>;
 }
 
 export interface RemoteStatusCheckTarget {
@@ -40,30 +40,47 @@ export class RemoteStatusCheckService {
     clientOptions: StatusRefreshClientOptions = {},
   ): Promise<number> {
     const operationId = this.options.createOperationId();
-    const checking = this.options.remoteConnectionStateStore.beginCheck({
-      repositoryId: target.repositoryId,
-      epoch: target.epoch,
-      operationId,
-      startedAt: this.options.now(),
-    });
-    this.options.remoteStateProjection.updateRemoteConnectionState(checking);
-    let remote: RemoteOperationEnvelope;
+    const isLocalFile = new URL(target.repositoryRootUrl).protocol === "file:";
+    if (!isLocalFile) {
+      const checking = this.options.remoteConnectionStateStore.beginCheck({
+        repositoryId: target.repositoryId,
+        epoch: target.epoch,
+        operationId,
+        startedAt: this.options.now(),
+      });
+      this.options.remoteStateProjection.updateRemoteConnectionState(checking);
+    }
+    let remote: RemoteOperationEnvelope | undefined;
     try {
       remote = await this.options.createRemoteEnvelope({ operationId, repositoryRootUrl: target.repositoryRootUrl });
     } catch (error) {
-      this.completeFailure(target, operationId, error);
+      if (!isLocalFile) {
+        this.completeFailure(target, operationId, error);
+      }
+      throw error;
+    }
+    if (isLocalFile === (remote !== undefined)) {
+      const error = new RemoteProfileConfigurationError(
+        isLocalFile ? "SUBVERSIONR_REMOTE_ENVELOPE_FORBIDDEN" : "SUBVERSIONR_REMOTE_ENVELOPE_REQUIRED",
+        "error.remote.contractInvalid",
+      );
+      if (!isLocalFile) {
+        this.completeFailure(target, operationId, error);
+      }
       throw error;
     }
     const request: StatusRemoteCheckRequest = {
       repositoryId: target.repositoryId,
       epoch: target.epoch,
-      remote,
+      ...(remote === undefined ? {} : { remote }),
     };
     let delta;
     try {
       delta = await this.options.client.checkRemoteStatus(request, clientOptions);
     } catch (error) {
-      this.completeFailure(target, operationId, error);
+      if (remote !== undefined) {
+        this.completeFailure(target, operationId, error);
+      }
       throw error;
     }
     return await this.options.refreshPipeline.runExclusive(request.repositoryId, async () => {
@@ -71,7 +88,7 @@ export class RemoteStatusCheckService {
       try {
         snapshot = this.options.statusSnapshotStore.applyDelta(delta);
       } catch (error) {
-        this.completeOnline(request, false);
+        this.completeOnline(request, remote, false);
         throw error;
       }
       try {
@@ -80,26 +97,33 @@ export class RemoteStatusCheckService {
         try {
           this.options.sourceControlProjection.replaceSnapshot(snapshot);
         } catch (replacementError) {
-          this.completeOnline(request, false);
+          this.completeOnline(request, remote, false);
           throw new AggregateError(
             [error, replacementError],
             "SUBVERSIONR_REMOTE_STATUS_PROJECTION_REBUILD_FAILED",
           );
         }
-        this.completeOnline(request, true);
+        this.completeOnline(request, remote, true);
         throw error;
       }
-      this.completeOnline(request, true);
+      this.completeOnline(request, remote, true);
       return snapshot.summary.remoteChanges;
     });
   }
 
-  private completeOnline(request: StatusRemoteCheckRequest, incomingApplied: boolean): void {
+  private completeOnline(
+    request: StatusRemoteCheckRequest,
+    remote: RemoteOperationEnvelope | undefined,
+    incomingApplied: boolean,
+  ): void {
+    if (remote === undefined) {
+      return;
+    }
     const completed = this.options.remoteConnectionStateStore.completeOnline({
       repositoryId: request.repositoryId,
       epoch: request.epoch,
-      operationId: request.remote.operationId,
-      transport: request.remote.profile.authority.scheme,
+      operationId: remote.operationId,
+      transport: remote.profile.authority.scheme,
       checkedAt: this.options.now(),
       incomingApplied,
     });

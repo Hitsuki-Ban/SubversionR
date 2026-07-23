@@ -401,6 +401,10 @@ typedef struct subversionr_bridge_operation_result {
 
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_runtime_create(subversionr_bridge_runtime **runtime);
 SUBVERSIONR_BRIDGE_API void subversionr_bridge_runtime_destroy(subversionr_bridge_runtime *runtime);
+SUBVERSIONR_BRIDGE_API int subversionr_bridge_runtime_configure_svn_anonymous(
+  subversionr_bridge_runtime *runtime,
+  const char *expected_origin
+);
 SUBVERSIONR_BRIDGE_API int subversionr_bridge_remote_context_create(
   const subversionr_bridge_remote_config_v1 *config,
   const subversionr_bridge_remote_credential_callbacks_v2 *credential_callbacks,

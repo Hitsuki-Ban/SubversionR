@@ -1730,22 +1730,31 @@ impl BridgeApi for FakeBridge {
 
 #[test]
 fn initialize_request_returns_versions_and_keeps_process_running() {
-    let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientName":"test","clientVersion":"0.0.0","locale":"en","workspaceTrust":"trusted","trustEpoch":1,"cacheRoot":"C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"}}"#;
+    let remote_state = DiscoveryTempTree::create("initialize-remote-state");
+    let request = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "clientName": "test", "clientVersion": "0.0.0", "locale": "en",
+            "workspaceTrust": "trusted", "trustEpoch": 1,
+            "cacheRoot": "C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache",
+            "remoteStateRoot": remote_state.path
+        }
+    });
     let bridge = FakeBridge::open_success();
 
-    let outcome =
-        dispatch_json_rpc_with_bridge(request, &bridge).expect("initialize should dispatch");
+    let outcome = dispatch_json_rpc_with_bridge(&request.to_string(), &bridge)
+        .expect("initialize should dispatch");
 
     assert_eq!(outcome, DispatchOutcome::Continue);
     assert_eq!(outcome.response()["id"], 1);
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 34);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 35);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["schemaId"],
         "subversionr.cache.v1"
     );
     assert_eq!(outcome.response()["result"]["protocol"]["major"], 1);
-    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 34);
+    assert_eq!(outcome.response()["result"]["protocol"]["minor"], 35);
     assert_eq!(outcome.response()["result"]["cacheSchema"]["version"], 1);
     assert_eq!(
         outcome.response()["result"]["cacheSchema"]["rollback"],
@@ -8977,7 +8986,7 @@ fn repository_open_maps_loaded_bridge_failure_to_structured_error() {
 fn remote_checkout_requires_initialized_current_trust_and_never_calls_legacy_checkout() {
     let bridge = FakeBridge::open_success();
     let mut state = DaemonState::new();
-    initialize_remote_state(&mut state, &bridge, "trusted");
+    let _remote_state = initialize_remote_state(&mut state, &bridge, "trusted");
 
     let missing_envelope = serde_json::json!({
         "jsonrpc": "2.0", "id": 501, "method": "repository/checkout",
@@ -9013,7 +9022,7 @@ fn remote_checkout_requires_initialized_current_trust_and_never_calls_legacy_che
 fn remote_trust_epochs_are_exactly_ordered_and_replays_never_create_contexts() {
     let bridge = FakeBridge::open_success();
     let mut state = DaemonState::new();
-    initialize_remote_state(&mut state, &bridge, "untrusted");
+    let _remote_state = initialize_remote_state(&mut state, &bridge, "untrusted");
 
     let denied = remote_checkout_request(510, 1);
     let outcome = state
@@ -9120,7 +9129,7 @@ fn trust_revoke_commits_the_epoch_only_after_worker_cleanup_acknowledges() {
     let bridge = FakeBridge::open_success();
     let supervisor = Arc::new(RetryableTrustUpdateSupervisor::default());
     let mut state = DaemonState::with_remote_worker(supervisor.clone());
-    initialize_remote_state(&mut state, &bridge, "trusted");
+    let _remote_state = initialize_remote_state(&mut state, &bridge, "trusted");
     let revoke = r#"{"jsonrpc":"2.0","id":515,"method":"workspaceTrust/update","params":{"trusted":false,"trustEpoch":2}}"#;
 
     let blocked = state
@@ -9142,7 +9151,7 @@ fn trust_revoke_commits_the_epoch_only_after_worker_cleanup_acknowledges() {
 fn local_file_checkout_rejects_remote_envelope_before_bridge_call() {
     let bridge = FakeBridge::open_success();
     let mut state = DaemonState::new();
-    initialize_remote_state(&mut state, &bridge, "trusted");
+    let _remote_state = initialize_remote_state(&mut state, &bridge, "trusted");
     let mut request = remote_checkout_request(520, 1);
     request["params"]["url"] = serde_json::json!("file:///C:/repo/project/trunk");
 
@@ -9161,7 +9170,7 @@ fn local_file_checkout_rejects_remote_envelope_before_bridge_call() {
 fn remote_checkout_rejects_contract_and_policy_variants_before_context_creation() {
     let bridge = FakeBridge::open_success();
     let mut state = DaemonState::new();
-    initialize_remote_state(&mut state, &bridge, "trusted");
+    let _remote_state = initialize_remote_state(&mut state, &bridge, "trusted");
 
     let mut cases = Vec::new();
     let mut expected_proxy = remote_checkout_request(530, 1);
@@ -9208,7 +9217,7 @@ fn remote_working_copy_status_check_is_gated_before_the_legacy_remote_bridge_pat
         ..FakeBridge::identity()
     });
     let mut state = DaemonState::new();
-    initialize_remote_state(&mut state, &bridge, "trusted");
+    let _remote_state = initialize_remote_state(&mut state, &bridge, "trusted");
     state
         .dispatch_json_rpc_with_bridge(
             r#"{"jsonrpc":"2.0","id":540,"method":"repository/open","params":{"path":"C:\\wc"}}"#,
@@ -9252,7 +9261,7 @@ fn remote_working_copy_relocate_cannot_hide_behind_file_url_options() {
         ..FakeBridge::identity()
     });
     let mut state = DaemonState::new();
-    initialize_remote_state(&mut state, &bridge, "trusted");
+    let _remote_state = initialize_remote_state(&mut state, &bridge, "trusted");
     state
         .dispatch_json_rpc_with_bridge(
             r#"{"jsonrpc":"2.0","id":550,"method":"repository/open","params":{"path":"C:\\wc"}}"#,
@@ -9272,19 +9281,26 @@ fn remote_working_copy_relocate_cannot_hide_behind_file_url_options() {
     assert!(bridge.relocate_requests.borrow().is_empty());
 }
 
-fn initialize_remote_state(state: &mut DaemonState, bridge: &FakeBridge, trust: &str) {
+fn initialize_remote_state(
+    state: &mut DaemonState,
+    bridge: &FakeBridge,
+    trust: &str,
+) -> DiscoveryTempTree {
+    let remote_state = DiscoveryTempTree::create("remote-state");
     let request = serde_json::json!({
         "jsonrpc": "2.0", "id": 500, "method": "initialize",
         "params": {
             "clientName": "test", "clientVersion": "0.0.0", "locale": "en",
             "workspaceTrust": trust, "trustEpoch": 1,
-            "cacheRoot": "C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache"
+            "cacheRoot": "C:/Users/Alice/AppData/Roaming/Code/User/globalStorage/subversionr/cache",
+            "remoteStateRoot": remote_state.path
         }
     });
     let outcome = state
         .dispatch_json_rpc_with_bridge(&request.to_string(), bridge)
         .expect("initialize should dispatch");
     assert_eq!(outcome.response()["result"]["acknowledgedTrustEpoch"], 1);
+    remote_state
 }
 
 fn remote_checkout_request(id: u64, trust_epoch: u64) -> serde_json::Value {

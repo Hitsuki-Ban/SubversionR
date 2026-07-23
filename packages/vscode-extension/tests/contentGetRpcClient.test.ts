@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ContentGetRpcClient, ContentResponseError } from "../src/content/contentGetRpcClient";
 import type { JsonRpcSender } from "../src/status/types";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("ContentGetRpcClient", () => {
   it("sends BASE content/get and decodes binary-safe response bytes", async () => {
@@ -80,7 +81,7 @@ describe("ContentGetRpcClient", () => {
     expect(content.byteLength).toBe(0);
   });
 
-  it("sends HEAD content/get and accepts the matching response identity", async () => {
+  it("sends local HEAD content/get without a remote envelope", async () => {
     const sender = fakeSender({
       repositoryId: "repo-uuid:C:/wc",
       epoch: 7,
@@ -111,6 +112,32 @@ describe("ContentGetRpcClient", () => {
     expect(content.source).toBe("libsvn-head");
   });
 
+  it("passes cancellation signals to remote content/get", async () => {
+    const sender = fakeSender({
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      path: "src/main.c",
+      revision: "head",
+      contentBase64: "aGVhZAo=",
+      byteLength: 5,
+      mimeType: "text/plain",
+      isBinary: false,
+      source: "libsvn-head",
+    });
+    const signal = new AbortController().signal;
+    const request = {
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      path: "src/main.c",
+      revision: "head",
+      remote: anonymousSvnRemoteEnvelope(),
+    } as const;
+
+    await new ContentGetRpcClient(sender).getContent(request, { signal });
+
+    expect(sender.sendRequest).toHaveBeenCalledWith("content/get", request, { signal });
+  });
+
   it("sends explicit revision content/get and accepts the matching response identity", async () => {
     const sender = fakeSender({
       repositoryId: "repo-uuid:C:/wc",
@@ -130,6 +157,7 @@ describe("ContentGetRpcClient", () => {
       epoch: 7,
       path: "src/main.c",
       revision: "r42",
+      remote: anonymousSvnRemoteEnvelope(),
     });
 
     expect(sender.sendRequest).toHaveBeenCalledWith("content/get", {
@@ -137,6 +165,7 @@ describe("ContentGetRpcClient", () => {
       epoch: 7,
       path: "src/main.c",
       revision: "r42",
+      remote: anonymousSvnRemoteEnvelope(),
     });
     expect(Array.from(content.bytes)).toEqual([114, 52, 50, 10]);
     expect(content.source).toBe("libsvn-revision");
@@ -154,6 +183,7 @@ describe("ContentGetRpcClient", () => {
           epoch: 7,
           path: "src/main.c",
           revision,
+          remote: anonymousSvnRemoteEnvelope(),
         }),
       ).rejects.toMatchObject({
         code: "SUBVERSIONR_CONTENT_REQUEST_INVALID",
@@ -174,9 +204,26 @@ describe("ContentGetRpcClient", () => {
       extra: true,
     };
 
-    await expect(client.getContent(request)).rejects.toMatchObject({
+    await expect(client.getContent(request as never)).rejects.toMatchObject({
       code: "SUBVERSIONR_CONTENT_REQUEST_INVALID",
       safeArgs: { field: "extra" },
+    });
+    expect(sender.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("forbids remote for BASE content", async () => {
+    const sender = fakeSender({});
+    const client = new ContentGetRpcClient(sender);
+
+    await expect(client.getContent({
+      repositoryId: "repo-uuid:C:/wc",
+      epoch: 7,
+      path: "src/main.c",
+      revision: "base",
+      remote: anonymousSvnRemoteEnvelope(),
+    } as never)).rejects.toMatchObject({
+      code: "SUBVERSIONR_CONTENT_REQUEST_INVALID",
+      safeArgs: { field: "remote" },
     });
     expect(sender.sendRequest).not.toHaveBeenCalled();
   });
@@ -201,6 +248,7 @@ describe("ContentGetRpcClient", () => {
         epoch: 7,
         path: "src/main.c",
         revision: "head",
+        remote: anonymousSvnRemoteEnvelope(),
       }),
     ).rejects.toMatchObject({
       code: "SUBVERSIONR_CONTENT_RESPONSE_INVALID",
@@ -228,6 +276,7 @@ describe("ContentGetRpcClient", () => {
         epoch: 7,
         path: "src/main.c",
         revision: "head",
+        remote: anonymousSvnRemoteEnvelope(),
       }),
     ).rejects.toMatchObject({
       code: "SUBVERSIONR_CONTENT_RESPONSE_INVALID",
@@ -255,6 +304,7 @@ describe("ContentGetRpcClient", () => {
         epoch: 7,
         path: "src/main.c",
         revision: "head",
+        remote: anonymousSvnRemoteEnvelope(),
       }),
     ).rejects.toMatchObject({
       code: "SUBVERSIONR_CONTENT_RESPONSE_INVALID",

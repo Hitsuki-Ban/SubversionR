@@ -10,6 +10,7 @@ import type {
   ScmRepositoryProjection,
 } from "../src/scm/sourceControlResourceStore";
 import type { StatusEntry } from "../src/status/statusSnapshotRpcClient";
+import { anonymousSvnRemoteEnvelope } from "./remoteOperationEnvelopeFixture";
 
 describe("CurrentLineBlameStatusBarService", () => {
   afterEach(() => {
@@ -56,7 +57,8 @@ describe("CurrentLineBlameStatusBarService", () => {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(statusItem.text).toBe("$(history) l10n:SVN r4 alice");
     expect(statusItem.tooltip).toBe("l10n:SVN blame for src/main.c:2");
     expect(statusItem.command).toEqual({
@@ -123,7 +125,8 @@ describe("CurrentLineBlameStatusBarService", () => {
       ignoreEolStyle: false,
       ignoreMimeType: false,
       includeMergedRevisions: false,
-    });
+      remote: anonymousSvnRemoteEnvelope(),
+    }, { signal: expect.any(AbortSignal) });
     expect(statusItem.text).toBe("$(history) l10n:SVN r4 alice");
     expect(statusItem.command).toEqual({
       command: "subversionr.showBlame",
@@ -173,6 +176,7 @@ describe("CurrentLineBlameStatusBarService", () => {
       expect.objectContaining({
         includeMergedRevisions: true,
       }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(statusItem.text).toBe("$(history) l10n:SVN r4 alice");
   });
@@ -514,6 +518,7 @@ function currentLineBlameService(options: {
     settings: () => options.settings ?? lensSettings(),
     includeMergedRevisions: options.includeMergedRevisions ?? (() => false),
     historyClient: options.historyClient ?? fakeHistoryClient(blameResponse({ lineStart: 2 })),
+    createRemoteEnvelope: async () => anonymousSvnRemoteEnvelope(),
     sessionService: fakeSessionService(options.sessions ?? [repositorySession()]),
     sourceControlProjection: options.sourceControlProjection ?? fakeSourceControlProjection(projections),
     workspaceTrusted: () => options.workspaceTrusted ?? true,
